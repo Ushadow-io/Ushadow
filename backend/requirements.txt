@@ -1,0 +1,38 @@
+# ushadow Backend Requirements
+# Python 3.11+
+
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+pydantic-settings==2.6.0
+
+# HTTP Client for Chronicle/MCP/Agent Zero
+httpx==0.27.2
+aiohttp==3.11.7
+
+# Database Clients
+pymongo==4.10.1
+motor==3.6.0  # Async MongoDB driver
+redis==5.2.0
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.17
+
+# CORS & Middleware
+fastapi-cors==0.0.6
+
+# Utilities
+python-dotenv==1.0.1
+pyyaml==6.0.2
+
+# Logging & Monitoring
+structlog==24.4.0
+
+# Testing
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.27.2  # For testing
