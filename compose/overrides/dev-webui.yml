@@ -1,0 +1,32 @@
+# Development override for hot-reload
+# Usage (from /compose): docker compose -f infrastructure-shared.yml up -d (if not running)
+# Usage (from root): docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up
+
+services:
+  webui:
+    build:
+      context: ./ushadow/frontend
+      dockerfile: Dockerfile.dev
+    command: npm run dev
+    volumes:
+      # Volume mount source files for hot-reload
+      - ./ushadow/frontend/src:/app/src:delegated
+      - ./ushadow/frontend/public:/app/public:delegated
+      - ./ushadow/frontend/index.html:/app/index.html:ro
+      - ./ushadow/frontend/vite.config.ts:/app/vite.config.ts:ro
+      - ./ushadow/frontend/tsconfig.json:/app/tsconfig.json:ro
+      - ./ushadow/frontend/tsconfig.node.json:/app/tsconfig.node.json:ro
+      - ./ushadow/frontend/tailwind.config.js:/app/tailwind.config.js:ro
+      - ./ushadow/frontend/postcss.config.js:/app/postcss.config.js:ro
+    ports:
+      - "${WEBUI_PORT:-3010}:5173"  # External:Internal
+    environment:
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8010}
+      - VITE_HMR_PORT=${WEBUI_PORT:-3010}  # HMR client connects to external port
+      - NODE_ENV=development
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

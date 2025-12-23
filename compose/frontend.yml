@@ -1,0 +1,27 @@
+# Frontend service definition
+
+services:
+  webui:
+    build:
+      context: ../ushadow/frontend
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-webui
+    env_file:
+      - ../.env.default  # Base defaults
+      - ../.env          # Environment overrides (if exists)
+    environment:
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8010}
+      - NODE_ENV=${NODE_ENV:-development}
+    volumes:
+      - ../ushadow/frontend/src:/app/src
+      - /app/node_modules
+    networks:
+      - infra-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true

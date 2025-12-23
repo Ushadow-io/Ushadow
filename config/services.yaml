@@ -1,0 +1,48 @@
+# Ushadow External Services Configuration
+# Defines external service integrations and memory sources
+# Services can reference settings using {{config.path.to.value}} templates
+
+version: "1.0"
+
+services:
+  # Example: Pieces for Developers integration
+  # Uncomment and configure to enable
+
+  # pieces-app:
+  #   name: "Pieces for Developers"
+  #   description: "Code snippets and developer memory manager"
+  #   service_type: memory_source
+  #   integration_type: rest
+  #   connection:
+  #     base_url: "{{config.services.pieces.url}}"
+  #     auth:
+  #       type: api_key
+  #       key_name: "X-API-Key"
+  #       key_value_ref: "{{config.api_keys.pieces_api_key}}"
+  #     endpoints:
+  #       health: "/health"
+  #       list: "/api/snippets"
+  #       get: "/api/snippets/{id}"
+  #     timeout: 30
+  #     headers:
+  #       Content-Type: "application/json"
+  #   memory_mapping:
+  #     enabled: true
+  #     field_mappings:
+  #       - source_field: "id"
+  #         target_field: "source_id"
+  #       - source_field: "name"
+  #         target_field: "title"
+  #         transform: "trim"
+  #         default_value: "Untitled"
+  #       - source_field: "raw.value"
+  #         target_field: "content"
+  #       - source_field: "tags"
+  #         target_field: "tags"
+  #   status: active
+  #   metadata:
+  #     last_sync: null
+  #     sync_count: 0
+  #     error_count: 0
+
+# Add more services via the UI wizard or by editing this file

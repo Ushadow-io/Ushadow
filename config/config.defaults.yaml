@@ -1,0 +1,67 @@
+# Ushadow Default Configuration
+# This file is version-controlled and contains sensible defaults
+# Override via config.local.yaml (not tracked) or environment variables
+# DO NOT MODIFY - This file should remain pristine in version control
+
+version: "1.0"
+
+# API Keys (empty by default - configure via Settings UI)
+api_keys:
+  openai_api_key: ""
+  anthropic_api_key: ""
+  deepgram_api_key: ""
+  pieces_api_key: ""
+
+# External Services
+services:
+  chronicle:
+    enabled: true
+    url: "http://chronicle-backend:8000"
+    api_timeout: 30
+    description: "Chronicle AI conversation and memory system"
+
+  pieces:
+    enabled: false
+    url: "http://localhost:1000"
+    sync_interval: 3600  # seconds (1 hour)
+    description: "Pieces for Developers - code snippets manager"
+
+  mcp:
+    enabled: false
+    url: "http://mcp-server:8765"
+    description: "Model Context Protocol server"
+
+  agent_zero:
+    enabled: false
+    url: "http://agent-zero:9000"
+    description: "Agent Zero autonomous agent"
+
+  n8n:
+    enabled: false
+    url: "http://n8n:5678"
+    description: "n8n workflow automation"
+
+# Database Connections
+database:
+  mongodb_uri: "mongodb://mongo:27017"
+  mongodb_database: "ushadow"
+  redis_url: "redis://redis:6379/0"
+
+# Docker Settings
+docker:
+  auto_restart_on_settings_change: false
+  log_retention_days: 7
+
+# System Settings
+system:
+  timezone: "UTC"
+  log_level: "INFO"
+  session_timeout: 3600  # seconds (1 hour)
+  debug_mode: false
+
+# CORS Settings
+cors:
+  origins:
+    - "http://localhost:3000"
+    - "http://localhost:3010"
+    - "http://localhost:5173"  # Vite dev server

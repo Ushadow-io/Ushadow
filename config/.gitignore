@@ -1,0 +1,9 @@
+# Local configuration overrides (contains secrets)
+config.local.yaml
+
+# Service secrets (encrypted but still sensitive)
+services.secrets.yaml
+
+# Backup files
+*.bak
+*.backup

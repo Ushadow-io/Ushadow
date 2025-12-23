@@ -1,0 +1,22 @@
+# ushadow Configuration File
+# This file stores API keys and integration settings
+# Copy to config.yml and customize
+
+api_keys:
+  # LLM Providers
+  openai_api_key: null  # OpenAI API key for GPT models
+  anthropic_api_key: null  # Anthropic API key for Claude models
+
+  # Transcription Services
+  deepgram_api_key: null  # Deepgram for audio transcription
+  mistral_api_key: null  # Mistral for transcription
+
+integrations:
+  # Optional service integrations
+  mcp_enabled: false  # Enable Model Context Protocol
+  agent_zero_enabled: false  # Enable Agent Zero orchestration
+  n8n_enabled: false  # Enable n8n workflows
+
+custom_settings:
+  # Add any custom settings here
+  # example_setting: value
