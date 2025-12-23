@@ -1,0 +1,7 @@
+# Production build override
+# Uses optimized nginx build serving static files (port 80)
+
+services:
+  webui:
+    ports:
+      - "${WEBUI_PORT:-3000}:80"

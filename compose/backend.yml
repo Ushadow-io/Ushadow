@@ -1,0 +1,36 @@
+# Backend service definition
+
+services:
+  backend:
+    build:
+      context: ../ushadow/backend
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-backend
+    env_file:
+      - ../.env.default  # Base defaults
+      - ../.env          # Environment overrides (if exists)
+    ports:
+      - "${BACKEND_PORT:-8010}:8010"
+    environment:
+      # Server configuration
+      - HOST=0.0.0.0
+      - PORT=8010
+      - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
+    volumes:
+      - ../ushadow/backend:/app
+      - /app/__pycache__
+      - /app/.pytest_cache
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true

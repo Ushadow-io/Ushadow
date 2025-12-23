@@ -1,0 +1,22 @@
+# Local Configuration Overrides
+# Copy this file to config.local.yaml and customize
+# config.local.yaml is Git-ignored and will not be committed
+
+# Example overrides:
+
+# api_keys:
+#   openai_api_key: "sk-your-actual-key-here"
+#   anthropic_api_key: "sk-ant-your-key-here"
+#   pieces_api_key: "your-pieces-token"
+
+# services:
+#   pieces:
+#     enabled: true
+#     url: "http://192.168.1.100:1000"  # Custom local Pieces instance
+#
+#   chronicle:
+#     url: "http://chronicle-backend:8100"  # Custom Chronicle URL
+
+# system:
+#   log_level: "DEBUG"
+#   debug_mode: true
