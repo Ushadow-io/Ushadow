@@ -16,9 +16,8 @@ fi
 echo ""
 echo "⚠️  WARNING: This will:"
 echo "   - Remove ALL admin users from the database"
-echo "   - Clear AUTH_SECRET_KEY from .env"
-echo "   - Clear ADMIN_PASSWORD from .env"
-echo "   - Allow you to run ./go.sh for a fresh setup"
+echo "   - Delete config/secrets.yaml (all API keys and credentials)"
+echo "   - Allow you to run ./quick-start.sh for a fresh setup"
 echo ""
 read -p "Are you sure? (yes/no): " -r
 echo ""
@@ -70,7 +69,16 @@ print("✅ Removed " + result.deletedCount + " admin user(s). Remaining admins: 
 ' || echo "⚠️  MongoDB operation may have failed - check if container is running"
 
 echo ""
-echo "🔐 Clearing auth variables from .env files..."
+echo "🗑️  Removing secrets.yaml..."
+if [ -f "config/secrets.yaml" ]; then
+    rm "config/secrets.yaml"
+    echo "   ✅ config/secrets.yaml removed"
+else
+    echo "   ℹ️  config/secrets.yaml not found (already clean)"
+fi
+
+echo ""
+echo "🔐 Clearing auth variables from .env files (deprecated - using secrets.yaml now)..."
 
 # Function to clear auth variables from a file
 clear_auth_vars() {
@@ -122,9 +130,8 @@ echo "✅ Admin reset complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "🚀 Next steps:"
-echo "   1. Clear your browser cache/localStorage (Cmd+Shift+R or hard refresh)"
-echo "   2. Visit the web UI - you'll be redirected to /setup"
-echo "   3. Create a new admin account"
+echo "   1. Run ./quick-start.sh to regenerate secrets and setup"
+echo "   2. Clear your browser cache (Cmd+Shift+R or hard refresh)"
+echo "   3. Log in with your new admin credentials"
 echo ""
-echo "💡 Or run ./go.sh to restart everything fresh"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

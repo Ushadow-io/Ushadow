@@ -7,8 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-webui
     env_file:
-      - ../.env.default  # Base defaults
-      - ../.env          # Environment overrides (if exists)
+      - ../.env          # Environment configuration
     environment:
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8010}
       - NODE_ENV=${NODE_ENV:-development}

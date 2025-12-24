@@ -1,9 +1,31 @@
 #!/bin/bash
+# set -e  # Exit on error
 
-# Ushadow Quick Start (with config.yml support)
-# Zero-configuration startup for local development
+# ============================================================================
+# APPLICATION CONFIGURATION
+# Customize these variables to use this script for different applications
+# ============================================================================
 
-set -e  # Exit on error
+# Application identity
+APP_NAME="ushadow"                  # Short name (lowercase for DB names, env names)
+APP_DISPLAY_NAME="Ushadow"          # Display name for UI messages
+
+# Directory structure
+SETUP_DIR="setup"                      # Setup utilities directory
+COMPOSE_OVERRIDES_DIR="compose/overrides"  # Docker Compose overrides
+
+# Docker Compose files
+INFRA_COMPOSE_FILE="docker-compose.infra.yml"  # Infrastructure services
+APP_COMPOSE_FILE="docker-compose.yml"                   # Application services (in APP_DIR)
+INFRA_PROJECT_NAME="infra"                              # Infrastructure compose project name
+
+# Default ports
+DEFAULT_BACKEND_PORT="8000"            # Backend API port
+DEFAULT_WEBUI_PORT="3000"              # Web UI port
+
+# ============================================================================
+# END CONFIGURATION - Do not modify below this line
+# ============================================================================
 
 # Colors for output
 RED='\033[0;31m'
@@ -13,10 +35,11 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Configuration
-ENV_FILE=".env"  # Main environment file (ports, databases)
-CONFIG_DIR="config"  # YAML config directory
-SECRETS_FILE="$CONFIG_DIR/secrets.yaml"  # Sensitive credentials (gitignored)
+# Derived configuration
+ENV_FILE=".env"
+CONFIG_DIR="config"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+SECRETS_FILE="${CONFIG_DIR}/secrets.yaml"
 
 # Parse arguments
 RESET_CONFIG=false
@@ -27,7 +50,7 @@ fi
 # Print header
 echo ""
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BOLD}🚀 Ushadow Quick Start${NC}"
+echo -e "${BOLD}🚀 ${APP_DISPLAY_NAME} Quick Start${NC}"
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
@@ -50,18 +73,18 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
     echo ""
     echo -e "${BOLD}Environment Name${NC}"
     echo -e "${YELLOW}For multi-worktree setups, give each environment a unique name${NC}"
-    echo -e "${YELLOW}Examples: ushadow, blue, gold, green, dev, staging${NC}"
+    echo -e "${YELLOW}Examples: ${APP_NAME}, blue, gold, green, dev, staging${NC}"
     echo ""
 
-    read -p "Environment name [ushadow]: " INPUT_ENV_NAME
-    ENV_NAME="${INPUT_ENV_NAME:-ushadow}"
+    read -p "Environment name [${APP_NAME}]: " INPUT_ENV_NAME
+    ENV_NAME="${INPUT_ENV_NAME:-${APP_NAME}}"
 
     # Convert to lowercase and replace spaces/special chars with hyphens
     ENV_NAME=$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/-$//')
 
     # Path to setup utilities
-    SETUP_UTILS="setup/setup_utils.py"
-    START_UTILS="setup/start_utils.py"
+    SETUP_UTILS="${SETUP_DIR}/setup_utils.py"
+    START_UTILS="${SETUP_DIR}/start_utils.py"
 
     # Prompt for port offset (for multi-worktree environments)
     echo ""
@@ -77,8 +100,8 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
         PORT_OFFSET="${INPUT_PORT_OFFSET:-0}"
 
         # Calculate application ports from offset (backend and frontend only)
-        BACKEND_PORT=$((8000 + PORT_OFFSET))
-        WEBUI_PORT=$((3000 + PORT_OFFSET))
+        BACKEND_PORT=$((DEFAULT_BACKEND_PORT + PORT_OFFSET))
+        WEBUI_PORT=$((DEFAULT_WEBUI_PORT + PORT_OFFSET))
 
         # Use Python utility for port validation
         set +e
@@ -140,13 +163,13 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
     TEST_WEBUI_PORT=$((3001 + PORT_OFFSET))
 
     # Set database and project names based on environment name
-    # Avoid chronicle-chronicle duplication
-    if [[ "$ENV_NAME" == "ushadow" ]]; then
-        MONGODB_DATABASE="ushadow"
-        COMPOSE_PROJECT_NAME="ushadow"
+    # Avoid app-app duplication (e.g., chronicle-chronicle)
+    if [[ "$ENV_NAME" == "${APP_NAME}" ]]; then
+        MONGODB_DATABASE="${APP_NAME}"
+        COMPOSE_PROJECT_NAME="${APP_NAME}"
     else
-        MONGODB_DATABASE="ushadow_${ENV_NAME}"
-        COMPOSE_PROJECT_NAME="ushadow-${ENV_NAME}"
+        MONGODB_DATABASE="${APP_NAME}_${ENV_NAME}"
+        COMPOSE_PROJECT_NAME="${APP_NAME}-${ENV_NAME}"
     fi
 
     echo ""
@@ -158,40 +181,15 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
     echo -e "  Database: ${MONGODB_DATABASE}"
     echo ""
 
-    # Prompt for admin credentials
-    echo ""
-    echo -e "${BOLD}Admin Account Setup${NC}"
-    echo -e "${YELLOW}Press Enter to use defaults shown in [brackets]${NC}"
-    echo ""
-
-    read -p "Admin Name [admin]: " INPUT_ADMIN_NAME
-    ADMIN_NAME="${INPUT_ADMIN_NAME:-admin}"
-
-    read -p "Admin Email [admin@ushadow.local]: " INPUT_ADMIN_EMAIL
-    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@ushadow.local}"
-
-    read -sp "Admin Password [ushadow-dev]: " INPUT_ADMIN_PASSWORD
-    echo ""
-    ADMIN_PASSWORD="${INPUT_ADMIN_PASSWORD:-ushadow-dev}"
-
-    echo ""
-    echo -e "${GREEN}✅ Admin account configured${NC}"
-    echo -e "  Name:     ${ADMIN_NAME}"
-    echo -e "  Email:    ${ADMIN_EMAIL}"
-    echo -e "  Password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
-    echo ""
-
     # Create minimal .env file with deployment config only
     cat > "$ENV_FILE" <<EOF
-# Ushadow Environment Configuration
+# ${APP_DISPLAY_NAME} Environment Configuration
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # DO NOT COMMIT - Contains environment-specific configuration
 #
 # This file contains ONLY deployment configuration (ports, databases).
-# Application config (API keys, services) managed via:
-#   - config/config.defaults.yaml (defaults)
-#   - config/config.local.yaml (local overrides)
-#   - config/services.yaml (service definitions)
+# Application config (API keys, providers) managed via config.yaml and secrets.yaml.
+# See .env.default for base defaults (committed to git).
 
 # ==========================================
 # ENVIRONMENT & PROJECT NAMING
@@ -221,86 +219,89 @@ HOST_IP=localhost
 # ==========================================
 # NOTE: Application Configuration
 # ==========================================
-# This file contains ONLY deployment configuration (ports, databases, networking).
-# 
-# Sensitive credentials (admin, API keys) are stored in:
-#   config/secrets.yaml (gitignored)
-#
-# Application configuration is stored in:
-#   config/config.defaults.yaml (defaults, version-controlled)
-#   config/config.local.yaml (local overrides, gitignored)
-#   config/services.yaml (service definitions, version-controlled)
-# 
-# To change admin credentials, edit config/secrets.yaml or run: ./quick-start.sh --reset
+# Admin credentials, API keys, and provider settings are managed via:
+# - Setup wizard (first run): http://localhost:${WEBUI_PORT}/register
+# - Settings page: http://localhost:${WEBUI_PORT}/settings
+# - Config files: ${APP_DIR}/config/config.yaml and secrets.yaml
 EOF
 
     chmod 600 "$ENV_FILE"
 
-    # Create secrets.yaml for sensitive credentials
-    mkdir -p "$CONFIG_DIR"
-    cat > "$SECRETS_FILE" <<EOF
-# Ushadow Secrets
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# DO NOT COMMIT - Contains sensitive credentials
-# This file is gitignored
+    # Generate secrets.yaml with security keys
+    echo ""
+    echo -e "${BLUE}🔐 Generating secrets...${NC}"
+    RESULT=$(python3 "$SETUP_UTILS" ensure-secrets "$SECRETS_FILE")
+    CREATED_NEW=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['created_new'])" 2>/dev/null || echo "true")
 
-# Admin Account
-admin:
-  name: "${ADMIN_NAME}"
-  email: "${ADMIN_EMAIL}"
-  password: "${ADMIN_PASSWORD}"
+    if [[ "$CREATED_NEW" == "True" ]] || [[ "$CREATED_NEW" == "true" ]]; then
+        echo -e "${GREEN}   ✅ Generated security keys in secrets.yaml${NC}"
+    else
+        echo -e "${GREEN}   ✅ Security keys already configured${NC}"
+    fi
 
-# API Keys (add your keys here)
-api_keys:
-  openai: ""
-  anthropic: ""
-  deepgram: ""
-  mistral: ""
-  pieces: ""
+    # Prompt for admin credentials
+    echo ""
+    echo -e "${BOLD}Admin Account Setup${NC}"
+    echo -e "${YELLOW}Create your administrator account${NC}"
+    echo ""
 
-# Service Credentials
-services:
-  openmemory:
-    api_key: ""
-  chronicle:
-    api_key: ""
-EOF
+    read -p "Admin name [admin]: " INPUT_ADMIN_NAME
+    ADMIN_NAME="${INPUT_ADMIN_NAME:-admin}"
 
-    chmod 600 "$SECRETS_FILE"
+    read -p "Admin email [admin@example.com]: " INPUT_ADMIN_EMAIL
+    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@example.com}"
+
+    # Password with confirmation
+    while true; do
+        read -sp "Admin password [password]: " INPUT_ADMIN_PASSWORD
+        echo ""
+        if [[ -z "$INPUT_ADMIN_PASSWORD" ]]; then
+            ADMIN_PASSWORD="password"
+            break
+        fi
+        read -sp "Confirm password: " INPUT_ADMIN_PASSWORD_CONFIRM
+        echo ""
+        if [[ "$INPUT_ADMIN_PASSWORD" == "$INPUT_ADMIN_PASSWORD_CONFIRM" ]]; then
+            ADMIN_PASSWORD="$INPUT_ADMIN_PASSWORD"
+            break
+        else
+            echo -e "${RED}Passwords do not match. Please try again.${NC}"
+        fi
+    done
+
+    # Update admin credentials in secrets.yaml
+    python3 -c "
+import yaml
+with open('$SECRETS_FILE', 'r') as f:
+    data = yaml.safe_load(f)
+if 'admin' not in data:
+    data['admin'] = {}
+data['admin']['name'] = '''$ADMIN_NAME'''
+data['admin']['email'] = '''$ADMIN_EMAIL'''
+data['admin']['password'] = '''$ADMIN_PASSWORD'''
+with open('$SECRETS_FILE', 'w') as f:
+    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+" 2>/dev/null
 
     echo ""
-    echo -e "${GREEN}✅ Configuration saved${NC}"
-    echo -e "  Deployment config: ${ENV_FILE}"
-    echo -e "  Secrets:           ${SECRETS_FILE}"
+    echo -e "${GREEN}✅ Admin credentials configured${NC}"
+
+    echo ""
+    echo -e "${GREEN}✅ Deployment configuration saved${NC}"
+    echo ""
+    echo -e "${YELLOW}📋 First-time setup will happen via web wizard${NC}"
     echo ""
     sleep 2
 else
     echo -e "${GREEN}✅ Using existing configuration${NC}"
-    
-    # Extract configuration from .env
+    # Extract ports from .env
     BACKEND_PORT=$(grep "^BACKEND_PORT=" "$ENV_FILE" | cut -d'=' -f2 | tr -d ' ')
     WEBUI_PORT=$(grep "^WEBUI_PORT=" "$ENV_FILE" | cut -d'=' -f2 | tr -d ' ')
-    
     # Set defaults if not found
-    BACKEND_PORT=${BACKEND_PORT:-8000}
-    WEBUI_PORT=${WEBUI_PORT:-3000}
-    
-    # Extract admin credentials from secrets.yaml if it exists
-    if [[ -f "$SECRETS_FILE" ]]; then
-        ADMIN_NAME=$(grep -A 3 "^admin:" "$SECRETS_FILE" | grep "name:" | cut -d'"' -f2 2>/dev/null || echo "admin")
-        ADMIN_EMAIL=$(grep -A 3 "^admin:" "$SECRETS_FILE" | grep "email:" | cut -d'"' -f2 2>/dev/null || echo "admin@ushadow.local")
-        ADMIN_PASSWORD=$(grep -A 3 "^admin:" "$SECRETS_FILE" | grep "password:" | cut -d'"' -f2 2>/dev/null || echo "ushadow-dev")
-    else
-        ADMIN_NAME="admin"
-        ADMIN_EMAIL="admin@ushadow.local"
-        ADMIN_PASSWORD="ushadow-dev"
-    fi
-    
+    BACKEND_PORT=${BACKEND_PORT:-${DEFAULT_BACKEND_PORT}}
+    WEBUI_PORT=${WEBUI_PORT:-${DEFAULT_WEBUI_PORT}}
     echo ""
-    echo -e "${BOLD}Login Credentials:${NC}"
-    echo -e "  Name:     ${ADMIN_NAME}"
-    echo -e "  Email:    ${ADMIN_EMAIL}"
-    echo -e "  Password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
+    echo -e "${YELLOW}📋 Login via web interface at http://localhost:${WEBUI_PORT}${NC}"
     echo ""
 fi
 
@@ -331,52 +332,21 @@ echo -e "${BLUE}🏗️  Starting infrastructure...${NC}"
 # Ensure Docker networks exist
 python3 "$START_UTILS" ensure-networks >/dev/null 2>&1 || true
 
-# Check if infrastructure is running
+# Check if infrastructure is running, start if needed
 INFRA_RUNNING=$(python3 "$START_UTILS" check-infrastructure 2>/dev/null | python3 -c "import sys, json; print(json.load(sys.stdin)['running'])" 2>/dev/null || echo "false")
 
 if [ "$INFRA_RUNNING" = "True" ]; then
     echo -e "${GREEN}   ✅ Infrastructure already running${NC}"
-    echo -e "      MongoDB: $(docker ps --filter 'name=mongo' --format '{{.Names}}')"
-    echo -e "      Redis:   $(docker ps --filter 'name=redis' --format '{{.Names}}')"
-    echo -e "      Qdrant:  $(docker ps --filter 'name=qdrant' --format '{{.Names}}')"
 else
-    echo -e "${YELLOW}   Starting infrastructure services...${NC}"
-    
-    # Start infrastructure (handles both existing stopped containers and creating new ones)
-    INFRA_RESULT=$(python3 "$START_UTILS" start-infrastructure "docker-compose.infra.yml" "ushadow-infra" 2>&1)
-    INFRA_SUCCESS=$(echo "$INFRA_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['success'])" 2>/dev/null || echo "false")
-    INFRA_MESSAGE=$(echo "$INFRA_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['message'])" 2>/dev/null || echo "Unknown error")
-    
-    if [ "$INFRA_SUCCESS" = "True" ]; then
-        echo -e "${GREEN}   ✅ Infrastructure started${NC}"
-        echo -e "      MongoDB: mongo"
-        echo -e "      Redis:   redis"
-        echo -e "      Qdrant:  qdrant"
-    else
-        echo -e "${RED}   ❌ Failed to start infrastructure${NC}"
-        echo -e "${YELLOW}      Error: $INFRA_MESSAGE${NC}"
-        echo ""
-        echo -e "${YELLOW}   Attempting manual container start...${NC}"
-        
-        # Try to start existing containers manually
-        docker start mongo redis qdrant >/dev/null 2>&1 || true
-        
-        # Check if they're running now
-        if docker ps --filter 'name=mongo' --filter 'status=running' -q | grep -q .; then
-            echo -e "${GREEN}   ✅ Infrastructure containers started manually${NC}"
-        else
-            echo -e "${RED}   ❌ Could not start infrastructure${NC}"
-            echo -e "${YELLOW}   Please check: docker ps -a | grep -E 'mongo|redis|qdrant'${NC}"
-            exit 1
-        fi
-    fi
+    python3 "$START_UTILS" start-infrastructure "${INFRA_COMPOSE_FILE}" "${INFRA_PROJECT_NAME}" >/dev/null 2>&1
+    echo -e "${GREEN}   ✅ Infrastructure started${NC}"
 fi
 echo ""
 
 # Start application
-echo -e "${BLUE}🚀 Starting Ushadow application...${NC}"
+echo -e "${BLUE}🚀 Starting ${APP_DISPLAY_NAME} application...${NC}"
 echo ""
-docker compose -f docker-compose.yml $COMPOSE_OVERRIDE_FILE up -d --build  # Build and start with .env overrides
+docker compose -f ${APP_COMPOSE_FILE} $COMPOSE_OVERRIDE_FILE up -d --build  # Build and start with .env overrides
 
 echo ""
 echo "   Waiting for backend to be healthy..."
@@ -388,7 +358,21 @@ BACKEND_HEALTHY=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load
 
 echo ""
 if [[ "$BACKEND_HEALTHY" == "True" ]]; then
-    echo -e "${GREEN}${BOLD}✅ ushadow is ready!${NC}"
+    echo -e "${GREEN}${BOLD}✅ ${APP_DISPLAY_NAME} is ready!${NC}"
+
+    # Create admin user from secrets.yaml
+    echo ""
+    echo -e "${BLUE}👤 Creating admin user...${NC}"
+    ADMIN_RESULT=$(python3 "$SETUP_UTILS" create-admin "$BACKEND_PORT" "$SECRETS_FILE" 2>&1)
+    ADMIN_SUCCESS=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['success'])" 2>/dev/null || echo "false")
+
+    if [[ "$ADMIN_SUCCESS" == "True" ]]; then
+        ADMIN_MESSAGE=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['message'])" 2>/dev/null || echo "Success")
+        echo -e "${GREEN}   ✅ ${ADMIN_MESSAGE}${NC}"
+    else
+        ADMIN_ERROR=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', 'Unknown error'))" 2>/dev/null || echo "Failed")
+        echo -e "${YELLOW}   ⚠️  ${ADMIN_ERROR}${NC}"
+    fi
 else
     echo -e "${YELLOW}⚠️  Backend is starting... (may take a moment)${NC}"
 fi
@@ -396,7 +380,7 @@ fi
 echo ""
 echo -e "${BOLD}╔════════════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}║                                                    ║${NC}"
-echo -e "${BOLD}║  ${GREEN}🚀 ushadow is ready!${NC}${BOLD}                          ║${NC}"
+echo -e "${BOLD}║  ${GREEN}🚀 ${APP_DISPLAY_NAME} is ready!${NC}${BOLD}                          ║${NC}"
 echo -e "${BOLD}║                                                    ║${NC}"
 echo -e "${BOLD}║     ${GREEN}${BOLD}http://localhost:${WEBUI_PORT}${NC}${BOLD}                          ║${NC}"
 echo -e "${BOLD}║                                                    ║${NC}"
@@ -409,21 +393,17 @@ echo -e "${BOLD}║                                                    ║${NC}"
 echo -e "${BOLD}╚════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Login instructions
-echo -e "${BOLD}📋 Login & Next Steps:${NC}"
+# First-time setup instructions
+echo -e "${BOLD}📋 First-Time Setup:${NC}"
 echo ""
-echo "  1. Open the web interface: http://localhost:${WEBUI_PORT}"
-echo "  2. Login with the credentials below"
-echo "  3. Add API keys to config/secrets.yaml"
-echo "  4. Configure services in Settings page"
+echo "  1. Open the web interface (link above)"
+echo "  2. Complete the setup wizard:"
+echo "     • Create admin account"
+echo "     • Configure API keys (OpenAI, Deepgram, etc.)"
+echo "     • Select LLM and memory providers"
+echo "     • Set up OpenMemory (optional)"
 echo ""
-echo -e "${BOLD}Admin Credentials:${NC}"
-echo -e "  Email:    ${ADMIN_EMAIL}"
-echo -e "  Password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
-echo ""
-echo -e "${BOLD}Configuration Files:${NC}"
-echo -e "  Deployment: ${ENV_FILE}"
-echo -e "  Secrets:    ${SECRETS_FILE}"
+echo -e "  ${GREEN}✓${NC} After setup, all settings managed via Settings page"
 echo ""
 
 # Check for Tailscale

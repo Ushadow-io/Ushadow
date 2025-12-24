@@ -9,6 +9,8 @@ import sys
 import socket
 import subprocess
 import json
+import secrets
+from pathlib import Path
 from typing import Optional, List, Tuple
 
 # Import Docker network management
@@ -17,6 +19,11 @@ from docker_utils import DockerNetworkManager
 # Enable debug mode via environment variable
 import os
 DEBUG = os.getenv("SETUP_UTILS_DEBUG", "").lower() in ("1", "true", "yes")
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 
 def check_port_in_use(port: int) -> bool:
@@ -339,6 +346,102 @@ def clear_admin_password(env_file: str) -> bool:
         return False
 
 
+def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
+    """
+    Ensure secrets.yaml exists with all required security keys.
+    Generates missing keys but preserves existing ones.
+
+    Args:
+        secrets_file: Path to secrets.yaml file
+
+    Returns:
+        Tuple of (created_new_keys: bool, secrets_dict: dict)
+    """
+    from pathlib import Path
+
+    if yaml is None:
+        print("Error: PyYAML not installed. Run: pip install pyyaml", file=sys.stderr)
+        return False, {}
+
+    secrets_path = Path(secrets_file)
+    created_new = False
+
+    # Load existing secrets or create new structure
+    if secrets_path.exists():
+        try:
+            with open(secrets_path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Warning: Could not load {secrets_file}: {e}", file=sys.stderr)
+            data = {}
+    else:
+        data = {}
+        created_new = True
+
+    # Ensure security section exists
+    if 'security' not in data:
+        data['security'] = {}
+        created_new = True
+
+    # Generate auth_secret_key if missing
+    if not data['security'].get('auth_secret_key'):
+        data['security']['auth_secret_key'] = secrets.token_urlsafe(32)
+        created_new = True
+
+    # Generate session_secret if missing
+    if not data['security'].get('session_secret'):
+        data['security']['session_secret'] = secrets.token_urlsafe(32)
+        created_new = True
+
+    # Ensure admin section exists with defaults
+    if 'admin' not in data:
+        data['admin'] = {
+            'name': 'admin',
+            'email': 'admin@example.com',
+            'password': 'password'
+        }
+
+    # Ensure api_keys section exists
+    if 'api_keys' not in data:
+        data['api_keys'] = {
+            'openai': '',
+            'anthropic': '',
+            'deepgram': '',
+            'mistral': '',
+            'pieces': ''
+        }
+
+    # Ensure services section exists
+    if 'services' not in data:
+        data['services'] = {
+            'openmemory': {'api_key': ''},
+            'chronicle': {'api_key': ''}
+        }
+
+    # Write back to file
+    try:
+        secrets_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(secrets_path, 'w') as f:
+            # Write header comment
+            f.write(f"# Ushadow Secrets\n")
+            f.write(f"# Generated: {subprocess.check_output(['date', '-u', '+%Y-%m-%dT%H:%M:%SZ'], text=True).strip()}\n")
+            f.write(f"# DO NOT COMMIT - Contains sensitive credentials\n")
+            f.write(f"# This file is gitignored\n\n")
+
+            # Write YAML data
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+        # Set restrictive permissions
+        secrets_path.chmod(0o600)
+
+        return created_new, data
+
+    except Exception as e:
+        print(f"Warning: Could not write {secrets_file}: {e}", file=sys.stderr)
+        return created_new, data
+
+
 
 
 if __name__ == '__main__':
@@ -354,3 +457,55 @@ if __name__ == '__main__':
         env_file = sys.argv[2] if len(sys.argv) > 2 else 'backends/advanced/.env'
         created, key = ensure_auth_secret_key(env_file)
         print(json.dumps({'created': created}))
+
+    elif cmd == 'ensure-secrets':
+        secrets_file = sys.argv[2] if len(sys.argv) > 2 else 'config/secrets.yaml'
+        created_new, secrets_data = ensure_secrets_yaml(secrets_file)
+        print(json.dumps({'created_new': created_new, 'has_auth_key': bool(secrets_data.get('security', {}).get('auth_secret_key'))}))
+
+    elif cmd == 'create-admin':
+        backend_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8010
+        secrets_file = sys.argv[3] if len(sys.argv) > 3 else 'config/secrets.yaml'
+
+        # Load admin credentials from secrets.yaml
+        if yaml is None:
+            print(json.dumps({'success': False, 'error': 'PyYAML not installed'}))
+            sys.exit(1)
+
+        try:
+            with open(secrets_file, 'r') as f:
+                secrets_data = yaml.safe_load(f) or {}
+
+            admin = secrets_data.get('admin', {})
+            name = admin.get('name', 'admin')
+            email = admin.get('email', 'admin@example.com')
+            password = admin.get('password', 'password')
+
+            # Call backend setup API
+            import requests
+            response = requests.post(
+                f'http://localhost:{backend_port}/api/auth/setup',
+                json={
+                    'display_name': name,
+                    'email': email,
+                    'password': password,
+                    'confirm_password': password
+                },
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                print(json.dumps({'success': True, 'message': 'Admin user created'}))
+            elif response.status_code == 409:
+                # Already exists
+                print(json.dumps({'success': True, 'message': 'Admin user already exists'}))
+            else:
+                print(json.dumps({'success': False, 'error': response.text}))
+                sys.exit(1)
+
+        except requests.exceptions.ConnectionError:
+            print(json.dumps({'success': False, 'error': 'Backend not reachable'}))
+            sys.exit(1)
+        except Exception as e:
+            print(json.dumps({'success': False, 'error': str(e)}))
+            sys.exit(1)

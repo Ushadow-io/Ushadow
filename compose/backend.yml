@@ -7,8 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-backend
     env_file:
-      - ../.env.default  # Base defaults
-      - ../.env          # Environment overrides (if exists)
+      - ../.env          # Environment configuration
     ports:
       - "${BACKEND_PORT:-8010}:8010"
     environment:
@@ -18,6 +17,7 @@ services:
       - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
     volumes:
       - ../ushadow/backend:/app
+      - ../config:/config:ro  # Mount config directory (read-only)
       - /app/__pycache__
       - /app/.pytest_cache
     networks:

@@ -35,28 +35,21 @@ else
 fi
 echo ""
 
-# Check if .env exists, if not create from defaults
+# Check if .env exists
 if [ ! -f .env ]; then
-    echo "📝 Creating .env from .env.default..."
-    cp .env.default .env
+    echo "❌ Error: .env file not found"
+    echo "   Run ./quick-start.sh to generate configuration"
+    exit 1
 fi
 
-    # Generate secure secret
-    if command -v openssl &> /dev/null; then
-        AUTH_SECRET_KEY=$(openssl rand -hex 32)
-        SESSION_SECRET=$(openssl rand -hex 32)
-    else
-        # Fallback for systems without openssl
-        AUTH_SECRET_KEY=$(head -c 32 /dev/urandom | xxd -p -c 64)
-        SESSION_SECRET=$(head -c 32 /dev/urandom | xxd -p -c 64)
-    fi
+# Ensure secrets.yaml exists with generated security keys
+RESULT=$(python3 setup/setup_utils.py ensure-secrets "config/secrets.yaml")
+CREATED_NEW=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['created_new'])" 2>/dev/null || echo "true")
 
-RESULT=$(python3 setup/setup_utils.py ensure-auth-key "config/secrets.yml")
-CREATED=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['created'])")
-if [ "$CREATED" = "true" ]; then
-    echo "🔐 Generated secure AUTH_SECRET_KEY"
+if [ "$CREATED_NEW" = "True" ] || [ "$CREATED_NEW" = "true" ]; then
+    echo "🔐 Generated security keys in config/secrets.yaml"
 else
-    echo "✅ AUTH_SECRET_KEY already set"
+    echo "✅ Security keys already configured"
 fi
 
 
@@ -102,9 +95,6 @@ fi
 
 echo ""
 echo "✅ Ushadow is running!"
-echo ""
-echo "📱 Opening web UI registration screen..."
-echo "   You'll be prompted to create your admin account"
 echo ""
 
 # Get webui port
