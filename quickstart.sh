@@ -31,7 +31,7 @@ echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Check we're in the right directory
-if [ ! -f "docker-compose.yml" ] || [ ! -f "compose/infrastructure-shared.yml" ]; then
+if [ ! -f "docker-compose.yml" ] || [ ! -f "docker-compose.infra.yml" ]; then
     echo -e "${RED}❌ Error: Must be run from the root directory${NC}"
     echo "   cd to the directory containing docker-compose.yml and compose/"
     exit 1
@@ -177,7 +177,7 @@ if [[ "$use_dev_server" == "n" ]] || [[ "$use_dev_server" == "N" ]]; then
     echo -e "${BLUE}   Using production build (no hot-reload)${NC}"
 else
     USE_DEV_SERVER=true
-    COMPOSE_OVERRIDE_FILE="-f ../compose/overrides/dev-webui.yml"
+    COMPOSE_OVERRIDE_FILE="-f compose/overrides/dev-webui.yml"
     echo -e "${GREEN}   Using dev server with hot-reload${NC}"
 fi
 echo ""
@@ -204,7 +204,7 @@ if [ "$INFRA_RUNNING" = "True" ]; then
     echo -e "      Qdrant:  $(docker ps --filter 'name=qdrant' --format '{{.Names}}')"
 else
     echo -e "${YELLOW}   Starting infrastructure services...${NC}"
-    python3 "$START_UTILS" start-infrastructure "compose/infrastructure-shared.yml" "infra" >/dev/null 2>&1
+    python3 "$START_UTILS" start-infrastructure  >/dev/null 2>&1
     echo -e "${GREEN}   ✅ Infrastructure started${NC}"
 fi
 echo ""

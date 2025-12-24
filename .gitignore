@@ -144,6 +144,13 @@ ENV/
 env.bak/
 venv.bak/
 
+# ushadow Configuration (contains API keys)
+config.yml
+backend/config.yml
+
+# Frontend local environment (dev overrides)
+frontend/.env.local
+
 # Spyder project settings
 .spyderproject
 .spyproject

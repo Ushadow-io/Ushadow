@@ -1,9 +1,12 @@
-# Local configuration overrides (contains secrets)
+# Local configuration overrides (not version controlled)
 config.local.yaml
 
-# Service secrets (encrypted but still sensitive)
+# Secrets file - contains sensitive credentials
+secrets.yaml
 services.secrets.yaml
+*.secrets.yaml
 
 # Backup files
 *.bak
 *.backup
+*.tmp

@@ -50,21 +50,50 @@ def check_docker_available() -> bool:
 
 def check_infrastructure_running() -> bool:
     """
-    Check if Chronicle infrastructure is running (checks for mongo container).
+    Check if infrastructure containers are running.
+    Checks for mongo, redis, and qdrant containers.
 
     Returns:
-        True if infrastructure is running, False otherwise
+        True if all infrastructure containers are running, False otherwise
     """
     try:
-        result = subprocess.run(
-            ["docker", "ps", "--filter", "name=^mongo$", "--filter", "status=running", "-q"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        return bool(result.stdout.strip())
+        # Check each infrastructure service
+        for service in ["mongo", "redis", "qdrant"]:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"name=^{service}$", "--filter", "status=running", "-q"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if not result.stdout.strip():
+                return False
+        return True
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+def check_infrastructure_exists() -> Tuple[bool, list]:
+    """
+    Check if infrastructure containers exist (running or stopped).
+
+    Returns:
+        Tuple of (all_exist: bool, existing_containers: list)
+    """
+    existing = []
+    try:
+        for service in ["mongo", "redis", "qdrant"]:
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", f"name=^{service}$", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.stdout.strip():
+                existing.append(service)
+        
+        return len(existing) == 3, existing
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False, existing
 
 
 def start_infrastructure(
@@ -73,7 +102,12 @@ def start_infrastructure(
     wait_seconds: int = 3
 ) -> Tuple[bool, str]:
     """
-    Start Chronicle infrastructure using docker compose.
+    Start infrastructure using docker compose or existing containers.
+    
+    Smart startup that:
+    1. Checks if containers exist but are stopped -> starts them
+    2. If containers don't exist -> creates them with docker compose
+    3. If already running -> does nothing
 
     Args:
         compose_file: Path to compose file (default: compose/infrastructure-shared.yml)
@@ -84,11 +118,33 @@ def start_infrastructure(
         Tuple of (success: bool, message: str)
     """
     try:
+        # Check if infrastructure containers exist
+        all_exist, existing = check_infrastructure_exists()
+        
+        if all_exist:
+            # Containers exist, just start them
+            for container in existing:
+                result = subprocess.run(
+                    ["docker", "start", container],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    return False, f"Failed to start {container}: {result.stderr}"
+            
+            # Wait for services to initialize
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+            
+            return True, f"Started existing infrastructure containers: {', '.join(existing)}"
+        
+        # Containers don't exist, create them with docker compose
         # Check if compose file exists
         if not Path(compose_file).exists():
             return False, f"Compose file not found: {compose_file}"
 
-        # Start infrastructure
+        # Create and start infrastructure
         result = subprocess.run(
             ["docker", "compose", "-f", compose_file, "-p", project_name, "up", "-d"],
             capture_output=True,
@@ -103,12 +159,12 @@ def start_infrastructure(
         if wait_seconds > 0:
             time.sleep(wait_seconds)
 
-        return True, "Infrastructure started successfully"
+        return True, "Infrastructure created and started successfully"
 
     except subprocess.TimeoutExpired:
         return False, "Timeout starting infrastructure"
     except FileNotFoundError:
-        return False, "Docker compose not found"
+        return False, "Docker not found"
     except Exception as e:
         return False, f"Error starting infrastructure: {e}"
 
@@ -177,6 +233,9 @@ if __name__ == '__main__':
     elif cmd == 'check-infrastructure':
         running = check_infrastructure_running()
         print(json.dumps({'running': running}))
+    elif cmd == 'check-infrastructure-exists':
+        all_exist, existing = check_infrastructure_exists()
+        print(json.dumps({'all_exist': all_exist, 'existing': existing}))
     elif cmd == 'start-infrastructure':
         compose_file = sys.argv[2] if len(sys.argv) > 2 else 'docker-compose.infra.yml'
         project_name = sys.argv[3] if len(sys.argv) > 3 else 'infra'
