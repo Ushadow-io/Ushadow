@@ -39,8 +39,11 @@ interface JoinToken {
 }
 
 export default function ClusterPage() {
+  const [activeTab, setActiveTab] = useState<'registered' | 'discovered'>('registered')
   const [unodes, setUnodes] = useState<UNode[]>([])
+  const [discoveredPeers, setDiscoveredPeers] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [discoveringPeers, setDiscoveringPeers] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showTokenModal, setShowTokenModal] = useState(false)
   const [newToken, setNewToken] = useState<JoinToken | null>(null)
@@ -53,6 +56,12 @@ export default function ClusterPage() {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    if (activeTab === 'discovered') {
+      loadDiscoveredPeers()
+    }
+  }, [activeTab])
+
   const loadUnodes = async () => {
     try {
       setError(null)
@@ -63,6 +72,32 @@ export default function ClusterPage() {
       setError(err.response?.data?.detail || 'Failed to load cluster nodes')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadDiscoveredPeers = async () => {
+    try {
+      setDiscoveringPeers(true)
+      setError(null)
+      const response = await clusterApi.discoverPeers()
+      setDiscoveredPeers(response.data)
+    } catch (err: any) {
+      console.error('Error discovering peers:', err)
+      setError(err.response?.data?.detail || 'Failed to discover Tailscale peers')
+    } finally {
+      setDiscoveringPeers(false)
+    }
+  }
+
+  const handleClaimNode = async (hostname: string, tailscaleIp: string) => {
+    if (!confirm(`Claim ${hostname} and register it to this leader?`)) return
+    try {
+      await clusterApi.claimNode(hostname, tailscaleIp)
+      // Refresh both lists
+      await loadUnodes()
+      await loadDiscoveredPeers()
+    } catch (err: any) {
+      alert(`Failed to claim node: ${err.response?.data?.detail || err.message}`)
     }
   }
 
@@ -165,7 +200,40 @@ export default function ClusterPage() {
         </button>
       </div>
 
-      {/* Stats */}
+      {/* Tabs */}
+      <div className="flex space-x-1 border-b border-neutral-200 dark:border-neutral-700">
+        <button
+          onClick={() => setActiveTab('registered')}
+          className={`px-4 py-3 font-medium transition-colors relative ${
+            activeTab === 'registered'
+              ? 'text-primary-600 dark:text-primary-400'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100'
+          }`}
+          data-testid="registered-tab"
+        >
+          Registered Nodes
+          {activeTab === 'registered' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-600 dark:bg-primary-400" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('discovered')}
+          className={`px-4 py-3 font-medium transition-colors relative ${
+            activeTab === 'discovered'
+              ? 'text-primary-600 dark:text-primary-400'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100'
+          }`}
+          data-testid="discovered-tab"
+        >
+          Discovered Peers
+          {activeTab === 'discovered' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-600 dark:bg-primary-400" />
+          )}
+        </button>
+      </div>
+
+      {/* Stats - Only show for registered tab */}
+      {activeTab === 'registered' && (
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card-hover p-4">
           <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Total Nodes</p>
@@ -190,6 +258,7 @@ export default function ClusterPage() {
           <HardDrive className="h-8 w-8 text-neutral-300 dark:text-neutral-600" />
         </div>
       </div>
+      )}
 
       {/* Error State */}
       {error && (
@@ -198,16 +267,19 @@ export default function ClusterPage() {
         </div>
       )}
 
-      {/* Loading State */}
-      {loading && (
-        <div className="text-center py-12">
-          <RefreshCw className="h-12 w-12 text-neutral-400 mx-auto mb-4 animate-spin" />
-          <p className="text-neutral-600 dark:text-neutral-400">Loading cluster...</p>
-        </div>
-      )}
+      {/* Registered Tab Content */}
+      {activeTab === 'registered' && (
+        <>
+          {/* Loading State */}
+          {loading && (
+            <div className="text-center py-12">
+              <RefreshCw className="h-12 w-12 text-neutral-400 mx-auto mb-4 animate-spin" />
+              <p className="text-neutral-600 dark:text-neutral-400">Loading cluster...</p>
+            </div>
+          )}
 
-      {/* Nodes Grid */}
-      {!loading && (
+          {/* Nodes Grid */}
+          {!loading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {unodes.map((node) => (
             <div key={node.id} className="card-hover p-6">
@@ -281,6 +353,121 @@ export default function ClusterPage() {
               )}
             </div>
           ))}
+        </div>
+      )}
+        </>
+      )}
+
+      {/* Discovered Tab Content */}
+      {activeTab === 'discovered' && (
+        <div className="space-y-4">
+          {discoveringPeers && (
+            <div className="text-center py-12">
+              <RefreshCw className="h-12 w-12 text-neutral-400 mx-auto mb-4 animate-spin" />
+              <p className="text-neutral-600 dark:text-neutral-400">Discovering Tailscale peers...</p>
+            </div>
+          )}
+
+          {!discoveringPeers && discoveredPeers && (
+            <>
+              {/* Available Nodes */}
+              {discoveredPeers.peers.available.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-3">
+                    Available Nodes ({discoveredPeers.counts.available})
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {discoveredPeers.peers.available.map((peer: any, idx: number) => (
+                      <div key={`${peer.tailscale_ip}-${idx}`} className="card-hover p-6 border-2 border-warning-200 dark:border-warning-800">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="p-2 rounded-lg bg-warning-100 dark:bg-warning-900/30">
+                              <Server className="h-6 w-6 text-warning-600 dark:text-warning-400" />
+                            </div>
+                            <div>
+                              <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                                {peer.hostname || 'Unknown'}
+                              </h3>
+                              <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                                {peer.os || 'unknown'}
+                              </p>
+                            </div>
+                          </div>
+                          {peer.online && (
+                            <CheckCircle className="h-5 w-5 text-success-600" />
+                          )}
+                        </div>
+
+                        <div className="mb-4 text-sm">
+                          <span className="text-neutral-500 dark:text-neutral-400">IP: </span>
+                          <span className="font-mono text-neutral-700 dark:text-neutral-300">{peer.tailscale_ip}</span>
+                        </div>
+
+                        {peer.registered_to === 'other_leader' && (
+                          <div className="mb-4 text-xs text-warning-600 dark:text-warning-400">
+                            ⚠️ Registered to another leader
+                          </div>
+                        )}
+
+                        <button
+                          onClick={() => handleClaimNode(peer.hostname, peer.tailscale_ip)}
+                          className="w-full btn-secondary text-sm"
+                        >
+                          Claim Node
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Unknown Peers */}
+              {discoveredPeers.peers.unknown.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-3">
+                    Other Tailscale Peers ({discoveredPeers.counts.unknown})
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {discoveredPeers.peers.unknown.map((peer: any, idx: number) => (
+                      <div key={`${peer.tailscale_ip}-${idx}`} className="card-hover p-6 opacity-60">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="p-2 rounded-lg bg-neutral-200 dark:bg-neutral-700">
+                              <Monitor className="h-6 w-6 text-neutral-600 dark:text-neutral-400" />
+                            </div>
+                            <div>
+                              <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                                {peer.hostname || 'Unknown'}
+                              </h3>
+                              <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                                {peer.os || 'unknown'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-sm">
+                          <span className="text-neutral-500 dark:text-neutral-400">IP: </span>
+                          <span className="font-mono text-neutral-700 dark:text-neutral-300">{peer.tailscale_ip}</span>
+                        </div>
+
+                        <div className="mt-4 text-xs text-neutral-500 dark:text-neutral-400">
+                          No u-node manager detected
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {discoveredPeers.peers.available.length === 0 && discoveredPeers.peers.unknown.length === 0 && (
+                <div className="text-center py-12">
+                  <Server className="h-12 w-12 text-neutral-400 mx-auto mb-4" />
+                  <p className="text-neutral-600 dark:text-neutral-400">No unregistered peers found on Tailscale network</p>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 

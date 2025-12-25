@@ -175,6 +175,92 @@ async def list_unodes(
     return UNodeListResponse(unodes=unodes, total=len(unodes))
 
 
+@router.get("/discover/peers", response_model=dict)
+async def discover_peers(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Discover all Tailscale peers on the network.
+    
+    Returns:
+    - registered: Nodes registered to this leader
+    - available: Nodes with u-node manager but not registered here
+    - unknown: Other Tailscale peers without u-node manager
+    """
+    unode_manager = await get_unode_manager()
+    peers = await unode_manager.discover_tailscale_peers()
+    
+    # Categorize peers by status
+    categorized = {
+        "registered": [],
+        "available": [],
+        "unknown": []
+    }
+    
+    for peer in peers:
+        status = peer.get("status", "unknown")
+        categorized.get(status, categorized["unknown"]).append(peer)
+    
+    return {
+        "peers": categorized,
+        "total": len(peers),
+        "counts": {k: len(v) for k, v in categorized.items()}
+    }
+
+
+@router.post("/claim", response_model=UNodeRegistrationResponse)
+async def claim_node(
+    request: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Claim an available u-node by registering it to this leader.
+    
+    This endpoint allows claiming nodes that are:
+    - Discovered on Tailscale network
+    - Running u-node manager
+    - Either unregistered or registered to another leader
+    """
+    hostname = request.get("hostname")
+    tailscale_ip = request.get("tailscale_ip")
+    
+    if not hostname or not tailscale_ip:
+        raise HTTPException(status_code=400, detail="hostname and tailscale_ip are required")
+    
+    unode_manager = await get_unode_manager()
+    
+    # Create a registration request for this node
+    unode_create = UNodeCreate(
+        hostname=hostname,
+        tailscale_ip=tailscale_ip,
+        platform="linux",  # Will be updated by actual registration
+        manager_version="0.1.0",
+        role=UNodeRole.WORKER,
+        capabilities=None  # Will be provided by the node
+    )
+    
+    # For now, create a basic registration
+    # In a full implementation, you'd want to contact the node's u-node manager
+    # and have it re-register with this leader
+    success, unode, error = await unode_manager.register_unode(
+        token_doc=None,  # Claiming doesn't require a token
+        unode_data=unode_create
+    )
+    
+    if not success:
+        return UNodeRegistrationResponse(
+            success=False,
+            message=error,
+            unode=None
+        )
+    
+    return UNodeRegistrationResponse(
+        success=True,
+        message=f"Successfully claimed node {hostname}",
+        unode=unode
+    )
+
+
 @router.get("/{hostname}", response_model=UNode)
 async def get_unode(
     hostname: str,

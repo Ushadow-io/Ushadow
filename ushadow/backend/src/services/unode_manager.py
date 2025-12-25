@@ -2,10 +2,11 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -565,6 +566,131 @@ Write-Host ""
 
         if result.modified_count > 0:
             logger.info(f"Marked {result.modified_count} stale u-nodes as offline")
+
+    async def discover_tailscale_peers(self) -> List[Dict[str, Any]]:
+        """
+        Discover all Tailscale peers on the network and probe for u-node managers.
+        
+        Returns list of discovered peers with their status:
+        - registered: Node is registered to this leader
+        - available: Node has u-node manager but not registered
+        - unknown: Tailscale peer with no u-node manager detected
+        """
+        discovered_peers = []
+        
+        try:
+            # Get Tailscale peer list
+            result = await asyncio.create_subprocess_exec(
+                "tailscale", "status", "--json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode != 0:
+                logger.warning(f"Tailscale status failed: {stderr.decode()}")
+                return []
+            
+            status_data = json.loads(stdout.decode())
+            peers = status_data.get("Peer", {})
+            
+            # Get registered nodes for comparison
+            registered_nodes = await self.list_unodes()
+            registered_ips = {node.tailscale_ip for node in registered_nodes if node.tailscale_ip}
+            registered_hostnames = {node.hostname for node in registered_nodes}
+            
+            # Probe each peer for u-node manager
+            for peer_id, peer_info in peers.items():
+                hostname = peer_info.get("DNSName", "").split(".")[0]  # Get short hostname
+                tailscale_ip = peer_info.get("TailscaleIPs", [None])[0]
+                
+                if not tailscale_ip:
+                    continue
+                
+                peer_data = {
+                    "hostname": hostname,
+                    "tailscale_ip": tailscale_ip,
+                    "os": peer_info.get("OS", "unknown"),
+                    "online": peer_info.get("Online", False),
+                    "last_seen": peer_info.get("LastSeen"),
+                }
+                
+                # Check if already registered
+                if tailscale_ip in registered_ips or hostname in registered_hostnames:
+                    peer_data["status"] = "registered"
+                    # Get full registered node info
+                    for node in registered_nodes:
+                        if node.tailscale_ip == tailscale_ip or node.hostname == hostname:
+                            peer_data["registered_to"] = "this_leader"
+                            peer_data["role"] = node.role
+                            peer_data["node_id"] = node.id
+                            break
+                else:
+                    # Probe for u-node manager on port 8444
+                    has_unode_manager = await self._probe_unode_manager(tailscale_ip, 8444)
+                    
+                    if has_unode_manager:
+                        peer_data["status"] = "available"
+                        # Try to get more info from the u-node manager
+                        node_info = await self._get_unode_info(tailscale_ip, 8444)
+                        if node_info:
+                            peer_data.update(node_info)
+                            # Check if registered to another leader
+                            if node_info.get("leader_ip") and node_info.get("leader_ip") != await self._get_own_tailscale_ip():
+                                peer_data["registered_to"] = "other_leader"
+                                peer_data["leader_ip"] = node_info["leader_ip"]
+                    else:
+                        peer_data["status"] = "unknown"
+                
+                discovered_peers.append(peer_data)
+            
+        except Exception as e:
+            logger.error(f"Error discovering Tailscale peers: {e}")
+        
+        return discovered_peers
+    
+    async def _probe_unode_manager(self, ip: str, port: int, timeout: float = 2.0) -> bool:
+        """Check if a u-node manager is running on the given IP:port."""
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"http://{ip}:{port}/health",
+                    timeout=aiohttp.ClientTimeout(total=timeout)
+                ) as response:
+                    return response.status == 200
+        except Exception:
+            return False
+    
+    async def _get_unode_info(self, ip: str, port: int, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Get u-node manager info from the given IP:port."""
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"http://{ip}:{port}/unode/info",
+                    timeout=aiohttp.ClientTimeout(total=timeout)
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+        except Exception:
+            pass
+        return None
+    
+    async def _get_own_tailscale_ip(self) -> Optional[str]:
+        """Get this leader's Tailscale IP."""
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "tailscale", "ip", "-4",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await result.communicate()
+            if result.returncode == 0:
+                return stdout.decode().strip()
+        except Exception as e:
+            logger.warning(f"Could not get own Tailscale IP: {e}")
+        return None
 
     async def get_join_script(self, token: str) -> str:
         """Generate the join script for a token."""
