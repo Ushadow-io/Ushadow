@@ -112,7 +112,7 @@ class UshadowManager:
 
         try:
             async with self.session.post(
-                f"{self.leader_url}/api/nodes/heartbeat",
+                f"{self.leader_url}/api/unodes/heartbeat",
                 json=heartbeat_data
             ) as response:
                 if response.status == 200:

@@ -15,6 +15,7 @@ import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
+import ClusterPage from './pages/ClusterPage'
 
 function App() {
   return (
@@ -45,6 +46,7 @@ function App() {
                 <Route path="agent-zero" element={<AgentZeroPage />} />
                 <Route path="n8n" element={<N8NPage />} />
                 <Route path="services" element={<ServicesPage />} />
+                <Route path="cluster" element={<ClusterPage />} />
                 <Route path="settings" element={<SettingsPage />} />
 
                 {/* Catch-all redirect to dashboard */}

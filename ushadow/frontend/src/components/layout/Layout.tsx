@@ -1,6 +1,6 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 
@@ -30,6 +30,7 @@ export default function Layout() {
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow },
     { path: '/services', label: 'Services', icon: Server },
+    { path: '/cluster', label: 'Cluster', icon: Network },
     { path: '/settings', label: 'Settings', icon: Settings },
     ...(isAdmin ? [
       { path: '/users', label: 'User Management', icon: Users },
