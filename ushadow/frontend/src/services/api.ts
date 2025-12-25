@@ -164,3 +164,18 @@ export const usersApi = {
   update: (id: string, userData: any) => api.put(`/api/users/${id}`, userData),
   delete: (id: string) => api.delete(`/api/users/${id}`),
 }
+
+// Wizard endpoints
+export const wizardApi = {
+  getStatus: () => api.get('/api/wizard/status'),
+  getApiKeys: () => api.get('/api/wizard/api-keys'),
+  updateApiKeys: (apiKeys: {
+    openai_api_key?: string
+    deepgram_api_key?: string
+    mistral_api_key?: string
+    anthropic_api_key?: string
+  }) => api.put('/api/wizard/api-keys', apiKeys),
+  detectEnvKeys: () => api.get('/api/wizard/detect-env-keys'),
+  importEnvKeys: () => api.post('/api/wizard/import-env-keys'),
+  complete: () => api.post('/api/wizard/complete'),
+}
