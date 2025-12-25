@@ -55,11 +55,6 @@ async def lifespan(app: FastAPI):
     await feature_flag_service.startup()
     logger.info("✓ Feature flags initialized")
 
-    yield
-
-    # Cleanup feature flags
-    await feature_flag_service.shutdown()
-
     # Initialize MongoDB connection and u-node manager
     client = AsyncIOMotorClient(settings.MONGODB_URI)
     db = client[settings.MONGODB_DATABASE]
@@ -73,6 +68,7 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     stale_check_task.cancel()
+    await feature_flag_service.shutdown()
     client.close()
     logger.info("ushadow shutting down...")
 

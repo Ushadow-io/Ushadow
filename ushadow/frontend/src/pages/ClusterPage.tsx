@@ -287,7 +287,17 @@ export default function ClusterPage() {
       {/* Add Node Modal */}
       {showTokenModal && newToken && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-2xl w-full p-6 shadow-xl">
+          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-2xl w-full p-6 shadow-xl relative">
+            {/* Close button */}
+            <button
+              onClick={() => { setShowTokenModal(false); setNewToken(null); }}
+              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+              title="Close"
+              data-testid="close-add-node-modal"
+            >
+              <XCircle className="h-5 w-5" />
+            </button>
+            
             <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100 mb-4">
               Add New Node
             </h2>
