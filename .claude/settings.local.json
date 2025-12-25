@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "mcp__plugin_serena_serena__list_dir",
-      "mcp__plugin_serena_serena__activate_project"
+      "mcp__plugin_serena_serena__activate_project",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "mcp__plugin_serena_serena__replace_content",
+      "Bash(docker exec:*)",
+      "Bash(docker network connect:*)",
+      "Bash(docker logs:*)"
     ]
   }
 }

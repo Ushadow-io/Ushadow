@@ -21,6 +21,7 @@ import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
+import ClusterPage from './pages/ClusterPage'
 
 function App() {
   return (
@@ -28,7 +29,7 @@ function App() {
       <ThemeProvider>
         <AuthProvider>
           <FeatureFlagsProvider>
-     		<WizardProvider>
+          <WizardProvider>
             <BrowserRouter>
               <Routes>
      
@@ -58,16 +59,16 @@ function App() {
                 <Route path="agent-zero" element={<AgentZeroPage />} />
                 <Route path="n8n" element={<N8NPage />} />
                 <Route path="services" element={<ServicesPage />} />
+                <Route path="cluster" element={<ClusterPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="feature-flags" element={<FeatureFlags />} />
 
                 {/* Catch-all redirect to dashboard */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
-            </Routes>
-          </BrowserRouter>
+              </Routes>
+            </BrowserRouter>
           </WizardProvider>
-
           </FeatureFlagsProvider>
         </AuthProvider>
       </ThemeProvider>

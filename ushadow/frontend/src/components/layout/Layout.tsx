@@ -1,6 +1,6 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, Wand2, ChevronDown, LayoutDashboard, FlaskConical, Flag } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical, Network } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import EnvironmentBanner, { getColorClasses, VALID_COLORS } from './EnvironmentBanner'
@@ -14,13 +14,6 @@ export default function Layout() {
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const userMenuRef = useRef<HTMLDivElement>(null)
-  
-  // Get environment info for border
-  const envName = import.meta.env.VITE_ENV_NAME as string | undefined
-  const nodeEnv = import.meta.env.MODE
-  const { border } = getColorClasses(envName)
-  const isValidColor = envName && VALID_COLORS.includes(envName.toLowerCase())
-  const borderClass = nodeEnv === 'development' && isValidColor ? `border-4 ${border}` : ''
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -40,6 +33,7 @@ export default function Layout() {
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow },
     { path: '/services', label: 'Services', icon: Server },
+    { path: '/cluster', label: 'Cluster', icon: Network },
     { path: '/settings', label: 'Settings', icon: Settings },
     ...(isAdmin ? [
       { path: '/users', label: 'User Management', icon: Users },
@@ -48,16 +42,13 @@ export default function Layout() {
   ]
 
   return (
-    <div className={`min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden ${borderClass}`}>
+    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
       {/* Decorative background blur circles */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-96 h-96 bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl"></div>
         <div className="absolute top-1/3 -left-40 w-96 h-96 bg-blue-300/15 dark:bg-blue-600/8 rounded-full blur-3xl"></div>
         <div className="absolute -bottom-40 right-1/4 w-96 h-96 bg-blue-200/15 dark:bg-blue-700/8 rounded-full blur-3xl"></div>
       </div>
-
-      {/* Environment Banner */}
-      <EnvironmentBanner />
 
       {/* Header */}
       <header className="sticky top-0 z-sticky bg-white/80 dark:bg-neutral-800/80 backdrop-blur-lg border-b border-neutral-200 dark:border-neutral-700 shadow-sm relative">
