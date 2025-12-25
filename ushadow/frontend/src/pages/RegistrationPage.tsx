@@ -104,13 +104,27 @@ export default function RegistrationPage() {
       <div className="max-w-md w-full space-y-8 relative z-10">
         {/* Logo & Header */}
         <div className="text-center animate-fade-in">
-          <div className="mx-auto h-20 w-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl flex items-center justify-center shadow-lg mb-6 transform transition-transform hover:scale-105">
-            <Layers className="h-10 w-10 text-white" />
+          <div className="mx-auto mb-8 transform transition-transform hover:scale-105">
+            <img
+              src="/logo.png"
+              alt="uShadow Logo"
+              className="h-72 w-72 mx-auto object-contain drop-shadow-2xl"
+              onError={(e) => {
+                // Fallback to icon if logo doesn't load
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                const fallback = target.nextElementSibling as HTMLElement;
+                if (fallback) fallback.style.display = 'flex';
+              }}
+            />
+            <div className="hidden h-32 w-32 mx-auto bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl items-center justify-center shadow-lg">
+              <Layers className="h-16 w-16 text-white" />
+            </div>
           </div>
-          <h2 className="text-4xl font-bold text-neutral-900 dark:text-neutral-100 tracking-tight">
-            ushadow
+          <h2 className="text-6xl font-bold bg-gradient-to-r from-blue-600 via-primary-600 to-blue-800 dark:from-blue-400 dark:via-primary-400 dark:to-blue-600 bg-clip-text text-transparent tracking-tight mb-1">
+            Ushadow
           </h2>
-          <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400 font-medium">
+          <p className="mt-3 text-base text-neutral-600 dark:text-neutral-400 font-medium tracking-wide">
             AI Orchestration Platform
           </p>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-500">

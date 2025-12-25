@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider } from './contexts/AuthContext'
+import { WizardProvider } from './contexts/WizardContext'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import Layout from './components/layout/Layout'
 
@@ -9,6 +10,9 @@ import Layout from './components/layout/Layout'
 import RegistrationPage from './pages/RegistrationPage'
 import LoginPage from './pages/LoginPage'
 import Dashboard from './pages/Dashboard'
+import WizardStartPage from './pages/WizardStartPage'
+import MemoryWizardPage from './pages/MemoryWizardPage'
+import ChronicleWizardPage from './pages/ChronicleWizardPage'
 import ChroniclePage from './pages/ChroniclePage'
 import MCPPage from './pages/MCPPage'
 import AgentZeroPage from './pages/AgentZeroPage'
@@ -21,7 +25,8 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <AuthProvider>
-          <BrowserRouter>
+          <WizardProvider>
+            <BrowserRouter>
             <Routes>
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
@@ -40,6 +45,10 @@ function App() {
                 <Route index element={<Dashboard />} />
 
                 {/* Core feature pages */}
+                <Route path="wizard" element={<Navigate to="/wizard/start" replace />} />
+                <Route path="wizard/start" element={<WizardStartPage />} />
+                <Route path="wizard/memory" element={<MemoryWizardPage />} />
+                <Route path="wizard/chronicle" element={<ChronicleWizardPage />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
                 <Route path="mcp" element={<MCPPage />} />
                 <Route path="agent-zero" element={<AgentZeroPage />} />
@@ -52,6 +61,7 @@ function App() {
               </Route>
             </Routes>
           </BrowserRouter>
+          </WizardProvider>
         </AuthProvider>
       </ThemeProvider>
     </ErrorBoundary>

@@ -1,0 +1,2 @@
+- When creating front end code, made sure that elements have a human readable identifier, so we can more easily debug and write browser tests
+- When doing front end changes, use mcp playright to test the changes in headless mode before saying it's working.  When making visual or cosmetic changes, use the screenshot function to check the work is complete

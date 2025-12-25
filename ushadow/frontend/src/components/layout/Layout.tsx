@@ -1,6 +1,6 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Wand2 } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 
@@ -34,6 +34,7 @@ export default function Layout() {
     ...(isAdmin ? [
       { path: '/users', label: 'User Management', icon: Users },
     ] : []),
+    { path: '/wizard/start', label: 'Setup Wizard', icon: Wand2, separator: true },
   ]
 
   return (
@@ -51,12 +52,26 @@ export default function Layout() {
           <div className="flex justify-between items-center h-16">
             {/* Logo & Brand */}
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center shadow-md">
-                <Layers className="h-6 w-6 text-white" />
+              <div className="w-10 h-10 flex items-center justify-center">
+                <img
+                  src="/logo.png"
+                  alt="uShadow Logo"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    // Fallback to icon if logo doesn't load
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                    const fallback = target.nextElementSibling as HTMLElement;
+                    if (fallback) fallback.style.display = 'flex';
+                  }}
+                />
+                <div className="hidden w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl items-center justify-center shadow-md">
+                  <Layers className="h-6 w-6 text-white" />
+                </div>
               </div>
               <div>
                 <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 tracking-tight">
-                  ushadow
+                  Ushadow
                 </h1>
                 <p className="text-xs text-neutral-500 dark:text-neutral-400">AI Orchestration</p>
               </div>
@@ -180,52 +195,58 @@ export default function Layout() {
           {/* Sidebar Navigation */}
           <nav className="lg:w-64 flex-shrink-0">
             <div className="card sticky top-24 p-3 space-y-1 backdrop-blur-sm bg-white/90 dark:bg-neutral-800/90 shadow-xl">
-              {navigationItems.map(({ path, label, icon: Icon }) => {
+              {navigationItems.map(({ path, label, icon: Icon, separator }) => {
                 const isActive = location.pathname === path ||
                   (path !== '/' && location.pathname.startsWith(path))
 
                 return (
-                  <Link
-                    key={path}
-                    to={path}
-                    className={`
-                      group relative flex items-center px-3 py-2.5 rounded-lg text-sm font-medium
-                      transition-all duration-200 ease-out overflow-hidden
-                      ${isActive
-                        ? 'bg-gradient-to-r from-primary-100 to-primary-50 dark:from-primary-900/30 dark:to-primary-900/10 text-primary-700 dark:text-primary-300 shadow-sm'
-                        : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700/50 hover:text-neutral-900 dark:hover:text-neutral-100'
-                      }
-                    `}
-                  >
-                    {/* Active indicator bar */}
-                    {isActive && (
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary-600 dark:bg-primary-500 rounded-r-full"></div>
+                  <div key={path}>
+                    {/* Separator */}
+                    {separator && (
+                      <div className="my-2 border-t border-neutral-200 dark:border-neutral-700"></div>
                     )}
 
-                    {/* Icon with scale effect */}
-                    <div className={`
-                      flex-shrink-0 transition-all duration-200
-                      ${isActive
-                        ? 'scale-110 text-primary-600 dark:text-primary-400'
-                        : 'group-hover:scale-110 group-hover:text-primary-600 dark:group-hover:text-primary-400'
-                      }
-                    `}>
-                      <Icon className="h-5 w-5" />
-                    </div>
+                    <Link
+                      to={path}
+                      className={`
+                        group relative flex items-center px-3 py-2.5 rounded-lg text-sm font-medium
+                        transition-all duration-200 ease-out overflow-hidden
+                        ${isActive
+                          ? 'bg-gradient-to-r from-primary-100 to-primary-50 dark:from-primary-900/30 dark:to-primary-900/10 text-primary-700 dark:text-primary-300 shadow-sm'
+                          : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700/50 hover:text-neutral-900 dark:hover:text-neutral-100'
+                        }
+                      `}
+                    >
+                      {/* Active indicator bar */}
+                      {isActive && (
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary-600 dark:bg-primary-500 rounded-r-full"></div>
+                      )}
 
-                    {/* Label */}
-                    <span className={`
-                      ml-3 transition-all duration-200
-                      ${isActive ? 'font-semibold' : ''}
-                    `}>
-                      {label}
-                    </span>
+                      {/* Icon with scale effect */}
+                      <div className={`
+                        flex-shrink-0 transition-all duration-200
+                        ${isActive
+                          ? 'scale-110 text-primary-600 dark:text-primary-400'
+                          : 'group-hover:scale-110 group-hover:text-primary-600 dark:group-hover:text-primary-400'
+                        }
+                      `}>
+                        <Icon className="h-5 w-5" />
+                      </div>
 
-                    {/* Shine effect on hover - clipped by overflow-hidden */}
-                    {!isActive && (
-                      <div className="absolute inset-0 translate-x-full group-hover:-translate-x-full bg-gradient-to-r from-transparent via-white/10 dark:via-white/5 to-transparent transition-transform duration-300 pointer-events-none"></div>
-                    )}
-                  </Link>
+                      {/* Label */}
+                      <span className={`
+                        ml-3 transition-all duration-200
+                        ${isActive ? 'font-semibold' : ''}
+                      `}>
+                        {label}
+                      </span>
+
+                      {/* Shine effect on hover - clipped by overflow-hidden */}
+                      {!isActive && (
+                        <div className="absolute inset-0 translate-x-full group-hover:-translate-x-full bg-gradient-to-r from-transparent via-white/10 dark:via-white/5 to-transparent transition-transform duration-300 pointer-events-none"></div>
+                      )}
+                    </Link>
+                  </div>
                 )
               })}
             </div>
@@ -233,7 +254,7 @@ export default function Layout() {
 
           {/* Main Content */}
           <main className="flex-1 min-w-0 relative">
-            <div className="card p-6 animate-fade-in backdrop-blur-sm bg-white/90 dark:bg-neutral-800/90 shadow-xl">
+            <div className="card p-6 animate-fade-in backdrop-blur-sm bg-white/90 dark:bg-neutral-800/90 shadow-xl overflow-hidden">
               <Outlet />
             </div>
           </main>
@@ -245,7 +266,7 @@ export default function Layout() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-center space-x-2 text-sm text-neutral-500 dark:text-neutral-400">
             <Layers className="h-4 w-4" />
-            <span>ushadow v0.1.0</span>
+            <span>Ushadow v0.1.0</span>
             <span className="text-neutral-300 dark:text-neutral-600">•</span>
             <span>AI Orchestration Platform</span>
           </div>
