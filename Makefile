@@ -54,7 +54,7 @@ prod:
 	@docker compose -f compose/docker-compose.yml -f compose/docker-compose.prod.yml up -d --build
 	@echo "✅ ushadow running in production mode"
 	@echo ""
-	@echo "Access at: http://localhost:$${USHADOW_FRONTEND_PORT:-3000}"
+	@echo "Access at: http://localhost:$${WEBUI_PORT:-3000}"
 
 # Application commands
 up:
@@ -116,7 +116,7 @@ status:
 health:
 	@echo "=== Health Checks ==="
 	@echo -n "ushadow Backend: "
-	@curl -s http://localhost:8080/health | grep -q "healthy" && echo "✅ Healthy" || echo "❌ Unhealthy"
+	@curl -s http://localhost:$${BACKEND_PORT:-8000}/health | grep -q "healthy" && echo "✅ Healthy" || echo "❌ Unhealthy"
 	@echo -n "Chronicle: "
 	@curl -s http://localhost:8000/health | grep -q "ok" && echo "✅ Healthy" || echo "❌ Unhealthy"
 	@echo -n "MongoDB: "
@@ -187,7 +187,7 @@ network-remove:
 env-info:
 	@echo "=== Environment Information ==="
 	@echo "ENV_NAME: $${ENV_NAME:-ushadow}"
-	@echo "USHADOW_BACKEND_PORT: $${USHADOW_BACKEND_PORT:-8080}"
-	@echo "USHADOW_FRONTEND_PORT: $${USHADOW_FRONTEND_PORT:-3000}"
+	@echo "BACKEND_PORT: $${BACKEND_PORT:-8000}"
+	@echo "WEBUI_PORT: $${WEBUI_PORT:-3000}"
 	@echo "CHRONICLE_PORT: $${CHRONICLE_PORT:-8000}"
 	@echo "MONGODB_DATABASE: $${MONGODB_DATABASE:-ushadow}"

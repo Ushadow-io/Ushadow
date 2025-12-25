@@ -8,9 +8,9 @@ echo "🚀 ushadow Quick Start - Web UI Registration"
 echo "==============================================="
 
 # Parse arguments
-USE_PROD=false
-if [[ "$1" == "--prod" ]]; then
-    USE_PROD=true
+USE_PROD=true
+if [[ "$1" == "--dev" ]]; then
+    USE_PROD=false
 fi
 
 # Check we're in the right directory
@@ -25,13 +25,13 @@ SETUP_UTILS="setup/setup_utils.py"
 START_UTILS="setup/start_utils.py"
 
 
-# Set compose files based on mode
-if [ "$USE_PROD" = true ]; then
-    COMPOSE_FILES="-f docker-compose.yml"
-    echo "📦 Mode: Production (minified build)"
-else
+# Set compose files based on mode (default to production)
+if [ "$USE_PROD" = false ]; then
     COMPOSE_FILES="-f docker-compose.yml -f compose/overrides/dev-webui.yml"
     echo "🔧 Mode: Development (hot-reload, better errors)"
+else
+    COMPOSE_FILES="-f docker-compose.yml"
+    echo "📦 Mode: Production (minified build)"
 fi
 echo ""
 
@@ -123,9 +123,9 @@ echo "   Web Dashboard: http://localhost:${WEBUI_PORT}"
 echo "   Backend API:   http://localhost:${BACKEND_PORT}"
 echo ""
 if [ "$USE_PROD" = true ]; then
-    echo "   Mode:          Production build"
+    echo "   Mode:          Production build (use './go.sh --dev' for development)"
 else
-    echo "   Mode:          Development (use './go.sh --prod' for production)"
+    echo "   Mode:          Development mode with hot-reload"
 fi
 echo ""
 echo "   View logs:     docker compose logs -f"

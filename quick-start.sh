@@ -172,6 +172,32 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
         COMPOSE_PROJECT_NAME="${APP_NAME}-${ENV_NAME}"
     fi
 
+        # Prompt for admin credentials
+    echo ""
+    echo -e "${BOLD}Admin Account Setup${NC}"
+    echo -e "${YELLOW}Press Enter to use defaults shown in [brackets]${NC}"
+    echo ""
+
+    read -p "Admin Name [admin]: " INPUT_ADMIN_NAME
+    ADMIN_NAME="${INPUT_ADMIN_NAME:-admin}"
+
+    read -p "Admin Email [admin@ushadow.local]: " INPUT_ADMIN_EMAIL
+    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@example.com}"
+
+    read -sp "Admin Password [ushadow-dev]: " INPUT_ADMIN_PASSWORD
+    echo ""
+    ADMIN_PASSWORD="${INPUT_ADMIN_PASSWORD:-password-123}"
+
+    echo ""
+    echo -e "${GREEN}✅ Admin account configured${NC}"
+    echo -e "  Name:     ${ADMIN_NAME}"
+    echo -e "  Email:    ${ADMIN_EMAIL}"
+    echo -e "  Password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
+    echo ""
+
+
+
+
     echo ""
     echo -e "${GREEN}✅ Environment configured${NC}"
     echo -e "  Name:     ${ENV_NAME}"
@@ -226,65 +252,6 @@ HOST_IP=localhost
 EOF
 
     chmod 600 "$ENV_FILE"
-
-    # Generate secrets.yaml with security keys
-    echo ""
-    echo -e "${BLUE}🔐 Generating secrets...${NC}"
-    RESULT=$(python3 "$SETUP_UTILS" ensure-secrets "$SECRETS_FILE")
-    CREATED_NEW=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['created_new'])" 2>/dev/null || echo "true")
-
-    if [[ "$CREATED_NEW" == "True" ]] || [[ "$CREATED_NEW" == "true" ]]; then
-        echo -e "${GREEN}   ✅ Generated security keys in secrets.yaml${NC}"
-    else
-        echo -e "${GREEN}   ✅ Security keys already configured${NC}"
-    fi
-
-    # Prompt for admin credentials
-    echo ""
-    echo -e "${BOLD}Admin Account Setup${NC}"
-    echo -e "${YELLOW}Create your administrator account${NC}"
-    echo ""
-
-    read -p "Admin name [admin]: " INPUT_ADMIN_NAME
-    ADMIN_NAME="${INPUT_ADMIN_NAME:-admin}"
-
-    read -p "Admin email [admin@example.com]: " INPUT_ADMIN_EMAIL
-    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@example.com}"
-
-    # Password with confirmation
-    while true; do
-        read -sp "Admin password [password]: " INPUT_ADMIN_PASSWORD
-        echo ""
-        if [[ -z "$INPUT_ADMIN_PASSWORD" ]]; then
-            ADMIN_PASSWORD="password"
-            break
-        fi
-        read -sp "Confirm password: " INPUT_ADMIN_PASSWORD_CONFIRM
-        echo ""
-        if [[ "$INPUT_ADMIN_PASSWORD" == "$INPUT_ADMIN_PASSWORD_CONFIRM" ]]; then
-            ADMIN_PASSWORD="$INPUT_ADMIN_PASSWORD"
-            break
-        else
-            echo -e "${RED}Passwords do not match. Please try again.${NC}"
-        fi
-    done
-
-    # Update admin credentials in secrets.yaml
-    python3 -c "
-import yaml
-with open('$SECRETS_FILE', 'r') as f:
-    data = yaml.safe_load(f)
-if 'admin' not in data:
-    data['admin'] = {}
-data['admin']['name'] = '''$ADMIN_NAME'''
-data['admin']['email'] = '''$ADMIN_EMAIL'''
-data['admin']['password'] = '''$ADMIN_PASSWORD'''
-with open('$SECRETS_FILE', 'w') as f:
-    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-" 2>/dev/null
-
-    echo ""
-    echo -e "${GREEN}✅ Admin credentials configured${NC}"
 
     echo ""
     echo -e "${GREEN}✅ Deployment configuration saved${NC}"
@@ -359,20 +326,6 @@ BACKEND_HEALTHY=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load
 echo ""
 if [[ "$BACKEND_HEALTHY" == "True" ]]; then
     echo -e "${GREEN}${BOLD}✅ ${APP_DISPLAY_NAME} is ready!${NC}"
-
-    # Create admin user from secrets.yaml
-    echo ""
-    echo -e "${BLUE}👤 Creating admin user...${NC}"
-    ADMIN_RESULT=$(python3 "$SETUP_UTILS" create-admin "$BACKEND_PORT" "$SECRETS_FILE" 2>&1)
-    ADMIN_SUCCESS=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['success'])" 2>/dev/null || echo "false")
-
-    if [[ "$ADMIN_SUCCESS" == "True" ]]; then
-        ADMIN_MESSAGE=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['message'])" 2>/dev/null || echo "Success")
-        echo -e "${GREEN}   ✅ ${ADMIN_MESSAGE}${NC}"
-    else
-        ADMIN_ERROR=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', 'Unknown error'))" 2>/dev/null || echo "Failed")
-        echo -e "${YELLOW}   ⚠️  ${ADMIN_ERROR}${NC}"
-    fi
 else
     echo -e "${YELLOW}⚠️  Backend is starting... (may take a moment)${NC}"
 fi
