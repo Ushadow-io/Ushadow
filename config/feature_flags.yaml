@@ -1,0 +1,15 @@
+# Feature Flags Configuration
+# Flags are loaded on startup and when changed via the API - no restart needed!
+
+flags:
+  # Example feature flag - demo flag that can be toggled
+  example_feature:
+    enabled: false
+    description: "Example feature flag for testing"
+    type: experiment
+
+  # Add your feature flags here following this format:
+  # my_feature_name:
+  #   enabled: false
+  #   description: "What this feature does"
+  #   type: release  # or experiment, ops
