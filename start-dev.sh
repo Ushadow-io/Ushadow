@@ -310,8 +310,7 @@ fi
 # Development server mode (always enabled)
 USE_DEV_SERVER=true
 COMPOSE_OVERRIDE_FILE="-f compose/overrides/dev-webui.yml"
-# Add Vite dev server internal port to CORS (5173 is Vite's default)
-CORS_ORIGINS="${CORS_ORIGINS},http://localhost:5173,http://127.0.0.1:5173"
+
 echo ""
 echo -e "${GREEN}🔥 Development server with hot-reload enabled${NC}"
 echo ""
