@@ -11,10 +11,11 @@ from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import get_settings
-from src.routers import health, wizard, chronicle, auth, docker, unodes
+from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flatgs
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
+from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 
 # Configure logging
 logging.basicConfig(

@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Chronicle Admin Reset Script
-# Removes admin users from database and clears auth variables for fresh setup
+# Ushadow Admin Reset Script
+# Removes admin users and secrets for fresh setup
 
-echo "🧹 Chronicle Admin Reset"
+echo "🧹 Ushadow Admin Reset"
 echo "========================================"
 
 # Check we're in the right directory
@@ -27,23 +27,14 @@ if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
     exit 0
 fi
 
-# Get database name - check where backend actually loads it from
-# Priority: backends/advanced/.env > root .env > .env.default > hardcoded default
-if [ -f backends/advanced/.env ]; then
-    MONGODB_DATABASE=$(grep "^MONGODB_DATABASE=" backends/advanced/.env | cut -d'=' -f2)
-fi
-
-if [ -z "$MONGODB_DATABASE" ] && [ -f .env ]; then
-    MONGODB_DATABASE=$(grep "^MONGODB_DATABASE=" .env | cut -d'=' -f2)
-fi
-
-if [ -z "$MONGODB_DATABASE" ] && [ -f .env.default ]; then
-    MONGODB_DATABASE=$(grep "^MONGODB_DATABASE=" .env.default | cut -d'=' -f2)
+# Get database name from .env
+if [ -f .env ]; then
+    MONGODB_DATABASE=$(grep "^MONGODB_DATABASE=" .env | cut -d'=' -f2 | tr -d ' ')
 fi
 
 # Final fallback to backend's hardcoded default
 if [ -z "$MONGODB_DATABASE" ]; then
-    MONGODB_DATABASE="friend-lite"
+    MONGODB_DATABASE="ushadow"
 fi
 
 echo "📦 Database: ${MONGODB_DATABASE}"
@@ -77,48 +68,6 @@ else
     echo "   ℹ️  config/secrets.yaml not found (already clean)"
 fi
 
-echo ""
-echo "🔐 Clearing auth variables from .env files (deprecated - using secrets.yaml now)..."
-
-# Function to clear auth variables from a file
-clear_auth_vars() {
-    local file=$1
-    local cleared=false
-
-    if [ -f "$file" ]; then
-        # Clear AUTH_SECRET_KEY
-        if grep -q "^AUTH_SECRET_KEY=" "$file"; then
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                sed -i '' "s|^AUTH_SECRET_KEY=.*|AUTH_SECRET_KEY=|" "$file"
-            else
-                sed -i "s|^AUTH_SECRET_KEY=.*|AUTH_SECRET_KEY=|" "$file"
-            fi
-            echo "   ✅ AUTH_SECRET_KEY cleared from $file"
-            cleared=true
-        fi
-
-        # Clear ADMIN_PASSWORD
-        if grep -q "^ADMIN_PASSWORD=" "$file"; then
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                sed -i '' "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=|" "$file"
-            else
-                sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=|" "$file"
-            fi
-            echo "   ✅ ADMIN_PASSWORD cleared from $file"
-            cleared=true
-        fi
-    fi
-}
-
-# Clear from root .env
-clear_auth_vars ".env"
-
-# Clear from backends/advanced/.env (this is what the backend actually uses!)
-clear_auth_vars "backends/advanced/.env"
-
-if [ ! -f .env ] && [ ! -f backends/advanced/.env ]; then
-    echo "   ⚠️  No .env files found (will be created by go.sh)"
-fi
 
 echo ""
 echo "🔄 Restarting backend to invalidate active sessions..."
