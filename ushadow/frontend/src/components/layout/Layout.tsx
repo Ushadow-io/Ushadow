@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Wand2 } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
-import EnvironmentBanner, { COLOR_MAP } from './EnvironmentBanner'
+import EnvironmentBanner, { getColorClasses, VALID_COLORS } from './EnvironmentBanner'
 
 export default function Layout() {
   const location = useLocation()
@@ -16,9 +16,9 @@ export default function Layout() {
   // Get environment info for border
   const envName = import.meta.env.VITE_ENV_NAME as string | undefined
   const nodeEnv = import.meta.env.MODE
-  const normalizedEnv = envName?.toLowerCase() || ''
-  const colorTheme = COLOR_MAP[normalizedEnv]
-  const borderClass = nodeEnv === 'development' && colorTheme ? `border-4 ${colorTheme.border}` : ''
+  const { border } = getColorClasses(envName)
+  const isValidColor = envName && VALID_COLORS.includes(envName.toLowerCase())
+  const borderClass = nodeEnv === 'development' && isValidColor ? `border-4 ${border}` : ''
 
   // Close dropdown when clicking outside
   useEffect(() => {
