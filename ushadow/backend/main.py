@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import get_settings
-from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flatgs
+
+from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -81,6 +82,7 @@ app.include_router(chronicle.router, prefix="/api/chronicle", tags=["chronicle"]
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(docker.router, prefix="/api/docker", tags=["docker"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
+app.include_router(services.router, prefix="/api/services", tags=["services"])
 
 
 @app.get("/")
