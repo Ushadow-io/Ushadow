@@ -52,10 +52,11 @@ class UNodeManager:
     async def _register_self_as_leader(self):
         """Register the current u-node as the cluster leader."""
         import os
-        import socket
         import subprocess
 
-        hostname = socket.gethostname()
+        # Use LEADER_HOSTNAME env var, or default to "leader"
+        # This ensures consistent hostname across container restarts
+        hostname = os.environ.get("LEADER_HOSTNAME", "leader")
 
         # Try to get Tailscale IP from environment first (for containerized deployments)
         tailscale_ip = os.environ.get("TAILSCALE_IP")
@@ -76,6 +77,12 @@ class UNodeManager:
 
         if tailscale_ip:
             logger.info(f"Using Tailscale IP: {tailscale_ip}")
+
+        # Remove any old leader entries and keep only one
+        await self.unodes_collection.delete_many({
+            "role": UNodeRole.LEADER.value,
+            "hostname": {"$ne": hostname}
+        })
 
         # Check if we already exist
         existing = await self.unodes_collection.find_one({"hostname": hostname})
@@ -255,140 +262,113 @@ curl -sL "$LEADER_URL/api/unodes/join/$TOKEN" | sh
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
         leader_port = settings.BACKEND_PORT
 
-        script = f'''# Ushadow UNode Bootstrap Script (PowerShell)
-# Installs Docker, Tailscale, connects, then joins cluster
-# Generated: {datetime.now(timezone.utc).isoformat()}
+        script = f'''# Ushadow UNode Bootstrap - All-in-one installer
+# Just run: iex (iwr "http://LEADER:8000/api/unodes/bootstrap/TOKEN/ps1").Content
 
 $ErrorActionPreference = "Continue"
 $TOKEN = "{token}"
-$LEADER_URL = "http://{leader_host}:{leader_port}"
+$LEADER = "{leader_host}"
+$PORT = {leader_port}
 
 Write-Host ""
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "  Ushadow UNode Bootstrap" -ForegroundColor Cyan
-Write-Host "==============================================" -ForegroundColor Cyan
+Write-Host "  Ushadow UNode Setup" -ForegroundColor Cyan
+Write-Host "  ===================" -ForegroundColor Cyan
 Write-Host ""
 
-$tsPath = "$env:ProgramFiles\\Tailscale\\tailscale.exe"
-$dockerPath = "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"
-$needRestart = $false
+$dockerExe = "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"
+$tsExe = "$env:ProgramFiles\\Tailscale\\tailscale.exe"
+$tsGui = "$env:ProgramFiles\\Tailscale\\tailscale-ipn.exe"
 
-# Step 1: Install Docker Desktop
-Write-Host "[1/5] Checking Docker..." -ForegroundColor Yellow
-if (Get-Command docker -ErrorAction SilentlyContinue) {{
-    Write-Host "      Docker already installed" -ForegroundColor Green
+# 1. Install Docker if needed
+if (-not (Get-Command docker -EA SilentlyContinue)) {{
+    Write-Host "[1/6] Installing Docker Desktop..." -ForegroundColor Yellow
+    winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements | Out-Null
+    Write-Host "      Installed!" -ForegroundColor Green
 }} else {{
-    Write-Host "      Installing Docker Desktop..." -ForegroundColor Yellow
-    if (Get-Command winget -ErrorAction SilentlyContinue) {{
-        winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements
-        $needRestart = $true
-    }} else {{
-        Write-Host "      winget not found. Please install Docker Desktop manually:" -ForegroundColor Red
-        Write-Host "      https://docs.docker.com/desktop/install/windows-install/"
-        exit 1
-    }}
+    Write-Host "[1/6] Docker already installed" -ForegroundColor Green
 }}
 
-# Step 2: Install Tailscale
-Write-Host "[2/5] Checking Tailscale..." -ForegroundColor Yellow
-if (Test-Path $tsPath) {{
-    Write-Host "      Tailscale already installed" -ForegroundColor Green
+# 2. Install Tailscale if needed
+if (-not (Test-Path $tsExe)) {{
+    Write-Host "[2/6] Installing Tailscale..." -ForegroundColor Yellow
+    winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements | Out-Null
+    Write-Host "      Installed!" -ForegroundColor Green
 }} else {{
-    Write-Host "      Installing Tailscale..." -ForegroundColor Yellow
-    if (Get-Command winget -ErrorAction SilentlyContinue) {{
-        winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements
-        $needRestart = $true
-    }} else {{
-        Write-Host "      winget not found. Please install Tailscale manually:" -ForegroundColor Red
-        Write-Host "      https://tailscale.com/download/windows"
-        exit 1
-    }}
+    Write-Host "[2/6] Tailscale already installed" -ForegroundColor Green
 }}
 
-# Check if restart needed after install
-if ($needRestart) {{
-    Write-Host ""
-    Write-Host "*** Software installed! Starting apps..." -ForegroundColor Yellow
+# 3. Start Docker Desktop and wait
+Write-Host "[3/6] Starting Docker Desktop..." -ForegroundColor Yellow
+$dockerOk = $false
+try {{ docker info 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dockerOk = $true }} }} catch {{}}
 
-    # Try to start Docker Desktop
-    $dockerExe = "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"
-    if (Test-Path $dockerExe) {{
-        Write-Host "      Starting Docker Desktop..." -ForegroundColor Yellow
-        Start-Process $dockerExe
+if (-not $dockerOk) {{
+    if (Test-Path $dockerExe) {{ Start-Process $dockerExe }}
+    Write-Host "      Waiting for Docker to start (this may take a minute)..." -ForegroundColor Gray
+    for ($i = 0; $i -lt 90; $i++) {{
+        Start-Sleep 2
+        try {{ docker info 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dockerOk = $true; break }} }} catch {{}}
     }}
-
-    # Try to start Tailscale
-    $tsExe = "$env:ProgramFiles\\Tailscale\\tailscale-ipn.exe"
-    if (Test-Path $tsExe) {{
-        Write-Host "      Starting Tailscale..." -ForegroundColor Yellow
-        Start-Process $tsExe
-    }}
-
-    Write-Host ""
-    Write-Host "*** Please complete setup, then re-run this command:" -ForegroundColor Yellow
-    Write-Host "    iex (iwr `"$LEADER_URL/api/unodes/bootstrap/$TOKEN/ps1`").Content" -ForegroundColor Cyan
-    Write-Host ""
-    exit 0
+}}
+if ($dockerOk) {{
+    Write-Host "      Docker is running!" -ForegroundColor Green
+}} else {{
+    Write-Host "      Docker not ready. Please start Docker Desktop and re-run." -ForegroundColor Red
+    exit 1
 }}
 
-# Step 3: Start Docker if not running
-Write-Host "[3/5] Checking Docker is running..." -ForegroundColor Yellow
-$dockerRunning = $false
+# 4. Start Tailscale and prompt login
+Write-Host "[4/6] Connecting to Tailscale..." -ForegroundColor Yellow
+$tsOk = $false
+try {{ & $tsExe status 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $tsOk = $true }} }} catch {{}}
+
+if (-not $tsOk) {{
+    if (Test-Path $tsGui) {{ Start-Process $tsGui }}
+    Write-Host ""
+    Write-Host "      >>> Please log in to Tailscale in the window that opened <<<" -ForegroundColor Magenta
+    Write-Host "      Waiting for Tailscale connection..." -ForegroundColor Gray
+    for ($i = 0; $i -lt 120; $i++) {{
+        Start-Sleep 2
+        try {{ & $tsExe status 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $tsOk = $true; break }} }} catch {{}}
+    }}
+}}
+if ($tsOk) {{
+    Write-Host "      Connected to Tailscale!" -ForegroundColor Green
+}} else {{
+    Write-Host "      Tailscale not connected. Please log in and re-run." -ForegroundColor Red
+    exit 1
+}}
+
+# 5. Register with cluster
+Write-Host "[5/6] Registering with cluster..." -ForegroundColor Yellow
+$HOSTNAME = $env:COMPUTERNAME
+$TSIP = & $tsExe ip -4 2>$null
+if (-not $TSIP) {{ Write-Host "Could not get Tailscale IP" -ForegroundColor Red; exit 1 }}
+
+$body = @{{ token=$TOKEN; hostname=$HOSTNAME; tailscale_ip=$TSIP; platform="windows"; manager_version="0.1.0" }} | ConvertTo-Json
 try {{
-    docker info 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {{ $dockerRunning = $true }}
-}} catch {{}}
-
-if (-not $dockerRunning) {{
-    Write-Host "      Starting Docker Desktop..." -ForegroundColor Yellow
-    $dockerExe = "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"
-    if (Test-Path $dockerExe) {{
-        Start-Process $dockerExe
-        Write-Host "      Waiting for Docker to start..." -ForegroundColor Gray
-        for ($i = 0; $i -lt 60; $i++) {{
-            Start-Sleep -Seconds 2
-            try {{
-                docker info 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) {{
-                    $dockerRunning = $true
-                    break
-                }}
-            }} catch {{}}
-            Write-Host "      Waiting for Docker... ($i/60)" -ForegroundColor Gray
-        }}
+    $r = Invoke-RestMethod -Uri "http://$LEADER`:$PORT/api/unodes/register" -Method Post -Body $body -ContentType "application/json"
+    if ($r.success) {{
+        Write-Host "      Registered!" -ForegroundColor Green
+        $SECRET = $r.unode.metadata.unode_secret
+    }} else {{
+        Write-Host "      Failed: $($r.message)" -ForegroundColor Red; exit 1
     }}
-
-    if (-not $dockerRunning) {{
-        Write-Host "      Docker not responding. Please start Docker Desktop manually and re-run." -ForegroundColor Yellow
-        exit 0
-    }}
-}}
-Write-Host "      Docker is running" -ForegroundColor Green
-
-# Step 4: Check Tailscale connection
-Write-Host "[4/5] Checking Tailscale connection..." -ForegroundColor Yellow
-$connected = $false
-for ($i = 0; $i -lt 30; $i++) {{
-    try {{
-        $status = & $tsPath status 2>&1
-        if ($LASTEXITCODE -eq 0) {{
-            $connected = $true
-            break
-        }}
-    }} catch {{}}
-    Write-Host "      Waiting for Tailscale login... ($i/30)" -ForegroundColor Gray
-    Start-Sleep -Seconds 2
+}} catch {{
+    Write-Host "      Failed: $_" -ForegroundColor Red; exit 1
 }}
 
-if (-not $connected) {{
-    Write-Host "      Please open Tailscale and log in, then re-run this script." -ForegroundColor Yellow
-    exit 0
-}}
-Write-Host "      Connected to Tailscale" -ForegroundColor Green
+# 6. Start manager container
+Write-Host "[6/6] Starting manager..." -ForegroundColor Yellow
+docker stop ushadow-manager 2>$null | Out-Null
+docker rm ushadow-manager 2>$null | Out-Null
+docker pull ghcr.io/ushadow-io/ushadow-manager:latest | Out-Null
+docker run -d --name ushadow-manager --restart unless-stopped -v //var/run/docker.sock:/var/run/docker.sock -e LEADER_URL="http://$LEADER`:$PORT" -e NODE_SECRET="$SECRET" -e NODE_HOSTNAME="$HOSTNAME" -e TAILSCALE_IP="$TSIP" -p 8444:8444 ghcr.io/ushadow-io/ushadow-manager:latest | Out-Null
 
-# Step 5: Run the join script
-Write-Host "[5/5] Joining cluster..." -ForegroundColor Yellow
-iex (iwr "$LEADER_URL/api/unodes/join/$TOKEN/ps1").Content
+Write-Host ""
+Write-Host "  Done! $HOSTNAME joined the cluster." -ForegroundColor Green
+Write-Host "  Tailscale IP: $TSIP" -ForegroundColor Gray
+Write-Host ""
 '''
         return script
 
@@ -824,7 +804,7 @@ docker rm ushadow-manager 2>/dev/null || true
 # Pull and run manager
 echo ""
 echo "Starting ushadow-manager..."
-docker pull ushadow/manager:latest 2>/dev/null || echo "(Using local image if available)"
+docker pull ghcr.io/ushadow-io/ushadow-manager:latest
 
 docker run -d \\
     --name ushadow-manager \\
@@ -835,7 +815,7 @@ docker run -d \\
     -e NODE_HOSTNAME="$NODE_HOSTNAME" \\
     -e TAILSCALE_IP="$TAILSCALE_IP" \\
     -p 8444:8444 \\
-    ushadow/manager:latest
+    ghcr.io/ushadow-io/ushadow-manager:latest
 
 echo ""
 echo "=============================================="
@@ -988,17 +968,35 @@ try {{
     exit 1
 }}
 
+# Start the manager container
+Write-Host ""
+Write-Host "Starting ushadow-manager..." -ForegroundColor Yellow
+docker pull ghcr.io/ushadow-io/ushadow-manager:latest
+
+# Stop existing if running
+docker stop ushadow-manager 2>$null | Out-Null
+docker rm ushadow-manager 2>$null | Out-Null
+
+docker run -d `
+    --name ushadow-manager `
+    --restart unless-stopped `
+    -v //var/run/docker.sock:/var/run/docker.sock `
+    -e LEADER_URL="$LEADER_URL" `
+    -e UNODE_SECRET="$UNODE_SECRET" `
+    -e NODE_HOSTNAME="$NODE_HOSTNAME" `
+    -e TAILSCALE_IP="$TAILSCALE_IP" `
+    -p 8444:8444 `
+    ghcr.io/ushadow-io/ushadow-manager:latest
+
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Green
 Write-Host "  UNode joined successfully!" -ForegroundColor Green
 Write-Host "==============================================" -ForegroundColor Green
 Write-Host "  Hostname:  $NODE_HOSTNAME"
 Write-Host "  IP:        $TAILSCALE_IP"
+Write-Host "  Manager:   http://localhost:8444"
 Write-Host "  Leader:    $LEADER_URL"
 Write-Host ""
-
-# Note: Manager container will be started when image is available
-# For now, u-node is registered and can receive commands via API
 '''
         return script
 

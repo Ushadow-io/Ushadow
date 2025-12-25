@@ -164,3 +164,12 @@ export const usersApi = {
   update: (id: string, userData: any) => api.put(`/api/users/${id}`, userData),
   delete: (id: string) => api.delete(`/api/users/${id}`),
 }
+
+// Cluster/UNode endpoints
+export const clusterApi = {
+  listUnodes: () => api.get('/api/unodes'),
+  getUnode: (hostname: string) => api.get(`/api/unodes/${hostname}`),
+  removeUnode: (hostname: string) => api.delete(`/api/unodes/${hostname}`),
+  createToken: (tokenData: { role: string; max_uses: number; expires_in_hours: number }) =>
+    api.post('/api/unodes/tokens', tokenData),
+}
