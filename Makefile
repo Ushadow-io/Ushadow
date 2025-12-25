@@ -76,7 +76,7 @@ logs-f:
 build:
 	@echo "🔨 Building with dev server (hot-reload enabled)..."
 	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d --build
-	@echo "✅ Build complete - frontend running on port $${WEBUI_PORT:-3050} with hot-reload"
+	@echo "✅ Build complete - frontend running on port $${WEBUI_PORT} with hot-reload"
 
 # Infrastructure commands
 infra-up:
