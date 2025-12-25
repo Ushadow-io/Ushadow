@@ -58,13 +58,14 @@ prod:
 
 # Application commands
 up:
-	docker compose -f docker-compose.yml up -d
+	@echo "🚀 Starting with dev server..."
+	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d
 
 down:
-	docker compose -f docker-compose.yml down
+	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml down
 
 restart:
-	docker compose -f docker-compose.yml restart
+	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml restart
 
 logs:
 	docker compose -f docker-compose.yml logs --tail=100
@@ -73,7 +74,9 @@ logs-f:
 	docker compose -f docker-compose.yml logs -f
 
 build:
-	docker compose -f docker-compose.yml up -d --build
+	@echo "🔨 Building with dev server (hot-reload enabled)..."
+	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d --build
+	@echo "✅ Build complete - frontend running on port $${WEBUI_PORT:-3050} with hot-reload"
 
 # Infrastructure commands
 infra-up:
