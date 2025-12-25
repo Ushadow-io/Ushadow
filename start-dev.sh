@@ -194,6 +194,7 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
 # ==========================================
 # ENVIRONMENT & PROJECT NAMING
 # ==========================================
+ENV_NAME=${ENV_NAME}
 COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
 
 # ==========================================
@@ -214,6 +215,7 @@ REDIS_DATABASE=${REDIS_DATABASE}
 # ==========================================
 CORS_ORIGINS=http://localhost:${WEBUI_PORT},http://127.0.0.1:${WEBUI_PORT},http://localhost:${BACKEND_PORT},http://127.0.0.1:${BACKEND_PORT}
 VITE_BACKEND_URL=http://localhost:${BACKEND_PORT}
+VITE_ENV_NAME=${ENV_NAME}
 HOST_IP=localhost
 
 # ==========================================
@@ -305,25 +307,13 @@ else
     echo ""
 fi
 
-# Ask about dev server
+# Development server mode (always enabled)
+USE_DEV_SERVER=true
+COMPOSE_OVERRIDE_FILE="-f compose/overrides/dev-webui.yml"
+# Add Vite dev server internal port to CORS (5173 is Vite's default)
+CORS_ORIGINS="${CORS_ORIGINS},http://localhost:5173,http://127.0.0.1:5173"
 echo ""
-echo -e "${BOLD}Development Server${NC}"
-echo -e "${YELLOW}Use dev server for frontend hot-reload? (Recommended for development)${NC}"
-echo -e "${YELLOW}With dev server: Changes to UI files reload instantly${NC}"
-echo -e "${YELLOW}Without dev server: UI changes require rebuild${NC}"
-echo ""
-read -p "Enable dev server? (Y/n): " use_dev_server
-if [[ "$use_dev_server" == "n" ]] || [[ "$use_dev_server" == "N" ]]; then
-    USE_DEV_SERVER=false
-    COMPOSE_OVERRIDE_FILE="-f compose/overrides/prod.yml"
-    echo -e "${BLUE}   Using production build (no hot-reload)${NC}"
-else
-    USE_DEV_SERVER=true
-    COMPOSE_OVERRIDE_FILE="-f compose/overrides/dev-webui.yml"
-    echo -e "${GREEN}   Using dev server with hot-reload${NC}"
-    # Add Vite dev server internal port to CORS (5173 is Vite's default)
-    CORS_ORIGINS="${CORS_ORIGINS},http://localhost:5173,http://127.0.0.1:5173"
-fi
+echo -e "${GREEN}🔥 Development server with hot-reload enabled${NC}"
 echo ""
 
 # Start infrastructure
