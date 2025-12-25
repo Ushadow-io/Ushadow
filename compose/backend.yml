@@ -17,7 +17,7 @@ services:
       - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
     volumes:
       - ../ushadow/backend:/app
-      - ../config:/config:ro  # Mount config directory (read-only)
+      - ../config:/config  # Mount config directory (read-write for feature flags)
       - /app/__pycache__
       - /app/.pytest_cache
     networks:
