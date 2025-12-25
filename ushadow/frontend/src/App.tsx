@@ -31,7 +31,8 @@ function App() {
           <FeatureFlagsProvider>
           <WizardProvider>
             <BrowserRouter>
-            <Routes>
+              <Routes>
+     
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
               <Route path="/login" element={<LoginPage />} />
