@@ -4,6 +4,15 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  // Safelist dynamic color classes for environment banners
+  safelist: [
+    // Background colors
+    { pattern: /^bg-(red|blue|green|yellow|purple|pink|orange|amber|lime|emerald|teal|cyan|sky|indigo|violet|fuchsia|rose|gray)-(100|900)$/ },
+    // Text colors
+    { pattern: /^text-(red|blue|green|yellow|purple|pink|orange|amber|lime|emerald|teal|cyan|sky|indigo|violet|fuchsia|rose|gray)-(300|800)$/ },
+    // Border colors
+    { pattern: /^border-(red|blue|green|yellow|purple|pink|orange|amber|lime|emerald|teal|cyan|sky|indigo|violet|fuchsia|rose|gray)-500$/ },
+  ],
   darkMode: 'class',
   theme: {
     extend: {
