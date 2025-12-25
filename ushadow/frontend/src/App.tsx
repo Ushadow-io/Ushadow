@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider } from './contexts/AuthContext'
+import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import Layout from './components/layout/Layout'
 
@@ -15,14 +16,16 @@ import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
+import FeatureFlags from './pages/FeatureFlags'
 
 function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
         <AuthProvider>
-          <BrowserRouter>
-            <Routes>
+          <FeatureFlagsProvider>
+            <BrowserRouter>
+              <Routes>
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
               <Route path="/login" element={<LoginPage />} />
@@ -46,12 +49,14 @@ function App() {
                 <Route path="n8n" element={<N8NPage />} />
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="settings" element={<SettingsPage />} />
+                <Route path="feature-flags" element={<FeatureFlags />} />
 
                 {/* Catch-all redirect to dashboard */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
-            </Routes>
-          </BrowserRouter>
+              </Routes>
+            </BrowserRouter>
+          </FeatureFlagsProvider>
         </AuthProvider>
       </ThemeProvider>
     </ErrorBoundary>
