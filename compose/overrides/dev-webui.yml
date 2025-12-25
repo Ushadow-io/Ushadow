@@ -22,6 +22,7 @@ services:
       - "${WEBUI_PORT:-3010}:5173"  # External:Internal
     environment:
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8010}
+      - VITE_ENV_NAME=${VITE_ENV_NAME:-}
       - VITE_HMR_PORT=${WEBUI_PORT:-3010}  # HMR client connects to external port
       - NODE_ENV=development
     healthcheck:
