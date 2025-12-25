@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate, Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { setupApi } from '../services/api'
 import { Layers, Eye, EyeOff } from 'lucide-react'
 import { getStorageKey } from '../utils/storage'
+import EnvironmentBanner from '../components/layout/EnvironmentBanner'
 
 export default function RegistrationPage() {
   const [displayName, setDisplayName] = useState('')
@@ -29,10 +31,13 @@ export default function RegistrationPage() {
   // Show loading while checking setup status
   if (setupRequired === null || authLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex items-center justify-center">
-        <div className="flex items-center space-x-3">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <span className="text-neutral-600 dark:text-neutral-400">Checking setup status...</span>
+      <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col">
+        <EnvironmentBanner />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex items-center space-x-3">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <span className="text-neutral-600 dark:text-neutral-400">Checking setup status...</span>
+          </div>
         </div>
       </div>
     )
@@ -94,9 +99,11 @@ export default function RegistrationPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
-      {/* Decorative background blur circles */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
+      <EnvironmentBanner />
+      <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        {/* Decorative background blur circles */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl"></div>
         <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-blue-300/20 dark:bg-blue-600/10 rounded-full blur-3xl"></div>
       </div>
@@ -254,6 +261,7 @@ export default function RegistrationPage() {
             ushadow Dashboard v0.1.0
           </p>
         </div>
+      </div>
       </div>
     </div>
   )
