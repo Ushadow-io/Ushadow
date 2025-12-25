@@ -178,4 +178,12 @@ export const wizardApi = {
   detectEnvKeys: () => api.get('/api/wizard/detect-env-keys'),
   importEnvKeys: () => api.post('/api/wizard/import-env-keys'),
   complete: () => api.post('/api/wizard/complete'),
+
+// Cluster/UNode endpoints
+export const clusterApi = {
+  listUnodes: () => api.get('/api/unodes'),
+  getUnode: (hostname: string) => api.get(`/api/unodes/${hostname}`),
+  removeUnode: (hostname: string) => api.delete(`/api/unodes/${hostname}`),
+  createToken: (tokenData: { role: string; max_uses: number; expires_in_hours: number }) =>
+    api.post('/api/unodes/tokens', tokenData),
 }

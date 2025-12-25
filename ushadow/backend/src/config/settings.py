@@ -22,7 +22,8 @@ class Settings(BaseSettings):
 
     # Server
     HOST: str = "0.0.0.0"
-    PORT: int = 8010  # 8000 + PORT_OFFSET (default 10)
+    PORT: int = 8010  # Internal container port
+    BACKEND_PORT: int = 8000  # External port for join URLs (mapped by docker)
 
     # Security (loaded from secrets.yaml with env override)
     AUTH_SECRET_KEY: Optional[str] = None

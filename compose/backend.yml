@@ -14,7 +14,10 @@ services:
       # Server configuration
       - HOST=0.0.0.0
       - PORT=8010
+      - BACKEND_PORT=${BACKEND_PORT:-8000}
       - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
+      # Tailscale IP for node registration (set via .env or detected)
+      - TAILSCALE_IP=${TAILSCALE_IP:-}
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config  # Mount config directory (read-write for feature flags)
