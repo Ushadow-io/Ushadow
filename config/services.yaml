@@ -1,48 +1,55 @@
-# Ushadow External Services Configuration
-# Defines external service integrations and memory sources
-# Services can reference settings using {{config.path.to.value}} templates
-
-version: "1.0"
+# External Service Configurations
+# This file defines external services that can be integrated with Ushadow
 
 services:
-  # Example: Pieces for Developers integration
-  # Uncomment and configure to enable
+  - service_id: openmemory
+    name: "OpenMemory"
+    description: "Semantic memory with knowledge graphs (mem0-based)"
+    service_type: memory_source
+    integration_type: rest
+    enabled: true
+    
+    connection:
+      url: "http://u-mem0-api:8765"
+      timeout: 30
+      auth:
+        method: none
+      
+      # mem0 API uses /api/v1/ prefix
+      list_endpoint: "/api/v1/memories/"
+      detail_endpoint: "/api/v1/memories/{id}/"
+      
+      query_params:
+        user_id: "ushadow"
+    
+    memory_mapping:
+      field_mappings:
+        # OpenMemory uses "content" not "memory"
+        - source_field: "content"
+          target_field: "content"
+        
+        # Use content as title (will be truncated in UI)
+        - source_field: "content"
+          target_field: "title"
+        
+        # OpenMemory auto-generates categories
+        - source_field: "categories"
+          target_field: "tags"
+        
+        # Preserve timestamps
+        - source_field: "created_at"
+          target_field: "created_at"
+        
+        # Source ID for deduplication
+        - source_field: "id"
+          target_field: "source_id"
+      
+      include_unmapped: true
+    
+    sync_interval: 1800
+    tags:
+      - memory
+      - semantic
+      - knowledge-graph
 
-  # pieces-app:
-  #   name: "Pieces for Developers"
-  #   description: "Code snippets and developer memory manager"
-  #   service_type: memory_source
-  #   integration_type: rest
-  #   connection:
-  #     base_url: "{{config.services.pieces.url}}"
-  #     auth:
-  #       type: api_key
-  #       key_name: "X-API-Key"
-  #       key_value_ref: "{{config.api_keys.pieces_api_key}}"
-  #     endpoints:
-  #       health: "/health"
-  #       list: "/api/snippets"
-  #       get: "/api/snippets/{id}"
-  #     timeout: 30
-  #     headers:
-  #       Content-Type: "application/json"
-  #   memory_mapping:
-  #     enabled: true
-  #     field_mappings:
-  #       - source_field: "id"
-  #         target_field: "source_id"
-  #       - source_field: "name"
-  #         target_field: "title"
-  #         transform: "trim"
-  #         default_value: "Untitled"
-  #       - source_field: "raw.value"
-  #         target_field: "content"
-  #       - source_field: "tags"
-  #         target_field: "tags"
-  #   status: active
-  #   metadata:
-  #     last_sync: null
-  #     sync_count: 0
-  #     error_count: 0
-
-# Add more services via the UI wizard or by editing this file
+# Add more services here as list items with "- service_id: ..."
