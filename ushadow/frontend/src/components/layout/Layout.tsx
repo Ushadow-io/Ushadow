@@ -1,13 +1,16 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, FlagWand2, FlaskConical } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical, Network } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
+import EnvironmentBanner, { getColorClasses, VALID_COLORS } from './EnvironmentBanner'
+import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 
 export default function Layout() {
   const location = useLocation()
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
+  const { isEnabled, flags } = useFeatureFlags()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -94,6 +97,16 @@ export default function Layout() {
 
             {/* Header Actions */}
             <div className="flex items-center space-x-1">
+              {/* Test Feature Flag Indicator */}
+              {isEnabled('example_feature') && (
+                <div className="mr-2 flex items-center gap-2 px-3 py-1.5 bg-purple-100 dark:bg-purple-900/30 border border-purple-300 dark:border-purple-700 rounded-lg">
+                  <Flag className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  <span className="text-xs font-medium text-purple-700 dark:text-purple-300">
+                    Feature Flag Active
+                  </span>
+                </div>
+              )}
+
               {/* Search Icon (Mobile) */}
               <button
                 className="btn-ghost p-2.5 rounded-lg md:hidden"
@@ -111,6 +124,31 @@ export default function Layout() {
                 {/* Notification badge */}
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary-500 rounded-full"></span>
               </button>
+
+              {/* Feature Flags */}
+              <Link
+                to="/feature-flags"
+                className={`btn-ghost p-2.5 rounded-lg transition-all relative ${
+                  location.pathname === '/feature-flags'
+                    ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400'
+                    : 'hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400'
+                }`}
+                aria-label="Feature Flags"
+              >
+                <FlaskConical className="h-5 w-5" />
+                {/* Triangular badge with count */}
+                {(() => {
+                  const enabledCount = flags ? Object.values(flags).filter(f => f.enabled).length : 0
+                  if (enabledCount > 0) {
+                    return (
+                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-purple-500 dark:bg-purple-400 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-md border-2 border-white dark:border-neutral-800">
+                        {enabledCount}
+                      </span>
+                    )
+                  }
+                  return null
+                })()}
+              </Link>
 
               {/* Theme Toggle */}
               <button

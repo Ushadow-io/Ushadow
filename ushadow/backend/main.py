@@ -46,6 +46,20 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENV_NAME}")
     logger.info(f"MongoDB: {settings.MONGODB_URI}/{settings.MONGODB_DATABASE}")
 
+    # Initialize feature flags
+    feature_flag_service = create_feature_flag_service(
+        backend="yaml",
+        yaml_config_path="/config/feature_flags.yaml"
+    )
+    set_feature_flag_service(feature_flag_service)
+    await feature_flag_service.startup()
+    logger.info("✓ Feature flags initialized")
+
+    yield
+
+    # Cleanup feature flags
+    await feature_flag_service.shutdown()
+
     # Initialize MongoDB connection and u-node manager
     client = AsyncIOMotorClient(settings.MONGODB_URI)
     db = client[settings.MONGODB_DATABASE]
@@ -81,6 +95,7 @@ app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(chronicle.router, prefix="/api/chronicle", tags=["chronicle"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(docker.router, prefix="/api/docker", tags=["docker"])
+app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
 
