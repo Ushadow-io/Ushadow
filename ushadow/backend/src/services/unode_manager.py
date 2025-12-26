@@ -1,6 +1,7 @@
 """UNode management service for distributed cluster."""
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -8,6 +9,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from src.config.settings import get_settings
@@ -37,6 +39,28 @@ class UNodeManager:
         self.tokens_collection = db.join_tokens
         self._heartbeat_tasks: Dict[str, asyncio.Task] = {}
         self._unode_timeout_seconds = 60  # Mark offline after 60s
+        # Initialize encryption key from app secret
+        self._fernet = self._init_fernet()
+
+    def _init_fernet(self) -> Fernet:
+        """Initialize Fernet encryption using app secret key."""
+        # Derive a 32-byte key from the app secret
+        secret = settings.AUTH_SECRET_KEY or "default-secret-key-change-me"
+        key = hashlib.sha256(secret.encode()).digest()
+        # Fernet requires base64-encoded 32-byte key
+        fernet_key = base64.urlsafe_b64encode(key)
+        return Fernet(fernet_key)
+
+    def _encrypt_secret(self, secret: str) -> str:
+        """Encrypt a secret for storage."""
+        return self._fernet.encrypt(secret.encode()).decode()
+
+    def _decrypt_secret(self, encrypted: str) -> str:
+        """Decrypt a stored secret."""
+        try:
+            return self._fernet.decrypt(encrypted.encode()).decode()
+        except Exception:
+            return ""
 
     async def initialize(self):
         """Initialize indexes and register self as leader."""
@@ -418,6 +442,7 @@ Write-Host ""
         # Generate u-node secret for authentication
         unode_secret = secrets.token_urlsafe(32)
         unode_secret_hash = hashlib.sha256(unode_secret.encode()).hexdigest()
+        unode_secret_encrypted = self._encrypt_secret(unode_secret)
 
         now = datetime.now(timezone.utc)
         unode_id = secrets.token_hex(16)
@@ -438,6 +463,7 @@ Write-Host ""
             "labels": {},
             "metadata": {},
             "unode_secret_hash": unode_secret_hash,
+            "unode_secret_encrypted": unode_secret_encrypted,
         }
 
         await self.unodes_collection.insert_one(unode_doc)
@@ -601,9 +627,12 @@ Write-Host ""
         if not unode_doc:
             return False, f"UNode {hostname} not found in database"
 
-        # We need to send the secret hash as auth - but the manager expects the actual secret
-        # For now, we'll skip auth for upgrade since it requires the original secret
-        # In production, you'd want to implement proper auth token exchange
+        # Decrypt the stored secret for authentication
+        encrypted_secret = unode_doc.get("unode_secret_encrypted", "")
+        node_secret = self._decrypt_secret(encrypted_secret) if encrypted_secret else ""
+
+        if not node_secret:
+            return False, f"No authentication secret available for {hostname}. Node may need to re-register."
 
         manager_url = f"http://{unode.tailscale_ip}:8444"
 
@@ -614,7 +643,7 @@ Write-Host ""
                 async with session.post(
                     f"{manager_url}/upgrade",
                     json={"image": image},
-                    headers={"X-Node-Secret": ""}  # TODO: implement proper auth
+                    headers={"X-Node-Secret": node_secret}
                 ) as response:
                     if response.status == 200:
                         data = await response.json()

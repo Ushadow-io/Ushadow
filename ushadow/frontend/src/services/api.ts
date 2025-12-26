@@ -190,6 +190,18 @@ export const clusterApi = {
     api.post('/api/unodes/tokens', tokenData),
   claimNode: (hostname: string, tailscale_ip: string) =>
     api.post('/api/unodes/claim', { hostname, tailscale_ip }),
+  // Upgrade endpoints
+  upgradeNode: (hostname: string, version: string = 'latest') =>
+    api.post(`/api/unodes/${hostname}/upgrade`, { version }),
+  upgradeAllNodes: (version: string = 'latest') =>
+    api.post('/api/unodes/upgrade-all', { version }),
+  // Version management
+  getManagerVersions: () => api.get<{
+    versions: string[]
+    latest: string
+    registry: string
+    image: string
+  }>('/api/unodes/versions'),
 }
 
 // Deployment endpoints

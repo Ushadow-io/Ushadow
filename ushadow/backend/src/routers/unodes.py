@@ -3,6 +3,7 @@
 import logging
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -259,6 +260,102 @@ async def claim_node(
         message=f"Successfully claimed node {hostname}",
         unode=unode
     )
+
+
+# Constants for version fetching
+GHCR_REGISTRY = "ghcr.io"
+GHCR_IMAGE = "ushadow-io/ushadow-manager"
+
+
+class ManagerVersionsResponse(BaseModel):
+    """Response with available manager versions."""
+    versions: List[str]
+    latest: str
+    registry: str
+    image: str
+
+
+@router.get("/versions", response_model=ManagerVersionsResponse)
+async def get_manager_versions(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get available ushadow-manager versions from the container registry.
+
+    Fetches tags from ghcr.io/ushadow-io/ushadow-manager and returns
+    them sorted with semantic versioning (latest first).
+    """
+    try:
+        # Get anonymous token for public repo
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_response = await client.get(
+                f"https://{GHCR_REGISTRY}/token",
+                params={"scope": f"repository:{GHCR_IMAGE}:pull"}
+            )
+
+            if token_response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to authenticate with container registry"
+                )
+
+            token = token_response.json().get("token")
+
+            # Fetch tags
+            tags_response = await client.get(
+                f"https://{GHCR_REGISTRY}/v2/{GHCR_IMAGE}/tags/list",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+
+            if tags_response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to fetch tags from container registry"
+                )
+
+            data = tags_response.json()
+            tags = data.get("tags", [])
+
+            if not tags:
+                # Return default if no tags found
+                return ManagerVersionsResponse(
+                    versions=["latest"],
+                    latest="latest",
+                    registry=GHCR_REGISTRY,
+                    image=GHCR_IMAGE
+                )
+
+            # Sort versions: 'latest' first, then semantic versions descending
+            def version_sort_key(v: str) -> tuple:
+                if v == "latest":
+                    return (0, 0, 0, 0)  # Always first
+                # Try to parse semantic version
+                try:
+                    # Remove 'v' prefix if present
+                    clean = v.lstrip("v")
+                    parts = clean.split(".")
+                    # Pad to 3 parts
+                    while len(parts) < 3:
+                        parts.append("0")
+                    return (1, -int(parts[0]), -int(parts[1]), -int(parts[2]))
+                except (ValueError, IndexError):
+                    return (2, 0, 0, 0)  # Non-semantic versions last
+
+            sorted_tags = sorted(tags, key=version_sort_key)
+
+            return ManagerVersionsResponse(
+                versions=sorted_tags,
+                latest=sorted_tags[0] if sorted_tags else "latest",
+                registry=GHCR_REGISTRY,
+                image=GHCR_IMAGE
+            )
+
+    except httpx.RequestError as e:
+        logger.error(f"Failed to fetch versions from registry: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to connect to container registry: {str(e)}"
+        )
 
 
 @router.get("/{hostname}", response_model=UNode)

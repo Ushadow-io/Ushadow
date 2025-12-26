@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText } from 'lucide-react'
+import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X } from 'lucide-react'
 import { clusterApi, deploymentsApi, ServiceDefinition, Deployment } from '../services/api'
 
 interface UNode {
@@ -60,6 +60,15 @@ export default function ClusterPage() {
   const [logsDeploymentId, setLogsDeploymentId] = useState<string | null>(null)
   const [logs, setLogs] = useState<string>('')
   const [loadingLogs, setLoadingLogs] = useState(false)
+
+  // Upgrade state
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [upgradeTarget, setUpgradeTarget] = useState<string | 'all' | null>(null)
+  const [upgradeVersion, setUpgradeVersion] = useState('latest')
+  const [upgrading, setUpgrading] = useState(false)
+  const [upgradeResult, setUpgradeResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [availableVersions, setAvailableVersions] = useState<string[]>(['latest'])
+  const [loadingVersions, setLoadingVersions] = useState(false)
 
   useEffect(() => {
     loadUnodes()
@@ -232,6 +241,62 @@ export default function ClusterPage() {
     }
   }
 
+  // Upgrade handlers
+  const openUpgradeModal = async (target: string | 'all') => {
+    setUpgradeTarget(target)
+    setUpgradeVersion('latest')
+    setUpgradeResult(null)
+    setShowUpgradeModal(true)
+
+    // Fetch available versions
+    setLoadingVersions(true)
+    try {
+      const response = await clusterApi.getManagerVersions()
+      setAvailableVersions(response.data.versions)
+    } catch (err) {
+      console.error('Failed to fetch versions:', err)
+      setAvailableVersions(['latest'])
+    } finally {
+      setLoadingVersions(false)
+    }
+  }
+
+  const handleUpgrade = async () => {
+    if (!upgradeTarget) return
+
+    try {
+      setUpgrading(true)
+      setUpgradeResult(null)
+
+      if (upgradeTarget === 'all') {
+        const response = await clusterApi.upgradeAllNodes(upgradeVersion)
+        const data = response.data
+        const successCount = data.succeeded?.length || 0
+        const failCount = data.failed?.length || 0
+        setUpgradeResult({
+          success: failCount === 0,
+          message: `Upgraded ${successCount} node(s)${failCount > 0 ? `, ${failCount} failed` : ''}`
+        })
+      } else {
+        const response = await clusterApi.upgradeNode(upgradeTarget, upgradeVersion)
+        setUpgradeResult({
+          success: response.data.success,
+          message: response.data.message
+        })
+      }
+
+      // Refresh nodes after a delay (upgrade takes time)
+      setTimeout(() => loadUnodes(), 5000)
+    } catch (err: any) {
+      setUpgradeResult({
+        success: false,
+        message: err.response?.data?.detail || err.message || 'Upgrade failed'
+      })
+    } finally {
+      setUpgrading(false)
+    }
+  }
+
   const getNodeDeployments = (hostname: string) => {
     return deployments.filter(d => d.unode_hostname === hostname)
   }
@@ -302,18 +367,30 @@ export default function ClusterPage() {
             Manage distributed u-nodes in your cluster
           </p>
         </div>
-        <button
-          className="btn-primary flex items-center space-x-2"
-          onClick={handleCreateToken}
-          disabled={creatingToken}
-        >
-          {creatingToken ? (
-            <RefreshCw className="h-5 w-5 animate-spin" />
-          ) : (
-            <Plus className="h-5 w-5" />
+        <div className="flex items-center space-x-3">
+          {unodes.filter(n => n.role === 'worker' && n.status === 'online').length > 0 && (
+            <button
+              className="btn-secondary flex items-center space-x-2"
+              onClick={() => openUpgradeModal('all')}
+              data-testid="upgrade-all-btn"
+            >
+              <ArrowUpCircle className="h-5 w-5" />
+              <span>Upgrade All</span>
+            </button>
           )}
-          <span>Add Node</span>
-        </button>
+          <button
+            className="btn-primary flex items-center space-x-2"
+            onClick={handleCreateToken}
+            disabled={creatingToken}
+          >
+            {creatingToken ? (
+              <RefreshCw className="h-5 w-5 animate-spin" />
+            ) : (
+              <Plus className="h-5 w-5" />
+            )}
+            <span>Add Node</span>
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -450,9 +527,17 @@ export default function ClusterPage() {
                 </div>
               )}
 
-              {/* Capabilities */}
+              {/* Version & Capabilities */}
               <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-4">
-                {node.capabilities?.available_cpu_cores} cores | {formatBytes(node.capabilities?.available_memory_mb || 0)} RAM | {node.capabilities?.available_disk_gb?.toFixed(0)} GB disk
+                <div className="flex items-center justify-between mb-1">
+                  <span>{node.capabilities?.available_cpu_cores} cores | {formatBytes(node.capabilities?.available_memory_mb || 0)} RAM | {node.capabilities?.available_disk_gb?.toFixed(0)} GB disk</span>
+                </div>
+                {node.manager_version && (
+                  <div className="flex items-center mt-1">
+                    <span className="text-neutral-400 dark:text-neutral-500">Manager: </span>
+                    <span className="ml-1 font-mono text-neutral-600 dark:text-neutral-300" data-testid={`node-version-${node.hostname}`}>v{node.manager_version}</span>
+                  </div>
+                )}
               </div>
 
               {/* Deployed Services */}
@@ -534,15 +619,27 @@ export default function ClusterPage() {
                   </button>
                 )}
                 {node.role === 'leader' && <div />}
-                {node.role !== 'leader' && (
-                  <button
-                    onClick={() => handleRemoveNode(node.hostname)}
-                    className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
-                    title="Remove from cluster"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
+                <div className="flex items-center space-x-1">
+                  {node.role !== 'leader' && node.status === 'online' && (
+                    <button
+                      onClick={() => openUpgradeModal(node.hostname)}
+                      className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
+                      title="Upgrade manager"
+                      data-testid={`upgrade-node-${node.hostname}`}
+                    >
+                      <ArrowUpCircle className="h-4 w-4" />
+                    </button>
+                  )}
+                  {node.role !== 'leader' && (
+                    <button
+                      onClick={() => handleRemoveNode(node.hostname)}
+                      className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
+                      title="Remove from cluster"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -698,7 +795,7 @@ export default function ClusterPage() {
                   <span>{copied === 'windows' ? 'Copied!' : 'Copy'}</span>
                 </button>
               </div>
-              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 overflow-x-auto">
+              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap">
                 {getJoinCommand()}
               </div>
             </div>
@@ -715,7 +812,7 @@ export default function ClusterPage() {
                   <span>{copied === 'linux' ? 'Copied!' : 'Copy'}</span>
                 </button>
               </div>
-              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 overflow-x-auto">
+              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap">
                 {newToken.join_command}
               </div>
             </div>
@@ -859,6 +956,119 @@ export default function ClusterPage() {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upgrade Modal */}
+      {showUpgradeModal && upgradeTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-md w-full p-6 shadow-xl relative" data-testid="upgrade-modal">
+            <button
+              onClick={() => { setShowUpgradeModal(false); setUpgradeTarget(null); setUpgradeResult(null); }}
+              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+              data-testid="close-upgrade-modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+                <ArrowUpCircle className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+              </div>
+              <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
+                Upgrade {upgradeTarget === 'all' ? 'All Nodes' : upgradeTarget}
+              </h2>
+            </div>
+
+            <p className="text-neutral-600 dark:text-neutral-400 mb-6">
+              {upgradeTarget === 'all'
+                ? 'This will upgrade all online worker nodes to the specified version.'
+                : `Upgrade the manager on ${upgradeTarget} to a new version.`}
+            </p>
+
+            {/* Version Select */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                Version
+              </label>
+              {loadingVersions ? (
+                <div className="flex items-center space-x-2 py-2">
+                  <RefreshCw className="h-4 w-4 animate-spin text-neutral-400" />
+                  <span className="text-sm text-neutral-500">Loading versions...</span>
+                </div>
+              ) : (
+                <select
+                  value={upgradeVersion}
+                  onChange={(e) => setUpgradeVersion(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  disabled={upgrading}
+                  data-testid="upgrade-version-select"
+                >
+                  {availableVersions.map((version) => (
+                    <option key={version} value={version}>
+                      {version === 'latest' ? 'latest (recommended)' : version}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+                Select a version from the container registry
+              </p>
+            </div>
+
+            {/* Result Message */}
+            {upgradeResult && (
+              <div className={`mb-6 p-4 rounded-lg ${
+                upgradeResult.success
+                  ? 'bg-success-50 dark:bg-success-900/20 text-success-700 dark:text-success-300'
+                  : 'bg-danger-50 dark:bg-danger-900/20 text-danger-700 dark:text-danger-300'
+              }`} data-testid="upgrade-result">
+                <div className="flex items-center space-x-2">
+                  {upgradeResult.success ? (
+                    <CheckCircle className="h-5 w-5" />
+                  ) : (
+                    <XCircle className="h-5 w-5" />
+                  )}
+                  <span>{upgradeResult.message}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Warning */}
+            <div className="mb-6 p-3 bg-warning-50 dark:bg-warning-900/20 rounded-lg text-sm text-warning-700 dark:text-warning-300">
+              <strong>Note:</strong> Nodes will be briefly offline (~10 seconds) during upgrade.
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => { setShowUpgradeModal(false); setUpgradeTarget(null); setUpgradeResult(null); }}
+                className="btn-secondary"
+              >
+                {upgradeResult ? 'Close' : 'Cancel'}
+              </button>
+              {!upgradeResult && (
+                <button
+                  onClick={handleUpgrade}
+                  disabled={upgrading || !upgradeVersion.trim()}
+                  className="btn-primary flex items-center space-x-2"
+                  data-testid="confirm-upgrade-btn"
+                >
+                  {upgrading ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      <span>Upgrading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ArrowUpCircle className="h-4 w-4" />
+                      <span>Upgrade</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
