@@ -341,3 +341,110 @@ async def update_unode_status(
         success=True,
         message=f"UNode {hostname} status updated to {status.value}"
     )
+
+
+class UpgradeRequest(BaseModel):
+    """Request to upgrade a u-node's manager."""
+    version: str = "latest"  # Version tag (e.g., "latest", "0.2.0", "v0.2.0")
+    registry: str = "ghcr.io/ushadow-io"  # Container registry
+
+    @property
+    def image(self) -> str:
+        """Get the full image reference."""
+        return f"{self.registry}/ushadow-manager:{self.version}"
+
+
+class UpgradeResponse(BaseModel):
+    """Response from upgrade request."""
+    success: bool
+    message: str
+    hostname: str
+    new_image: Optional[str] = None
+
+
+@router.post("/{hostname}/upgrade", response_model=UpgradeResponse)
+async def upgrade_unode(
+    hostname: str,
+    request: UpgradeRequest = UpgradeRequest(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upgrade a u-node's manager to a new version.
+
+    This triggers the remote node to:
+    1. Pull the new manager image
+    2. Stop and remove its current container
+    3. Start a new container with the new image
+
+    The node will be briefly offline during the upgrade (~10 seconds).
+    """
+    unode_manager = await get_unode_manager()
+
+    # Get the node
+    unode = await unode_manager.get_unode(hostname)
+    if not unode:
+        raise HTTPException(status_code=404, detail="UNode not found")
+
+    # Can't upgrade the leader this way (it runs differently)
+    if unode.role == UNodeRole.LEADER:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot upgrade leader via this endpoint. Update leader containers directly."
+        )
+
+    # Check node is online
+    if unode.status != UNodeStatus.ONLINE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"UNode is {unode.status.value}. Must be online to upgrade."
+        )
+
+    # Trigger upgrade on the remote node
+    success, message = await unode_manager.upgrade_unode(
+        hostname=hostname,
+        image=request.image
+    )
+
+    return UpgradeResponse(
+        success=success,
+        message=message,
+        hostname=hostname,
+        new_image=request.image if success else None
+    )
+
+
+@router.post("/upgrade-all", response_model=dict)
+async def upgrade_all_unodes(
+    request: UpgradeRequest = UpgradeRequest(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upgrade all online worker u-nodes to a new manager version.
+
+    This performs a rolling upgrade across all workers.
+    """
+    unode_manager = await get_unode_manager()
+
+    # Get all online workers
+    unodes = await unode_manager.list_unodes(status=UNodeStatus.ONLINE)
+    workers = [n for n in unodes if n.role == UNodeRole.WORKER]
+
+    results = {
+        "total": len(workers),
+        "succeeded": [],
+        "failed": [],
+        "image": request.image
+    }
+
+    for unode in workers:
+        success, message = await unode_manager.upgrade_unode(
+            hostname=unode.hostname,
+            image=request.image
+        )
+
+        if success:
+            results["succeeded"].append(unode.hostname)
+        else:
+            results["failed"].append({"hostname": unode.hostname, "error": message})
+
+    return results

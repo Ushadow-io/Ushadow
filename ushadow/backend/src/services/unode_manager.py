@@ -490,16 +490,20 @@ Write-Host ""
 
     async def process_heartbeat(self, heartbeat: UNodeHeartbeat) -> bool:
         """Process a heartbeat from a u-node."""
+        update_data = {
+            "status": heartbeat.status.value,
+            "last_seen": datetime.now(timezone.utc),
+            "services": heartbeat.services_running,
+            "metadata.last_metrics": heartbeat.metrics,
+        }
+
+        # Update manager version if provided
+        if heartbeat.manager_version:
+            update_data["manager_version"] = heartbeat.manager_version
+
         result = await self.unodes_collection.update_one(
             {"hostname": heartbeat.hostname},
-            {
-                "$set": {
-                    "status": heartbeat.status.value,
-                    "last_seen": datetime.now(timezone.utc),
-                    "services": heartbeat.services_running,
-                    "metadata.last_metrics": heartbeat.metrics,
-                }
-            }
+            {"$set": update_data}
         )
 
         if heartbeat.capabilities:
@@ -566,6 +570,69 @@ Write-Host ""
 
         if result.modified_count > 0:
             logger.info(f"Marked {result.modified_count} stale u-nodes as offline")
+
+    async def upgrade_unode(
+        self,
+        hostname: str,
+        image: str = "ghcr.io/ushadow-io/ushadow-manager:latest"
+    ) -> Tuple[bool, str]:
+        """
+        Trigger a remote u-node to upgrade its manager.
+
+        Args:
+            hostname: The hostname of the u-node to upgrade
+            image: The new Docker image to use
+
+        Returns:
+            Tuple of (success, message)
+        """
+        import aiohttp
+
+        # Get the node
+        unode = await self.get_unode(hostname)
+        if not unode:
+            return False, f"UNode {hostname} not found"
+
+        if not unode.tailscale_ip:
+            return False, f"UNode {hostname} has no Tailscale IP"
+
+        # Get the node secret for authentication
+        unode_doc = await self.unodes_collection.find_one({"hostname": hostname})
+        if not unode_doc:
+            return False, f"UNode {hostname} not found in database"
+
+        # We need to send the secret hash as auth - but the manager expects the actual secret
+        # For now, we'll skip auth for upgrade since it requires the original secret
+        # In production, you'd want to implement proper auth token exchange
+
+        manager_url = f"http://{unode.tailscale_ip}:8444"
+
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=120)  # Long timeout for image pull
+            ) as session:
+                async with session.post(
+                    f"{manager_url}/upgrade",
+                    json={"image": image},
+                    headers={"X-Node-Secret": ""}  # TODO: implement proper auth
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        logger.info(f"Upgrade initiated on {hostname}: {data.get('message')}")
+                        return True, data.get("message", "Upgrade initiated")
+                    elif response.status == 401:
+                        return False, "Authentication failed - node requires secret"
+                    else:
+                        text = await response.text()
+                        return False, f"Upgrade failed: {response.status} - {text}"
+
+        except aiohttp.ClientConnectorError:
+            return False, f"Cannot connect to {hostname} at {manager_url}"
+        except asyncio.TimeoutError:
+            return False, f"Timeout connecting to {hostname}"
+        except Exception as e:
+            logger.error(f"Error upgrading {hostname}: {e}")
+            return False, str(e)
 
     async def discover_tailscale_peers(self) -> List[Dict[str, Any]]:
         """

@@ -125,6 +125,7 @@ class UNodeHeartbeat(BaseModel):
     """Heartbeat message from a u-node."""
     hostname: str
     status: UNodeStatus = UNodeStatus.ONLINE
+    manager_version: Optional[str] = None
     services_running: List[str] = Field(default_factory=list)
     capabilities: Optional[UNodeCapabilities] = None
     metrics: Dict[str, Any] = Field(default_factory=dict)
