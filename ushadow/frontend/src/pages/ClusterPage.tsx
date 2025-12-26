@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check } from 'lucide-react'
-import { clusterApi } from '../services/api'
+import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText } from 'lucide-react'
+import { clusterApi, deploymentsApi, ServiceDefinition, Deployment } from '../services/api'
 
 interface UNode {
   id: string
@@ -50,9 +50,25 @@ export default function ClusterPage() {
   const [creatingToken, setCreatingToken] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
 
+  // Deployment state
+  const [services, setServices] = useState<ServiceDefinition[]>([])
+  const [deployments, setDeployments] = useState<Deployment[]>([])
+  const [showDeployModal, setShowDeployModal] = useState(false)
+  const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const [deploying, setDeploying] = useState(false)
+  const [showLogsModal, setShowLogsModal] = useState(false)
+  const [logsDeploymentId, setLogsDeploymentId] = useState<string | null>(null)
+  const [logs, setLogs] = useState<string>('')
+  const [loadingLogs, setLoadingLogs] = useState(false)
+
   useEffect(() => {
     loadUnodes()
-    const interval = setInterval(loadUnodes, 15000) // Refresh every 15s
+    loadServices()
+    loadDeployments()
+    const interval = setInterval(() => {
+      loadUnodes()
+      loadDeployments()
+    }, 15000) // Refresh every 15s
     return () => clearInterval(interval)
   }, [])
 
@@ -72,6 +88,24 @@ export default function ClusterPage() {
       setError(err.response?.data?.detail || 'Failed to load cluster nodes')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadServices = async () => {
+    try {
+      const response = await deploymentsApi.listServices()
+      setServices(response.data)
+    } catch (err: any) {
+      console.error('Error loading services:', err)
+    }
+  }
+
+  const loadDeployments = async () => {
+    try {
+      const response = await deploymentsApi.listDeployments()
+      setDeployments(response.data)
+    } catch (err: any) {
+      console.error('Error loading deployments:', err)
     }
   }
 
@@ -133,6 +167,88 @@ export default function ClusterPage() {
     await navigator.clipboard.writeText(text)
     setCopied(id)
     setTimeout(() => setCopied(null), 2000)
+  }
+
+  // Deployment handlers
+  const openDeployModal = (hostname: string) => {
+    setSelectedNode(hostname)
+    setShowDeployModal(true)
+  }
+
+  const handleDeploy = async (serviceId: string) => {
+    if (!selectedNode) return
+    try {
+      setDeploying(true)
+      await deploymentsApi.deploy(serviceId, selectedNode)
+      setShowDeployModal(false)
+      setSelectedNode(null)
+      loadDeployments()
+    } catch (err: any) {
+      alert(`Deploy failed: ${err.response?.data?.detail || err.message}`)
+    } finally {
+      setDeploying(false)
+    }
+  }
+
+  const handleStopDeployment = async (deploymentId: string) => {
+    try {
+      await deploymentsApi.stopDeployment(deploymentId)
+      loadDeployments()
+    } catch (err: any) {
+      alert(`Stop failed: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  const handleRestartDeployment = async (deploymentId: string) => {
+    try {
+      await deploymentsApi.restartDeployment(deploymentId)
+      loadDeployments()
+    } catch (err: any) {
+      alert(`Restart failed: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  const handleRemoveDeployment = async (deploymentId: string) => {
+    if (!confirm('Remove this deployment?')) return
+    try {
+      await deploymentsApi.removeDeployment(deploymentId)
+      loadDeployments()
+    } catch (err: any) {
+      alert(`Remove failed: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  const handleViewLogs = async (deploymentId: string) => {
+    setLogsDeploymentId(deploymentId)
+    setShowLogsModal(true)
+    setLoadingLogs(true)
+    try {
+      const response = await deploymentsApi.getDeploymentLogs(deploymentId)
+      setLogs(response.data.logs)
+    } catch (err: any) {
+      setLogs(`Failed to load logs: ${err.response?.data?.detail || err.message}`)
+    } finally {
+      setLoadingLogs(false)
+    }
+  }
+
+  const getNodeDeployments = (hostname: string) => {
+    return deployments.filter(d => d.unode_hostname === hostname)
+  }
+
+  const getServiceName = (serviceId: string) => {
+    const service = services.find(s => s.service_id === serviceId)
+    return service?.name || serviceId
+  }
+
+  const getDeploymentStatusColor = (status: string) => {
+    switch (status) {
+      case 'running': return 'text-success-600 bg-success-100 dark:text-success-400 dark:bg-success-900/30'
+      case 'stopped': return 'text-neutral-600 bg-neutral-100 dark:text-neutral-400 dark:bg-neutral-800'
+      case 'deploying': return 'text-warning-600 bg-warning-100 dark:text-warning-400 dark:bg-warning-900/30'
+      case 'failed': return 'text-danger-600 bg-danger-100 dark:text-danger-400 dark:bg-danger-900/30'
+      default: return 'text-neutral-600 bg-neutral-100'
+    }
   }
 
   const getStatusColor = (status: string) => {
@@ -339,9 +455,86 @@ export default function ClusterPage() {
                 {node.capabilities?.available_cpu_cores} cores | {formatBytes(node.capabilities?.available_memory_mb || 0)} RAM | {node.capabilities?.available_disk_gb?.toFixed(0)} GB disk
               </div>
 
+              {/* Deployed Services */}
+              {getNodeDeployments(node.hostname).length > 0 && (
+                <div className="mb-4 border-t border-neutral-200 dark:border-neutral-700 pt-3">
+                  <div className="text-xs font-medium text-neutral-600 dark:text-neutral-400 mb-2 flex items-center">
+                    <Package className="h-3 w-3 mr-1" />
+                    Deployed Services
+                  </div>
+                  <div className="space-y-2">
+                    {getNodeDeployments(node.hostname).map((deployment) => (
+                      <div
+                        key={deployment.id}
+                        className="flex items-center justify-between bg-neutral-50 dark:bg-neutral-800/50 rounded px-2 py-1.5"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <span className={`px-1.5 py-0.5 text-xs rounded ${getDeploymentStatusColor(deployment.status)}`}>
+                            {deployment.status}
+                          </span>
+                          <span className="text-sm text-neutral-700 dark:text-neutral-300">
+                            {getServiceName(deployment.service_id)}
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          {deployment.status === 'running' ? (
+                            <button
+                              onClick={() => handleStopDeployment(deployment.id)}
+                              className="p-1 text-neutral-500 hover:text-warning-600 rounded"
+                              title="Stop"
+                            >
+                              <Square className="h-3 w-3" />
+                            </button>
+                          ) : deployment.status === 'stopped' ? (
+                            <button
+                              onClick={() => handleRestartDeployment(deployment.id)}
+                              className="p-1 text-neutral-500 hover:text-success-600 rounded"
+                              title="Start"
+                            >
+                              <Play className="h-3 w-3" />
+                            </button>
+                          ) : null}
+                          <button
+                            onClick={() => handleRestartDeployment(deployment.id)}
+                            className="p-1 text-neutral-500 hover:text-primary-600 rounded"
+                            title="Restart"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => handleViewLogs(deployment.id)}
+                            className="p-1 text-neutral-500 hover:text-primary-600 rounded"
+                            title="View Logs"
+                          >
+                            <FileText className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => handleRemoveDeployment(deployment.id)}
+                            className="p-1 text-neutral-500 hover:text-danger-600 rounded"
+                            title="Remove"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Actions */}
-              {node.role !== 'leader' && (
-                <div className="flex justify-end">
+              <div className="flex justify-between items-center">
+                {node.role !== 'leader' && node.status === 'online' && (
+                  <button
+                    onClick={() => openDeployModal(node.hostname)}
+                    className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center"
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Deploy Service
+                  </button>
+                )}
+                {node.role === 'leader' && <div />}
+                {node.role !== 'leader' && (
                   <button
                     onClick={() => handleRemoveNode(node.hostname)}
                     className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
@@ -349,8 +542,8 @@ export default function ClusterPage() {
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -537,6 +730,134 @@ export default function ClusterPage() {
                 className="btn-secondary"
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deploy Service Modal */}
+      {showDeployModal && selectedNode && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-md w-full p-6 shadow-xl relative">
+            <button
+              onClick={() => { setShowDeployModal(false); setSelectedNode(null); }}
+              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+            >
+              <XCircle className="h-5 w-5" />
+            </button>
+
+            <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100 mb-4">
+              Deploy to {selectedNode}
+            </h2>
+
+            {services.length === 0 ? (
+              <div className="text-center py-8">
+                <Package className="h-12 w-12 text-neutral-400 mx-auto mb-4" />
+                <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                  No service definitions found
+                </p>
+                <p className="text-sm text-neutral-500">
+                  Create a service definition first to deploy containers
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                  Select a service to deploy:
+                </p>
+                {services.map((service) => {
+                  const existingDeployment = deployments.find(
+                    d => d.service_id === service.service_id && d.unode_hostname === selectedNode
+                  )
+                  const isDeployed = existingDeployment && ['running', 'deploying'].includes(existingDeployment.status)
+
+                  return (
+                    <button
+                      key={service.service_id}
+                      onClick={() => !isDeployed && handleDeploy(service.service_id)}
+                      disabled={deploying || isDeployed}
+                      className={`w-full text-left p-4 rounded-lg border transition-colors ${
+                        isDeployed
+                          ? 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 opacity-50 cursor-not-allowed'
+                          : 'border-neutral-200 dark:border-neutral-700 hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                            {service.name}
+                          </div>
+                          <div className="text-sm text-neutral-500 dark:text-neutral-400">
+                            {service.image}
+                          </div>
+                        </div>
+                        {isDeployed && (
+                          <span className="text-xs px-2 py-1 rounded bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400">
+                            Deployed
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={() => { setShowDeployModal(false); setSelectedNode(null); }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Logs Modal */}
+      {showLogsModal && logsDeploymentId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-4xl w-full max-h-[80vh] flex flex-col shadow-xl relative">
+            <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
+              <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
+                Container Logs
+              </h2>
+              <button
+                onClick={() => { setShowLogsModal(false); setLogsDeploymentId(null); setLogs(''); }}
+                className="p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+              >
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4">
+              {loadingLogs ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="h-8 w-8 text-neutral-400 animate-spin" />
+                </div>
+              ) : (
+                <pre className="bg-neutral-900 text-green-400 p-4 rounded-lg text-sm font-mono whitespace-pre-wrap overflow-x-auto">
+                  {logs || 'No logs available'}
+                </pre>
+              )}
+            </div>
+
+            <div className="flex justify-end p-4 border-t border-neutral-200 dark:border-neutral-700">
+              <button
+                onClick={() => handleViewLogs(logsDeploymentId)}
+                className="btn-secondary mr-2"
+                disabled={loadingLogs}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${loadingLogs ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+              <button
+                onClick={() => { setShowLogsModal(false); setLogsDeploymentId(null); setLogs(''); }}
+                className="btn-primary"
+              >
+                Close
               </button>
             </div>
           </div>

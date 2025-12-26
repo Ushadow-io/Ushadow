@@ -47,6 +47,10 @@ if [[ "$1" == "--reset" ]]; then
     RESET_CONFIG=true
 fi
 
+# Path to setup utilities (needed by all code paths)
+SETUP_UTILS="${SETUP_DIR}/setup_utils.py"
+START_UTILS="${SETUP_DIR}/start_utils.py"
+
 # Print header
 echo ""
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -81,10 +85,6 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
 
     # Convert to lowercase and replace spaces/special chars with hyphens
     ENV_NAME=$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/-$//')
-
-    # Path to setup utilities
-    SETUP_UTILS="${SETUP_DIR}/setup_utils.py"
-    START_UTILS="${SETUP_DIR}/start_utils.py"
 
     # Prompt for port offset (for multi-worktree environments)
     echo ""
@@ -327,8 +327,40 @@ INFRA_RUNNING=$(python3 "$START_UTILS" check-infrastructure 2>/dev/null | python
 if [ "$INFRA_RUNNING" = "True" ]; then
     echo -e "${GREEN}   ✅ Infrastructure already running${NC}"
 else
-    python3 "$START_UTILS" start-infrastructure "${INFRA_COMPOSE_FILE}" "${INFRA_PROJECT_NAME}" >/dev/null 2>&1
-    echo -e "${GREEN}   ✅ Infrastructure started${NC}"
+    echo -e "${YELLOW}   Infrastructure not running, starting...${NC}"
+
+    # Call start-infrastructure and capture result
+    INFRA_RESULT=$(python3 "$START_UTILS" start-infrastructure "${INFRA_COMPOSE_FILE}" "${INFRA_PROJECT_NAME}" 2>&1)
+
+    # Try to parse as JSON first
+    set +e
+    INFRA_SUCCESS=$(echo "$INFRA_RESULT" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('success', False))" 2>/dev/null)
+    INFRA_EXIT_CODE=$?
+    set -e
+
+    if [ $INFRA_EXIT_CODE -eq 0 ] && [ "$INFRA_SUCCESS" = "True" ]; then
+        INFRA_MESSAGE=$(echo "$INFRA_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('message', 'Started'))" 2>/dev/null || echo "Started")
+        echo -e "${GREEN}   ✅ ${INFRA_MESSAGE}${NC}"
+    else
+        # Try to extract error message from JSON, or show raw output
+        INFRA_ERROR=$(echo "$INFRA_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('message', ''))" 2>/dev/null || echo "")
+
+        if [ -z "$INFRA_ERROR" ]; then
+            # If JSON parsing failed, show the raw output
+            echo -e "${RED}   ❌ Infrastructure startup failed:${NC}"
+            echo ""
+            echo "$INFRA_RESULT" | sed 's/^/   /'
+        else
+            echo -e "${RED}   ❌ Error:${NC}"
+            echo ""
+            echo "$INFRA_ERROR" | sed 's/^/   /'
+        fi
+
+        echo ""
+        echo -e "${YELLOW}   Try manually starting infrastructure:${NC}"
+        echo -e "   ${BOLD}docker compose -f ${INFRA_COMPOSE_FILE} -p ${INFRA_PROJECT_NAME} up -d${NC}"
+        exit 1
+    fi
 fi
 echo ""
 

@@ -7,9 +7,11 @@ This service runs on worker nodes and:
 - Sends periodic heartbeats
 - Executes commands from the leader (start/stop containers, etc.)
 - Reports node status and metrics
+- Exposes HTTP API for receiving deployment commands
 """
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -19,8 +21,9 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 import aiohttp
+from aiohttp import web
 import docker
-from docker.errors import DockerException
+from docker.errors import DockerException, NotFound, ImageNotFound
 
 # Configure logging
 logging.basicConfig(
@@ -50,12 +53,20 @@ class UshadowManager:
         self.docker_client: Optional[docker.DockerClient] = None
         self.session: Optional[aiohttp.ClientSession] = None
         self.services_running: List[str] = []
+        self.web_app: Optional[web.Application] = None
+        self.web_runner: Optional[web.AppRunner] = None
+
+    def _check_auth(self, request: web.Request) -> bool:
+        """Verify request authentication via X-Node-Secret header."""
+        secret = request.headers.get("X-Node-Secret", "")
+        return secret == self.node_secret and self.node_secret != ""
 
     async def start(self):
         """Start the manager service."""
         logger.info(f"Starting Ushadow Manager on {self.hostname}")
         logger.info(f"Leader URL: {self.leader_url}")
         logger.info(f"Tailscale IP: {self.tailscale_ip}")
+        logger.info(f"API Port: {MANAGER_PORT}")
 
         # Initialize Docker client
         try:
@@ -65,23 +76,300 @@ class UshadowManager:
             logger.error(f"Failed to connect to Docker: {e}")
             logger.error("Make sure Docker socket is mounted")
 
-        # Initialize HTTP session
+        # Initialize HTTP session for outbound requests
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=30),
             headers={"X-Node-Secret": self.node_secret}
         )
 
-        # Start heartbeat loop
-        await self.heartbeat_loop()
+        # Start HTTP API server and heartbeat loop concurrently
+        await asyncio.gather(
+            self.start_api_server(),
+            self.heartbeat_loop()
+        )
 
     async def stop(self):
         """Stop the manager service."""
         logger.info("Stopping Ushadow Manager...")
         self.running = False
+        if self.web_runner:
+            await self.web_runner.cleanup()
         if self.session:
             await self.session.close()
         if self.docker_client:
             self.docker_client.close()
+
+    # =========================================================================
+    # HTTP API Server
+    # =========================================================================
+
+    async def start_api_server(self):
+        """Start the HTTP API server for receiving commands from leader."""
+        self.web_app = web.Application()
+        self.web_app.router.add_get("/health", self.handle_health)
+        self.web_app.router.add_post("/deploy", self.handle_deploy)
+        self.web_app.router.add_post("/stop", self.handle_stop)
+        self.web_app.router.add_post("/restart", self.handle_restart)
+        self.web_app.router.add_post("/remove", self.handle_remove)
+        self.web_app.router.add_get("/status/{container_name}", self.handle_status)
+        self.web_app.router.add_get("/logs/{container_name}", self.handle_logs)
+        self.web_app.router.add_get("/containers", self.handle_list_containers)
+
+        self.web_runner = web.AppRunner(self.web_app)
+        await self.web_runner.setup()
+        site = web.TCPSite(self.web_runner, "0.0.0.0", MANAGER_PORT)
+        await site.start()
+        logger.info(f"API server started on port {MANAGER_PORT}")
+
+        # Keep running until stopped
+        while self.running:
+            await asyncio.sleep(1)
+
+    async def handle_health(self, request: web.Request) -> web.Response:
+        """Health check endpoint (no auth required)."""
+        return web.json_response({
+            "status": "healthy",
+            "hostname": self.hostname,
+            "docker_available": self.docker_client is not None
+        })
+
+    async def handle_deploy(self, request: web.Request) -> web.Response:
+        """Deploy a container."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        container_name = data.get("container_name")
+        image = data.get("image")
+
+        if not container_name or not image:
+            return web.json_response({"error": "container_name and image required"}, status=400)
+
+        result = await self.deploy_container(
+            container_name=container_name,
+            image=image,
+            ports=data.get("ports", {}),
+            environment=data.get("environment", {}),
+            volumes=data.get("volumes", []),
+            restart_policy=data.get("restart_policy", "unless-stopped"),
+            network=data.get("network"),
+            command=data.get("command"),
+        )
+        status = 200 if result.get("success") else 500
+        return web.json_response(result, status=status)
+
+    async def handle_stop(self, request: web.Request) -> web.Response:
+        """Stop a container."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        container_name = data.get("container_name")
+        if not container_name:
+            return web.json_response({"error": "container_name required"}, status=400)
+
+        result = await self.stop_service(container_name)
+        status = 200 if result.get("success") else 500
+        return web.json_response(result, status=status)
+
+    async def handle_restart(self, request: web.Request) -> web.Response:
+        """Restart a container."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        container_name = data.get("container_name")
+        if not container_name:
+            return web.json_response({"error": "container_name required"}, status=400)
+
+        result = await self.restart_service(container_name)
+        status = 200 if result.get("success") else 500
+        return web.json_response(result, status=status)
+
+    async def handle_remove(self, request: web.Request) -> web.Response:
+        """Stop and remove a container."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        container_name = data.get("container_name")
+        if not container_name:
+            return web.json_response({"error": "container_name required"}, status=400)
+
+        result = await self.remove_container(container_name)
+        status = 200 if result.get("success") else 500
+        return web.json_response(result, status=status)
+
+    async def handle_status(self, request: web.Request) -> web.Response:
+        """Get container status."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        container_name = request.match_info["container_name"]
+        result = self.get_container_status(container_name)
+        status = 200 if result.get("success") else 404
+        return web.json_response(result, status=status)
+
+    async def handle_logs(self, request: web.Request) -> web.Response:
+        """Get container logs."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        container_name = request.match_info["container_name"]
+        tail = int(request.query.get("tail", "100"))
+        result = await self.get_service_logs(container_name, tail=tail)
+        status = 200 if result.get("success") else 404
+        return web.json_response(result, status=status)
+
+    async def handle_list_containers(self, request: web.Request) -> web.Response:
+        """List all containers."""
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        result = self.list_all_containers()
+        return web.json_response(result)
+
+    # =========================================================================
+    # Container Operations
+    # =========================================================================
+
+    async def deploy_container(
+        self,
+        container_name: str,
+        image: str,
+        ports: Dict[str, int] = None,
+        environment: Dict[str, str] = None,
+        volumes: List[str] = None,
+        restart_policy: str = "unless-stopped",
+        network: str = None,
+        command: str = None,
+    ) -> Dict[str, Any]:
+        """Deploy (pull and run) a Docker container."""
+        if not self.docker_client:
+            return {"success": False, "error": "Docker not available"}
+
+        try:
+            # Stop and remove existing container if present
+            try:
+                existing = self.docker_client.containers.get(container_name)
+                logger.info(f"Stopping existing container: {container_name}")
+                existing.stop(timeout=10)
+                existing.remove()
+            except NotFound:
+                pass
+
+            # Pull the image
+            logger.info(f"Pulling image: {image}")
+            self.docker_client.images.pull(image)
+
+            # Prepare port bindings
+            port_bindings = {}
+            if ports:
+                for container_port, host_port in ports.items():
+                    port_bindings[container_port] = host_port
+
+            # Prepare restart policy
+            restart_policy_config = {"Name": restart_policy}
+            if restart_policy == "on-failure":
+                restart_policy_config["MaximumRetryCount"] = 5
+
+            # Run the container
+            logger.info(f"Starting container: {container_name}")
+            container = self.docker_client.containers.run(
+                image,
+                name=container_name,
+                detach=True,
+                ports=port_bindings if port_bindings else None,
+                environment=environment or {},
+                volumes=volumes or [],
+                restart_policy=restart_policy_config,
+                network=network,
+                command=command,
+            )
+
+            return {
+                "success": True,
+                "container_id": container.id[:12],
+                "container_name": container_name,
+                "status": container.status
+            }
+        except ImageNotFound:
+            return {"success": False, "error": f"Image not found: {image}"}
+        except Exception as e:
+            logger.error(f"Failed to deploy container {container_name}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def remove_container(self, container_name: str) -> Dict[str, Any]:
+        """Stop and remove a container."""
+        if not self.docker_client:
+            return {"success": False, "error": "Docker not available"}
+
+        try:
+            container = self.docker_client.containers.get(container_name)
+            if container.status == "running":
+                container.stop(timeout=10)
+            container.remove()
+            return {"success": True, "message": f"Container {container_name} removed"}
+        except NotFound:
+            return {"success": False, "error": f"Container not found: {container_name}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_container_status(self, container_name: str) -> Dict[str, Any]:
+        """Get status of a specific container."""
+        if not self.docker_client:
+            return {"success": False, "error": "Docker not available"}
+
+        try:
+            container = self.docker_client.containers.get(container_name)
+            return {
+                "success": True,
+                "container_id": container.id[:12],
+                "container_name": container.name,
+                "status": container.status,
+                "image": container.image.tags[0] if container.image.tags else container.image.short_id,
+                "created": container.attrs.get("Created"),
+                "health": container.attrs.get("State", {}).get("Health", {}).get("Status"),
+            }
+        except NotFound:
+            return {"success": False, "error": f"Container not found: {container_name}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def list_all_containers(self) -> Dict[str, Any]:
+        """List all containers on this node."""
+        if not self.docker_client:
+            return {"success": False, "error": "Docker not available", "containers": []}
+
+        try:
+            containers = self.docker_client.containers.list(all=True)
+            result = []
+            for c in containers:
+                result.append({
+                    "container_id": c.id[:12],
+                    "name": c.name,
+                    "status": c.status,
+                    "image": c.image.tags[0] if c.image.tags else c.image.short_id,
+                })
+            return {"success": True, "containers": result}
+        except Exception as e:
+            return {"success": False, "error": str(e), "containers": []}
 
     async def heartbeat_loop(self):
         """Send periodic heartbeats to the leader."""

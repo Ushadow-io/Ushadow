@@ -59,13 +59,16 @@ def check_infrastructure_running() -> bool:
     try:
         # Check each infrastructure service
         for service in ["mongo", "redis", "qdrant"]:
+            # Use format filter to get exact container name match
             result = subprocess.run(
-                ["docker", "ps", "--filter", f"name=^{service}$", "--filter", "status=running", "-q"],
+                ["docker", "ps", "--filter", f"name={service}", "--filter", "status=running", "--format", "{{.Names}}"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            if not result.stdout.strip():
+            # Check if we got an exact match (not a partial match)
+            containers = [name.strip() for name in result.stdout.strip().split('\n') if name.strip()]
+            if service not in containers:
                 return False
         return True
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -83,14 +86,16 @@ def check_infrastructure_exists() -> Tuple[bool, list]:
     try:
         for service in ["mongo", "redis", "qdrant"]:
             result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", f"name=^{service}$", "--format", "{{.Names}}"],
+                ["docker", "ps", "-a", "--filter", f"name={service}", "--format", "{{.Names}}"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            if result.stdout.strip():
+            # Check if we got an exact match (not a partial match)
+            containers = [name.strip() for name in result.stdout.strip().split('\n') if name.strip()]
+            if service in containers:
                 existing.append(service)
-        
+
         return len(existing) == 3, existing
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False, existing
@@ -123,6 +128,7 @@ def start_infrastructure(
         
         if all_exist:
             # Containers exist, just start them
+            started = []
             for container in existing:
                 result = subprocess.run(
                     ["docker", "start", container],
@@ -131,13 +137,17 @@ def start_infrastructure(
                     timeout=30
                 )
                 if result.returncode != 0:
-                    return False, f"Failed to start {container}: {result.stderr}"
-            
+                    error_msg = (result.stderr + result.stdout).strip()
+                    if not error_msg:
+                        error_msg = "Unknown error"
+                    return False, f"Failed to start {container}: {error_msg}"
+                started.append(container)
+
             # Wait for services to initialize
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
-            
-            return True, f"Started existing infrastructure containers: {', '.join(existing)}"
+
+            return True, f"Started existing infrastructure containers: {', '.join(started)}"
         
         # Containers don't exist, create them with docker compose
         # Check if compose file exists
@@ -153,7 +163,11 @@ def start_infrastructure(
         )
 
         if result.returncode != 0:
-            return False, f"Failed to start infrastructure: {result.stderr}"
+            # Combine stdout and stderr for complete error info
+            error_msg = (result.stderr + result.stdout).strip()
+            if not error_msg:
+                error_msg = "Unknown error (no output from docker compose)"
+            return False, f"Failed to create infrastructure: {error_msg}"
 
         # Wait for services to initialize
         if wait_seconds > 0:
