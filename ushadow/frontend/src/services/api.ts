@@ -188,6 +188,68 @@ export const clusterApi = {
   removeUnode: (hostname: string) => api.delete(`/api/unodes/${hostname}`),
   createToken: (tokenData: { role: string; max_uses: number; expires_in_hours: number }) =>
     api.post('/api/unodes/tokens', tokenData),
-  claimNode: (hostname: string, tailscale_ip: string) => 
+  claimNode: (hostname: string, tailscale_ip: string) =>
     api.post('/api/unodes/claim', { hostname, tailscale_ip }),
+}
+
+// Deployment endpoints
+export interface ServiceDefinition {
+  service_id: string
+  name: string
+  description: string
+  image: string
+  ports: Record<string, number>
+  environment: Record<string, string>
+  volumes: string[]
+  command?: string
+  restart_policy: string
+  network?: string
+  health_check_path?: string
+  health_check_port?: number
+  tags: string[]
+  metadata: Record<string, any>
+  created_at?: string
+  updated_at?: string
+  created_by?: string
+}
+
+export interface Deployment {
+  id: string
+  service_id: string
+  unode_hostname: string
+  status: 'pending' | 'deploying' | 'running' | 'stopped' | 'failed' | 'removing'
+  container_id?: string
+  container_name?: string
+  created_at?: string
+  deployed_at?: string
+  stopped_at?: string
+  last_health_check?: string
+  healthy?: boolean
+  health_message?: string
+  error?: string
+  retry_count: number
+  deployed_config?: Record<string, any>
+}
+
+export const deploymentsApi = {
+  // Service definitions
+  createService: (data: Omit<ServiceDefinition, 'created_at' | 'updated_at' | 'created_by'>) =>
+    api.post('/api/deployments/services', data),
+  listServices: () => api.get<ServiceDefinition[]>('/api/deployments/services'),
+  getService: (serviceId: string) => api.get<ServiceDefinition>(`/api/deployments/services/${serviceId}`),
+  updateService: (serviceId: string, data: Partial<ServiceDefinition>) =>
+    api.put(`/api/deployments/services/${serviceId}`, data),
+  deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
+
+  // Deployments
+  deploy: (serviceId: string, unodeHostname: string) =>
+    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname }),
+  listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
+    api.get<Deployment[]>('/api/deployments', { params }),
+  getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
+  stopDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/stop`),
+  restartDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/restart`),
+  removeDeployment: (deploymentId: string) => api.delete(`/api/deployments/${deploymentId}`),
+  getDeploymentLogs: (deploymentId: string, tail?: number) =>
+    api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
 }
