@@ -216,3 +216,7 @@ __marimo__/
 .vscode/extensions.json
 .vscode
 .serena
+config/certs
+.playwright-mcp
+config/Caddyfile
+config/tailscale.yaml

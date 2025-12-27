@@ -9,12 +9,12 @@ services:
     env_file:
       - ../.env          # Environment configuration
     ports:
-      - "${BACKEND_PORT:-8010}:8010"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
       # Server configuration
       - HOST=0.0.0.0
-      - PORT=8010
-      - BACKEND_PORT=${BACKEND_PORT:-8000}
+      - PORT=8000  # Internal port - always 8000
+      - BACKEND_PORT=${BACKEND_PORT:-8000}  # External port - uses offset from .env
       - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
       # Tailscale IP for node registration (set via .env or detected)
       - TAILSCALE_IP=${TAILSCALE_IP:-}
@@ -23,10 +23,12 @@ services:
       - ../config:/config  # Mount config directory (read-write for feature flags)
       - /app/__pycache__
       - /app/.pytest_cache
+      # Docker socket for container management (Tailscale container control)
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - infra-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5

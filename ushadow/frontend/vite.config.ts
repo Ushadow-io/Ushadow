@@ -7,12 +7,15 @@ export default defineConfig({
   server: {
     port: 5173,
     host: '0.0.0.0',
+    // Disable host check - we're behind Tailscale auth
+    allowedHosts: true,
     hmr: {
-      port: 5173,
-      // HMR connects to external port (not internal)
+      // Disable HMR for remote access (Tailscale, production, etc.)
+      // HMR only works on localhost or when explicitly configured
       clientPort: process.env.VITE_HMR_PORT
         ? parseInt(process.env.VITE_HMR_PORT)
-        : undefined,
+        : 5173,
+      host: 'localhost', // Force HMR to localhost only
     },
     watch: {
       usePolling: true, // Required for Docker volume mounts

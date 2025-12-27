@@ -1,2 +1,3 @@
 - When creating front end code, made sure that elements have a human readable identifier, so we can more easily debug and write browser tests
 - When doing front end changes, use mcp playright to test the changes in headless mode before saying it's working.  When making visual or cosmetic changes, use the screenshot function to check the work is complete
+- When creating wizards, use side arrow navigation (not footer buttons). Place circular arrow buttons on the left and right sides of the wizard card using absolute positioning (`-translate-x-16` and `translate-x-16` to position outside the card). Back arrow on the left (hidden on first step), Next arrow on the right (blue, always visible). This keeps navigation in a fixed position without content jumping or scrollbars.
