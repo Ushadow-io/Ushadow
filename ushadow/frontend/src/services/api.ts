@@ -204,6 +204,30 @@ export const clusterApi = {
   }>('/api/unodes/versions'),
 }
 
+// Kubernetes cluster endpoints
+export interface KubernetesCluster {
+  cluster_id: string
+  name: string
+  context: string
+  server: string
+  status: 'connected' | 'unreachable' | 'unauthorized' | 'error'
+  version?: string
+  node_count?: number
+  namespace: string
+  labels: Record<string, string>
+}
+
+export const kubernetesApi = {
+  addCluster: (data: { name: string; kubeconfig: string; context?: string; namespace?: string; labels?: Record<string, string> }) =>
+    api.post<KubernetesCluster>('/api/kubernetes', data),
+  listClusters: () =>
+    api.get<KubernetesCluster[]>('/api/kubernetes'),
+  getCluster: (clusterId: string) =>
+    api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
+  removeCluster: (clusterId: string) =>
+    api.delete(`/api/kubernetes/${clusterId}`),
+}
+
 // Deployment endpoints
 export interface ServiceDefinition {
   service_id: string

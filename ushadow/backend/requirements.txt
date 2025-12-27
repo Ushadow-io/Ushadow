@@ -32,6 +32,7 @@ python-dotenv==1.0.1
 pyyaml==6.0.2
 PyYAML==6.0.2
 docker==7.1.0  # Docker SDK for Python
+kubernetes==31.0.0  # Kubernetes Python client
 
 # Logging & Monitoring
 structlog==24.4.0
