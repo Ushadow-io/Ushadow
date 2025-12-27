@@ -22,6 +22,7 @@ import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
 import ClusterPage from './pages/ClusterPage'
+import TailscaleWizard from './wizards/TailscaleWizard'
 
 function App() {
   return (
@@ -54,6 +55,7 @@ function App() {
                 <Route path="wizard/start" element={<WizardStartPage />} />
                 <Route path="wizard/memory" element={<MemoryWizardPage />} />
                 <Route path="wizard/chronicle" element={<ChronicleWizardPage />} />
+                <Route path="wizard/tailscale" element={<TailscaleWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
                 <Route path="mcp" element={<MCPPage />} />
                 <Route path="agent-zero" element={<AgentZeroPage />} />

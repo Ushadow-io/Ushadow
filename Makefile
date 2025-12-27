@@ -18,6 +18,7 @@ help:
 	@echo "  make logs         - View application logs"
 	@echo "  make logs-f       - Follow application logs"
 	@echo "  make build        - Rebuild containers"
+	@echo "  make build-with-tailscale - Build with Tailscale socket (Linux only)"
 	@echo "  make clean        - Stop everything and remove volumes"
 	@echo "  make status       - Show running containers"
 	@echo "  make health       - Check service health"
@@ -38,6 +39,7 @@ help:
 	@echo "  make clean-logs   - Remove log files"
 	@echo "  make clean-cache  - Remove Python cache files"
 	@echo "  make reset        - Full reset (stop all, remove volumes, clean)"
+	@echo "  make reset-tailscale - Reset Tailscale (container, state, certs)"
 
 # Quick start - runs go.sh
 go:
@@ -77,6 +79,15 @@ build:
 	@echo "🔨 Building with dev server (hot-reload enabled)..."
 	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d --build
 	@echo "✅ Build complete - frontend running on port $${WEBUI_PORT} with hot-reload"
+
+build-with-tailscale:
+	@echo "🔨 Building with Tailscale socket support (Linux only)..."
+	@echo "⚠️  This requires Tailscale to be running on your Linux host"
+	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml -f compose/backend-with-tailscale.yml up -d --build
+	@echo "✅ Build complete - Tailscale socket mounted for auto-detection"
+
+reset-tailscale:
+	@./setup/reset-tailscale.sh
 
 # Infrastructure commands
 infra-up:
