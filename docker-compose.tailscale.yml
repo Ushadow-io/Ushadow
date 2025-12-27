@@ -1,0 +1,43 @@
+# Tailscale Container Service
+#
+# This container runs Tailscale daemon for seamless HTTPS access
+# to ushadow without port forwarding or firewall configuration.
+#
+# Usage:
+#   docker compose -f docker-compose.tailscale.yml up -d
+#
+# Or include in your main compose:
+#   docker compose -f docker-compose.infra.yml -f docker-compose.tailscale.yml up -d
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ushadow-tailscale
+    hostname: ushadow-tailscale
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      # Do not set TS_AUTHKEY - we'll use interactive auth with QR code
+      - TS_ACCEPT_DNS=true
+      - TS_EXTRA_ARGS=--advertise-tags=tag:container
+    volumes:
+      # Persist Tailscale state across container restarts
+      - tailscale-state:/var/lib/tailscale
+      # Mount config for certificate storage
+      - ./config/certs:/certs
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - infra-network
+    restart: unless-stopped
+    # Keep container running even if Tailscale isn't authenticated yet
+    command: sh -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity"
+
+volumes:
+  tailscale-state:
+    name: ushadow-tailscale-state
+
+networks:
+  infra-network:
+    external: true

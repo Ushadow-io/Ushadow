@@ -217,3 +217,7 @@ __marimo__/
 .vscode
 .serena
 results
+config/certs
+.playwright-mcp
+config/Caddyfile
+config/tailscale.yaml

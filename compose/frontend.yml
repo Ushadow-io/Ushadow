@@ -9,7 +9,7 @@ services:
     env_file:
       - ../.env          # Environment configuration
     environment:
-      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8010}
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8000}
       - VITE_ENV_NAME=${VITE_ENV_NAME:-}
       - NODE_ENV=${NODE_ENV:-development}
     volumes:
