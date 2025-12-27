@@ -11,6 +11,7 @@ import re
 import subprocess
 import yaml
 import json
+import aiohttp
 import docker
 from pathlib import Path
 from typing import Dict, List, Optional, Literal, Any
@@ -208,25 +209,6 @@ winget install tailscale.tailscale
         raise HTTPException(status_code=400, detail=f"Unsupported platform: {os_type}")
 
     return guide
-
-
-# ============================================================================
-# Tailscale Status Check
-# ============================================================================
-
-async def run_command(command: str) -> tuple[int, str, str]:
-    """Run a shell command and return exit code, stdout, stderr"""
-    try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        return process.returncode or 0, stdout.decode(), stderr.decode()
-    except Exception as e:
-        logger.error(f"Error running command '{command}': {e}")
-        return 1, "", str(e)
 
 
 # ============================================================================
@@ -450,20 +432,34 @@ async def get_access_urls() -> AccessUrls:
 async def test_connection(url: str) -> Dict[str, Any]:
     """Test connection to a specific URL"""
 
-    try:
-        # Use curl to test the connection
-        code, stdout, stderr = await run_command(f"curl -I -s -o /dev/null -w '%{{http_code}}' {url}")
-
-        http_code = stdout.strip() if code == 0 else "000"
-        success = http_code.startswith("2") or http_code.startswith("3")
-
+    # Validate URL to prevent SSRF
+    if not url.startswith(('http://', 'https://')):
         return {
             "url": url,
-            "success": success,
-            "http_code": http_code,
-            "error": stderr if not success else None
+            "success": False,
+            "error": "URL must start with http:// or https://"
         }
 
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, timeout=aiohttp.ClientTimeout(total=10), allow_redirects=True) as response:
+                http_code = str(response.status)
+                success = response.status >= 200 and response.status < 400
+
+                return {
+                    "url": url,
+                    "success": success,
+                    "http_code": http_code,
+                    "error": None if success else f"HTTP {http_code}"
+                }
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Connection error testing {url}: {e}")
+        return {
+            "url": url,
+            "success": False,
+            "error": str(e)
+        }
     except Exception as e:
         logger.error(f"Error testing connection to {url}: {e}")
         return {
@@ -727,14 +723,14 @@ async def provision_cert_in_container(hostname: str) -> CertificateStatus:
             # Copy cert file from /certs in Tailscale container
             cert_data, _ = container.get_archive(f"/certs/{hostname}.crt")
             tar_stream = io.BytesIO(b''.join(cert_data))
-            tar = tarfile.open(fileobj=tar_stream)
-            cert_content = tar.extractfile(f"{hostname}.crt").read()
+            with tarfile.open(fileobj=tar_stream) as tar:
+                cert_content = tar.extractfile(f"{hostname}.crt").read()
 
             # Copy key file
             key_data, _ = container.get_archive(f"/certs/{hostname}.key")
             tar_stream = io.BytesIO(b''.join(key_data))
-            tar = tarfile.open(fileobj=tar_stream)
-            key_content = tar.extractfile(f"{hostname}.key").read()
+            with tarfile.open(fileobj=tar_stream) as tar:
+                key_content = tar.extractfile(f"{hostname}.key").read()
 
             # Write to backend's config/certs
             with open(cert_file, 'wb') as f:

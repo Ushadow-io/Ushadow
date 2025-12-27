@@ -430,6 +430,7 @@ export default function TailscaleWizard() {
         {/* Back Arrow - Left Side */}
         {currentStepIndex > 0 && (
           <button
+            id="wizard-back-button"
             onClick={handleBack}
             disabled={loading}
             className="absolute left-0 top-32 -translate-x-16 w-12 h-12 rounded-full bg-white dark:bg-gray-800 border-2 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center justify-center shadow-lg z-10"
@@ -779,14 +780,19 @@ export default function TailscaleWizard() {
                       )}
                       <div className="flex justify-center">
                         <button
+                          id="check-auth-status"
                           onClick={async () => {
-                            const response = await tailscaleApi.getContainerStatus()
-                            if (response.data.authenticated) {
-                              setContainerStatus(response.data)
-                              setConfig(prev => ({ ...prev, hostname: response.data.hostname || '' }))
-                              setMessage({ type: 'success', text: 'Device authorized!' })
-                            } else {
-                              setMessage({ type: 'info', text: 'Not authorized yet - please complete authorization on your phone' })
+                            try {
+                              const response = await tailscaleApi.getContainerStatus()
+                              if (response.data.authenticated) {
+                                setContainerStatus(response.data)
+                                setConfig(prev => ({ ...prev, hostname: response.data.hostname || '' }))
+                                setMessage({ type: 'success', text: 'Device authorized!' })
+                              } else {
+                                setMessage({ type: 'info', text: 'Not authorized yet - please complete authorization on your phone' })
+                              }
+                            } catch (err: any) {
+                              setMessage({ type: 'error', text: err.response?.data?.detail || 'Failed to check status' })
                             }
                           }}
                           className="btn-secondary text-sm"
