@@ -1,0 +1,91 @@
+# Chronicle backend service definition with sidecar workers
+
+services:
+  chronicle-backend:
+    image: ghcr.io/ushadow-io/chronicle-backend:${CHRONICLE_IMAGE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
+    # Sidecar mode: Run both workers and backend in same container
+    command:
+      - /bin/bash
+      - -c
+      - |
+        echo "🚀 Starting Chronicle with sidecar workers..."
+        ./start-workers.sh &
+        sleep 3
+        echo "🌐 Starting FastAPI backend..."
+        exec uv run --extra deepgram python src/advanced_omi_backend/main.py
+    env_file:
+      - ../.env
+      - ../config/chronicle.env
+    ports:
+      - "${CHRONICLE_PORT:-8080}:8000"
+    environment:
+      # Override infrastructure connections to use shared services
+      - MONGODB_URI=mongodb://mongo:27017
+      - REDIS_URL=redis://redis:6379/${CHRONICLE_REDIS_DB:-1}
+      - QDRANT_BASE_URL=http://qdrant:6333
+
+      # All other config comes from config/chronicle.env
+
+    volumes:
+      # Data persistence
+      - chronicle_audio:/app/audio_chunks
+      - chronicle_data:/app/data
+      - chronicle_debug:/app/debug_dir
+
+      # Configuration
+      - ../chronicle/config.yml:/app/config.yml
+
+    networks:
+      - infra-network
+
+    # NOTE: Depends on shared infrastructure services (mongo, redis, qdrant)
+    # These must be started separately via docker-compose.infra.yml
+    # Cannot use depends_on for services in external compose files
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  chronicle-webui:
+    image: ghcr.io/ushadow-io/chronicle-webui:${CHRONICLE_IMAGE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-webui
+    env_file:
+      - ../.env
+    ports:
+      - "${CHRONICLE_WEBUI_PORT:-3080}:80"
+    environment:
+      - VITE_BACKEND_URL=http://localhost:${CHRONICLE_PORT:-8080}
+      - BACKEND_URL=http://chronicle-backend:8000
+    networks:
+      - infra-network
+    depends_on:
+      - chronicle-backend
+    restart: unless-stopped
+
+# Chronicle data volumes (local to this environment)
+volumes:
+  chronicle_audio:
+    driver: local
+  chronicle_data:
+    driver: local
+  chronicle_debug:
+    driver: local
+
+# Use existing shared infrastructure network
+networks:
+  infra-network:
+    name: infra-network
+    external: true
