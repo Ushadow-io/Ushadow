@@ -1,0 +1,22 @@
+# Backend with Tailscale Socket Mounting (Linux only)
+#
+# This override enables the backend container to communicate with
+# the host's Tailscale daemon for automatic status detection and
+# certificate provisioning.
+#
+# IMPORTANT: This only works on Linux hosts!
+# On macOS/Windows, use the standard backend.yml and follow
+# manual certificate provisioning steps in the wizard.
+#
+# Usage:
+#   docker compose -f docker-compose.yml \
+#     -f compose/backend-with-tailscale.yml up -d
+
+services:
+  backend:
+    volumes:
+      # Mount Tailscale socket from Linux host
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock:ro
+    environment:
+      # Tell backend that Tailscale socket is available
+      - TAILSCALE_SOCKET_AVAILABLE=true

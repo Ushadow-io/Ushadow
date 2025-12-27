@@ -61,6 +61,26 @@ services:
       retries: 5
       start_period: 10s
 
+  # tailscale:
+  #   image: tailscale/tailscale:latest
+  #   container_name: ushadow-tailscale
+  #   hostname: ushadow-tailscale
+  #   environment:
+  #     - TS_STATE_DIR=/var/lib/tailscale
+  #     - TS_USERSPACE=true
+  #     - TS_ACCEPT_DNS=true
+  #     - TS_EXTRA_ARGS=--advertise-tags=tag:container
+  #   volumes:
+  #     - tailscale_state:/var/lib/tailscale
+  #     - ./config/certs:/certs
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_RAW
+  #   networks:
+  #     - infra-network
+  #   restart: unless-stopped
+  #   command: sh -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity"
+
 networks:
   infra-network:
     name: infra-network
@@ -72,4 +92,6 @@ volumes:
   redis_data:
     driver: local
   qdrant_data:
+    driver: local
+  tailscale_state:
     driver: local

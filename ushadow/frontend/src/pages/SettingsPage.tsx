@@ -1,8 +1,10 @@
-import { Settings, Save, Server, Key, Database } from 'lucide-react'
+import { Settings, Save, Server, Key, Database, Shield, ArrowRight } from 'lucide-react'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('services')
+  const navigate = useNavigate()
 
   const tabs = [
     { id: 'services', label: 'Services', icon: Server },
@@ -141,6 +143,50 @@ export default function SettingsPage() {
                 <label htmlFor="n8n-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
                   Enable n8n Integration
                 </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="card p-6 border-2 border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-white dark:from-blue-900/20 dark:to-gray-800">
+            <div className="flex items-start justify-between">
+              <div className="flex items-start space-x-4">
+                <div className="p-3 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
+                  <Shield className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
+                    Tailscale Secure Access
+                  </h3>
+                  <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
+                    Set up secure HTTPS access to ushadow from anywhere without port forwarding or firewall configuration.
+                  </p>
+                  <ul className="text-sm text-neutral-700 dark:text-neutral-300 space-y-1 mb-4">
+                    <li className="flex items-center gap-2">
+                      <span className="text-green-600 dark:text-green-400">✓</span>
+                      <span>Encrypted VPN mesh network</span>
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="text-green-600 dark:text-green-400">✓</span>
+                      <span>Automatic HTTPS with valid SSL certificates</span>
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="text-green-600 dark:text-green-400">✓</span>
+                      <span>Access from any device (phone, laptop, tablet)</span>
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="text-green-600 dark:text-green-400">✓</span>
+                      <span>No network configuration required</span>
+                    </li>
+                  </ul>
+                  <button
+                    id="tailscale-wizard-button"
+                    onClick={() => navigate('/wizard/tailscale')}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <span>Launch Setup Wizard</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
