@@ -1,11 +1,16 @@
 """Kubernetes cluster management and deployment service."""
 
 import base64
+import binascii
+import hashlib
 import logging
+import os
 import secrets
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from cryptography.fernet import Fernet, InvalidToken
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -29,6 +34,27 @@ class KubernetesManager:
         self.clusters_collection = db.kubernetes_clusters
         self._kubeconfig_dir = Path("/config/kubeconfigs")
         self._kubeconfig_dir.mkdir(parents=True, exist_ok=True)
+        # Initialize encryption for kubeconfig files
+        self._fernet = self._init_fernet()
+
+    def _init_fernet(self) -> Fernet:
+        """Initialize Fernet encryption using app secret key."""
+        from src.config.settings import get_settings
+        settings = get_settings()
+
+        # Derive a 32-byte key from the app secret
+        secret = settings.secret_key.encode() if settings.secret_key else b"default-secret-key"
+        key = hashlib.sha256(secret).digest()
+        fernet_key = base64.urlsafe_b64encode(key)
+        return Fernet(fernet_key)
+
+    def _encrypt_kubeconfig(self, kubeconfig_yaml: str) -> bytes:
+        """Encrypt kubeconfig content for storage."""
+        return self._fernet.encrypt(kubeconfig_yaml.encode())
+
+    def _decrypt_kubeconfig(self, encrypted_data: bytes) -> str:
+        """Decrypt kubeconfig content."""
+        return self._fernet.decrypt(encrypted_data).decode()
 
     async def initialize(self):
         """Initialize indexes."""
@@ -43,22 +69,30 @@ class KubernetesManager:
         """
         Add a new Kubernetes cluster.
 
-        Stores the kubeconfig and validates cluster connectivity.
+        Stores the kubeconfig (encrypted) and validates cluster connectivity.
         """
+        temp_kubeconfig_path = None
         try:
-            # Decode kubeconfig
-            kubeconfig_yaml = base64.b64decode(cluster_data.kubeconfig).decode('utf-8')
+            # Decode kubeconfig with proper error handling
+            try:
+                kubeconfig_yaml = base64.b64decode(cluster_data.kubeconfig).decode('utf-8')
+            except (binascii.Error, ValueError) as e:
+                return False, None, f"Invalid base64 encoding in kubeconfig: {str(e)}"
+            except UnicodeDecodeError as e:
+                return False, None, f"Kubeconfig is not valid UTF-8 text: {str(e)}"
 
             # Generate cluster ID
             cluster_id = secrets.token_hex(8)
 
-            # Save kubeconfig to file
-            kubeconfig_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
-            kubeconfig_path.write_text(kubeconfig_yaml)
+            # Write to temp file for validation (kubernetes client needs a file)
+            temp_kubeconfig_path = self._kubeconfig_dir / f".tmp_{cluster_id}.yaml"
+            temp_kubeconfig_path.write_text(kubeconfig_yaml)
+            # Set restrictive permissions on temp file
+            os.chmod(temp_kubeconfig_path, 0o600)
 
             # Load config and extract info
             kube_config = config.load_kube_config(
-                config_file=str(kubeconfig_path),
+                config_file=str(temp_kubeconfig_path),
                 context=cluster_data.context
             )
 
@@ -74,11 +108,17 @@ class KubernetesManager:
 
                 # Extract context info from kubeconfig
                 contexts, active_context = config.list_kube_config_contexts(
-                    config_file=str(kubeconfig_path)
+                    config_file=str(temp_kubeconfig_path)
                 )
                 context_to_use = cluster_data.context or active_context['name']
                 context_details = next(c for c in contexts if c['name'] == context_to_use)
                 server = context_details['context']['cluster']
+
+                # Encrypt and save kubeconfig permanently
+                encrypted_path = self._kubeconfig_dir / f"{cluster_id}.enc"
+                encrypted_data = self._encrypt_kubeconfig(kubeconfig_yaml)
+                encrypted_path.write_bytes(encrypted_data)
+                os.chmod(encrypted_path, 0o600)
 
                 cluster = KubernetesCluster(
                     cluster_id=cluster_id,
@@ -99,12 +139,20 @@ class KubernetesManager:
                 return True, cluster, ""
 
             except ApiException as e:
-                kubeconfig_path.unlink()  # Clean up file
+                # Clean up encrypted file if it was created
+                encrypted_path = self._kubeconfig_dir / f"{cluster_id}.enc"
+                if encrypted_path.exists():
+                    encrypted_path.unlink()
                 return False, None, f"Cannot connect to cluster: {e.reason}"
 
         except Exception as e:
             logger.error(f"Error adding K8s cluster: {e}")
             return False, None, str(e)
+
+        finally:
+            # Always clean up temp file
+            if temp_kubeconfig_path and temp_kubeconfig_path.exists():
+                temp_kubeconfig_path.unlink()
 
     async def list_clusters(self) -> List[KubernetesCluster]:
         """List all registered Kubernetes clusters."""
@@ -122,10 +170,15 @@ class KubernetesManager:
 
     async def remove_cluster(self, cluster_id: str) -> bool:
         """Remove a cluster and its kubeconfig."""
-        # Delete kubeconfig file
-        kubeconfig_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
-        if kubeconfig_path.exists():
-            kubeconfig_path.unlink()
+        # Delete encrypted kubeconfig file
+        encrypted_path = self._kubeconfig_dir / f"{cluster_id}.enc"
+        if encrypted_path.exists():
+            encrypted_path.unlink()
+
+        # Also clean up legacy unencrypted file if it exists
+        legacy_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
+        if legacy_path.exists():
+            legacy_path.unlink()
 
         # Delete from database
         result = await self.clusters_collection.delete_one({"cluster_id": cluster_id})
@@ -133,13 +186,39 @@ class KubernetesManager:
 
     def _get_kube_client(self, cluster_id: str) -> Tuple[client.CoreV1Api, client.AppsV1Api]:
         """Get Kubernetes API clients for a cluster."""
-        kubeconfig_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
+        encrypted_path = self._kubeconfig_dir / f"{cluster_id}.enc"
+        legacy_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
 
-        if not kubeconfig_path.exists():
+        # Try encrypted file first, fall back to legacy unencrypted
+        if encrypted_path.exists():
+            try:
+                encrypted_data = encrypted_path.read_bytes()
+                kubeconfig_yaml = self._decrypt_kubeconfig(encrypted_data)
+
+                # Write to temp file for kubernetes client
+                temp_path = self._kubeconfig_dir / f".tmp_{cluster_id}.yaml"
+                temp_path.write_text(kubeconfig_yaml)
+                os.chmod(temp_path, 0o600)
+
+                try:
+                    config.load_kube_config(config_file=str(temp_path))
+                    return client.CoreV1Api(), client.AppsV1Api()
+                finally:
+                    # Clean up temp file
+                    if temp_path.exists():
+                        temp_path.unlink()
+
+            except InvalidToken:
+                raise ValueError(f"Failed to decrypt kubeconfig for cluster {cluster_id}")
+
+        elif legacy_path.exists():
+            # Support legacy unencrypted files
+            logger.warning(f"Using unencrypted kubeconfig for cluster {cluster_id}")
+            config.load_kube_config(config_file=str(legacy_path))
+            return client.CoreV1Api(), client.AppsV1Api()
+
+        else:
             raise FileNotFoundError(f"Kubeconfig not found for cluster {cluster_id}")
-
-        config.load_kube_config(config_file=str(kubeconfig_path))
-        return client.CoreV1Api(), client.AppsV1Api()
 
     async def compile_service_to_k8s(
         self,

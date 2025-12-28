@@ -220,7 +220,7 @@ async def claim_node(
     This endpoint allows claiming nodes that are:
     - Discovered on Tailscale network
     - Running u-node manager
-    - Either unregistered or registered to another leader
+    - Either unregistered or released from another leader
     """
     hostname = request.get("hostname")
     tailscale_ip = request.get("tailscale_ip")
@@ -230,22 +230,10 @@ async def claim_node(
     
     unode_manager = await get_unode_manager()
     
-    # Create a registration request for this node
-    unode_create = UNodeCreate(
+    # Use the claim_unode method which doesn't require a token
+    success, unode, error = await unode_manager.claim_unode(
         hostname=hostname,
-        tailscale_ip=tailscale_ip,
-        platform="linux",  # Will be updated by actual registration
-        manager_version="0.1.0",
-        role=UNodeRole.WORKER,
-        capabilities=None  # Will be provided by the node
-    )
-    
-    # For now, create a basic registration
-    # In a full implementation, you'd want to contact the node's u-node manager
-    # and have it re-register with this leader
-    success, unode, error = await unode_manager.register_unode(
-        token_doc=None,  # Claiming doesn't require a token
-        unode_data=unode_create
+        tailscale_ip=tailscale_ip
     )
     
     if not success:
@@ -351,10 +339,11 @@ async def get_manager_versions(
             )
 
     except httpx.RequestError as e:
+        # Log full error internally but don't expose details to client
         logger.error(f"Failed to fetch versions from registry: {e}")
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to connect to container registry: {str(e)}"
+            detail="Failed to connect to container registry. Please try again later."
         )
 
 

@@ -3,12 +3,16 @@
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import aiohttp
+from aiohttp import UnixConnector
 from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -29,6 +33,50 @@ from src.models.unode import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Tailscale IP ranges - CGNAT for IPv4, fd7a::/48 for IPv6
+# All traffic between Tailscale nodes is encrypted via WireGuard
+TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+TAILSCALE_IPV6_NETWORK = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+
+# U-Node manager configuration
+UNODE_MANAGER_PORT = 8444  # Port where worker's manager listens
+UNODE_SECRET_LENGTH = 32   # Bytes for token_urlsafe (produces ~43 char string)
+
+# Timeout values (in seconds)
+HTTP_TIMEOUT_DEFAULT = 10.0      # Default timeout for HTTP requests to workers
+HTTP_TIMEOUT_PROBE = 2.0         # Quick timeout for health probes
+HEARTBEAT_TIMEOUT_SECONDS = 60   # Mark node offline after this many seconds
+
+
+def is_tailscale_ip(ip_str: str) -> bool:
+    """
+    Validate that an IP address is in the Tailscale range.
+
+    This is a security check to ensure we only send sensitive data
+    (like unode_secret) to nodes on the Tailscale mesh network,
+    which provides WireGuard encryption for all traffic.
+
+    Args:
+        ip_str: IP address string to validate
+
+    Returns:
+        True if the IP is in Tailscale's CGNAT range (100.64.0.0/10)
+        or Tailscale's IPv6 range (fd7a:115c:a1e0::/48)
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        if isinstance(ip, ipaddress.IPv4Address):
+            return ip in TAILSCALE_IPV4_NETWORK
+        elif isinstance(ip, ipaddress.IPv6Address):
+            return ip in TAILSCALE_IPV6_NETWORK
+        return False
+    except ValueError:
+        return False
+
 
 class UNodeManager:
     """Manages cluster u-nodes and their state."""
@@ -38,7 +86,7 @@ class UNodeManager:
         self.unodes_collection = db.unodes
         self.tokens_collection = db.join_tokens
         self._heartbeat_tasks: Dict[str, asyncio.Task] = {}
-        self._unode_timeout_seconds = 60  # Mark offline after 60s
+        self._unode_timeout_seconds = HEARTBEAT_TIMEOUT_SECONDS
         # Initialize encryption key from app secret
         self._fernet = self._init_fernet()
 
@@ -584,8 +632,6 @@ Write-Host ""
         Returns:
             Tuple of (success, message)
         """
-        import aiohttp
-
         # Get the node first
         unode = await self.get_unode(hostname)
         if not unode:
@@ -618,6 +664,128 @@ Write-Host ""
             return True, f"Node {hostname} released. It can now be claimed by another leader."
 
         return False, f"Failed to release {hostname}"
+
+    async def claim_unode(
+        self,
+        hostname: str,
+        tailscale_ip: str,
+        platform: str = "linux",
+        manager_version: str = "0.1.0"
+    ) -> Tuple[bool, Optional[UNode], str]:
+        """
+        Claim a discovered u-node without requiring a token.
+
+        This is used when a leader discovers a released/available node on the
+        Tailscale network and wants to claim it. The leader initiates the claim
+        rather than the worker registering with a token.
+
+        Security: This method sends the unode_secret over HTTP, but this is
+        secure because:
+        1. We validate that the target IP is in the Tailscale range
+        2. All Tailscale traffic is encrypted via WireGuard
+
+        Args:
+            hostname: The hostname of the node to claim
+            tailscale_ip: The Tailscale IP of the node (must be in 100.64.0.0/10)
+            platform: Platform type (linux, darwin, windows)
+            manager_version: Version of the u-node manager
+
+        Returns:
+            Tuple of (success, unode, error_message)
+        """
+        # Security: Validate that the IP is in the Tailscale range
+        # This ensures we only send secrets over Tailscale's encrypted network
+        if not is_tailscale_ip(tailscale_ip):
+            logger.warning(f"Rejecting claim for {hostname}: IP {tailscale_ip} is not a Tailscale IP")
+            return False, None, f"Invalid IP address: {tailscale_ip} is not in Tailscale range"
+
+        # Check if node already exists (maybe registered to this leader already)
+        existing = await self.unodes_collection.find_one({"hostname": hostname})
+        if existing:
+            return False, None, f"Node {hostname} is already registered"
+        
+        # Try to contact the worker to get its actual info and notify it
+        worker_info = None
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as session:
+                # First try to get the worker's info
+                async with session.get(f"http://{tailscale_ip}:8444/info") as response:
+                    if response.status == 200:
+                        worker_info = await response.json()
+                        logger.info(f"Got worker info from {hostname}: {worker_info}")
+        except Exception as e:
+            logger.warning(f"Could not contact worker {hostname} at {tailscale_ip}: {e}")
+            # Continue anyway - we can still claim the node
+        
+        # Generate u-node secret for authentication
+        unode_secret = secrets.token_urlsafe(32)
+        unode_secret_hash = hashlib.sha256(unode_secret.encode()).hexdigest()
+        unode_secret_encrypted = self._encrypt_secret(unode_secret)
+        
+        now = datetime.now(timezone.utc)
+        unode_id = secrets.token_hex(16)
+        
+        # Use worker info if available, otherwise use provided values
+        actual_platform = (worker_info or {}).get("platform", platform)
+        actual_version = (worker_info or {}).get("manager_version", manager_version)
+        
+        unode_doc = {
+            "id": unode_id,
+            "hostname": hostname,
+            "display_name": hostname,
+            "tailscale_ip": tailscale_ip,
+            "platform": actual_platform,
+            "role": UNodeRole.WORKER.value,
+            "status": UNodeStatus.ONLINE.value,
+            "capabilities": UNodeCapabilities().model_dump(),
+            "registered_at": now,
+            "last_seen": now,
+            "manager_version": actual_version,
+            "services": [],
+            "labels": {},
+            "metadata": {},
+            "unode_secret_hash": unode_secret_hash,
+            "unode_secret_encrypted": unode_secret_encrypted,
+        }
+        
+        await self.unodes_collection.insert_one(unode_doc)
+        logger.info(f"Claimed u-node: {hostname} ({tailscale_ip})")
+        
+        # Try to notify the worker about its new leader
+        # The worker needs to know the leader URL to send heartbeats
+        try:
+            leader_url = os.environ.get("LEADER_URL", "")
+            if not leader_url:
+                # Try to construct from tailscale IP
+                ts_ip = os.environ.get("TAILSCALE_IP", "")
+                if ts_ip:
+                    leader_url = f"http://{ts_ip}:8000"
+            
+            if leader_url:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as session:
+                    async with session.post(
+                        f"http://{tailscale_ip}:8444/claim",
+                        json={
+                            "leader_url": leader_url,
+                            "unode_secret": unode_secret
+                        }
+                    ) as response:
+                        if response.status == 200:
+                            logger.info(f"Notified {hostname} of new leader")
+                        else:
+                            logger.warning(f"Worker {hostname} claim notification returned: {response.status}")
+        except Exception as e:
+            logger.warning(f"Could not notify worker {hostname} of claim: {e}")
+        
+        # Return u-node with the secret (only returned once!)
+        unode = UNode(**{k: v for k, v in unode_doc.items() if k != "unode_secret_hash"})
+        unode.metadata["unode_secret"] = unode_secret  # One-time secret return
+        
+        return True, unode, ""
 
     async def update_unode_status(self, hostname: str, status: UNodeStatus) -> bool:
         """Update a u-node's status."""
@@ -658,8 +826,6 @@ Write-Host ""
         Returns:
             Tuple of (success, message)
         """
-        import aiohttp
-
         # Get the node
         unode = await self.get_unode(hostname)
         if not unode:
@@ -714,19 +880,15 @@ Write-Host ""
         Discover all Tailscale peers on the network and probe for u-node managers.
         
         Supports multiple discovery methods:
-        1. Direct tailscale CLI command (if available locally)
-        2. Docker exec into TAILSCALE_CONTAINER (if Docker socket available)
-        3. Tailscale LocalAPI via shared Unix socket (TS_SOCKET env var)
+        1. Tailscale LocalAPI via shared Unix socket (TS_SOCKET env var)
+        2. Docker API to exec into TAILSCALE_CONTAINER
+        3. Direct tailscale CLI command (if available locally)
         
         Returns list of discovered peers with their status:
         - registered: Node is registered to this leader
         - available: Node has u-node manager but not registered
         - unknown: Tailscale peer with no u-node manager detected
         """
-        import os
-        import aiohttp
-        from aiohttp import UnixConnector
-        
         discovered_peers = []
         status_data = None
         
@@ -744,22 +906,53 @@ Write-Host ""
                 except Exception as e:
                     logger.debug(f"LocalAPI socket method failed: {e}")
             
-            # Method 2: Try docker exec into tailscale container
+            # Method 2: Try Docker API to exec into tailscale container
             if not status_data:
                 tailscale_container = os.environ.get("TAILSCALE_CONTAINER", "")
-                if tailscale_container:
+                docker_socket = "/var/run/docker.sock"
+                if tailscale_container and os.path.exists(docker_socket):
                     try:
-                        result = await asyncio.create_subprocess_exec(
-                            "docker", "exec", tailscale_container, "tailscale", "status", "--json",
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE
-                        )
-                        stdout, stderr = await result.communicate()
-                        if result.returncode == 0:
-                            status_data = json.loads(stdout.decode())
-                            logger.info("Got Tailscale status via docker exec")
+                        connector = UnixConnector(path=docker_socket)
+                        async with aiohttp.ClientSession(connector=connector) as session:
+                            # Create exec instance
+                            exec_create_url = f"http://localhost/containers/{tailscale_container}/exec"
+                            exec_payload = {
+                                "AttachStdout": True,
+                                "AttachStderr": True,
+                                "Cmd": ["tailscale", "status", "--json"]
+                            }
+                            async with session.post(exec_create_url, json=exec_payload) as resp:
+                                if resp.status == 201:
+                                    exec_data = await resp.json()
+                                    exec_id = exec_data.get("Id")
+                                    
+                                    # Start exec and get output
+                                    exec_start_url = f"http://localhost/exec/{exec_id}/start"
+                                    async with session.post(exec_start_url, json={"Detach": False}) as start_resp:
+                                        if start_resp.status == 200:
+                                            # Docker sends 8-byte header per frame, then data
+                                            raw_output = await start_resp.read()
+                                            # Skip Docker stream headers (8 bytes per chunk)
+                                            # Find the JSON start
+                                            json_start = raw_output.find(b'{')
+                                            if json_start >= 0:
+                                                json_data = raw_output[json_start:].decode('utf-8', errors='ignore')
+                                                # Find the end of the JSON object
+                                                brace_count = 0
+                                                json_end = 0
+                                                for i, char in enumerate(json_data):
+                                                    if char == '{':
+                                                        brace_count += 1
+                                                    elif char == '}':
+                                                        brace_count -= 1
+                                                        if brace_count == 0:
+                                                            json_end = i + 1
+                                                            break
+                                                if json_end > 0:
+                                                    status_data = json.loads(json_data[:json_end])
+                                                    logger.info("Got Tailscale status via Docker API exec")
                     except Exception as e:
-                        logger.debug(f"Docker exec method failed: {e}")
+                        logger.warning(f"Docker API exec method failed: {e}")
             
             # Method 3: Try local tailscale CLI
             if not status_data:
@@ -840,7 +1033,6 @@ Write-Host ""
     async def _probe_unode_manager(self, ip: str, port: int, timeout: float = 2.0) -> bool:
         """Check if a u-node manager is running on the given IP:port."""
         try:
-            import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"http://{ip}:{port}/health",
@@ -853,7 +1045,6 @@ Write-Host ""
     async def _get_unode_info(self, ip: str, port: int, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
         """Get u-node manager info from the given IP:port."""
         try:
-            import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"http://{ip}:{port}/unode/info",

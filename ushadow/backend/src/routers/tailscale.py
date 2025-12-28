@@ -15,8 +15,11 @@ import aiohttp
 import docker
 from pathlib import Path
 from typing import Dict, List, Optional, Literal, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
+
+from src.services.auth_dependencies import get_current_user
+from src.models.user import User
 import logging
 
 logger = logging.getLogger(__name__)
@@ -101,7 +104,9 @@ class AuthUrlResponse(BaseModel):
 # ============================================================================
 
 @router.get("/platform", response_model=PlatformInfo)
-async def detect_platform() -> PlatformInfo:
+async def detect_platform(
+    current_user: User = Depends(get_current_user)
+) -> PlatformInfo:
     """Detect the current platform and system information"""
     try:
         os_type = platform.system().lower()
@@ -127,7 +132,10 @@ async def detect_platform() -> PlatformInfo:
 # ============================================================================
 
 @router.get("/installation-guide", response_model=InstallationGuide)
-async def get_installation_guide(os_type: str) -> InstallationGuide:
+async def get_installation_guide(
+    os_type: str,
+    current_user: User = Depends(get_current_user)
+) -> InstallationGuide:
     """Get platform-specific Tailscale installation instructions"""
 
     guides = {
@@ -219,10 +227,8 @@ CONFIG_DIR = Path("/config")
 TAILSCALE_CONFIG_FILE = CONFIG_DIR / "tailscale.yaml"
 
 
-@router.get("/config", response_model=Optional[TailscaleConfig])
-async def get_config() -> Optional[TailscaleConfig]:
-    """Get current Tailscale configuration"""
-
+def _read_config() -> Optional[TailscaleConfig]:
+    """Internal helper to read Tailscale configuration from disk."""
     if not TAILSCALE_CONFIG_FILE.exists():
         return None
 
@@ -235,8 +241,19 @@ async def get_config() -> Optional[TailscaleConfig]:
         raise HTTPException(status_code=500, detail=f"Failed to read configuration: {str(e)}")
 
 
+@router.get("/config", response_model=Optional[TailscaleConfig])
+async def get_config(
+    current_user: User = Depends(get_current_user)
+) -> Optional[TailscaleConfig]:
+    """Get current Tailscale configuration"""
+    return _read_config()
+
+
 @router.post("/config", response_model=TailscaleConfig)
-async def save_config(config: TailscaleConfig) -> TailscaleConfig:
+async def save_config(
+    config: TailscaleConfig,
+    current_user: User = Depends(get_current_user)
+) -> TailscaleConfig:
     """Save Tailscale configuration"""
 
     try:
@@ -268,7 +285,10 @@ CERTS_DIR = Path("/config/certs")
 # ============================================================================
 
 @router.post("/generate-config")
-async def generate_tailscale_config(config: TailscaleConfig) -> Dict[str, str]:
+async def generate_tailscale_config(
+    config: TailscaleConfig,
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
     """Generate Tailscale serve configuration or Caddyfile based on deployment mode"""
 
     try:
@@ -387,10 +407,12 @@ async def generate_caddyfile(config: TailscaleConfig) -> Dict[str, str]:
 # ============================================================================
 
 @router.get("/access-urls", response_model=AccessUrls)
-async def get_access_urls() -> AccessUrls:
+async def get_access_urls(
+    current_user: User = Depends(get_current_user)
+) -> AccessUrls:
     """Get access URLs for all configured services"""
 
-    config = await get_config()
+    config = _read_config()
     if not config:
         raise HTTPException(status_code=404, detail="Tailscale not configured")
 
@@ -429,7 +451,10 @@ async def get_access_urls() -> AccessUrls:
 # ============================================================================
 
 @router.post("/test-connection")
-async def test_connection(url: str) -> Dict[str, Any]:
+async def test_connection(
+    url: str,
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
     """Test connection to a specific URL"""
 
     # Validate URL to prevent SSRF
@@ -504,7 +529,9 @@ async def exec_in_container(command: str) -> tuple[int, str, str]:
 
 
 @router.get("/container/status", response_model=ContainerStatus)
-async def get_container_status() -> ContainerStatus:
+async def get_container_status(
+    current_user: User = Depends(get_current_user)
+) -> ContainerStatus:
     """Get Tailscale container status"""
     try:
         try:
@@ -553,7 +580,9 @@ async def get_container_status() -> ContainerStatus:
 
 
 @router.post("/container/start")
-async def start_tailscale_container() -> Dict[str, str]:
+async def start_tailscale_container(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
     """Start or create Tailscale container using Docker SDK"""
     try:
         # Check if container exists
@@ -627,7 +656,9 @@ async def start_tailscale_container() -> Dict[str, str]:
 
 
 @router.get("/container/auth-url", response_model=AuthUrlResponse)
-async def get_auth_url() -> AuthUrlResponse:
+async def get_auth_url(
+    current_user: User = Depends(get_current_user)
+) -> AuthUrlResponse:
     """Get Tailscale authentication URL with QR code"""
     try:
         # Try to get status first (shows login URL if logged out)
@@ -697,7 +728,10 @@ async def get_auth_url() -> AuthUrlResponse:
 
 
 @router.post("/container/provision-cert")
-async def provision_cert_in_container(hostname: str) -> CertificateStatus:
+async def provision_cert_in_container(
+    hostname: str,
+    current_user: User = Depends(get_current_user)
+) -> CertificateStatus:
     """Provision certificate via Tailscale container"""
     try:
         # Ensure certs directory exists
@@ -761,7 +795,10 @@ async def provision_cert_in_container(hostname: str) -> CertificateStatus:
 # ============================================================================
 
 @router.post("/configure-serve")
-async def configure_tailscale_serve(config: TailscaleConfig) -> Dict[str, str]:
+async def configure_tailscale_serve(
+    config: TailscaleConfig,
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
     """Configure Tailscale serve for routing"""
     try:
         if config.deployment_mode.mode != "single":
@@ -814,12 +851,14 @@ async def configure_tailscale_serve(config: TailscaleConfig) -> Dict[str, str]:
 # ============================================================================
 
 @router.post("/complete")
-async def complete_setup() -> Dict[str, str]:
+async def complete_setup(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
     """Mark Tailscale setup as complete"""
 
     try:
         # Verify configuration exists
-        config = await get_config()
+        config = _read_config()
         if not config:
             raise HTTPException(status_code=400, detail="Configuration not found")
 
