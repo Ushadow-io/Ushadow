@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X } from 'lucide-react'
+import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink } from 'lucide-react'
 import { clusterApi, deploymentsApi, ServiceDefinition, Deployment } from '../services/api'
 
 interface UNode {
@@ -169,6 +169,16 @@ export default function ClusterPage() {
       loadUnodes()
     } catch (err: any) {
       alert(`Failed to remove node: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  const handleReleaseNode = async (hostname: string) => {
+    if (!confirm(`Release ${hostname}? The node will become available for other leaders to claim.`)) return
+    try {
+      await clusterApi.releaseNode(hostname)
+      loadUnodes()
+    } catch (err: any) {
+      alert(`Failed to release node: ${err.response?.data?.detail || err.message}`)
     }
   }
 
@@ -632,9 +642,20 @@ export default function ClusterPage() {
                   )}
                   {node.role !== 'leader' && (
                     <button
+                      onClick={() => handleReleaseNode(node.hostname)}
+                      className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-warning-600 dark:hover:text-warning-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
+                      title="Release for another leader"
+                      data-testid={`release-node-${node.hostname}`}
+                    >
+                      <Unlink className="h-4 w-4" />
+                    </button>
+                  )}
+                  {node.role !== 'leader' && (
+                    <button
                       onClick={() => handleRemoveNode(node.hostname)}
                       className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
                       title="Remove from cluster"
+                      data-testid={`remove-node-${node.hostname}`}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>

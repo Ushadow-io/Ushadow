@@ -573,6 +573,52 @@ Write-Host ""
             return True
         return False
 
+    async def release_unode(self, hostname: str) -> Tuple[bool, str]:
+        """
+        Release a u-node so it can be claimed by another leader.
+
+        This removes the node from this leader's database and notifies the worker
+        to clear its leader association. The worker's manager container keeps
+        running and will be discoverable by other leaders.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        import aiohttp
+
+        # Get the node first
+        unode = await self.get_unode(hostname)
+        if not unode:
+            return False, f"UNode {hostname} not found"
+
+        if unode.role == UNodeRole.LEADER:
+            return False, "Cannot release the leader node"
+
+        # Try to notify the worker to release its leader association
+        if unode.tailscale_ip:
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as session:
+                    async with session.post(
+                        f"http://{unode.tailscale_ip}:8444/release"
+                    ) as response:
+                        if response.status == 200:
+                            logger.info(f"Notified {hostname} to release leader association")
+                        else:
+                            logger.warning(f"Worker {hostname} release notification failed: {response.status}")
+            except Exception as e:
+                # Continue even if notification fails - the node can still be released
+                logger.warning(f"Could not notify worker {hostname}: {e}")
+
+        # Remove from database
+        result = await self.unodes_collection.delete_one({"hostname": hostname})
+        if result.deleted_count > 0:
+            logger.info(f"Released u-node: {hostname}")
+            return True, f"Node {hostname} released. It can now be claimed by another leader."
+
+        return False, f"Failed to release {hostname}"
+
     async def update_unode_status(self, hostname: str, status: UNodeStatus) -> bool:
         """Update a u-node's status."""
         result = await self.unodes_collection.update_one(
@@ -667,27 +713,73 @@ Write-Host ""
         """
         Discover all Tailscale peers on the network and probe for u-node managers.
         
+        Supports multiple discovery methods:
+        1. Direct tailscale CLI command (if available locally)
+        2. Docker exec into TAILSCALE_CONTAINER (if Docker socket available)
+        3. Tailscale LocalAPI via shared Unix socket (TS_SOCKET env var)
+        
         Returns list of discovered peers with their status:
         - registered: Node is registered to this leader
         - available: Node has u-node manager but not registered
         - unknown: Tailscale peer with no u-node manager detected
         """
+        import os
+        import aiohttp
+        from aiohttp import UnixConnector
+        
         discovered_peers = []
+        status_data = None
         
         try:
-            # Get Tailscale peer list
-            result = await asyncio.create_subprocess_exec(
-                "tailscale", "status", "--json",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await result.communicate()
+            # Method 1: Try Tailscale LocalAPI via Unix socket
+            ts_socket = os.environ.get("TS_SOCKET", "/var/run/tailscale/tailscaled.sock")
+            if os.path.exists(ts_socket):
+                try:
+                    connector = UnixConnector(path=ts_socket)
+                    async with aiohttp.ClientSession(connector=connector) as session:
+                        async with session.get("http://local-tailscaled.sock/localapi/v0/status") as resp:
+                            if resp.status == 200:
+                                status_data = await resp.json()
+                                logger.info("Got Tailscale status via LocalAPI socket")
+                except Exception as e:
+                    logger.debug(f"LocalAPI socket method failed: {e}")
             
-            if result.returncode != 0:
-                logger.warning(f"Tailscale status failed: {stderr.decode()}")
+            # Method 2: Try docker exec into tailscale container
+            if not status_data:
+                tailscale_container = os.environ.get("TAILSCALE_CONTAINER", "")
+                if tailscale_container:
+                    try:
+                        result = await asyncio.create_subprocess_exec(
+                            "docker", "exec", tailscale_container, "tailscale", "status", "--json",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout, stderr = await result.communicate()
+                        if result.returncode == 0:
+                            status_data = json.loads(stdout.decode())
+                            logger.info("Got Tailscale status via docker exec")
+                    except Exception as e:
+                        logger.debug(f"Docker exec method failed: {e}")
+            
+            # Method 3: Try local tailscale CLI
+            if not status_data:
+                try:
+                    result = await asyncio.create_subprocess_exec(
+                        "tailscale", "status", "--json",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout, stderr = await result.communicate()
+                    if result.returncode == 0:
+                        status_data = json.loads(stdout.decode())
+                        logger.info("Got Tailscale status via local CLI")
+                except Exception as e:
+                    logger.debug(f"Local CLI method failed: {e}")
+            
+            if not status_data:
+                logger.warning("All Tailscale discovery methods failed")
                 return []
             
-            status_data = json.loads(stdout.decode())
             peers = status_data.get("Peer", {})
             
             # Get registered nodes for comparison

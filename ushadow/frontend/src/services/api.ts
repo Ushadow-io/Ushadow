@@ -186,6 +186,7 @@ export const clusterApi = {
   discoverPeers: () => api.get('/api/unodes/discover/peers'),
   getUnode: (hostname: string) => api.get(`/api/unodes/${hostname}`),
   removeUnode: (hostname: string) => api.delete(`/api/unodes/${hostname}`),
+  releaseNode: (hostname: string) => api.post(`/api/unodes/${hostname}/release`),
   createToken: (tokenData: { role: string; max_uses: number; expires_in_hours: number }) =>
     api.post('/api/unodes/tokens', tokenData),
   claimNode: (hostname: string, tailscale_ip: string) =>

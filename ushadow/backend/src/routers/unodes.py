@@ -419,6 +419,28 @@ async def remove_unode(
     return UNodeActionResponse(success=True, message=f"UNode {hostname} removed")
 
 
+@router.post("/{hostname}/release", response_model=UNodeActionResponse)
+async def release_unode(
+    hostname: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Release a u-node so it can be claimed by another leader.
+
+    This removes the node from this leader's cluster but keeps the worker's
+    manager container running. The node will appear in the "Discovered" tab
+    for other leaders to claim.
+    """
+    unode_manager = await get_unode_manager()
+
+    success, message = await unode_manager.release_unode(hostname)
+
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+
+    return UNodeActionResponse(success=True, message=message)
+
+
 @router.post("/{hostname}/status", response_model=UNodeActionResponse)
 async def update_unode_status(
     hostname: str,
