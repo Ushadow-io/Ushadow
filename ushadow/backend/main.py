@@ -12,11 +12,12 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import get_settings
 
-from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, tailscale, docker_events
+from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, tailscale, kubernetes, docker-events
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
+from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.omegaconf_settings import get_omegaconf_settings
 
@@ -71,6 +72,10 @@ async def lifespan(app: FastAPI):
     await init_deployment_manager(db)
     logger.info("✓ Deployment manager initialized")
 
+    # Initialize Kubernetes manager
+    await init_kubernetes_manager(db)
+    logger.info("✓ Kubernetes manager initialized")
+
     # Start background task for stale u-node checking
     stale_check_task = asyncio.create_task(check_stale_unodes_task())
 
@@ -104,6 +109,7 @@ app.include_router(docker.router, prefix="/api/docker", tags=["docker"])
 app.include_router(docker_events.router, prefix="/api/docker", tags=["docker"])
 app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
+app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])

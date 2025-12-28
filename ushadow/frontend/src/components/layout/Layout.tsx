@@ -1,6 +1,6 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical, Cloud } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
@@ -33,6 +33,7 @@ export default function Layout() {
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow },
     { path: '/services', label: 'Services', icon: Server },
     { path: '/cluster', label: 'Cluster', icon: Network },
+    { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },
     { path: '/settings', label: 'Settings', icon: Settings },
     ...(isAdmin ? [
       { path: '/users', label: 'User Management', icon: Users },

@@ -3,6 +3,7 @@
 import logging
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -219,7 +220,7 @@ async def claim_node(
     This endpoint allows claiming nodes that are:
     - Discovered on Tailscale network
     - Running u-node manager
-    - Either unregistered or registered to another leader
+    - Either unregistered or released from another leader
     """
     hostname = request.get("hostname")
     tailscale_ip = request.get("tailscale_ip")
@@ -229,22 +230,10 @@ async def claim_node(
     
     unode_manager = await get_unode_manager()
     
-    # Create a registration request for this node
-    unode_create = UNodeCreate(
+    # Use the claim_unode method which doesn't require a token
+    success, unode, error = await unode_manager.claim_unode(
         hostname=hostname,
-        tailscale_ip=tailscale_ip,
-        platform="linux",  # Will be updated by actual registration
-        manager_version="0.1.0",
-        role=UNodeRole.WORKER,
-        capabilities=None  # Will be provided by the node
-    )
-    
-    # For now, create a basic registration
-    # In a full implementation, you'd want to contact the node's u-node manager
-    # and have it re-register with this leader
-    success, unode, error = await unode_manager.register_unode(
-        token_doc=None,  # Claiming doesn't require a token
-        unode_data=unode_create
+        tailscale_ip=tailscale_ip
     )
     
     if not success:
@@ -259,6 +248,103 @@ async def claim_node(
         message=f"Successfully claimed node {hostname}",
         unode=unode
     )
+
+
+# Constants for version fetching
+GHCR_REGISTRY = "ghcr.io"
+GHCR_IMAGE = "ushadow-io/ushadow-manager"
+
+
+class ManagerVersionsResponse(BaseModel):
+    """Response with available manager versions."""
+    versions: List[str]
+    latest: str
+    registry: str
+    image: str
+
+
+@router.get("/versions", response_model=ManagerVersionsResponse)
+async def get_manager_versions(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get available ushadow-manager versions from the container registry.
+
+    Fetches tags from ghcr.io/ushadow-io/ushadow-manager and returns
+    them sorted with semantic versioning (latest first).
+    """
+    try:
+        # Get anonymous token for public repo
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_response = await client.get(
+                f"https://{GHCR_REGISTRY}/token",
+                params={"scope": f"repository:{GHCR_IMAGE}:pull"}
+            )
+
+            if token_response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to authenticate with container registry"
+                )
+
+            token = token_response.json().get("token")
+
+            # Fetch tags
+            tags_response = await client.get(
+                f"https://{GHCR_REGISTRY}/v2/{GHCR_IMAGE}/tags/list",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+
+            if tags_response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to fetch tags from container registry"
+                )
+
+            data = tags_response.json()
+            tags = data.get("tags", [])
+
+            if not tags:
+                # Return default if no tags found
+                return ManagerVersionsResponse(
+                    versions=["latest"],
+                    latest="latest",
+                    registry=GHCR_REGISTRY,
+                    image=GHCR_IMAGE
+                )
+
+            # Sort versions: 'latest' first, then semantic versions descending
+            def version_sort_key(v: str) -> tuple:
+                if v == "latest":
+                    return (0, 0, 0, 0)  # Always first
+                # Try to parse semantic version
+                try:
+                    # Remove 'v' prefix if present
+                    clean = v.lstrip("v")
+                    parts = clean.split(".")
+                    # Pad to 3 parts
+                    while len(parts) < 3:
+                        parts.append("0")
+                    return (1, -int(parts[0]), -int(parts[1]), -int(parts[2]))
+                except (ValueError, IndexError):
+                    return (2, 0, 0, 0)  # Non-semantic versions last
+
+            sorted_tags = sorted(tags, key=version_sort_key)
+
+            return ManagerVersionsResponse(
+                versions=sorted_tags,
+                latest=sorted_tags[0] if sorted_tags else "latest",
+                registry=GHCR_REGISTRY,
+                image=GHCR_IMAGE
+            )
+
+    except httpx.RequestError as e:
+        # Log full error internally but don't expose details to client
+        logger.error(f"Failed to fetch versions from registry: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to connect to container registry. Please try again later."
+        )
 
 
 @router.get("/{hostname}", response_model=UNode)
@@ -322,6 +408,28 @@ async def remove_unode(
     return UNodeActionResponse(success=True, message=f"UNode {hostname} removed")
 
 
+@router.post("/{hostname}/release", response_model=UNodeActionResponse)
+async def release_unode(
+    hostname: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Release a u-node so it can be claimed by another leader.
+
+    This removes the node from this leader's cluster but keeps the worker's
+    manager container running. The node will appear in the "Discovered" tab
+    for other leaders to claim.
+    """
+    unode_manager = await get_unode_manager()
+
+    success, message = await unode_manager.release_unode(hostname)
+
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+
+    return UNodeActionResponse(success=True, message=message)
+
+
 @router.post("/{hostname}/status", response_model=UNodeActionResponse)
 async def update_unode_status(
     hostname: str,
@@ -341,3 +449,110 @@ async def update_unode_status(
         success=True,
         message=f"UNode {hostname} status updated to {status.value}"
     )
+
+
+class UpgradeRequest(BaseModel):
+    """Request to upgrade a u-node's manager."""
+    version: str = "latest"  # Version tag (e.g., "latest", "0.2.0", "v0.2.0")
+    registry: str = "ghcr.io/ushadow-io"  # Container registry
+
+    @property
+    def image(self) -> str:
+        """Get the full image reference."""
+        return f"{self.registry}/ushadow-manager:{self.version}"
+
+
+class UpgradeResponse(BaseModel):
+    """Response from upgrade request."""
+    success: bool
+    message: str
+    hostname: str
+    new_image: Optional[str] = None
+
+
+@router.post("/{hostname}/upgrade", response_model=UpgradeResponse)
+async def upgrade_unode(
+    hostname: str,
+    request: UpgradeRequest = UpgradeRequest(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upgrade a u-node's manager to a new version.
+
+    This triggers the remote node to:
+    1. Pull the new manager image
+    2. Stop and remove its current container
+    3. Start a new container with the new image
+
+    The node will be briefly offline during the upgrade (~10 seconds).
+    """
+    unode_manager = await get_unode_manager()
+
+    # Get the node
+    unode = await unode_manager.get_unode(hostname)
+    if not unode:
+        raise HTTPException(status_code=404, detail="UNode not found")
+
+    # Can't upgrade the leader this way (it runs differently)
+    if unode.role == UNodeRole.LEADER:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot upgrade leader via this endpoint. Update leader containers directly."
+        )
+
+    # Check node is online
+    if unode.status != UNodeStatus.ONLINE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"UNode is {unode.status.value}. Must be online to upgrade."
+        )
+
+    # Trigger upgrade on the remote node
+    success, message = await unode_manager.upgrade_unode(
+        hostname=hostname,
+        image=request.image
+    )
+
+    return UpgradeResponse(
+        success=success,
+        message=message,
+        hostname=hostname,
+        new_image=request.image if success else None
+    )
+
+
+@router.post("/upgrade-all", response_model=dict)
+async def upgrade_all_unodes(
+    request: UpgradeRequest = UpgradeRequest(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upgrade all online worker u-nodes to a new manager version.
+
+    This performs a rolling upgrade across all workers.
+    """
+    unode_manager = await get_unode_manager()
+
+    # Get all online workers
+    unodes = await unode_manager.list_unodes(status=UNodeStatus.ONLINE)
+    workers = [n for n in unodes if n.role == UNodeRole.WORKER]
+
+    results = {
+        "total": len(workers),
+        "succeeded": [],
+        "failed": [],
+        "image": request.image
+    }
+
+    for unode in workers:
+        success, message = await unode_manager.upgrade_unode(
+            hostname=unode.hostname,
+            image=request.image
+        )
+
+        if success:
+            results["succeeded"].append(unode.hostname)
+        else:
+            results["failed"].append({"hostname": unode.hostname, "error": message})
+
+    return results
