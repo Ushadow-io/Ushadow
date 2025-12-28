@@ -11,6 +11,12 @@ const getBackendUrl = () => {
   const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
                          (protocol === 'http:' && (port === '' || port === '80'))
 
+  // Check if we're being accessed through Tailscale
+  if (hostname.endsWith('.ts.net')) {
+    console.log('Accessed via Tailscale - using relative URLs')
+    return '' // Use relative URLs - Tailscale serve routes everything
+  }
+
   // Check if we have a base path (for path-based routing)
   const basePath = import.meta.env.BASE_URL
   console.log('Base path from Vite:', basePath)
@@ -33,11 +39,18 @@ const getBackendUrl = () => {
     return ''
   }
 
-  // Development mode - direct access to dev server (port 5173 is Vite's default)
-  if (port === '5173') {
-    console.log('Development mode - using environment backend URL or default')
-    // Use VITE_API_URL if set, otherwise fallback to localhost:8000 + offset
-    return import.meta.env.VITE_API_URL || 'http://localhost:8010'
+  // Development mode - direct access to dev server
+  // Check for common Vite dev ports: 5173 (default), 3500 (with PORT_OFFSET), etc.
+  const viteDevPorts = ['5173']
+  if (viteDevPorts.includes(port)) {
+    console.log('Development mode - using Vite proxy')
+    // Use relative URLs to go through Vite proxy, unless explicitly overridden
+    if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '') {
+      console.log('Using explicit VITE_API_URL override')
+      return import.meta.env.VITE_API_URL
+    }
+    // Use empty string to use relative URLs (goes through Vite proxy)
+    return ''
   }
 
   // Fallback - calculate backend port from frontend port
@@ -289,4 +302,90 @@ export const deploymentsApi = {
   removeDeployment: (deploymentId: string) => api.delete(`/api/deployments/${deploymentId}`),
   getDeploymentLogs: (deploymentId: string, tail?: number) =>
     api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
+}
+
+// Tailscale Setup Wizard endpoints
+export interface TailscaleConfig {
+  hostname: string
+  deployment_mode: {
+    mode: 'single' | 'multi'
+    environment?: string
+  }
+  https_enabled: boolean
+  use_caddy_proxy: boolean
+  backend_port: number
+  frontend_port: number
+  environments: string[]
+}
+
+export interface PlatformInfo {
+  os_type: 'linux' | 'darwin' | 'windows' | 'unknown'
+  os_version: string
+  architecture: string
+  is_docker: boolean
+}
+
+export interface CertificateStatus {
+  provisioned: boolean
+  cert_path?: string
+  key_path?: string
+  expires_at?: string
+  error?: string
+}
+
+export interface AccessUrls {
+  frontend: string
+  backend: string
+  environments: Record<string, { frontend: string; backend: string }>
+}
+
+export interface ContainerStatus {
+  exists: boolean
+  running: boolean
+  authenticated: boolean
+  hostname?: string
+  ip_address?: string
+}
+
+export interface AuthUrlResponse {
+  auth_url: string  // Deep link for mobile app
+  web_url: string   // Web URL as fallback
+  qr_code_data: string
+}
+
+export const tailscaleApi = {
+  // Platform detection
+  getPlatform: () => api.get<PlatformInfo>('/api/tailscale/platform'),
+  getInstallationGuide: (osType: string) => api.get(`/api/tailscale/installation-guide?os_type=${osType}`),
+
+  // Container management
+  getContainerStatus: () => api.get<ContainerStatus>('/api/tailscale/container/status'),
+  startContainer: () => api.post<{ status: string; message: string }>('/api/tailscale/container/start'),
+  getAuthUrl: () => api.get<AuthUrlResponse>('/api/tailscale/container/auth-url'),
+  provisionCertInContainer: (hostname: string) =>
+    api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
+  configureServe: (config: TailscaleConfig) =>
+    api.post<{ status: string; message: string; results?: string }>('/api/tailscale/configure-serve', config),
+
+  // Configuration
+  getConfig: () => api.get<TailscaleConfig | null>('/api/tailscale/config'),
+  saveConfig: (config: TailscaleConfig) => api.post<TailscaleConfig>('/api/tailscale/config', config),
+
+  // Configuration generation
+  generateConfig: (config: TailscaleConfig) =>
+    api.post<{ mode: string; config_file: string; content: string }>('/api/tailscale/generate-config', config),
+
+  // Access URLs
+  getAccessUrls: () => api.get<AccessUrls>('/api/tailscale/access-urls'),
+
+  // Testing
+  testConnection: (url: string) =>
+    api.post<{ url: string; success: boolean; http_code?: string; error?: string }>(
+      '/api/tailscale/test-connection',
+      null,
+      { params: { url } }
+    ),
+
+  // Setup completion
+  complete: () => api.post<{ status: string; message: string }>('/api/tailscale/complete'),
 }

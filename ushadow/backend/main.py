@@ -12,7 +12,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import get_settings
 
-from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, kubernetes
+from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, tailscale, kubernetes
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -106,6 +106,7 @@ app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
 app.include_router(deployments.router, tags=["deployments"])
+app.include_router(tailscale.router, tags=["tailscale"])
 
 
 @app.get("/")
