@@ -3,7 +3,6 @@ import { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical, Cloud } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
-import EnvironmentBanner, { getColorClasses, VALID_COLORS } from './EnvironmentBanner'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 
 export default function Layout() {
@@ -43,12 +42,12 @@ export default function Layout() {
   ]
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
-      {/* Decorative background blur circles */}
+    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-emerald-50/20 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
+      {/* Decorative background blur circles - emerald green and fuchsia from logo */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-96 h-96 bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl"></div>
-        <div className="absolute top-1/3 -left-40 w-96 h-96 bg-blue-300/15 dark:bg-blue-600/8 rounded-full blur-3xl"></div>
-        <div className="absolute -bottom-40 right-1/4 w-96 h-96 bg-blue-200/15 dark:bg-blue-700/8 rounded-full blur-3xl"></div>
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-fuchsia-400/20 dark:bg-fuchsia-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute top-1/3 -left-40 w-96 h-96 bg-emerald-400/15 dark:bg-emerald-500/8 rounded-full blur-3xl"></div>
+        <div className="absolute -bottom-40 right-1/4 w-96 h-96 bg-emerald-300/15 dark:bg-emerald-600/8 rounded-full blur-3xl"></div>
       </div>
 
       {/* Header */}

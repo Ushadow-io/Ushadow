@@ -50,7 +50,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
       return (
         <div className="min-h-screen bg-neutral-50 dark:bg-neutral-900 flex items-center justify-center p-4">
-          <div className="max-w-md w-full card p-6 text-center animate-fade-in">
+          <div className="max-w-6xl w-full card p-6 text-center animate-fade-in">
             <div className="flex justify-center mb-4">
               <AlertTriangle className="h-12 w-12 text-error-500" />
             </div>
@@ -64,11 +64,11 @@ export class ErrorBoundary extends Component<Props, State> {
             </p>
 
             {this.state.error && (
-              <details className="mb-4 text-left">
-                <summary className="cursor-pointer text-sm font-mono text-error-600 dark:text-error-400">
-                  Error Details (Always Shown for Debugging)
+              <details className="mb-4 text-left" open>
+                <summary className="cursor-pointer text-sm font-mono text-error-600 dark:text-error-400 mb-2">
+                  Error Details (Click to collapse)
                 </summary>
-                <pre className="mt-2 text-xs bg-neutral-100 dark:bg-neutral-700 p-2 rounded overflow-auto max-h-40">
+                <pre className="mt-2 text-xs bg-neutral-100 dark:bg-neutral-700 p-4 rounded overflow-auto max-h-[70vh] whitespace-pre-wrap break-words">
                   <strong>Error:</strong> {this.state.error.toString()}
                   {this.state.error.stack && (
                     <>

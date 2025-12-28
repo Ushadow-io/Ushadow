@@ -1,10 +1,55 @@
-import { Settings, Save, Server, Key, Database, Shield, ArrowRight } from 'lucide-react'
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Settings, Save, Server, Key, Database, CheckCircle, XCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { settingsApi, dockerApi } from '../services/api'
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('services')
-  const navigate = useNavigate()
+  const [config, setConfig] = useState<any>(null)
+  const [memoryStatus, setMemoryStatus] = useState<any>(null)
+  
+  useEffect(() => {
+    loadConfig()
+    loadMemoryStatus()
+  }, [])
+  
+  const loadConfig = async () => {
+    try {
+      // Load both core config and service configs
+      const [configResponse, serviceConfigsResponse] = await Promise.all([
+        settingsApi.getConfig(),
+        settingsApi.getAllServiceConfigs()
+      ])
+      
+      setConfig({
+        ...configResponse.data,
+        service_configs: serviceConfigsResponse.data
+      })
+    } catch (error) {
+      console.error('Failed to load config:', error)
+    }
+  }
+  
+  const loadMemoryStatus = async () => {
+    // Check if any memory service is configured
+    const memoryProvider = config?.memory_provider
+    if (!memoryProvider) return
+    
+    try {
+      // Check if mem0 container is running (for openmemory)
+      if (memoryProvider === 'openmemory') {
+        const response = await dockerApi.getServiceInfo('mem0')
+        setMemoryStatus(response.data)
+      }
+    } catch (error) {
+      console.error('Failed to load memory status:', error)
+    }
+  }
+  
+  useEffect(() => {
+    if (config?.memory_provider) {
+      loadMemoryStatus()
+    }
+  }, [config])
 
   const tabs = [
     { id: 'services', label: 'Services', icon: Server },
@@ -50,6 +95,56 @@ export default function SettingsPage() {
       {/* Services Tab */}
       {activeTab === 'services' && (
         <div className="space-y-4">
+          {/* Memory Provider Status */}
+          {config?.memory_provider && (
+            <div className="card p-6 border-l-4 border-primary-500">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                  Memory Provider
+                </h3>
+                {memoryStatus?.status === 'running' ? (
+                  <div className="flex items-center space-x-2 text-success-600">
+                    <CheckCircle className="h-5 w-5" />
+                    <span className="text-sm font-medium">Connected</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-2 text-neutral-500">
+                    <XCircle className="h-5 w-5" />
+                    <span className="text-sm font-medium">Not Running</span>
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-neutral-600 dark:text-neutral-400">Provider:</span>
+                  <p className="font-medium text-neutral-900 dark:text-neutral-100 mt-1">
+                    {config.memory_provider === 'openmemory' ? 'OpenMemory' : config.memory_provider}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-neutral-600 dark:text-neutral-400">Server URL:</span>
+                  <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 mt-1">
+                    {config.service_configs?.openmemory?.server_url || 'Not configured'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-neutral-600 dark:text-neutral-400">Graph Memory:</span>
+                  <p className="font-medium text-neutral-900 dark:text-neutral-100 mt-1">
+                    {config.service_configs?.openmemory?.enable_graph ? 'Enabled (Neo4j)' : 'Disabled'}
+                  </p>
+                </div>
+                {memoryStatus && (
+                  <div>
+                    <span className="text-neutral-600 dark:text-neutral-400">Container:</span>
+                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 mt-1">
+                      {memoryStatus.container_id || 'Not started'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          
           <div className="card p-6">
             <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
               Chronicle Configuration
@@ -147,50 +242,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="card p-6 border-2 border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-white dark:from-blue-900/20 dark:to-gray-800">
-            <div className="flex items-start justify-between">
-              <div className="flex items-start space-x-4">
-                <div className="p-3 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
-                  <Shield className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
-                    Tailscale Secure Access
-                  </h3>
-                  <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
-                    Set up secure HTTPS access to ushadow from anywhere without port forwarding or firewall configuration.
-                  </p>
-                  <ul className="text-sm text-neutral-700 dark:text-neutral-300 space-y-1 mb-4">
-                    <li className="flex items-center gap-2">
-                      <span className="text-green-600 dark:text-green-400">✓</span>
-                      <span>Encrypted VPN mesh network</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="text-green-600 dark:text-green-400">✓</span>
-                      <span>Automatic HTTPS with valid SSL certificates</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="text-green-600 dark:text-green-400">✓</span>
-                      <span>Access from any device (phone, laptop, tablet)</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <span className="text-green-600 dark:text-green-400">✓</span>
-                      <span>No network configuration required</span>
-                    </li>
-                  </ul>
-                  <button
-                    id="tailscale-wizard-button"
-                    onClick={() => navigate('/wizard/tailscale')}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    <span>Launch Setup Wizard</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
           <div className="flex justify-end">
             <button className="btn-primary flex items-center space-x-2">
               <Save className="h-5 w-5" />
@@ -208,8 +259,50 @@ export default function SettingsPage() {
               API Keys
             </h3>
             <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
-              Configure API keys for external services and AI models.
+              Shared API keys from api_keys namespace
             </p>
+
+            {config?.api_keys && Object.entries(config.api_keys).some(([_, v]) => v) ? (
+              <div className="space-y-4">
+                {Object.entries(config.api_keys).map(([keyName, keyValue]: [string, any]) => {
+                  if (!keyValue) return null  // Skip null/empty keys
+
+                  return (
+                    <div key={keyName} className="p-4 border border-neutral-200 dark:border-neutral-700 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <h4 className="font-medium text-neutral-900 dark:text-neutral-100">
+                            {keyName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                          </h4>
+                          <code className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded text-xs font-mono text-neutral-500">
+                            ●●●●●●●●{keyValue.slice(-4)}
+                          </code>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <CheckCircle className="h-5 w-5 text-success-600" />
+                          <span className="text-sm text-success-600">Configured</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-neutral-500 dark:text-neutral-400 text-sm">
+                No API keys configured yet. Complete the setup wizard to add services.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Database Tab (keeping original) */}
+      {activeTab === 'database' && (
+        <div className="space-y-4">
+          <div className="card p-6">
+            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+              Database Configuration
+            </h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">

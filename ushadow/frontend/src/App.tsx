@@ -12,8 +12,6 @@ import RegistrationPage from './pages/RegistrationPage'
 import LoginPage from './pages/LoginPage'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
-import MemoryWizardPage from './pages/MemoryWizardPage'
-import ChronicleWizardPage from './pages/ChronicleWizardPage'
 import ChroniclePage from './pages/ChroniclePage'
 import MCPPage from './pages/MCPPage'
 import AgentZeroPage from './pages/AgentZeroPage'
@@ -22,7 +20,14 @@ import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
 import ClusterPage from './pages/ClusterPage'
-import TailscaleWizard from './wizards/TailscaleWizard'
+
+// Wizards (all use WizardShell pattern)
+import {
+  TailscaleWizard,
+  ChronicleWizard,
+  MemoryWizard,
+  QuickstartWizard,
+} from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
 
 function App() {
@@ -54,8 +59,9 @@ function App() {
                 {/* Core feature pages */}
                 <Route path="wizard" element={<Navigate to="/wizard/start" replace />} />
                 <Route path="wizard/start" element={<WizardStartPage />} />
-                <Route path="wizard/memory" element={<MemoryWizardPage />} />
-                <Route path="wizard/chronicle" element={<ChronicleWizardPage />} />
+                <Route path="wizard/quickstart" element={<QuickstartWizard />} />
+                <Route path="wizard/memory" element={<MemoryWizard />} />
+                <Route path="wizard/chronicle" element={<ChronicleWizard />} />
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
                 <Route path="mcp" element={<MCPPage />} />

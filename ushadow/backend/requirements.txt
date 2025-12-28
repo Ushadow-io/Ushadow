@@ -32,6 +32,7 @@ python-dotenv==1.0.1
 pyyaml==6.0.2
 PyYAML==6.0.2
 docker==7.1.0  # Docker SDK for Python
+sse-starlette==2.1.3  # Server-Sent Events for real-time Docker updates
 qrcode[pil]==8.0  # QR code generation for Tailscale auth
 kubernetes==31.0.0  # Kubernetes Python client
 
@@ -40,6 +41,9 @@ structlog==24.4.0
 
 # YAML parsing for feature flags
 ruamel.yaml==0.18.6
+
+# Configuration Management
+omegaconf==2.3.0
 
 # Testing
 pytest==8.3.3

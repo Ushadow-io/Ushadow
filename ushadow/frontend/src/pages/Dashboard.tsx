@@ -2,7 +2,7 @@ import { Activity, MessageSquare, Plug, Bot, Workflow, TrendingUp } from 'lucide
 
 export default function Dashboard() {
   const stats = [
-    { label: 'Conversations', value: '0', icon: MessageSquare, color: 'text-blue-600 dark:text-blue-400' },
+    { label: 'Conversations', value: '0', icon: MessageSquare, color: 'text-primary-600 dark:text-primary-400' },
     { label: 'MCP Servers', value: '0', icon: Plug, color: 'text-emerald-600 dark:text-emerald-400' },
     { label: 'Active Agents', value: '0', icon: Bot, color: 'text-amber-600 dark:text-amber-400' },
     { label: 'n8n Workflows', value: '0', icon: Workflow, color: 'text-purple-600 dark:text-purple-400' },

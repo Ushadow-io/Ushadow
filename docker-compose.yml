@@ -19,6 +19,10 @@
 name: ushadow
 
 include:
-  # Application services (backend API + web UI)
+  # Application services (backend API + web UI only)
   - compose/backend.yml
   - compose/frontend.yml
+
+# Note: Memory services run in separate projects:
+#   docker compose -f compose/memory.yml -p memory up -d
+# This allows switching between different memory providers
