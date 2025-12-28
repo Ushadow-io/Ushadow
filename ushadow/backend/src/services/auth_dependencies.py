@@ -6,7 +6,7 @@ FastAPI dependencies for protecting routes
 import logging
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from src.models.user import User, UserInDB
@@ -22,12 +22,30 @@ auth_service = AuthService()
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> User:
     """
     Get current authenticated user from JWT token.
+    Supports both:
+    - Authorization: Bearer <token> header
+    - access_token HTTP-only cookie (for SSE/WebSocket)
     """
-    token = credentials.credentials
+    token = None
+
+    # Try Authorization header first
+    if credentials:
+        token = credentials.credentials
+    # Fall back to cookie
+    elif "access_token" in request.cookies:
+        token = request.cookies["access_token"]
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # Decode token
     payload = auth_service.decode_token(token)

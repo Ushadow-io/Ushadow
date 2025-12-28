@@ -9,8 +9,19 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
 
+class ServiceCategory(str, Enum):
+    """High-level service category (user-facing grouping)."""
+    MEMORY = "memory"                          # Memory/knowledge storage
+    LLM = "llm"                                # Language models
+    TRANSCRIPTION = "transcription"            # Speech-to-text
+    SPEAKER_RECOGNITION = "speaker_recognition"  # Speaker identification
+    AUDIO_RECORDING = "audio_recording"        # Audio capture
+    WORKFLOW = "workflow"                      # Automation (n8n, etc.)
+    AGENT = "agent"                            # Autonomous agents
+
+
 class ServiceType(str, Enum):
-    """Type of service being integrated."""
+    """Type of service being integrated (technical classification)."""
     INFRASTRUCTURE = "infrastructure"  # Docker containers managed by docker_manager
     MEMORY_SOURCE = "memory_source"    # External memory/knowledge sources
     MCP_SERVER = "mcp_server"          # Model Context Protocol servers
@@ -86,68 +97,115 @@ class MemoryMappingConfig(BaseModel):
     include_unmapped: bool = True  # Add unmapped fields to metadata
 
 
+class ServiceConfigSchema(BaseModel):
+    """Schema definition for service configuration fields."""
+    key: str = Field(..., description="Setting key (will be namespaced under service_id)")
+    type: str = Field(..., description="Field type: string, secret, integer, boolean, url, number")
+    label: str = Field(..., description="Human-readable label for UI")
+    description: Optional[str] = Field(None, description="Help text for this setting")
+    link: Optional[str] = Field(None, description="URL for getting this value (e.g., where to obtain API key)")
+    required: bool = Field(False, description="Whether this field is required")
+    default: Optional[Any] = Field(None, description="Default value if not set")
+    env_var: Optional[str] = Field(None, description="Environment variable to load from")
+    validation: Optional[str] = Field(None, description="Regex pattern for validation")
+    options: Optional[List[str]] = Field(None, description="Valid options for enum/select fields")
+    min: Optional[float] = Field(None, description="Min value for numbers")
+    max: Optional[float] = Field(None, description="Max value for numbers")
+    min_length: Optional[int] = Field(None, description="Min length for strings")
+    settings_path: Optional[str] = Field(None, description="Dot-notation path to setting in config (e.g., 'api_keys.openai_api_key')")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "key": "api_key",
+                "type": "secret",
+                "label": "API Key",
+                "description": "Your OpenAI API key from platform.openai.com",
+                "required": True,
+                "env_var": "OPENAI_API_KEY",
+                "settings_path": "api_keys.openai_api_key"
+            }
+        }
+
+
+class ServiceTemplateModeConfig(BaseModel):
+    """Template configuration for a specific deployment mode."""
+    config_schema: List[ServiceConfigSchema] = []
+    connection: Optional[Dict[str, Any]] = None  # Connection defaults
+    docker: Optional[Dict[str, Any]] = None  # Docker requirements
+    dependencies: Optional[List[str]] = None  # Required other services
+
+
+class ServiceTemplate(BaseModel):
+    """Service type template from service-templates.yaml."""
+    description: str
+    cloud: Optional[ServiceTemplateModeConfig] = None
+    local: Optional[ServiceTemplateModeConfig] = None
+
+
 class ServiceConfig(BaseModel):
-    """Complete service configuration."""
+    """
+    Service Instance Configuration (Template/Instance Pattern).
+
+    Each service instance references a template and inherits its config_schema.
+    Templates are defined in config/service-templates.yaml
+    Instances are defined in config/default-services.yaml
+    """
+    # Core identity
     service_id: str = Field(..., pattern=r'^[a-z0-9-]+$')
     name: str
     description: Optional[str] = None
-    service_type: ServiceType
-    integration_type: IntegrationType
+
+    # Template reference (e.g., "memory", "llm", "transcription")
+    template: str = Field(..., description="Template name from service-templates.yaml")
+    mode: str = Field(..., pattern=r'^(cloud|local)$', description="Deployment mode")
+
+    # Wizard/UI behavior
+    is_default: bool = False  # Show in quickstart wizard
     enabled: bool = True
-    
-    # Connection details
-    connection: ConnectionConfig
-    
-    # Memory mapping (for memory_source services)
+
+    # Instance-specific config overrides
+    # These override defaults from the template
+    config_overrides: Dict[str, Any] = {}
+
+    # Cloud service configuration (when mode=cloud)
+    connection_url: Optional[str] = None  # Base URL for cloud APIs
+    connection: Optional[ConnectionConfig] = None  # Full connection config (advanced)
+
+    # Local service configuration (when mode=local)
+    docker_image: Optional[str] = None
+    docker_compose_file: Optional[str] = None
+    docker_service_name: Optional[str] = None
+    docker_profile: Optional[str] = None  # Compose profile to activate
+
+    # Memory mapping (for memory_source category services)
     memory_mapping: Optional[MemoryMappingConfig] = None
-    
-    # Sync configuration
+
+    # Sync configuration (for services that sync data)
     sync_interval: Optional[int] = None  # Seconds between syncs
     last_sync: Optional[str] = None  # ISO datetime
-    
+
     # Metadata
     tags: List[str] = []
     metadata: Dict[str, Any] = {}
+
+    # NOTE: config_schema is NOT stored here - it's inherited from the template!
+    # Use ServiceRegistry.get_effective_schema(service_id) to get merged schema
     
     class Config:
         json_schema_extra = {
             "example": {
-                "service_id": "pieces-app",
-                "name": "Pieces for Developers",
-                "description": "Personal micro-repo and AI assistant",
-                "service_type": "memory_source",
-                "integration_type": "rest",
+                "service_id": "openai",
+                "name": "OpenAI",
+                "description": "OpenAI GPT models",
+                "template": "llm",  # References service-templates.yaml:templates.llm
+                "mode": "cloud",    # Uses llm.cloud config_schema from template
+                "is_default": True,
                 "enabled": True,
-                "connection": {
-                    "url": "http://localhost:1000",
-                    "timeout": 30,
-                    "auth": {
-                        "method": "api_key",
-                        "api_key": "{{config.api_keys.pieces_api_key}}",
-                        "api_key_header": "Authorization"
-                    },
-                    "list_endpoint": "/api/snippets",
-                    "detail_endpoint": "/api/snippets/{id}"
+                "connection_url": "https://api.openai.com/v1",
+                "config_overrides": {
+                    "model": "gpt-4o-mini"  # Override template default
                 },
-                "memory_mapping": {
-                    "field_mappings": [
-                        {
-                            "source_field": "name",
-                            "target_field": "title"
-                        },
-                        {
-                            "source_field": "raw.value",
-                            "target_field": "content"
-                        },
-                        {
-                            "source_field": "classification.specific",
-                            "target_field": "tags",
-                            "transform": "split"
-                        }
-                    ],
-                    "include_unmapped": True
-                },
-                "sync_interval": 3600,
-                "tags": ["memory", "code-snippets"]
+                "tags": ["llm", "cloud"]
             }
         }

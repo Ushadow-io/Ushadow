@@ -1,9 +1,13 @@
 /**
- * Wizard components for Chronicle setup and configuration.
+ * Wizard Components
  *
- * - SetupWizard: Main setup wizard for initial configuration
- * - OpenMemoryWizard: Mini-wizard for OpenMemory MCP provider setup
+ * All wizards follow a consistent pattern using the WizardShell base component.
+ * Each wizard handles its own step content and business logic while the shell
+ * provides navigation, progress tracking, and consistent styling.
  */
 
-export { default as SetupWizard } from './SetupWizard'
-export { default as OpenMemoryWizard } from './OpenMemoryWizard'
+// Export individual wizards
+export { default as TailscaleWizard } from './TailscaleWizard'
+export { default as ChronicleWizard } from './ChronicleWizard'
+export { default as MemoryWizard } from './MemoryWizard'
+export { default as QuickstartWizard } from './QuickstartWizard'

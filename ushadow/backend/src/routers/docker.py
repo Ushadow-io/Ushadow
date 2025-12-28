@@ -204,7 +204,7 @@ async def start_service(
         Action result
     """
     docker_manager = get_docker_manager()
-    success, message = docker_manager.start_service(service_name)
+    success, message = await docker_manager.start_service(service_name)
 
     if not success and message in ["Service not found", "Operation not permitted"]:
         raise HTTPException(status_code=403, detail=message)

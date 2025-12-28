@@ -12,12 +12,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import get_settings
 
-from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, tailscale
+from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, tailscale, docker_events
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
+from src.services.omegaconf_settings import get_omegaconf_settings
 
 # Configure logging
 logging.basicConfig(
@@ -62,6 +63,10 @@ async def lifespan(app: FastAPI):
     await init_unode_manager(db)
     logger.info("✓ UNode manager initialized")
 
+    # Initialize OmegaConf settings manager
+    omegaconf_settings = get_omegaconf_settings(db=db)
+    await omegaconf_settings.load_config()  # Pre-load and cache
+    logger.info("✓ OmegaConf settings initialized")
     # Initialize deployment manager
     await init_deployment_manager(db)
     logger.info("✓ Deployment manager initialized")
@@ -96,6 +101,7 @@ app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(chronicle.router, prefix="/api/chronicle", tags=["chronicle"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(docker.router, prefix="/api/docker", tags=["docker"])
+app.include_router(docker_events.router, prefix="/api/docker", tags=["docker"])
 app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])

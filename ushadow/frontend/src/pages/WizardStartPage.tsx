@@ -1,5 +1,5 @@
-import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle, Link, FlaskConical } from 'lucide-react'
+import { useNavigate, Link as RouterLink } from 'react-router-dom'
 import { useWizard } from '../contexts/WizardContext'
 
 export default function WizardStartPage() {
@@ -8,10 +8,18 @@ export default function WizardStartPage() {
 
   const handleModeSelection = (mode: 'quickstart' | 'local' | 'custom') => {
     setMode(mode)
-    setCurrentPhase('memory')
-    // Navigate to the first phase (Memory setup)
-    navigate('/wizard/memory')
+    setCurrentPhase('quickstart')
+    // Navigate to quickstart wizard (asks for required API keys)
+    navigate('/wizard/quickstart')
   }
+
+  // All available wizards for testing
+  const availableWizards = [
+    { path: '/wizard/quickstart', label: 'Quickstart', description: 'Configure API keys' },
+    { path: '/wizard/chronicle', label: 'Chronicle', description: 'Conversation engine setup' },
+    { path: '/wizard/memory', label: 'Memory', description: 'OpenMemory setup' },
+    { path: '/wizard/tailscale', label: 'Tailscale', description: 'Secure remote access' },
+  ]
 
   return (
     <div className="space-y-8">
@@ -85,11 +93,11 @@ export default function WizardStartPage() {
         {/* Completely Local Option */}
         <button
           onClick={() => handleModeSelection('local')}
-          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-blue-500 dark:hover:border-blue-400"
+          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-primary-500 dark:hover:border-primary-400"
         >
           <div className="flex flex-col h-full">
             {/* Icon */}
-            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+            <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-700 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
               <Server className="h-8 w-8 text-white" />
             </div>
 
@@ -119,10 +127,10 @@ export default function WizardStartPage() {
 
             {/* CTA */}
             <div className="flex items-center justify-between pt-4 border-t border-neutral-200 dark:border-neutral-700">
-              <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              <span className="text-sm font-medium text-accent-600 dark:text-accent-400">
                 Self-Host
               </span>
-              <ArrowRight className="h-5 w-5 text-blue-600 dark:text-blue-400 group-hover:translate-x-1 transition-transform" />
+              <ArrowRight className="h-5 w-5 text-accent-600 dark:text-accent-400 group-hover:translate-x-1 transition-transform" />
             </div>
           </div>
         </button>
@@ -178,6 +186,39 @@ export default function WizardStartPage() {
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           Don't worry - you can always change these settings later in your configuration
         </p>
+      </div>
+
+      {/* Wizard Links - Testing Section */}
+      <div className="card p-6 bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800">
+        <div className="flex items-center gap-2 mb-4">
+          <FlaskConical className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+          <h3 className="text-lg font-semibold text-purple-900 dark:text-purple-100">
+            All Wizards (Testing)
+          </h3>
+        </div>
+        <p className="text-sm text-purple-700 dark:text-purple-300 mb-4">
+          Direct links to all available setup wizards for testing purposes.
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {availableWizards.map((wizard) => (
+            <RouterLink
+              key={wizard.path}
+              to={wizard.path}
+              id={`wizard-link-${wizard.label.toLowerCase()}`}
+              className="p-4 rounded-lg bg-white dark:bg-neutral-800 border border-purple-200 dark:border-purple-700 hover:border-purple-400 dark:hover:border-purple-500 transition-all hover:shadow-md group"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <Link className="h-4 w-4 text-purple-500 group-hover:text-purple-600 dark:text-purple-400" />
+                <span className="font-medium text-neutral-900 dark:text-neutral-100">
+                  {wizard.label}
+                </span>
+              </div>
+              <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                {wizard.description}
+              </p>
+            </RouterLink>
+          ))}
+        </div>
       </div>
     </div>
   )

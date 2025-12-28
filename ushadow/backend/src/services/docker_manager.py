@@ -3,24 +3,24 @@
 This module provides centralized Docker container management for controlling
 local services and integrations through the Ushadow backend API.
 
-Adapted from Chronicle's docker_manager.py with enhancements for:
-- External service integrations (Pieces, MCP servers, etc.)
-- Memory source management
-- Plugin/integration discovery
+Services are loaded dynamically from ServiceRegistry (config/default-services.yaml)
+with only core infrastructure defined here.
 """
 
-import asyncio
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import docker
 from docker.errors import DockerException, NotFound, APIError
+
+from src.services.service_registry import get_service_registry
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +97,13 @@ class DockerManager:
     """
     Manages Docker containers for Ushadow services and integrations.
 
-    Provides methods to start, stop, restart, and monitor Docker containers
-    that are part of the Ushadow infrastructure and external integrations.
+    Services are loaded dynamically from ServiceRegistry (config/default-services.yaml).
+    Only core infrastructure is defined here as CORE_SERVICES.
     """
 
-    # Define manageable services
-    MANAGEABLE_SERVICES = {
-        # Infrastructure services (from docker-compose.infra.yml)
+    # Core infrastructure services that are always available
+    # These don't come from ServiceRegistry - they're required for the system
+    CORE_SERVICES = {
         "mongo": {
             "description": "MongoDB database",
             "service_type": ServiceType.INFRASTRUCTURE,
@@ -131,8 +131,6 @@ class DockerManager:
                 )
             ]
         },
-
-        # Optional infrastructure
         "neo4j": {
             "description": "Neo4j graph database",
             "service_type": ServiceType.INFRASTRUCTURE,
@@ -149,75 +147,7 @@ class DockerManager:
                 )
             ]
         },
-
-        # Chronicle integration (from deployment/docker-compose.chronicle.yml)
-        "chronicle-backend": {
-            "description": "Chronicle memory backend",
-            "service_type": ServiceType.MEMORY_SOURCE,
-            "required": False,
-            "user_controllable": True,
-            "compose_file": "deployment/docker-compose.chronicle.yml",
-            "endpoints": [
-                ServiceEndpoint(
-                    url="http://chronicle-backend:8000",
-                    integration_type=IntegrationType.REST,
-                    health_check_path="/health"
-                )
-            ],
-            "metadata": {
-                "provides": ["conversations", "transcriptions", "memories"],
-                "memory_type": "audio_based"
-            }
-        },
-
-        # MCP Servers
-        "mcp-server": {
-            "description": "MCP protocol server",
-            "service_type": ServiceType.MCP_SERVER,
-            "required": False,
-            "user_controllable": True,
-            "compose_profile": "mcp",
-            "endpoints": [
-                ServiceEndpoint(
-                    url="http://mcp-server:8765",
-                    integration_type=IntegrationType.MCP
-                )
-            ]
-        },
-
-        # Agent integrations
-        "agent-zero": {
-            "description": "Agent Zero autonomous agent",
-            "service_type": ServiceType.AGENT,
-            "required": False,
-            "user_controllable": True,
-            "compose_profile": "agents",
-            "endpoints": [
-                ServiceEndpoint(
-                    url="http://agent-zero:9000",
-                    integration_type=IntegrationType.REST
-                )
-            ]
-        },
-
-        # Workflow automation
-        "n8n": {
-            "description": "n8n workflow automation",
-            "service_type": ServiceType.WORKFLOW,
-            "required": False,
-            "user_controllable": True,
-            "compose_profile": "workflows",
-            "endpoints": [
-                ServiceEndpoint(
-                    url="http://n8n:5678",
-                    integration_type=IntegrationType.REST,
-                    requires_auth=True,
-                    auth_type="basic"
-                )
-            ]
-        },
-
-        # Application services (typically not user-controlled)
+        # Application services (the ushadow app itself)
         "ushadow-backend": {
             "description": "Ushadow backend API",
             "service_type": ServiceType.APPLICATION,
@@ -245,6 +175,104 @@ class DockerManager:
         self._client: Optional[docker.DockerClient] = None
         self._initialized = False
         self._docker_available = False
+        self._services_cache: Optional[Dict[str, Any]] = None
+
+    @property
+    def MANAGEABLE_SERVICES(self) -> Dict[str, Any]:
+        """
+        Get all manageable services (core + dynamic from ServiceRegistry).
+
+        This property replaces the old hardcoded MANAGEABLE_SERVICES dict.
+        Services are loaded from config/default-services.yaml via ServiceRegistry.
+        """
+        if self._services_cache is not None:
+            return self._services_cache
+
+        # Start with core services
+        services = dict(self.CORE_SERVICES)
+
+        # Load dynamic services from ServiceRegistry
+        try:
+            registry = get_service_registry()
+            for instance in registry.get_instances():
+                # Skip if no docker compose file (cloud-only services)
+                if not instance.docker_compose_file:
+                    continue
+
+                # Skip if already in core services
+                if instance.service_id in services:
+                    continue
+
+                # Map template to ServiceType
+                service_type = self._template_to_service_type(instance.template)
+
+                # Build service config from ServiceConfig
+                service_config = {
+                    "description": instance.description or instance.name,
+                    "service_type": service_type,
+                    "required": False,
+                    "user_controllable": True,
+                    "compose_file": instance.docker_compose_file,
+                    "docker_service_name": instance.docker_service_name or instance.service_id,
+                    "endpoints": self._build_endpoints(instance),
+                    "metadata": instance.metadata,
+                }
+
+                # Add compose profile if specified
+                if instance.docker_profile:
+                    service_config["compose_profile"] = instance.docker_profile
+
+                services[instance.service_id] = service_config
+                logger.debug(f"Loaded dynamic service: {instance.service_id}")
+
+        except Exception as e:
+            logger.warning(f"Failed to load services from registry: {e}")
+
+        self._services_cache = services
+        logger.info(f"Loaded {len(services)} manageable services ({len(self.CORE_SERVICES)} core + {len(services) - len(self.CORE_SERVICES)} dynamic)")
+        return services
+
+    def reload_services(self) -> None:
+        """Clear the services cache to reload from ServiceRegistry."""
+        self._services_cache = None
+        # Also reload the registry
+        registry = get_service_registry()
+        registry.get_instances(reload=True)
+        logger.info("Services cache cleared - will reload on next access")
+
+    def _template_to_service_type(self, template: str) -> ServiceType:
+        """Map service template name to ServiceType enum."""
+        template_base = template.split('.')[0]  # Handle "memory.ui" -> "memory"
+        mapping = {
+            "memory": ServiceType.MEMORY_SOURCE,
+            "llm": ServiceType.INTEGRATION,
+            "transcription": ServiceType.INTEGRATION,
+            "speaker_recognition": ServiceType.INTEGRATION,
+            "workflow": ServiceType.WORKFLOW,
+            "agent": ServiceType.AGENT,
+            "mcp": ServiceType.MCP_SERVER,
+        }
+        return mapping.get(template_base, ServiceType.INTEGRATION)
+
+    def _build_endpoints(self, instance) -> List[ServiceEndpoint]:
+        """Build ServiceEndpoint list from ServiceConfig."""
+        endpoints = []
+
+        # Get URL from config overrides or connection_url
+        url = instance.config_overrides.get("server_url") or instance.connection_url
+        if url:
+            # Determine integration type from template
+            integration_type = IntegrationType.REST
+            if "mcp" in instance.template.lower():
+                integration_type = IntegrationType.MCP
+
+            endpoints.append(ServiceEndpoint(
+                url=url,
+                integration_type=integration_type,
+                health_check_path="/health"
+            ))
+
+        return endpoints
 
     def initialize(self) -> bool:
         """
@@ -279,8 +307,7 @@ class DockerManager:
             self.initialize()
         return self._docker_available
 
-    @staticmethod
-    def validate_service_name(service_name: str) -> tuple[bool, str]:
+    def validate_service_name(self, service_name: str) -> tuple[bool, str]:
         """
         Validate service name format and whitelist.
 
@@ -302,8 +329,8 @@ class DockerManager:
         if not SERVICE_NAME_PATTERN.match(service_name):
             return False, "Invalid service name format"
 
-        # Whitelist check
-        if service_name not in DockerManager.MANAGEABLE_SERVICES:
+        # Whitelist check - needs instance access for dynamic MANAGEABLE_SERVICES
+        if service_name not in self.MANAGEABLE_SERVICES:
             return False, "Service not found"
 
         return True, None
@@ -319,7 +346,7 @@ class DockerManager:
             ServiceInfo object with service details
         """
         # Validate service name first
-        valid, error_msg = self.validate_service_name(service_name)
+        valid, _ = self.validate_service_name(service_name)
         if not valid:
             logger.warning(f"Invalid service name attempted: {repr(service_name)}")
             return ServiceInfo(
@@ -353,7 +380,9 @@ class DockerManager:
             )
 
         try:
-            container = self._client.containers.get(service_name)
+            # Use docker_service_name if specified (e.g., "mem0" for "openmemory" service)
+            docker_container_name = service_config.get("docker_service_name", service_name)
+            container = self._client.containers.get(docker_container_name)
 
             # Extract port mappings
             ports = {}
@@ -445,7 +474,7 @@ class DockerManager:
 
         return services
 
-    def start_service(self, service_name: str) -> tuple[bool, str]:
+    async def start_service(self, service_name: str) -> tuple[bool, str]:
         """
         Start a Docker service.
 
@@ -456,7 +485,7 @@ class DockerManager:
             Tuple of (success: bool, message: str)
         """
         # Validate service name first
-        valid, error_msg = self.validate_service_name(service_name)
+        valid, _ = self.validate_service_name(service_name)
         if not valid:
             logger.warning(f"Invalid service name in start_service: {repr(service_name)}")
             return False, "Service not found"
@@ -464,9 +493,7 @@ class DockerManager:
         if not self.is_available():
             return False, "Docker not available"
 
-        # Check if service is user controllable
-        if not self.MANAGEABLE_SERVICES[service_name].get("user_controllable", True):
-            return False, "Operation not permitted"
+        # Allow starting any service - user_controllable only restricts stopping/deleting
 
         try:
             container = self._client.containers.get(service_name)
@@ -482,7 +509,7 @@ class DockerManager:
             # Container doesn't exist - try to start via compose if compose_file is specified
             compose_file = self.MANAGEABLE_SERVICES[service_name].get("compose_file")
             if compose_file:
-                return self._start_service_via_compose(service_name, compose_file)
+                return await self._start_service_via_compose(service_name, compose_file)
 
             logger.error(f"Container not found for service: {service_name}")
             return False, "Service not found"
@@ -495,7 +522,74 @@ class DockerManager:
             logger.error(f"Error starting {service_name}: {e}")
             return False, "Failed to start service"
 
-    def _start_service_via_compose(self, service_name: str, compose_file: str) -> tuple[bool, str]:
+    async def _build_env_vars_for_service(self, service_name: str) -> Dict[str, str]:
+        """
+        Build environment variables for a service from its configuration.
+
+        Maps service config fields to environment variables using the schema's env_var property.
+
+        Args:
+            service_name: Name of the service
+
+        Returns:
+            Dictionary of environment variables
+        """
+        env = os.environ.copy()  # Start with system environment
+
+        try:
+            # Import here to avoid circular dependencies
+            from src.services.service_registry import get_service_registry
+            from src.services.omegaconf_settings import get_omegaconf_settings
+
+            # Get service registry and effective schema
+            registry = get_service_registry()
+            schema = registry.get_effective_schema(service_name)
+
+            # Get OmegaConf settings manager
+            settings = get_omegaconf_settings()
+
+            # Map config fields to environment variables
+            for field in schema:
+                env_var_name = field.env_var
+                if not env_var_name:
+                    continue  # Skip fields without env_var mapping
+
+                # Try to get value from different possible locations
+                field_value = None
+
+                # 1. Try service-specific preferences
+                try:
+                    key_path = f"service_preferences.{service_name}.{field.key}"
+                    field_value = await settings.get(key_path)
+                    if field_value:
+                        logger.debug(f"Found {field.key} in {key_path}")
+                except Exception as e:
+                    logger.debug(f"Not in service_preferences: {e}")
+
+                # 2. Try shared api_keys namespace
+                if not field_value and field.key.endswith('_api_key'):
+                    try:
+                        key_path = f"api_keys.{field.key}"
+                        field_value = await settings.get(key_path)
+                        if field_value:
+                            logger.debug(f"Found {field.key} in {key_path}")
+                    except Exception as e:
+                        logger.warning(f"Error checking api_keys.{field.key}: {e}")
+
+                # 3. Inject if we found a value
+                if field_value:
+                    env[env_var_name] = str(field_value)
+                    logger.debug(f"Injecting env var: {env_var_name}=*** for {service_name}")
+                else:
+                    logger.debug(f"No value found for {field.key} (env var: {env_var_name})")
+
+        except Exception as e:
+            logger.warning(f"Could not load service config for {service_name}: {e}")
+            logger.warning("Starting service with system environment variables only")
+
+        return env
+
+    async def _start_service_via_compose(self, service_name: str, compose_file: str) -> tuple[bool, str]:
         """
         Start a service using docker-compose.
 
@@ -518,15 +612,33 @@ class DockerManager:
             compose_dir = compose_path.parent if compose_path.parent.exists() else Path(".")
 
             # Run docker-compose up -d for this service
+            # Determine project name based on compose file location
+            if "infra" in str(compose_path):
+                project_name = "infra"
+            elif "memory" in str(compose_path):
+                project_name = "memory"
+            else:
+                project_name = None
+
             # Check if service requires a specific compose profile
             compose_profile = self.MANAGEABLE_SERVICES[service_name].get("compose_profile")
+
+            # Get docker service name (may differ from service_name)
+            docker_service_name = self.MANAGEABLE_SERVICES[service_name].get("docker_service_name", service_name)
+
+            # Build environment variables from service configuration
+            env = await self._build_env_vars_for_service(service_name)
+
+            cmd = ["docker", "compose", "-f", str(compose_path)]
+            if project_name:
+                cmd.extend(["-p", project_name])
             if compose_profile:
-                cmd = ["docker", "compose", "-f", str(compose_path), "--profile", compose_profile, "up", "-d", service_name]
-            else:
-                cmd = ["docker", "compose", "-f", str(compose_path), "up", "-d", service_name]
+                cmd.extend(["--profile", compose_profile])
+            cmd.extend(["up", "-d", docker_service_name])
 
             result = subprocess.run(
                 cmd,
+                env=env,  # Inject environment variables
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
@@ -559,7 +671,7 @@ class DockerManager:
             Tuple of (success: bool, message: str)
         """
         # Validate service name first
-        valid, error_msg = self.validate_service_name(service_name)
+        valid, _ = self.validate_service_name(service_name)
         if not valid:
             logger.warning(f"Invalid service name in stop_service: {repr(service_name)}")
             return False, "Service not found"
@@ -610,7 +722,7 @@ class DockerManager:
             Tuple of (success: bool, message: str)
         """
         # Validate service name first
-        valid, error_msg = self.validate_service_name(service_name)
+        valid, _ = self.validate_service_name(service_name)
         if not valid:
             logger.warning(f"Invalid service name in restart_service: {repr(service_name)}")
             return False, "Service not found"
@@ -664,7 +776,7 @@ class DockerManager:
             Tuple of (success: bool, logs: str)
         """
         # Validate service name first
-        valid, error_msg = self.validate_service_name(service_name)
+        valid, _ = self.validate_service_name(service_name)
         if not valid:
             logger.warning(f"Invalid service name in get_service_logs: {repr(service_name)}")
             return False, "Service not found"

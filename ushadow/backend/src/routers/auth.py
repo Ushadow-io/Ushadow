@@ -6,7 +6,7 @@ Handles login, registration, and setup
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Response
 from pydantic import BaseModel, EmailStr, Field
 
 from src.models.user import User, UserCreate
@@ -134,9 +134,10 @@ async def create_admin_user(setup_data: SetupRequest):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(login_data: LoginRequest):
+async def login(login_data: LoginRequest, response: Response):
     """
     Authenticate user and return access token.
+    Also sets HTTP-only cookie for SSE/WebSocket auth.
     """
     try:
         # Authenticate user
@@ -155,6 +156,16 @@ async def login(login_data: LoginRequest):
         # Create access token
         access_token = auth_service.create_access_token(
             data={"sub": user.id}
+        )
+
+        # Set HTTP-only cookie for SSE/WebSocket support
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,  # Prevents JavaScript access (XSS protection)
+            samesite="lax",  # CSRF protection
+            secure=False,  # Set to True in production with HTTPS
+            max_age=86400 * 30  # 30 days
         )
 
         logger.info(f"User logged in: {user.email}")

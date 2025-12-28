@@ -43,6 +43,10 @@
   .btn-danger {
     @apply btn bg-error-600 hover:bg-error-700 text-white focus:ring-error-500;
   }
+
+  .btn-accent {
+    @apply btn bg-accent-600 hover:bg-accent-700 text-white focus:ring-accent-500;
+  }
   
   /* Input Components */
   .input {
@@ -80,6 +84,10 @@
   
   .badge-neutral {
     @apply badge bg-neutral-100 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-300;
+  }
+
+  .badge-accent {
+    @apply badge bg-accent-100 text-accent-800 dark:bg-accent-900/30 dark:text-accent-300;
   }
 }
 
