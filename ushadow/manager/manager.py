@@ -32,6 +32,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ushadow-manager")
 
+# Version info - update this when releasing new versions
+MANAGER_VERSION = "0.2.0"
+
 # Configuration from environment
 LEADER_URL = os.environ.get("LEADER_URL", "http://localhost:8010")
 NODE_SECRET = os.environ.get("NODE_SECRET", "")
@@ -107,10 +110,12 @@ class UshadowManager:
         """Start the HTTP API server for receiving commands from leader."""
         self.web_app = web.Application()
         self.web_app.router.add_get("/health", self.handle_health)
+        self.web_app.router.add_get("/info", self.handle_info)
         self.web_app.router.add_post("/deploy", self.handle_deploy)
         self.web_app.router.add_post("/stop", self.handle_stop)
         self.web_app.router.add_post("/restart", self.handle_restart)
         self.web_app.router.add_post("/remove", self.handle_remove)
+        self.web_app.router.add_post("/upgrade", self.handle_upgrade)
         self.web_app.router.add_get("/status/{container_name}", self.handle_status)
         self.web_app.router.add_get("/logs/{container_name}", self.handle_logs)
         self.web_app.router.add_get("/containers", self.handle_list_containers)
@@ -130,8 +135,124 @@ class UshadowManager:
         return web.json_response({
             "status": "healthy",
             "hostname": self.hostname,
+            "version": MANAGER_VERSION,
             "docker_available": self.docker_client is not None
         })
+
+    async def handle_info(self, request: web.Request) -> web.Response:
+        """Get node info endpoint (no auth required, used for discovery)."""
+        return web.json_response({
+            "hostname": self.hostname,
+            "tailscale_ip": self.tailscale_ip,
+            "leader_url": self.leader_url,
+            "manager_version": MANAGER_VERSION,
+            "platform": platform.system().lower(),
+            "docker_available": self.docker_client is not None,
+        })
+
+    async def handle_upgrade(self, request: web.Request) -> web.Response:
+        """
+        Upgrade the manager to a new version.
+
+        This pulls a new image and schedules a self-restart.
+        The restart happens after responding to avoid connection issues.
+        """
+        if not self._check_auth(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            data = {}
+
+        image = data.get("image", "ghcr.io/ushadow-io/ushadow-manager:latest")
+
+        if not self.docker_client:
+            return web.json_response({"success": False, "error": "Docker not available"}, status=500)
+
+        try:
+            # Pull the new image first
+            logger.info(f"Pulling new manager image: {image}")
+            self.docker_client.images.pull(image)
+            logger.info("New image pulled successfully")
+
+            # Schedule the restart after responding
+            # We use a background task to restart ourselves
+            asyncio.create_task(self._perform_self_upgrade(image))
+
+            return web.json_response({
+                "success": True,
+                "message": "Upgrade initiated. Manager will restart in ~5 seconds.",
+                "new_image": image
+            })
+
+        except ImageNotFound:
+            return web.json_response({"success": False, "error": f"Image not found: {image}"}, status=404)
+        except Exception as e:
+            logger.error(f"Upgrade failed: {e}")
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
+    async def _perform_self_upgrade(self, new_image: str):
+        """
+        Perform the actual self-upgrade by recreating our own container.
+
+        This runs after responding to the upgrade request.
+        """
+        await asyncio.sleep(3)  # Give time for response to be sent
+
+        logger.info("Starting self-upgrade process...")
+
+        try:
+            # Get our own container
+            my_container = self.docker_client.containers.get("ushadow-manager")
+
+            # Capture current config
+            env_vars = my_container.attrs.get("Config", {}).get("Env", [])
+            env_dict = {}
+            for env in env_vars:
+                if "=" in env:
+                    k, v = env.split("=", 1)
+                    env_dict[k] = v
+
+            # Get port bindings
+            ports = my_container.attrs.get("HostConfig", {}).get("PortBindings", {})
+            port_bindings = {}
+            for container_port, host_bindings in ports.items():
+                if host_bindings:
+                    port_bindings[container_port] = int(host_bindings[0].get("HostPort", 8444))
+
+            # Get volume mounts
+            mounts = my_container.attrs.get("Mounts", [])
+            volumes = []
+            for mount in mounts:
+                if mount.get("Type") == "bind":
+                    volumes.append(f"{mount['Source']}:{mount['Destination']}")
+
+            logger.info(f"Recreating container with image: {new_image}")
+            logger.info(f"Env vars: {list(env_dict.keys())}")
+            logger.info(f"Ports: {port_bindings}")
+            logger.info(f"Volumes: {volumes}")
+
+            # Stop and remove ourselves
+            my_container.stop(timeout=5)
+            my_container.remove()
+
+            # Start new container with same config
+            self.docker_client.containers.run(
+                new_image,
+                name="ushadow-manager",
+                detach=True,
+                restart_policy={"Name": "unless-stopped"},
+                environment=env_dict,
+                ports=port_bindings,
+                volumes=volumes,
+            )
+
+            logger.info("Self-upgrade complete - new container started")
+
+        except Exception as e:
+            logger.error(f"Self-upgrade failed: {e}")
+            # If we fail, try to at least log it - we may be killed mid-process
 
     async def handle_deploy(self, request: web.Request) -> web.Response:
         """Deploy a container."""
@@ -393,6 +514,7 @@ class UshadowManager:
         heartbeat_data = {
             "hostname": self.hostname,
             "status": "online",
+            "manager_version": MANAGER_VERSION,
             "services_running": self.services_running,
             "capabilities": self.get_capabilities(),
             "metrics": metrics,

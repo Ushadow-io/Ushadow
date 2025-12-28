@@ -199,10 +199,47 @@ export const clusterApi = {
   discoverPeers: () => api.get('/api/unodes/discover/peers'),
   getUnode: (hostname: string) => api.get(`/api/unodes/${hostname}`),
   removeUnode: (hostname: string) => api.delete(`/api/unodes/${hostname}`),
+  releaseNode: (hostname: string) => api.post(`/api/unodes/${hostname}/release`),
   createToken: (tokenData: { role: string; max_uses: number; expires_in_hours: number }) =>
     api.post('/api/unodes/tokens', tokenData),
   claimNode: (hostname: string, tailscale_ip: string) =>
     api.post('/api/unodes/claim', { hostname, tailscale_ip }),
+  // Upgrade endpoints
+  upgradeNode: (hostname: string, version: string = 'latest') =>
+    api.post(`/api/unodes/${hostname}/upgrade`, { version }),
+  upgradeAllNodes: (version: string = 'latest') =>
+    api.post('/api/unodes/upgrade-all', { version }),
+  // Version management
+  getManagerVersions: () => api.get<{
+    versions: string[]
+    latest: string
+    registry: string
+    image: string
+  }>('/api/unodes/versions'),
+}
+
+// Kubernetes cluster endpoints
+export interface KubernetesCluster {
+  cluster_id: string
+  name: string
+  context: string
+  server: string
+  status: 'connected' | 'unreachable' | 'unauthorized' | 'error'
+  version?: string
+  node_count?: number
+  namespace: string
+  labels: Record<string, string>
+}
+
+export const kubernetesApi = {
+  addCluster: (data: { name: string; kubeconfig: string; context?: string; namespace?: string; labels?: Record<string, string> }) =>
+    api.post<KubernetesCluster>('/api/kubernetes', data),
+  listClusters: () =>
+    api.get<KubernetesCluster[]>('/api/kubernetes'),
+  getCluster: (clusterId: string) =>
+    api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
+  removeCluster: (clusterId: string) =>
+    api.delete(`/api/kubernetes/${clusterId}`),
 }
 
 // Deployment endpoints

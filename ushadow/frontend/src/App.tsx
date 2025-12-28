@@ -23,6 +23,7 @@ import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
 import ClusterPage from './pages/ClusterPage'
 import TailscaleWizard from './wizards/TailscaleWizard'
+import KubernetesClustersPage from './pages/KubernetesClustersPage'
 
 function App() {
   return (
@@ -62,6 +63,7 @@ function App() {
                 <Route path="n8n" element={<N8NPage />} />
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />
+                <Route path="kubernetes" element={<KubernetesClustersPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="feature-flags" element={<FeatureFlags />} />
 
