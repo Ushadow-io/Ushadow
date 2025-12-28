@@ -1,0 +1,202 @@
+# Default Service Instances
+# Each service is an instance of a service_type_template
+#
+# Service instances inherit config_schema from their template
+# and can override/extend with instance-specific values
+
+# Which provider is default for each category (used in quickstart wizard)
+default_providers:
+  memory: openmemory
+  llm: openai
+  transcription: deepgram
+  speaker_recognition: none  # Optional
+  audio_recording: local
+
+# Service Instances - Concrete implementations of templates
+services:
+  # ============================================
+  # Memory Services
+  # ============================================
+
+  - service_id: openmemory
+    name: "OpenMemory"
+    description: "Graph-based memory with MCP support"
+    template: memory        # References service-templates.yaml:templates.memory
+    mode: local             # Uses memory.local config_schema
+    is_default: true        # Show in quickstart wizard
+
+    # Local deployment configuration
+    docker_image: "ghcr.io/ushadow-io/u-mem0-api:latest"
+    docker_compose_file: "docker-compose.infra.yml"
+    docker_service_name: "mem0"
+    docker_profile: null    # Runs by default (no profile needed)
+
+    # Instance-specific config overrides
+    config_overrides:
+      server_url: "http://mem0:8765"  # Override default from template
+
+    enabled: true
+    tags: ["memory", "mcp", "local"]
+
+  - service_id: openmemory-ui
+    name: "OpenMemory UI"
+    description: "Web interface for OpenMemory"
+    template: memory.ui     # Special UI-only template
+    mode: local
+    is_default: true        # Start with core memory
+
+    docker_image: "ghcr.io/ushadow-io/u-mem0-ui:latest"
+    docker_compose_file: "docker-compose.infra.yml"
+    docker_service_name: "mem0-ui"
+
+    config_overrides:
+      server_url: "http://mem0-ui:3000"
+
+    enabled: true
+    tags: ["memory", "ui", "local"]
+
+  - service_id: chronicle-backend
+    name: "Chronicle Backend"
+    description: "Conversation engine with audio processing and AI analysis"
+    template: conversation_engine
+    mode: local
+    is_default: true
+
+    docker_image: "ghcr.io/ushadow-io/chronicle-backend:latest"
+    docker_compose_file: "compose/chronicle-compose.yaml"
+    docker_service_name: "chronicle-backend"
+
+    config_overrides:
+      server_url: "http://chronicle-backend:8000"
+
+    enabled: true
+    tags: ["memory", "audio", "local", "transcription"]
+
+  - service_id: chronicle-webui
+    name: "Chronicle WebUI"
+    description: "Web dashboard for Chronicle conversation engine"
+    template: conversation_engine.ui
+    mode: local
+    is_default: true
+
+    docker_image: "ghcr.io/ushadow-io/chronicle-webui:latest"
+    docker_compose_file: "compose/chronicle-compose.yaml"
+    docker_service_name: "chronicle-webui"
+
+    config_overrides:
+      server_url: "http://chronicle-webui:80"
+
+    enabled: true
+    tags: ["memory", "ui", "local"]
+
+  # ============================================
+  # LLM Services
+  # ============================================
+
+  - service_id: openai
+    name: "OpenAI"
+    description: "OpenAI GPT models (GPT-4, GPT-4o, etc.)"
+    template: llm
+    mode: cloud
+    is_default: true        # Default LLM in quickstart
+
+    # Cloud service connection
+    connection_url: "https://api.openai.com/v1"
+
+    # Instance-specific config overrides
+    config_overrides:
+      model: "gpt-4o-mini"  # Default model for this instance
+      api_key_link: "https://platform.openai.com/api-keys"  # Override template link
+      api_key_settings_path: "api_keys.openai_api_key"  # Map to shared API key
+
+    enabled: true
+    tags: ["llm", "cloud", "openai"]
+
+  - service_id: anthropic
+    name: "Anthropic"
+    description: "Claude models from Anthropic"
+    template: llm
+    mode: cloud
+    is_default: false       # Alternative LLM option
+
+    connection_url: "https://api.anthropic.com/v1"
+
+    config_overrides:
+      model: "claude-3-5-sonnet-20241022"
+      api_key_header: "x-api-key"  # Anthropic uses different header
+      api_key_link: "https://console.anthropic.com/settings/keys"
+      api_key_settings_path: "api_keys.anthropic_api_key"  # Map to Anthropic's API key
+
+    enabled: false
+    tags: ["llm", "cloud", "anthropic"]
+
+  - service_id: ollama
+    name: "Ollama"
+    description: "Local LLM server"
+    template: llm
+    mode: local
+    is_default: false       # Alternative to cloud LLMs
+
+    docker_image: "ollama/ollama:latest"
+    docker_service_name: "ollama"
+
+    config_overrides:
+      base_url: "http://ollama:11434"
+      model: "llama3.1:latest"
+      embedder_model: "nomic-embed-text:latest"
+
+    enabled: false
+    tags: ["llm", "local", "ollama"]
+
+  # ============================================
+  # Transcription Services
+  # ============================================
+
+  - service_id: deepgram
+    name: "Deepgram"
+    description: "Cloud speech-to-text API"
+    template: transcription
+    mode: cloud
+    is_default: true        # Default transcription
+
+    connection_url: "https://api.deepgram.com/v1"
+
+    config_overrides:
+      api_key_link: "https://console.deepgram.com/project/default/keys"
+      api_key_settings_path: "api_keys.deepgram_api_key"  # Map to Deepgram's API key
+
+    enabled: true
+    tags: ["transcription", "cloud"]
+
+  - service_id: mistral-voxtral
+    name: "Mistral Voxtral"
+    description: "Mistral's voice transcription models"
+    template: transcription
+    mode: cloud
+    is_default: false
+
+    connection_url: "https://api.mistral.ai/v1"
+
+    config_overrides:
+      api_key_link: "https://console.mistral.ai/api-keys"
+      api_key_settings_path: "api_keys.mistral_api_key"  # Map to Mistral's API key
+
+    enabled: false
+    tags: ["transcription", "cloud", "mistral"]
+
+  - service_id: whisper-local
+    name: "Whisper (Local)"
+    description: "OpenAI Whisper running locally"
+    template: transcription
+    mode: local
+    is_default: false
+
+    docker_image: "onerahmet/openai-whisper-asr-webservice:latest"
+    docker_service_name: "whisper"
+
+    config_overrides:
+      server_url: "http://whisper:9000"
+      model_size: "base"
+
+    enabled: false
+    tags: ["transcription", "local", "whisper"]

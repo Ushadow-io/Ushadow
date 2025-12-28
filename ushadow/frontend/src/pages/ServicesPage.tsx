@@ -1,917 +1,980 @@
 import { useState, useEffect } from 'react'
-import { Server, Plus, RefreshCw, Settings, Trash2, CheckCircle, XCircle, AlertCircle, Package, Upload, Network, Play, Square, RotateCw, FileText, X } from 'lucide-react'
-import { servicesApi, deploymentsApi, clusterApi, ServiceDefinition, Deployment } from '../services/api'
+import {
+  Server,
+  CheckCircle,
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Edit2,
+  Save,
+  X,
+  Plus,
+  RefreshCw,
+  Circle,
+  PlayCircle,
+  StopCircle,
+  Loader2,
+  Cloud,
+  HardDrive,
+  ToggleLeft,
+  ToggleRight
+} from 'lucide-react'
+import { servicesApi, settingsApi, dockerApi } from '../services/api'
+import ConfirmDialog from '../components/ConfirmDialog'
+import AddServiceModal from '../components/AddServiceModal'
 
-interface Service {
+interface ServiceInstance {
   service_id: string
   name: string
-  description?: string
-  service_type: string
-  integration_type: string
-  status: string
-  connection?: {
-    base_url?: string
-  }
-  metadata?: {
-    last_sync?: string
-    sync_count?: number
-    error_count?: number
-  }
-}
-
-interface UNode {
-  hostname: string
-  status: string
-  role: string
-  tailscale_ip?: string
+  description: string
+  template: string
+  mode: 'cloud' | 'local'
+  is_default: boolean
+  enabled: boolean
+  config_schema: any[]
+  tags: string[]
 }
 
 export default function ServicesPage() {
-  const [activeTab, setActiveTab] = useState<'deployable' | 'integrations'>('deployable')
-  const [services, setServices] = useState<Service[]>([])
+  const [serviceInstances, setServiceInstances] = useState<ServiceInstance[]>([])
+  const [serviceConfigs, setServiceConfigs] = useState<any>({})
+  const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['memory', 'llm', 'transcription']))
+  const [editingService, setEditingService] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState<any>({})
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [testingService, setTestingService] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [startingService, setStartingService] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean
+    serviceId: string | null
+    serviceName: string | null
+  }>({ isOpen: false, serviceId: null, serviceName: null })
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  const [expandedConfigs, setExpandedConfigs] = useState<Set<string>>(new Set())
+  const [showAllConfigs, setShowAllConfigs] = useState(false)
+  const [togglingEnabled, setTogglingEnabled] = useState<string | null>(null)
+  const [showAddServiceModal, setShowAddServiceModal] = useState(false)
 
-  // Deployable services state
-  const [deployableServices, setDeployableServices] = useState<ServiceDefinition[]>([])
-  const [deployments, setDeployments] = useState<Deployment[]>([])
-  const [unodes, setUnodes] = useState<UNode[]>([])
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [showDeployModal, setShowDeployModal] = useState(false)
-  const [selectedService, setSelectedService] = useState<ServiceDefinition | null>(null)
-  const [selectedNode, setSelectedNode] = useState<string>('')
-  const [deploying, setDeploying] = useState(false)
-  const [creatingService, setCreatingService] = useState(false)
-  const [newService, setNewService] = useState({
-    service_id: '',
-    name: '',
-    description: '',
-    image: '',
-    ports: '',
-    environment: '',
-    restart_policy: 'unless-stopped',
-  })
-
+  // Load initial data once on mount
   useEffect(() => {
-    if (activeTab === 'integrations') {
-      loadServices()
-    } else {
-      loadDeployableData()
-    }
-  }, [activeTab])
+    loadData()
+  }, [])
 
-  const loadServices = async () => {
+  // Set up SSE connection once on mount (separate from data loading)
+  useEffect(() => {
+    const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:8100'
+    const eventSource = new EventSource(`${backendUrl}/api/docker/events`, {
+      withCredentials: true
+    })
+
+    eventSource.addEventListener('container', (event) => {
+      const data = JSON.parse(event.data)
+      console.log('🐳 Docker event:', data.action, data.container_name)
+
+      // Refresh status when containers start/stop/die/restart
+      if (['start', 'stop', 'die', 'restart'].includes(data.action)) {
+        // Reload all service statuses (they'll use current serviceInstances from state)
+        setServiceStatuses(prevStatuses => {
+          // Trigger a refresh by reloading data
+          loadData()
+          return prevStatuses
+        })
+
+        // Clear starting spinner and show success message
+        if (data.action === 'start') {
+          setStartingService(null)
+          setMessage({ type: 'success', text: 'Service is now running' })
+        }
+      }
+    })
+
+    eventSource.addEventListener('error', (error) => {
+      console.error('SSE connection error:', error)
+      // Don't close - let it auto-reconnect
+    })
+
+    return () => {
+      eventSource.close()
+    }
+  }, [])  // Empty deps - only run once on mount
+
+  const loadData = async () => {
     try {
       setLoading(true)
-      setError(null)
-      const response = await servicesApi.list()
-      setServices(response.data)
-    } catch (err: any) {
-      console.error('Error loading services:', err)
-      setError(err.response?.data?.detail || 'Failed to load services')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadDeployableData = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const [servicesRes, deploymentsRes, unodesRes] = await Promise.all([
-        deploymentsApi.listServices(),
-        deploymentsApi.listDeployments(),
-        clusterApi.listUnodes(),
+      const [instancesResponse, configResponse] = await Promise.all([
+        servicesApi.getInstalled(),  // Use installed services (default + user-added)
+        settingsApi.getConfig()  // Load FULL merged config (api_keys + service_preferences + defaults)
       ])
-      setDeployableServices(servicesRes.data)
-      setDeployments(deploymentsRes.data)
-      setUnodes(unodesRes.data)
-    } catch (err: any) {
-      console.error('Error loading deployable data:', err)
-      setError(err.response?.data?.detail || 'Failed to load deployable services')
+
+      const instances = instancesResponse.data
+      const mergedConfig = configResponse.data
+
+      // Build effective config per service (merge api_keys + service_preferences)
+      const effectiveConfigs: any = {}
+      instances.forEach((service: any) => {
+        effectiveConfigs[service.service_id] = {}
+
+        service.config_schema?.forEach((field: any) => {
+          if (field.env_var) {
+            // Check api_keys namespace
+            const keyName = field.env_var.toLowerCase()
+            const value = mergedConfig?.api_keys?.[keyName]
+            if (value !== undefined && value !== null) {
+              effectiveConfigs[service.service_id][field.key] = value
+            }
+          } else {
+            // Check service_preferences namespace
+            const value = mergedConfig?.service_preferences?.[service.service_id]?.[field.key]
+            if (value !== undefined && value !== null) {
+              effectiveConfigs[service.service_id][field.key] = value
+            }
+          }
+        })
+      })
+
+      setServiceInstances(instances)
+      setServiceConfigs(effectiveConfigs)  // Use effective merged config, not just preferences
+
+      // Load status for local services (check if containers running)
+      await loadServiceStatuses(instances)
+    } catch (error) {
+      console.error('Error loading services:', error)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleTestConnection = async (serviceId: string) => {
-    try {
-      setTestingService(serviceId)
-      const response = await servicesApi.testConnection(serviceId)
-      if (response.data.success) {
-        alert(`Connection successful: ${response.data.message}`)
+  const loadServiceStatuses = async (services: any[]) => {
+    const statuses: Record<string, any> = {}
+
+    for (const service of services) {
+      if (service.mode === 'local') {
+        // Check Docker container status
+        try {
+          const response = await dockerApi.getServiceInfo(service.service_id)
+          statuses[service.service_id] = {
+            status: response.data.status,
+            container_id: response.data.container_id,
+            health: response.data.health
+          }
+        } catch (error) {
+          statuses[service.service_id] = { status: 'not_found' }
+        }
       } else {
-        alert(`Connection failed: ${response.data.message}`)
+        // Cloud service - "running" if configured
+        const isConfigured = serviceConfigs[service.service_id] &&
+                            Object.keys(serviceConfigs[service.service_id]).length > 0
+        statuses[service.service_id] = {
+          status: isConfigured ? 'configured' : 'not_configured'
+        }
       }
-    } catch (err: any) {
-      console.error('Error testing connection:', err)
-      alert(`Connection test failed: ${err.response?.data?.detail || err.message}`)
-    } finally {
-      setTestingService(null)
+    }
+
+    setServiceStatuses(statuses)
+  }
+
+  const handleStartService = async (serviceId: string) => {
+    setStartingService(serviceId)
+    try {
+      await dockerApi.startService(serviceId)
+      setMessage({ type: 'success', text: 'Service starting...' })
+      // Status will update automatically via SSE when container starts
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to start service' })
+      setStartingService(null)
     }
   }
 
-  const handleDeleteService = async (serviceId: string, serviceName: string) => {
-    if (!confirm(`Are you sure you want to delete "${serviceName}"?`)) {
+  const handleStopService = (serviceId: string) => {
+    const service = serviceInstances.find(s => s.service_id === serviceId)
+    setConfirmDialog({
+      isOpen: true,
+      serviceId,
+      serviceName: service?.name || serviceId
+    })
+  }
+
+  const confirmStopService = async () => {
+    const { serviceId } = confirmDialog
+    if (!serviceId) return
+
+    setConfirmDialog({ isOpen: false, serviceId: null, serviceName: null })
+
+    try {
+      await dockerApi.stopService(serviceId)
+      setMessage({ type: 'success', text: 'Service stopped' })
+      await loadData()  // Refresh status
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to stop service' })
+    }
+  }
+
+  const handleToggleEnabled = async (serviceId: string, currentEnabled: boolean) => {
+    setTogglingEnabled(serviceId)
+    try {
+      const newEnabled = !currentEnabled
+      await servicesApi.setEnabled(serviceId, newEnabled)
+
+      // Update local state immediately
+      setServiceInstances(prev =>
+        prev.map(s => s.service_id === serviceId ? { ...s, enabled: newEnabled } : s)
+      )
+
+      const action = newEnabled ? 'enabled' : 'disabled'
+      setMessage({ type: 'success', text: `Service ${action}` })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to toggle service' })
+    } finally {
+      setTogglingEnabled(null)
+    }
+  }
+
+  const toggleCategory = (categoryId: string) => {
+    setExpandedCategories(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(categoryId)) {
+        newSet.delete(categoryId)
+      } else {
+        newSet.add(categoryId)
+      }
+      return newSet
+    })
+  }
+
+  const handleEditService = (serviceId: string) => {
+    const currentConfig = serviceConfigs[serviceId] || {}
+    setEditForm({ ...currentConfig })
+    setEditingService(serviceId)
+  }
+
+  const handleSaveService = async (serviceId: string) => {
+    const service = serviceInstances.find(s => s.service_id === serviceId)
+    if (!service) return
+
+    // Clear previous validation errors
+    setValidationErrors({})
+
+    // Validate required fields
+    const errors: Record<string, string> = {}
+    service.config_schema
+      ?.filter(f => f.required)
+      .forEach(field => {
+        const value = editForm[field.key]
+        if (!value || value === '') {
+          errors[field.key] = `${field.label} is required`
+        }
+      })
+
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors)
+      setMessage({ type: 'error', text: 'Please fill in all required fields' })
       return
     }
 
+    setSaving(true)
     try {
-      await servicesApi.delete(serviceId)
-      alert(`Deleted service: ${serviceName}`)
-      loadServices()
-    } catch (err: any) {
-      console.error('Error deleting service:', err)
-      alert(`Failed to delete service: ${err.response?.data?.detail || err.message}`)
+      await settingsApi.updateServiceConfig(serviceId, editForm)
+      setServiceConfigs((prev: Record<string, any>) => ({
+        ...prev,
+        [serviceId]: editForm
+      }))
+      setMessage({ type: 'success', text: 'Configuration saved' })
+      setEditingService(null)
+      setValidationErrors({})
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to save' })
+    } finally {
+      setSaving(false)
     }
   }
 
-  const handleCreateService = async () => {
-    try {
-      setCreatingService(true)
+  const handleCancelEdit = () => {
+    setEditingService(null)
+    setEditForm({})
+    setValidationErrors({})
+  }
 
-      // Parse ports JSON
-      let ports: Record<string, number> = {}
-      if (newService.ports.trim()) {
-        try {
-          ports = JSON.parse(newService.ports)
-        } catch {
-          alert('Invalid ports JSON. Example: {"8080": 80}')
-          return
-        }
+  const maskValue = (value: string) => {
+    if (value && value.length > 4) {
+      return '●●●●●●' + value.slice(-4)
+    }
+    return '●●●●●●'
+  }
+
+  const getServiceStatus = (service: any, config: any) => {
+    // Rule 1: Check if service has required configuration
+    const hasRequiredConfig = () => {
+      if (!service.config_schema || service.config_schema.length === 0) {
+        // No config needed (like mem0-ui) - always "configured"
+        return true
       }
 
-      // Parse environment JSON
-      let environment: Record<string, string> = {}
-      if (newService.environment.trim()) {
-        try {
-          environment = JSON.parse(newService.environment)
-        } catch {
-          alert('Invalid environment JSON. Example: {"KEY": "value"}')
-          return
-        }
+      // Get list of required fields
+      const requiredFields = service.config_schema.filter((f: any) => f.required)
+
+      // If no required fields, service is always configured
+      if (requiredFields.length === 0) {
+        return true
       }
 
-      await deploymentsApi.createService({
-        service_id: newService.service_id,
-        name: newService.name,
-        description: newService.description,
-        image: newService.image,
-        ports,
-        environment,
-        volumes: [],
-        restart_policy: newService.restart_policy,
-        tags: [],
-        metadata: {},
+      // If no config saved at all, not configured
+      if (!config || Object.keys(config).length === 0) {
+        return false
+      }
+
+      // Check all required fields have non-null values
+      return requiredFields.every((f: any) => {
+        const value = config[f.key]
+        // Field is filled if it has a value (including defaults)
+        return value !== undefined && value !== null && value !== ''
       })
+    }
 
-      setShowCreateModal(false)
-      setNewService({
-        service_id: '',
-        name: '',
-        description: '',
-        image: '',
-        ports: '',
-        environment: '',
-        restart_policy: 'unless-stopped',
-      })
-      loadDeployableData()
-    } catch (err: any) {
-      console.error('Error creating service:', err)
-      alert(`Failed to create service: ${err.response?.data?.detail || err.message}`)
-    } finally {
-      setCreatingService(false)
+    const isConfigured = hasRequiredConfig()
+
+    // Rule 2: Not configured services - RED with alert icon
+    if (!isConfigured) {
+      return {
+        state: 'not_configured',
+        label: 'Missing Config',
+        color: 'error',
+        icon: AlertCircle,
+        canConfigure: true
+      }
+    }
+
+    // Rule 3: Cloud services - configured means active (no containers to manage)
+    if (service.mode === 'cloud') {
+      // TODO: Add pause functionality later
+      return {
+        state: 'active',
+        label: 'Active',
+        color: 'success',
+        icon: CheckCircle,
+        canEdit: true,
+        canPause: false  // Future feature
+      }
+    }
+
+    // Rule 4: Local services - check container status for started/stopped
+    const containerStatus = serviceStatuses[service.service_id]
+
+    if (!containerStatus || containerStatus.status === 'not_found') {
+      // Configured but container doesn't exist/not started yet - GRAY
+      return {
+        state: 'stopped',
+        label: 'Stopped',
+        color: 'neutral',
+        icon: Circle,
+        canStart: true,
+        canEdit: true
+      }
+    }
+
+    if (containerStatus.status === 'running') {
+      // Container running - GREEN with play icon
+      const isHealthy = containerStatus.health === 'healthy'
+      return {
+        state: 'running',
+        label: isHealthy ? 'Running' : 'Starting',
+        color: 'success',
+        icon: PlayCircle,
+        canStop: true,
+        canEdit: true
+      }
+    }
+
+    if (containerStatus.status === 'exited' || containerStatus.status === 'stopped') {
+      // Container exists but stopped - GRAY
+      return {
+        state: 'stopped',
+        label: 'Stopped',
+        color: 'neutral',
+        icon: Circle,
+        canStart: true,
+        canEdit: true
+      }
+    }
+
+    // Unknown state - show as error
+    return {
+      state: 'error',
+      label: 'Error',
+      color: 'error',
+      icon: AlertCircle,
+      canEdit: true
     }
   }
 
-  const handleDeleteDeployableService = async (serviceId: string, serviceName: string) => {
-    if (!confirm(`Are you sure you want to delete "${serviceName}"? This will not affect running deployments.`)) {
-      return
+  const shouldShowField = (fieldKey: string, config: any): boolean => {
+    // Neo4j password only shown if graph memory enabled
+    if (fieldKey === 'neo4j_password') {
+      return config.enable_graph === true
     }
-
-    try {
-      await deploymentsApi.deleteService(serviceId)
-      loadDeployableData()
-    } catch (err: any) {
-      console.error('Error deleting service:', err)
-      alert(`Failed to delete service: ${err.response?.data?.detail || err.message}`)
-    }
+    // Add other conditional logic here
+    return true
   }
 
-  const handleOpenDeployModal = (service: ServiceDefinition) => {
-    setSelectedService(service)
-    setSelectedNode('')
-    setShowDeployModal(true)
-  }
+  const renderFieldValue = (key: string, value: any, isEditing: boolean, serviceId?: string) => {
+    const isSecret = key.includes('password') || key.includes('key')
+    const fieldId = serviceId ? `field-${serviceId}-${key}` : undefined
+    const hasError = validationErrors[key]
 
-  const handleDeploy = async () => {
-    if (!selectedService || !selectedNode) return
-
-    try {
-      setDeploying(true)
-      await deploymentsApi.deploy(selectedService.service_id, selectedNode)
-      setShowDeployModal(false)
-      loadDeployableData()
-    } catch (err: any) {
-      console.error('Error deploying service:', err)
-      alert(`Failed to deploy service: ${err.response?.data?.detail || err.message}`)
-    } finally {
-      setDeploying(false)
-    }
-  }
-
-  const handleStopDeployment = async (deploymentId: string) => {
-    try {
-      await deploymentsApi.stopDeployment(deploymentId)
-      loadDeployableData()
-    } catch (err: any) {
-      console.error('Error stopping deployment:', err)
-      alert(`Failed to stop deployment: ${err.response?.data?.detail || err.message}`)
-    }
-  }
-
-  const handleRestartDeployment = async (deploymentId: string) => {
-    try {
-      await deploymentsApi.restartDeployment(deploymentId)
-      loadDeployableData()
-    } catch (err: any) {
-      console.error('Error restarting deployment:', err)
-      alert(`Failed to restart deployment: ${err.response?.data?.detail || err.message}`)
-    }
-  }
-
-  const handleRemoveDeployment = async (deploymentId: string) => {
-    if (!confirm('Are you sure you want to remove this deployment?')) return
-
-    try {
-      await deploymentsApi.removeDeployment(deploymentId)
-      loadDeployableData()
-    } catch (err: any) {
-      console.error('Error removing deployment:', err)
-      alert(`Failed to remove deployment: ${err.response?.data?.detail || err.message}`)
-    }
-  }
-
-  const getStatusIcon = (status: string) => {
-    switch (status?.toLowerCase()) {
-      case 'active':
-      case 'running':
-        return <CheckCircle className="h-5 w-5 text-success-600 dark:text-success-400" />
-      case 'inactive':
-      case 'stopped':
-        return <XCircle className="h-5 w-5 text-neutral-500 dark:text-neutral-400" />
-      case 'error':
-      case 'failed':
-        return <AlertCircle className="h-5 w-5 text-danger-600 dark:text-danger-400" />
-      case 'deploying':
-      case 'pending':
-        return <RefreshCw className="h-5 w-5 text-warning-600 dark:text-warning-400 animate-spin" />
-      default:
-        return <AlertCircle className="h-5 w-5 text-warning-600 dark:text-warning-400" />
-    }
-  }
-
-  const getStatusBadge = (status: string) => {
-    const statusLower = status?.toLowerCase()
-    let colorClass = 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
-
-    switch (statusLower) {
-      case 'running':
-        colorClass = 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400'
-        break
-      case 'stopped':
-        colorClass = 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
-        break
-      case 'failed':
-        colorClass = 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-400'
-        break
-      case 'deploying':
-      case 'pending':
-        colorClass = 'bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-400'
-        break
+    if (isEditing) {
+      if (typeof value === 'boolean') {
+        return (
+          <input
+            id={fieldId}
+            type="checkbox"
+            checked={editForm[key] === true}
+            onChange={(e) => setEditForm({ ...editForm, [key]: e.target.checked })}
+            className="rounded"
+          />
+        )
+      }
+      return (
+        <div>
+          <input
+            id={fieldId}
+            type={isSecret ? 'password' : 'text'}
+            value={editForm[key] || ''}
+            onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
+            className={`input text-xs ${hasError ? 'border-error-500 focus:ring-error-500' : ''}`}
+            placeholder={isSecret ? '●●●●●●' : ''}
+            aria-invalid={hasError ? 'true' : 'false'}
+            aria-describedby={hasError ? `error-${serviceId}-${key}` : undefined}
+          />
+          {hasError && (
+            <p
+              id={`error-${serviceId}-${key}`}
+              className="text-xs text-error-600 dark:text-error-400 mt-1"
+              role="alert"
+            >
+              {hasError}
+            </p>
+          )}
+        </div>
+      )
     }
 
+    // Display mode
+    if (isSecret) {
+      return <span className="font-mono text-xs">{value ? maskValue(String(value)) : 'Not set'}</span>
+    }
+    if (typeof value === 'boolean') {
+      return (
+        <span className={`text-xs font-medium ${value ? 'text-success-600' : 'text-neutral-500'}`}>
+          {value ? 'Enabled' : 'Disabled'}
+        </span>
+      )
+    }
+    return <span className="font-mono text-xs">{String(value).substring(0, 30)}</span>
+  }
+
+  // Group services by category
+  const servicesByCategory = serviceInstances.reduce((acc, service) => {
+    const category = service.template.split('.')[0]
+    if (!acc[category]) {
+      acc[category] = []
+    }
+    acc[category].push(service)
+    return acc
+  }, {} as Record<string, ServiceInstance[]>)
+
+  const categories = [
+    { id: 'memory', name: 'Memory', description: 'Knowledge storage and retrieval' },
+    { id: 'llm', name: 'Language Models', description: 'AI language model providers' },
+    { id: 'transcription', name: 'Transcription', description: 'Speech-to-text services' },
+  ]
+
+  // Calculate stats
+  const totalServices = serviceInstances.length
+  const activeServices = Object.keys(serviceConfigs).length
+
+  if (loading) {
     return (
-      <span className={`px-2 py-1 text-xs font-medium rounded ${colorClass}`}>
-        {status}
-      </span>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <RefreshCw className="h-12 w-12 text-neutral-400 mx-auto mb-4 animate-spin" />
+          <p className="text-neutral-600 dark:text-neutral-400">Loading services...</p>
+        </div>
+      </div>
     )
   }
-
-  const getIntegrationTypeColor = (type: string) => {
-    switch (type?.toLowerCase()) {
-      case 'rest':
-        return 'text-primary-600 dark:text-primary-400'
-      case 'mcp':
-        return 'text-info-600 dark:text-info-400'
-      case 'graphql':
-        return 'text-warning-600 dark:text-warning-400'
-      default:
-        return 'text-neutral-600 dark:text-neutral-400'
-    }
-  }
-
-  const getServiceDeployments = (serviceId: string) => {
-    return deployments.filter(d => d.service_id === serviceId)
-  }
-
-  const getAvailableNodes = (serviceId: string) => {
-    const deployedNodes = new Set(
-      deployments
-        .filter(d => d.service_id === serviceId && d.status !== 'failed' && d.status !== 'stopped')
-        .map(d => d.unode_hostname)
-    )
-    return unodes.filter(n => n.status === 'online' && !deployedNodes.has(n.hostname))
-  }
-
-  // Stats for integrations tab
-  const totalServices = services.length
-  const activeServices = services.filter(s => s.status?.toLowerCase() === 'active').length
-  const memoryServices = services.filter(s => s.service_type?.includes('memory')).length
-  const errorServices = services.filter(s => s.status?.toLowerCase() === 'error').length
-
-  // Stats for deployable tab
-  const totalDeployable = deployableServices.length
-  const runningDeployments = deployments.filter(d => d.status === 'running').length
-  const failedDeployments = deployments.filter(d => d.status === 'failed').length
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
+          <div className="flex items-center space-x-2">
+            <Server className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
+            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
+          </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-            Manage deployable services and external integrations
+            Manage service providers and integrations
           </p>
         </div>
-        {activeTab === 'deployable' ? (
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAllConfigs(!showAllConfigs)}
+            className="btn-ghost text-sm flex items-center gap-2"
+          >
+            {showAllConfigs ? (
+              <>
+                <ChevronUp className="h-4 w-4" />
+                Collapse All Details
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-4 w-4" />
+                Expand All Details
+              </>
+            )}
+          </button>
           <button
             className="btn-primary flex items-center space-x-2"
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => setShowAddServiceModal(true)}
+            data-testid="add-service-button"
           >
             <Plus className="h-5 w-5" />
-            <span>Create Service</span>
+            <span>Add Service</span>
           </button>
-        ) : (
-          <button
-            className="btn-primary flex items-center space-x-2"
-            onClick={() => alert('Add Service wizard coming in Phase 2!')}
-          >
-            <Plus className="h-5 w-5" />
-            <span>Add Integration</span>
-          </button>
-        )}
-      </div>
-
-      {/* Tabs */}
-      <div className="border-b border-neutral-200 dark:border-neutral-700">
-        <nav className="-mb-px flex space-x-8">
-          <button
-            onClick={() => setActiveTab('deployable')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'deployable'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:text-neutral-400 dark:hover:text-neutral-300'
-            }`}
-          >
-            <Package className="h-5 w-5 inline mr-2" />
-            Deployable Services
-          </button>
-          <button
-            onClick={() => setActiveTab('integrations')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'integrations'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:text-neutral-400 dark:hover:text-neutral-300'
-            }`}
-          >
-            <Network className="h-5 w-5 inline mr-2" />
-            Integrations
-          </button>
-        </nav>
+        </div>
       </div>
 
       {/* Stats */}
-      {activeTab === 'deployable' ? (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Service Definitions</p>
-            <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{totalDeployable}</p>
-          </div>
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Running</p>
-            <p className="mt-2 text-2xl font-bold text-success-600 dark:text-success-400">{runningDeployments}</p>
-          </div>
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Total Deployments</p>
-            <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">{deployments.length}</p>
-          </div>
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Failed</p>
-            <p className="mt-2 text-2xl font-bold text-danger-600 dark:text-danger-400">{failedDeployments}</p>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="card-hover p-4">
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Available Services</p>
+          <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{totalServices}</p>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Total Services</p>
-            <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{totalServices}</p>
-          </div>
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Active</p>
-            <p className="mt-2 text-2xl font-bold text-success-600 dark:text-success-400">{activeServices}</p>
-          </div>
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Memory Sources</p>
-            <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">{memoryServices}</p>
-          </div>
-          <div className="card-hover p-4">
-            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Errors</p>
-            <p className="mt-2 text-2xl font-bold text-danger-600 dark:text-danger-400">{errorServices}</p>
-          </div>
+        <div className="card-hover p-4">
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Configured</p>
+          <p className="mt-2 text-2xl font-bold text-success-600 dark:text-success-400">{activeServices}</p>
         </div>
-      )}
+        <div className="card-hover p-4">
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Categories</p>
+          <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">{categories.length}</p>
+        </div>
+      </div>
 
-      {/* Error State */}
-      {error && (
-        <div className="card p-4 border-l-4 border-danger-600 bg-danger-50 dark:bg-danger-900/20">
+      {/* Message */}
+      {message && (
+        <div 
+          role="alert"
+          aria-live="polite"
+          aria-atomic="true"
+          className={`card p-4 border ${
+          message.type === 'success'
+            ? 'bg-success-50 dark:bg-success-900/20 border-success-200 text-success-700'
+            : 'bg-error-50 dark:bg-error-900/20 border-error-200 text-error-700'
+        }`}>
           <div className="flex items-center space-x-2">
-            <AlertCircle className="h-5 w-5 text-danger-600 dark:text-danger-400" />
-            <p className="text-danger-900 dark:text-danger-200">{error}</p>
+            <AlertCircle className="h-5 w-5" />
+            <span>{message.text}</span>
           </div>
         </div>
       )}
 
-      {/* Loading State */}
-      {loading && (
-        <div className="text-center py-12">
-          <RefreshCw className="h-12 w-12 text-neutral-400 dark:text-neutral-600 mx-auto mb-4 animate-spin" />
-          <p className="text-neutral-600 dark:text-neutral-400">Loading services...</p>
-        </div>
-      )}
+      {/* Service Categories */}
+      <div className="space-y-4">
+        {categories.map(category => {
+          const categoryServices = servicesByCategory[category.id] || []
+          if (categoryServices.length === 0) return null
 
-      {/* Deployable Services Tab Content */}
-      {!loading && !error && activeTab === 'deployable' && (
-        <div>
-          {deployableServices.length === 0 ? (
-            <div className="card p-12 text-center">
-              <Package className="h-16 w-16 text-neutral-400 dark:text-neutral-600 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
-                No service definitions yet
-              </h3>
-              <p className="text-neutral-600 dark:text-neutral-400 mb-6">
-                Create a service definition to deploy Docker containers to your u-nodes
-              </p>
+          const isExpanded = expandedCategories.has(category.id)
+
+          return (
+            <div key={category.id} className="card">
+              {/* Category Header */}
               <button
-                className="btn-primary"
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => toggleCategory(category.id)}
+                className="w-full p-6 flex items-center space-x-4 hover:opacity-70 transition-opacity text-left"
+                aria-expanded={isExpanded}
+                aria-controls={`category-${category.id}-content`}
               >
-                <Plus className="h-5 w-5 mr-2 inline" />
-                Create First Service
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {deployableServices.map((service) => {
-                const serviceDeployments = getServiceDeployments(service.service_id)
-                const availableNodes = getAvailableNodes(service.service_id)
-
-                return (
-                  <div key={service.service_id} className="card p-6">
-                    {/* Service Header */}
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center space-x-3">
-                        <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
-                          <Package className="h-6 w-6 text-primary-600 dark:text-primary-400" />
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                            {service.name}
-                          </h3>
-                          <p className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
-                            {service.image}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => handleOpenDeployModal(service)}
-                          disabled={availableNodes.length === 0}
-                          className="btn-primary py-1.5 px-3 text-sm disabled:opacity-50"
-                          title={availableNodes.length === 0 ? 'No available nodes' : 'Deploy to node'}
-                        >
-                          <Upload className="h-4 w-4 mr-1 inline" />
-                          Deploy
-                        </button>
-                        <button
-                          onClick={() => handleDeleteDeployableService(service.service_id, service.name)}
-                          className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Service Description */}
-                    {service.description && (
-                      <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
-                        {service.description}
-                      </p>
-                    )}
-
-                    {/* Service Config Summary */}
-                    <div className="flex flex-wrap gap-2 mb-4 text-xs">
-                      {Object.keys(service.ports || {}).length > 0 && (
-                        <span className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded">
-                          Ports: {Object.entries(service.ports || {}).map(([c, h]) => `${h}:${c}`).join(', ')}
-                        </span>
-                      )}
-                      <span className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded">
-                        Restart: {service.restart_policy}
-                      </span>
-                    </div>
-
-                    {/* Deployments */}
-                    {serviceDeployments.length > 0 && (
-                      <div className="border-t border-neutral-200 dark:border-neutral-700 pt-4">
-                        <h4 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">
-                          Deployments ({serviceDeployments.length})
-                        </h4>
-                        <div className="space-y-2">
-                          {serviceDeployments.map((deployment) => (
-                            <div
-                              key={deployment.id}
-                              className="flex items-center justify-between p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg"
-                            >
-                              <div className="flex items-center space-x-3">
-                                {getStatusIcon(deployment.status)}
-                                <div>
-                                  <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                                    {deployment.unode_hostname}
-                                  </p>
-                                  <div className="flex items-center space-x-2 mt-1">
-                                    {getStatusBadge(deployment.status)}
-                                    {deployment.error && (
-                                      <span className="text-xs text-danger-600 dark:text-danger-400">
-                                        {deployment.error}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center space-x-1">
-                                {deployment.status === 'running' ? (
-                                  <>
-                                    <button
-                                      onClick={() => handleRestartDeployment(deployment.id)}
-                                      className="p-1.5 text-neutral-500 hover:text-warning-600 dark:hover:text-warning-400 rounded"
-                                      title="Restart"
-                                    >
-                                      <RotateCw className="h-4 w-4" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleStopDeployment(deployment.id)}
-                                      className="p-1.5 text-neutral-500 hover:text-danger-600 dark:hover:text-danger-400 rounded"
-                                      title="Stop"
-                                    >
-                                      <Square className="h-4 w-4" />
-                                    </button>
-                                  </>
-                                ) : deployment.status === 'stopped' ? (
-                                  <button
-                                    onClick={() => handleRestartDeployment(deployment.id)}
-                                    className="p-1.5 text-neutral-500 hover:text-success-600 dark:hover:text-success-400 rounded"
-                                    title="Start"
-                                  >
-                                    <Play className="h-4 w-4" />
-                                  </button>
-                                ) : null}
-                                <button
-                                  onClick={() => handleRemoveDeployment(deployment.id)}
-                                  className="p-1.5 text-neutral-500 hover:text-danger-600 dark:hover:text-danger-400 rounded"
-                                  title="Remove"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* No Deployments Message */}
-                    {serviceDeployments.length === 0 && (
-                      <div className="border-t border-neutral-200 dark:border-neutral-700 pt-4">
-                        <p className="text-sm text-neutral-500 dark:text-neutral-400 text-center py-2">
-                          Not deployed to any nodes yet
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Integrations Tab Content */}
-      {!loading && !error && activeTab === 'integrations' && (
-        <div>
-          {services.length === 0 ? (
-            <div className="card p-12 text-center">
-              <Server className="h-16 w-16 text-neutral-400 dark:text-neutral-600 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
-                No integrations configured
-              </h3>
-              <p className="text-neutral-600 dark:text-neutral-400 mb-6">
-                Get started by adding your first external service integration
-              </p>
-              <button
-                className="btn-primary"
-                onClick={() => alert('Add Service wizard coming in Phase 2!')}
-              >
-                <Plus className="h-5 w-5 mr-2 inline" />
-                Add Your First Integration
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {services.map((service) => (
-                <div key={service.service_id} className="card-hover p-6">
-                  {/* Service Header */}
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
-                        <Server className={`h-6 w-6 ${getIntegrationTypeColor(service.integration_type)}`} />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                          {service.name}
-                        </h3>
-                        <p className="text-xs text-neutral-600 dark:text-neutral-400">
-                          {service.integration_type?.toUpperCase()}
-                        </p>
-                      </div>
-                    </div>
-                    {getStatusIcon(service.status)}
-                  </div>
-
-                  {/* Service Description */}
-                  {service.description && (
-                    <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4 line-clamp-2">
-                      {service.description}
-                    </p>
-                  )}
-
-                  {/* Service Stats */}
-                  {service.metadata && (
-                    <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
-                      {service.metadata.sync_count !== undefined && (
-                        <div className="bg-neutral-100 dark:bg-neutral-800 rounded px-2 py-1">
-                          <span className="text-neutral-600 dark:text-neutral-400">Syncs:</span>{' '}
-                          <span className="font-semibold text-neutral-900 dark:text-neutral-100">
-                            {service.metadata.sync_count}
-                          </span>
-                        </div>
-                      )}
-                      {service.metadata.error_count !== undefined && (
-                        <div className="bg-neutral-100 dark:bg-neutral-800 rounded px-2 py-1">
-                          <span className="text-neutral-600 dark:text-neutral-400">Errors:</span>{' '}
-                          <span className="font-semibold text-neutral-900 dark:text-neutral-100">
-                            {service.metadata.error_count}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Service Actions */}
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleTestConnection(service.service_id)}
-                      disabled={testingService === service.service_id}
-                      className="flex-1 btn-secondary py-2 text-sm disabled:opacity-50"
-                    >
-                      {testingService === service.service_id ? (
-                        <RefreshCw className="h-4 w-4 mx-auto animate-spin" />
-                      ) : (
-                        'Test'
-                      )}
-                    </button>
-                    <button
-                      onClick={() => alert(`Settings for ${service.name} coming soon!`)}
-                      className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
-                    >
-                      <Settings className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteService(service.service_id, service.name)}
-                      className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
+                {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
+                <div>
+                  <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+                    {category.name}
+                  </h2>
+                  <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                    {category.description}
+                  </p>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Create Service Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-neutral-900 rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
-              <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
-                Create Service Definition
-              </h2>
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="p-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-              >
-                <X className="h-5 w-5" />
               </button>
-            </div>
-            <div className="p-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Service ID
-                </label>
-                <input
-                  type="text"
-                  value={newService.service_id}
-                  onChange={(e) => setNewService({ ...newService, service_id: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-                  placeholder="my-service"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={newService.name}
-                  onChange={(e) => setNewService({ ...newService, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-                  placeholder="My Service"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Description
-                </label>
-                <textarea
-                  value={newService.description}
-                  onChange={(e) => setNewService({ ...newService, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-                  rows={2}
-                  placeholder="Optional description"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Docker Image
-                </label>
-                <input
-                  type="text"
-                  value={newService.image}
-                  onChange={(e) => setNewService({ ...newService, image: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-                  placeholder="nginx:latest"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Ports (JSON)
-                </label>
-                <input
-                  type="text"
-                  value={newService.ports}
-                  onChange={(e) => setNewService({ ...newService, ports: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-mono text-sm"
-                  placeholder='{"80": 8080}'
-                />
-                <p className="text-xs text-neutral-500 mt-1">Container port to host port mapping</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Environment (JSON)
-                </label>
-                <input
-                  type="text"
-                  value={newService.environment}
-                  onChange={(e) => setNewService({ ...newService, environment: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-mono text-sm"
-                  placeholder='{"KEY": "value"}'
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                  Restart Policy
-                </label>
-                <select
-                  value={newService.restart_policy}
-                  onChange={(e) => setNewService({ ...newService, restart_policy: e.target.value })}
-                  className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+
+              {/* Category Services */}
+              {isExpanded && (
+                <div 
+                  id={`category-${category.id}-content`}
+                  className="px-6 pb-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
                 >
-                  <option value="unless-stopped">Unless Stopped</option>
-                  <option value="always">Always</option>
-                  <option value="on-failure">On Failure</option>
-                  <option value="no">No</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex justify-end space-x-3 p-4 border-t border-neutral-200 dark:border-neutral-700">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateService}
-                disabled={creatingService || !newService.service_id || !newService.name || !newService.image}
-                className="btn-primary disabled:opacity-50"
-              >
-                {creatingService ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  'Create Service'
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                  {categoryServices.map(service => {
+                    const isConfigured = serviceConfigs[service.service_id] &&
+                                        Object.keys(serviceConfigs[service.service_id]).length > 0
+                    const isEditing = editingService === service.service_id
+                    const config = serviceConfigs[service.service_id] || {}
+                    const status = getServiceStatus(service, config)
 
-      {/* Deploy Modal */}
-      {showDeployModal && selectedService && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-neutral-900 rounded-lg shadow-xl max-w-md w-full mx-4">
-            <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
-              <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
-                Deploy {selectedService.name}
-              </h2>
-              <button
-                onClick={() => setShowDeployModal(false)}
-                className="p-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="p-4">
-              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                Select Target Node
-              </label>
-              <select
-                value={selectedNode}
-                onChange={(e) => setSelectedNode(e.target.value)}
-                className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-              >
-                <option value="">Select a node...</option>
-                {getAvailableNodes(selectedService.service_id).map((node) => (
-                  <option key={node.hostname} value={node.hostname}>
-                    {node.hostname} ({node.role})
-                  </option>
-                ))}
-              </select>
-              {getAvailableNodes(selectedService.service_id).length === 0 && (
-                <p className="text-sm text-warning-600 dark:text-warning-400 mt-2">
-                  No available nodes. The service may already be deployed to all online nodes.
-                </p>
+                    // Border and background based on status - cards should pop from page
+                    const getBorderClasses = () => {
+                      // Disabled services get grayed out appearance
+                      if (!service.enabled) {
+                        return 'border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800/50 shadow-sm opacity-60'
+                      }
+                      if (status.state === 'running') {
+                        // Subtle green border, neutral background for better button contrast
+                        return 'border-success-400 dark:border-success-600 bg-white dark:bg-neutral-900 shadow-sm'
+                      }
+                      if (status.state === 'active' || status.state === 'stopped') {
+                        return 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm'
+                      }
+                      if (status.state === 'not_configured' || status.state === 'error') {
+                        return 'border-warning-200 dark:border-warning-800 bg-warning-50/30 dark:bg-warning-950/20 shadow-sm'
+                      }
+                      return 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm'
+                    }
+
+                    const isExpanded = showAllConfigs || expandedConfigs.has(service.service_id)
+
+                    const toggleConfig = (e: React.MouseEvent) => {
+                      // Don't expand if clicking on a button
+                      if ((e.target as HTMLElement).closest('button')) {
+                        return
+                      }
+
+                      setExpandedConfigs(prev => {
+                        const next = new Set(prev)
+                        if (next.has(service.service_id)) {
+                          next.delete(service.service_id)
+                        } else {
+                          next.add(service.service_id)
+                        }
+                        return next
+                      })
+                    }
+
+                    return (
+                      <div
+                        key={service.service_id}
+                        className={`border rounded-lg transition-all ${getBorderClasses()} ${!isEditing ? 'cursor-pointer' : ''}`}
+                        onClick={!isEditing ? toggleConfig : undefined}
+                      >
+                        <div className="p-4">
+                          {/* Service Header - Colored highlight box with everything inline */}
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3 flex-1">
+                            {/* Service name with colored icon box */}
+                            {service.mode === 'cloud' ? (
+                              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800">
+                                <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                                <h3 className="font-semibold text-blue-900 dark:text-blue-100">
+                                  {service.name}
+                                </h3>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800">
+                                <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                                <h3 className="font-semibold text-purple-900 dark:text-purple-100">
+                                  {service.name}
+                                </h3>
+                              </div>
+                            )}
+
+                            {/* Setup warning */}
+                            {(() => {
+                              const status = getServiceStatus(service, config)
+                              if (status.state === 'not_configured') {
+                                return (
+                                  <span className="inline-flex items-center gap-1 text-xs text-warning-700 dark:text-warning-300">
+                                    <AlertCircle className="h-3.5 w-3.5" />
+                                    Setup Required
+                                  </span>
+                                )
+                              }
+                              return null
+                            })()}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                          
+                          {/* Actionable Status Badge */}
+                          {!isEditing && (() => {
+                            const status = getServiceStatus(service, config)
+                            const Icon = status.icon
+
+                            const colorClasses = {
+                              success: 'text-success-700 dark:text-success-300',
+                              error: 'text-error-700 dark:text-error-300',
+                              neutral: 'text-neutral-600 dark:text-neutral-400',
+                              warning: 'text-warning-700 dark:text-warning-300'
+                            }
+
+                            const bgClasses = {
+                              success: 'bg-success-100 dark:bg-success-900/30',
+                              error: 'bg-error-100 dark:bg-error-900/30',
+                              neutral: 'bg-neutral-100 dark:bg-neutral-800',
+                              warning: 'bg-warning-100 dark:bg-warning-900/30'
+                            }
+
+                            // Make status badge clickable for local services (only if enabled)
+                            const isClickable = service.enabled && service.mode === 'local' && (status.canStart || status.canStop)
+                            const handleStatusClick = () => {
+                              if (status.canStart) {
+                                handleStartService(service.service_id)
+                              } else if (status.canStop) {
+                                handleStopService(service.service_id)
+                              }
+                            }
+
+                            if (isClickable) {
+                              // Different color schemes for Start vs Stop
+                              const isStopButton = status.canStop
+
+                              return (
+                                <button
+                                  onClick={handleStatusClick}
+                                  disabled={startingService === service.service_id}
+                                  aria-label={status.canStart ? `Start ${service.name}` : `Stop ${service.name}`}
+                                  className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                                >
+                                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 ${
+                                    isStopButton
+                                      ? 'bg-error-100 dark:bg-error-900/30 group-hover:ring-error-400 group-hover:bg-error-200 dark:group-hover:bg-error-800'
+                                      : 'bg-success-100 dark:bg-success-900/30 group-hover:ring-success-400 group-hover:bg-success-200 dark:group-hover:bg-success-800'
+                                  }`}>
+                                    {startingService === service.service_id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin text-success-700 dark:text-success-300" />
+                                    ) : status.canStart ? (
+                                      <PlayCircle className="h-3.5 w-3.5 text-success-700 dark:text-success-300" />
+                                    ) : (
+                                      <StopCircle className="h-3.5 w-3.5 text-error-700 dark:text-error-300" />
+                                    )}
+                                    <span className={`text-xs font-medium ${
+                                      isStopButton
+                                        ? 'text-error-700 dark:text-error-300'
+                                        : 'text-success-700 dark:text-success-300'
+                                    }`}>
+                                      {status.canStart ? 'Start' : 'Stop'}
+                                    </span>
+                                  </div>
+                                </button>
+                              )
+                            }
+
+                            return (
+                              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bgClasses[status.color as keyof typeof bgClasses]}`}>
+                                <Icon className={`h-4 w-4 ${colorClasses[status.color as keyof typeof colorClasses]}`} />
+                                <span className={`text-xs font-medium ${colorClasses[status.color as keyof typeof colorClasses]}`}>
+                                  {status.label}
+                                </span>
+                              </div>
+                            )
+                          })()}
+
+                            {/* Enable/Disable Toggle */}
+                            {!isEditing && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleToggleEnabled(service.service_id, service.enabled)
+                                }}
+                                disabled={togglingEnabled === service.service_id}
+                                aria-label={service.enabled ? `Disable ${service.name}` : `Enable ${service.name}`}
+                                data-testid={`toggle-enabled-${service.service_id}`}
+                                className="flex items-center gap-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+                                title={service.enabled ? 'Click to disable' : 'Click to enable'}
+                              >
+                                {togglingEnabled === service.service_id ? (
+                                  <Loader2 className="h-5 w-5 animate-spin" />
+                                ) : service.enabled ? (
+                                  <ToggleRight className="h-5 w-5 text-success-600 dark:text-success-400" />
+                                ) : (
+                                  <ToggleLeft className="h-5 w-5 text-neutral-400" />
+                                )}
+                              </button>
+                            )}
+
+                            {/* Expand indicator */}
+                            {!isEditing && (
+                              <div className="flex items-center text-neutral-400">
+                                {isExpanded ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">
+                          {service.description}
+                        </p>
+                      </div>
+
+                        {/* Edit Mode Actions */}
+                        {isEditing && (
+                          <div className="flex items-center justify-end gap-2 mb-3">
+                            <button
+                              onClick={handleCancelEdit}
+                              className="btn-ghost text-xs flex items-center gap-1"
+                            >
+                              <X className="h-4 w-4" />
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleSaveService(service.service_id)}
+                              disabled={saving}
+                              className="btn-primary text-xs flex items-center gap-1"
+                            >
+                              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                              {saving ? 'Saving...' : 'Save'}
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Service Configuration - Collapsible */}
+                        {(isConfigured || isEditing) && service.config_schema && service.config_schema.length > 0 && (
+                          <>
+                            {/* Config Fields - Show if editing OR expanded */}
+                            {(isEditing || isExpanded) && (
+                              <div className={`space-y-2 px-4 pb-4 pt-3 border-t border-neutral-200 dark:border-neutral-700 ${isEditing ? 'mt-0' : 'mt-0'}`}>
+                                {service.config_schema
+                                  .filter((f: any) => {
+                                    // In edit mode, show all fields
+                                    if (isEditing) return true
+                                    // In view mode, only show if configured AND should be visible
+                                    if (config[f.key] === undefined) return false
+                                    return shouldShowField(f.key, config)
+                                  })
+                                  .map((field: any) => (
+                                    <div key={field.key} className={isEditing ? '' : 'flex items-baseline gap-2'}>
+                                      {isEditing ? (
+                                        <>
+                                          <label
+                                            htmlFor={`field-${service.service_id}-${field.key}`}
+                                            className="text-xs font-medium text-neutral-600 dark:text-neutral-400 mb-1 block"
+                                          >
+                                            {field.label}
+                                            {field.required && <span className="text-error-600 ml-1">*</span>}
+                                          </label>
+                                          <div className="text-xs">
+                                            {renderFieldValue(field.key, config[field.key], isEditing, service.service_id)}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span className="text-xs text-neutral-500 dark:text-neutral-400 flex-shrink-0">
+                                            {field.label}:
+                                          </span>
+                                          <div className="text-xs flex-1 truncate">
+                                            {renderFieldValue(field.key, config[field.key], isEditing, service.service_id)}
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+
+                                {/* Edit Button - Inside expanded section */}
+                                {!isEditing && (
+                                  <div className="pt-3 mt-3 border-t border-neutral-200 dark:border-neutral-700">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleEditService(service.service_id)
+                                      }}
+                                      className="btn-ghost text-xs flex items-center gap-1"
+                                    >
+                                      <Edit2 className="h-4 w-4" />
+                                      {(() => {
+                                        const status = getServiceStatus(service, config)
+                                        return status.canConfigure ? 'Setup' : 'Edit'
+                                      })()}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
+
+                        {/* Only show "Not configured" text if service is truly not configured */}
+                        {(() => {
+                          const status = getServiceStatus(service, config)
+                          return status.state === 'not_configured' && !isEditing && !isExpanded && (
+                            <div className="px-4 pb-4">
+                              <p className="text-xs text-neutral-500 dark:text-neutral-400 text-center">
+                                Click to setup
+                              </p>
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    )
+                  })}
+                </div>
               )}
             </div>
-            <div className="flex justify-end space-x-3 p-4 border-t border-neutral-200 dark:border-neutral-700">
-              <button
-                onClick={() => setShowDeployModal(false)}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeploy}
-                disabled={deploying || !selectedNode}
-                className="btn-primary disabled:opacity-50"
-              >
-                {deploying ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2 inline" />
-                    Deploy
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
+          )
+        })}
+      </div>
+
+      {Object.keys(serviceConfigs).length === 0 && (
+        <div className="card p-12 text-center">
+          <Server className="h-16 w-16 text-neutral-400 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
+            No services configured
+          </h3>
+          <p className="text-neutral-600 dark:text-neutral-400 mb-6">
+            Complete the setup wizard to configure your default services
+          </p>
+          <button
+            onClick={() => window.location.href = '/wizard/start'}
+            className="btn-primary"
+          >
+            Start Setup Wizard
+          </button>
         </div>
       )}
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title="Stop Service"
+        message={`Are you sure you want to stop ${confirmDialog.serviceName}? This will shut down the service container.`}
+        confirmText="Stop Service"
+        cancelText="Cancel"
+        variant="warning"
+        onConfirm={confirmStopService}
+        onCancel={() => setConfirmDialog({ isOpen: false, serviceId: null, serviceName: null })}
+      />
+
+      {/* Live region for screen reader announcements */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {message?.text}
+      </div>
+
+      {/* Add Service Modal */}
+      <AddServiceModal
+        isOpen={showAddServiceModal}
+        onClose={() => setShowAddServiceModal(false)}
+        onServiceInstalled={() => {
+          loadData()  // Refresh services list
+          setMessage({ type: 'success', text: 'Service installed successfully' })
+        }}
+      />
     </div>
   )
 }

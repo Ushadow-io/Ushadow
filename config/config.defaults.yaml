@@ -10,8 +10,8 @@ wizard_completed: false
 
 # Authentication Configuration (non-sensitive)
 auth:
-  secret_key: ''  # Auto-generated on first run if empty
-  admin_password_hash: ''  # Set via wizard or environment variable
+  admin_email: admin@example.com
+  admin_name: admin
 
 # Speech Detection Settings
 speech_detection:
@@ -44,17 +44,23 @@ diarization:
 
 # LLM Configuration
 llm:
-  llm_provider: openai
+  provider: openai
   openai_model: gpt-4o-mini
-  chat_llm_model: null
   chat_temperature: 0.7
   ollama_model: llama3.1:latest
   ollama_embedder_model: nomic-embed-text:latest
+  ollama_base_url: http://ollama:11434
 
-# Service Providers
-providers:
-  memory_provider: chronicle
-  transcription_provider: auto
+# Transcription Configuration
+transcription:
+  provider: deepgram
+  language: en
+
+# Service-Specific Preferences (not shared across services)
+service_preferences:
+  openmemory:
+    enable_graph: false
+    neo4j_password: null
 
 # Network Configuration
 network:
@@ -68,6 +74,7 @@ infrastructure:
   mongodb_uri: mongodb://mongo:27017
   mongodb_database: chronicle
   redis_url: redis://redis:6379/0
+  
   qdrant_base_url: qdrant
   qdrant_port: '6333'
   neo4j_host: neo4j-mem0
