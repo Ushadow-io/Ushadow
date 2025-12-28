@@ -38,10 +38,38 @@ interface JoinToken {
   join_command_powershell: string
 }
 
+// Discovered peer from Tailscale network
+interface DiscoveredPeer {
+  hostname: string
+  tailscale_ip: string
+  os?: string
+  online?: boolean
+  registered_to?: 'this_leader' | 'other_leader' | null
+  manager_info?: {
+    version?: string
+    platform?: string
+  }
+}
+
+// Response structure from discover peers API
+interface DiscoveredPeersResponse {
+  peers: {
+    registered: DiscoveredPeer[]
+    available: DiscoveredPeer[]
+    unknown: DiscoveredPeer[]
+  }
+  counts: {
+    registered: number
+    available: number
+    unknown: number
+    total: number
+  }
+}
+
 export default function ClusterPage() {
   const [activeTab, setActiveTab] = useState<'registered' | 'discovered'>('registered')
   const [unodes, setUnodes] = useState<UNode[]>([])
-  const [discoveredPeers, setDiscoveredPeers] = useState<any>(null)
+  const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeersResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [discoveringPeers, setDiscoveringPeers] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -688,7 +716,7 @@ export default function ClusterPage() {
                     Available Nodes ({discoveredPeers.counts.available})
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {discoveredPeers.peers.available.map((peer: any, idx: number) => (
+                    {discoveredPeers.peers.available.map((peer: DiscoveredPeer, idx: number) => (
                       <div key={`${peer.tailscale_ip}-${idx}`} className="card-hover p-6 border-2 border-warning-200 dark:border-warning-800">
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex items-center space-x-3">
@@ -739,7 +767,7 @@ export default function ClusterPage() {
                     Other Tailscale Peers ({discoveredPeers.counts.unknown})
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {discoveredPeers.peers.unknown.map((peer: any, idx: number) => (
+                    {discoveredPeers.peers.unknown.map((peer: DiscoveredPeer, idx: number) => (
                       <div key={`${peer.tailscale_ip}-${idx}`} className="card-hover p-6 opacity-60">
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex items-center space-x-3">
