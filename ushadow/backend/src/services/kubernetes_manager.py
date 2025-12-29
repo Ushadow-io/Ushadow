@@ -43,7 +43,7 @@ class KubernetesManager:
         settings = get_settings()
 
         # Derive a 32-byte key from the app secret
-        secret = settings.secret_key.encode() if settings.secret_key else b"default-secret-key"
+        secret = settings.AUTH_SECRET_KEY.encode() if settings.AUTH_SECRET_KEY else b"default-secret-key"
         key = hashlib.sha256(secret).digest()
         fernet_key = base64.urlsafe_b64encode(key)
         return Fernet(fernet_key)

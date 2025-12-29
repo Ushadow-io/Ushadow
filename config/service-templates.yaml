@@ -245,3 +245,13 @@ templates:
         - mongodb
         - redis
         - qdrant
+
+  # Utility/Test Service Template
+  utility:
+    description: "Simple utility and test services"
+    local:
+      config_schema: []  # No config needed
+      docker:
+        required: true
+        default_port: 80
+        health_endpoint: "/"
