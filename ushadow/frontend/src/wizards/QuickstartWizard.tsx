@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useForm, FormProvider, useFormContext } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, Eye, EyeOff } from 'lucide-react'
+import { Sparkles, Loader2, Eye, EyeOff, Settings2, ChevronDown, ChevronUp } from 'lucide-react'
 
-import { servicesApi, settingsApi } from '../services/api'
+import { servicesApi, settingsApi, providersApi, Capability } from '../services/api'
 import { useWizard } from '../contexts/WizardContext'
-import { WizardShell, WizardMessage } from '../components/wizard'
+import { WizardShell, WizardMessage, ProviderSelector } from '../components/wizard'
 import { getErrorMessage } from './wizard-utils'
 
 /**
@@ -38,12 +38,17 @@ type FormData = Record<string, Record<string, any>>
 
 export default function QuickstartWizard() {
   const navigate = useNavigate()
-  const { markPhaseComplete } = useWizard()
+  const { wizardState, markPhaseComplete, selectProvider } = useWizard()
 
   const [loading, setLoading] = useState(true)
   const [services, setServices] = useState<QuickstartService[]>([])
+  const [capabilities, setCapabilities] = useState<Capability[]>([])
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [showProviderConfig, setShowProviderConfig] = useState(false)
+
+  // In custom mode, show provider configuration by default
+  const isCustomMode = wizardState.mode === 'custom'
 
   const methods = useForm<FormData>({
     defaultValues: {},
@@ -52,6 +57,7 @@ export default function QuickstartWizard() {
 
   useEffect(() => {
     loadQuickstartServices()
+    loadCapabilities()
   }, [])
 
   const loadQuickstartServices = async () => {
@@ -99,6 +105,28 @@ export default function QuickstartWizard() {
       console.error('Failed to load quickstart services:', error)
       setMessage({ type: 'error', text: 'Failed to load wizard configuration' })
       setLoading(false)
+    }
+  }
+
+  const loadCapabilities = async () => {
+    try {
+      const response = await providersApi.getCapabilities()
+      setCapabilities(response.data)
+    } catch (error) {
+      console.error('Failed to load capabilities:', error)
+      // Non-fatal - wizard can still work without provider selection
+    }
+  }
+
+  const handleProviderSelect = async (capability: string, providerId: string) => {
+    try {
+      await selectProvider(capability, providerId)
+      // Reload capabilities to refresh selected state
+      await loadCapabilities()
+      setMessage({ type: 'success', text: `Selected ${providerId} for ${capability}` })
+      setTimeout(() => setMessage(null), 2000)
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to select provider') })
     }
   }
 
@@ -227,31 +255,84 @@ export default function QuickstartWizard() {
       message={message}
     >
       <FormProvider {...methods}>
-        {servicesWithRequiredFields.length > 0 ? (
-          <div id="quickstart-form" className="space-y-6">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-                API Keys Required
+        <div id="quickstart-form" className="space-y-8">
+          {/* Provider Configuration Section - Always visible in Custom mode, collapsible otherwise */}
+          {capabilities.length > 0 && (
+            <div id="quickstart-providers" className="space-y-4">
+              {/* Collapsible header for non-custom modes */}
+              {!isCustomMode ? (
+                <button
+                  type="button"
+                  onClick={() => setShowProviderConfig(!showProviderConfig)}
+                  className="flex items-center justify-between w-full p-4 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="h-5 w-5 text-gray-500" />
+                    <span className="font-medium text-gray-700 dark:text-gray-300">
+                      Advanced: Configure Providers
+                    </span>
+                  </div>
+                  {showProviderConfig ? (
+                    <ChevronUp className="h-5 w-5 text-gray-500" />
+                  ) : (
+                    <ChevronDown className="h-5 w-5 text-gray-500" />
+                  )}
+                </button>
+              ) : (
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+                    Select Your Providers
+                  </h2>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Choose which services to use for each capability
+                  </p>
+                </div>
+              )}
+
+              {/* Provider selectors */}
+              {(isCustomMode || showProviderConfig) && (
+                <div className="space-y-6 pt-2">
+                  {capabilities.map((capability) => (
+                    <ProviderSelector
+                      key={capability.id}
+                      capability={capability}
+                      selectedId={capability.selected_provider}
+                      onSelect={(providerId) => handleProviderSelect(capability.id, providerId)}
+                      mode="cards"
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* API Keys Section */}
+          {servicesWithRequiredFields.length > 0 ? (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+                  API Keys Required
+                </h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Enter your API keys to enable AI features
+                </p>
+              </div>
+
+              {servicesWithRequiredFields.map((service) => (
+                <ServiceFieldGroup key={service.service_id} service={service} />
+              ))}
+            </div>
+          ) : (
+            <div id="quickstart-complete" className="text-center space-y-4">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+                All Set!
               </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Enter your API keys to enable AI features
+              <p className="text-gray-600 dark:text-gray-400">
+                No additional configuration needed. Default services are ready to use.
               </p>
             </div>
-
-            {servicesWithRequiredFields.map((service) => (
-              <ServiceFieldGroup key={service.service_id} service={service} />
-            ))}
-          </div>
-        ) : (
-          <div id="quickstart-complete" className="text-center space-y-4">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-              All Set!
-            </h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              No additional configuration needed. Default services are ready to use.
-            </p>
-          </div>
-        )}
+          )}
+        </div>
       </FormProvider>
     </WizardShell>
   )
@@ -277,7 +358,7 @@ function ServiceFieldGroup({ service }: { service: QuickstartService }) {
 
 // Dynamic field renderer
 function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceField }) {
-  const { register, watch, setValue } = useFormContext<FormData>()
+  const { register, watch } = useFormContext<FormData>()
   const [showSecret, setShowSecret] = useState(false)
 
   const fieldPath = `${serviceId}.${field.key}` as const

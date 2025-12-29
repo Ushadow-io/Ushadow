@@ -1,0 +1,145 @@
+# LLM Capability Providers
+# Implements the 'llm' capability defined in capabilities.yaml
+#
+# Each provider specifies:
+#   - credentials: Values for the capability + env_var name to expose
+#   - mode: cloud or local
+#   - docker: Container config (for local providers)
+#
+# Services get the provider's env vars directly. Only need env_mapping to override.
+# Default provider selection is in config.defaults.yaml under `selected_providers`
+
+capability: llm
+
+providers:
+  # ==========================================================================
+  # OpenAI - Cloud LLM
+  # ==========================================================================
+  - id: openai
+    name: "OpenAI"
+    description: "OpenAI GPT models (GPT-4, GPT-4o, etc.)"
+    mode: cloud
+
+    credentials:
+      api_key:
+        env_var: OPENAI_API_KEY
+        settings_path: api_keys.openai_api_key
+        label: "OpenAI API Key"
+        link: "https://platform.openai.com/api-keys"
+        required: true
+      base_url:
+        env_var: OPENAI_BASE_URL
+        settings_path: llm.openai_base_url
+        label: "Base URL"
+        default: "https://api.openai.com/v1"
+      model:
+        env_var: OPENAI_MODEL
+        settings_path: llm.openai_model
+        label: "Model"
+        default: "gpt-4o-mini"
+
+    ui:
+      icon: openai
+      tags: ["llm", "cloud", "gpt"]
+
+  # ==========================================================================
+  # Anthropic - Cloud LLM
+  # ==========================================================================
+  - id: anthropic
+    name: "Anthropic"
+    description: "Claude models from Anthropic"
+    mode: cloud
+
+    credentials:
+      api_key:
+        env_var: ANTHROPIC_API_KEY
+        settings_path: api_keys.anthropic_api_key
+        label: "Anthropic API Key"
+        link: "https://console.anthropic.com/settings/keys"
+        required: true
+      base_url:
+        env_var: ANTHROPIC_BASE_URL
+        settings_path: llm.anthropic_base_url
+        label: "Base URL"
+        default: "https://api.anthropic.com"
+      model:
+        env_var: ANTHROPIC_MODEL
+        settings_path: llm.anthropic_model
+        label: "Model"
+        default: "claude-3-5-sonnet-20241022"
+
+    ui:
+      icon: anthropic
+      tags: ["llm", "cloud", "claude"]
+
+  # ==========================================================================
+  # Ollama - Local LLM
+  # ==========================================================================
+  - id: ollama
+    name: "Ollama"
+    description: "Local LLM server - runs models on your machine"
+    mode: local
+
+    docker:
+      image: ollama/ollama:latest
+      compose_file: ""
+      service_name: ollama
+      ports:
+        - container: 11434
+          protocol: http
+      volumes:
+        - name: ollama-models
+          path: /root/.ollama
+          persistent: true
+      health:
+        http_get: /api/tags
+        port: 11434
+
+    credentials:
+      api_key:
+        env_var: OLLAMA_API_KEY
+        value: ""
+      base_url:
+        env_var: OLLAMA_BASE_URL
+        settings_path: llm.ollama_base_url
+        label: "Ollama URL"
+        default: "http://ollama:11434"
+      model:
+        env_var: OLLAMA_MODEL
+        settings_path: llm.ollama_model
+        label: "Model"
+        default: "llama3.1:latest"
+
+    ui:
+      icon: ollama
+      tags: ["llm", "local", "private"]
+
+  # ==========================================================================
+  # OpenAI-Compatible (Custom) - For local servers with OpenAI API
+  # ==========================================================================
+  - id: openai-compatible
+    name: "OpenAI-Compatible Server"
+    description: "Any server with OpenAI-compatible API (vLLM, LMStudio, etc.)"
+    mode: local
+
+    credentials:
+      api_key:
+        env_var: OPENAI_API_KEY
+        settings_path: api_keys.openai_compatible_api_key
+        label: "API Key (if required)"
+        required: false
+      base_url:
+        env_var: OPENAI_BASE_URL
+        settings_path: llm.openai_compatible_base_url
+        label: "Server URL"
+        required: true
+        default: "http://localhost:8080/v1"
+      model:
+        env_var: OPENAI_MODEL
+        settings_path: llm.openai_compatible_model
+        label: "Model Name"
+        required: true
+
+    ui:
+      icon: server
+      tags: ["llm", "local", "custom"]

@@ -1,4 +1,6 @@
 # Chronicle backend service definition with sidecar workers
+# Environment variables are passed directly via docker compose subprocess env
+# No .env files needed - CapabilityResolver provides all values
 
 services:
   chronicle-backend:
@@ -14,18 +16,33 @@ services:
         sleep 3
         echo "🌐 Starting FastAPI backend..."
         exec uv run --extra deepgram python src/advanced_omi_backend/main.py
-    env_file:
-      - ../.env
-      - ../config/chronicle.env
     ports:
       - "${CHRONICLE_PORT:-8080}:8000"
     environment:
-      # Override infrastructure connections to use shared services
-      - MONGODB_URI=mongodb://mongo:27017
-      - REDIS_URL=redis://redis:6379/${CHRONICLE_REDIS_DB:-1}
-      - QDRANT_BASE_URL=http://qdrant:6333
+      # Infrastructure connections (from CapabilityResolver or defaults)
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-chronicle}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
+      - QDRANT_BASE_URL=${QDRANT_BASE_URL:-http://qdrant:6333}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
 
-      # All other config comes from config/chronicle.env
+      # LLM capability (from selected provider)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+
+      # Transcription capability (from selected provider)
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+
+      # Memory capability (optional, from selected provider)
+      - MEM0_API_KEY=${MEM0_API_KEY:-}
+
+      # Security (from settings)
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+
+      # CORS
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
 
     volumes:
       # Data persistence
@@ -33,8 +50,9 @@ services:
       - chronicle_data:/app/data
       - chronicle_debug:/app/debug_dir
 
-      # Configuration
-      - ../chronicle/config.yml:/app/config.yml
+      # Model registry - defines available LLMs, embeddings, STT, TTS
+      # Uses PROJECT_ROOT env var for host path (set by backend container)
+      - ${PROJECT_ROOT}/config/config.yml:/app/config.yml:ro
 
     networks:
       - infra-network
@@ -62,8 +80,6 @@ services:
   chronicle-webui:
     image: ghcr.io/ushadow-io/chronicle-webui:${CHRONICLE_IMAGE_TAG:-latest}
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-webui
-    env_file:
-      - ../.env
     ports:
       - "${CHRONICLE_WEBUI_PORT:-3080}:80"
     environment:

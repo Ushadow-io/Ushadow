@@ -186,11 +186,12 @@ export const servicesApi = {
 // Docker service management endpoints (infrastructure containers)
 export const dockerApi = {
   listServices: () => api.get('/api/docker/services'),
+  getServicesStatus: () => api.get('/api/docker/services/status'),
   getServiceInfo: (serviceName: string) => api.get(`/api/docker/services/${serviceName}`),
   startService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/start`),
   stopService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/stop`),
   restartService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/restart`),
-  getServiceLogs: (serviceName: string, tail: number = 100) => 
+  getServiceLogs: (serviceName: string, tail: number = 100) =>
     api.get(`/api/docker/services/${serviceName}/logs`, { params: { tail } }),
 }
 
@@ -388,6 +389,156 @@ export interface AuthUrlResponse {
   auth_url: string
   web_url: string
   qr_code_data: string
+}
+
+// =============================================================================
+// Provider Types (capability-based service composition)
+// =============================================================================
+
+/** Summary returned by list endpoints */
+export interface ProviderSummary {
+  id: string
+  name: string
+  capability: string
+}
+
+/** EnvMap - maps settings to environment variables */
+export interface EnvMap {
+  key: string
+  env_var: string
+  label: string | null
+  type: 'string' | 'secret' | 'url' | 'boolean' | 'integer'
+  required: boolean
+  settings_path: string | null
+  link: string | null
+  default: string | null
+}
+
+/** Missing required field */
+export interface MissingField {
+  key: string
+  label: string
+  settings_path: string | null
+  link: string | null
+}
+
+/** Credential with value status (from /capabilities providers) */
+export interface Credential {
+  key: string
+  type: 'string' | 'secret' | 'url' | 'boolean' | 'integer'
+  label: string
+  settings_path: string | null
+  link: string | null
+  required: boolean
+  default: string | null
+  has_value: boolean
+  value: string | null  // Actual value for non-secrets only
+}
+
+/** Provider with config status (from /providers/capability/{id} or /capabilities) */
+export interface ProviderWithStatus {
+  id: string
+  name: string
+  description: string | null
+  mode: 'cloud' | 'local'
+  icon: string | null
+  tags: string[]
+  configured: boolean
+  missing: MissingField[]
+  is_selected?: boolean
+  is_default?: boolean
+  credentials?: Credential[]
+  /** Whether the provider's service is available/reachable (for local providers) */
+  available?: boolean
+  /** Whether the provider needs external setup (local providers that aren't running) */
+  setup_needed?: boolean
+}
+
+/** Full provider details (from /providers/{id}) */
+export interface Provider {
+  id: string
+  name: string
+  description: string | null
+  capability: string
+  mode: 'cloud' | 'local'
+  icon: string | null
+  tags: string[]
+  env_maps: EnvMap[]
+  configured: boolean
+  missing: MissingField[]
+}
+
+/** Capability with providers and selection status */
+export interface Capability {
+  id: string
+  description: string
+  selected_provider: string | null
+  providers: ProviderWithStatus[]
+}
+
+/** Provider selection state */
+export interface SelectedProviders {
+  wizard_mode: 'quickstart' | 'local' | 'custom'
+  selected_providers: Record<string, string>
+}
+
+/** Query parameters for finding providers */
+export interface ProviderQuery {
+  capability?: string
+  mode?: 'cloud' | 'local'
+  configured?: boolean
+}
+
+// =============================================================================
+// Provider API
+// =============================================================================
+
+export const providersApi = {
+  /** List all providers (summary: id, name, capability) */
+  listProviders: () =>
+    api.get<ProviderSummary[]>('/api/providers'),
+
+  /** Get providers for a capability with config status */
+  getProvidersByCapability: (capability: string) =>
+    api.get<ProviderWithStatus[]>(`/api/providers/capability/${capability}`),
+
+  /** Get full provider details */
+  getProvider: (providerId: string) =>
+    api.get<Provider>(`/api/providers/${providerId}`),
+
+  /** Get missing required fields for a provider */
+  getMissingFields: (providerId: string) =>
+    api.get<{ provider_id: string; configured: boolean; missing: MissingField[] }>(
+      `/api/providers/${providerId}/missing`
+    ),
+
+  /** Find providers matching criteria */
+  findProviders: (query: ProviderQuery) =>
+    api.post<Provider[]>('/api/providers/find', query),
+
+  /** List all capabilities with selected provider */
+  getCapabilities: () =>
+    api.get<Capability[]>('/api/providers/capabilities'),
+
+  /** Get current provider selections */
+  getSelected: () =>
+    api.get<SelectedProviders>('/api/providers/selected'),
+
+  /** Update provider selections */
+  updateSelected: (update: {
+    wizard_mode?: string
+    selected_providers?: Record<string, string>
+  }) => api.put<SelectedProviders>('/api/providers/selected', update),
+
+  /** Select a single provider for a capability */
+  selectProvider: (capability: string, providerId: string) =>
+    api.put<SelectedProviders>('/api/providers/selected', {
+      selected_providers: { [capability]: providerId }
+    }),
+
+  /** Apply default providers for a mode (cloud/local) */
+  applyDefaults: (mode: 'cloud' | 'local') =>
+    api.post<SelectedProviders>(`/api/providers/apply-defaults/${mode}`),
 }
 
 export const tailscaleApi = {

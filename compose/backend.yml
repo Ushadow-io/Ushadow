@@ -18,11 +18,16 @@ services:
       - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
       # Tailscale IP for node registration (set via .env or detected)
       - TAILSCALE_IP=${TAILSCALE_IP:-}
+      # Tailscale container name for peer discovery (docker exec)
+      - TAILSCALE_CONTAINER=ushadow-tailscale
+      # Host project root for docker compose volume mounts (required for service management)
+      - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
       # Compose project name for per-environment Tailscale containers
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config  # Mount config directory (read-write for feature flags)
+      - ../compose:/compose  # Mount compose files for service management
       - /app/__pycache__
       - /app/.pytest_cache
       # Docker socket for container management (Tailscale container control)
