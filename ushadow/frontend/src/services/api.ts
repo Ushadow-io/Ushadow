@@ -370,71 +370,154 @@ export interface AuthUrlResponse {
   qr_code_data: string
 }
 
-// Provider selection types (capability-based service composition)
-export interface ProviderCredential {
-  key: string
-  label: string | null
-  type: string
-  required: boolean
-  link: string | null
-  settings_path: string | null
-  has_value: boolean
-  default: string | null
-  value: string | null  // Current effective value (non-secrets only)
+// =============================================================================
+// Provider Types (capability-based service composition)
+// =============================================================================
+
+/** Summary returned by list endpoints */
+export interface ProviderSummary {
+  id: string
+  name: string
+  capability: string
 }
 
-export interface Provider {
+/** EnvMap - maps settings to environment variables */
+export interface EnvMap {
+  key: string
+  env_var: string
+  label: string | null
+  type: 'string' | 'secret' | 'url' | 'boolean' | 'integer'
+  required: boolean
+  settings_path: string | null
+  link: string | null
+  default: string | null
+}
+
+/** Missing required field */
+export interface MissingField {
+  key: string
+  label: string
+  settings_path: string | null
+  link: string | null
+}
+
+/** Credential with value status (from /capabilities providers) */
+export interface Credential {
+  key: string
+  type: 'string' | 'secret' | 'url' | 'boolean' | 'integer'
+  label: string
+  settings_path: string | null
+  link: string | null
+  required: boolean
+  default: string | null
+  has_value: boolean
+  value: string | null  // Actual value for non-secrets only
+}
+
+/** Provider with config status (from /providers/capability/{id} or /capabilities) */
+export interface ProviderWithStatus {
   id: string
   name: string
   description: string | null
   mode: 'cloud' | 'local'
-  is_selected: boolean
-  is_default: boolean
-  credentials: ProviderCredential[]
+  icon: string | null
   tags: string[]
+  configured: boolean
+  missing: MissingField[]
+  is_selected?: boolean
+  is_default?: boolean
+  credentials?: Credential[]
+  /** Whether the provider's service is available/reachable (for local providers) */
+  available?: boolean
+  /** Whether the provider needs external setup (local providers that aren't running) */
+  setup_needed?: boolean
 }
 
+/** Full provider details (from /providers/{id}) */
+export interface Provider {
+  id: string
+  name: string
+  description: string | null
+  capability: string
+  mode: 'cloud' | 'local'
+  icon: string | null
+  tags: string[]
+  env_maps: EnvMap[]
+  configured: boolean
+  missing: MissingField[]
+}
+
+/** Capability with providers and selection status */
 export interface Capability {
   id: string
   description: string
   selected_provider: string | null
-  providers: Provider[]
+  providers: ProviderWithStatus[]
 }
 
+/** Provider selection state */
 export interface SelectedProviders {
   wizard_mode: 'quickstart' | 'local' | 'custom'
   selected_providers: Record<string, string>
 }
 
-// Provider selection API (capability-based service composition)
+/** Query parameters for finding providers */
+export interface ProviderQuery {
+  capability?: string
+  mode?: 'cloud' | 'local'
+  configured?: boolean
+}
+
+// =============================================================================
+// Provider API
+// =============================================================================
+
 export const providersApi = {
-  // List all capabilities with their available providers
-  getCapabilities: () => api.get<Capability[]>('/api/providers/capabilities'),
+  /** List all providers (summary: id, name, capability) */
+  listProviders: () =>
+    api.get<ProviderSummary[]>('/api/providers'),
 
-  // Get a specific capability with its providers
-  getCapability: (capabilityId: string) =>
-    api.get<Capability>(`/api/providers/capabilities/${capabilityId}`),
+  /** Get providers for a capability with config status */
+  getProvidersByCapability: (capability: string) =>
+    api.get<ProviderWithStatus[]>(`/api/providers/capability/${capability}`),
 
-  // Get current provider selections
-  getSelected: () => api.get<SelectedProviders>('/api/providers/selected'),
+  /** Get full provider details */
+  getProvider: (providerId: string) =>
+    api.get<Provider>(`/api/providers/${providerId}`),
 
-  // Update provider selections
+  /** Get missing required fields for a provider */
+  getMissingFields: (providerId: string) =>
+    api.get<{ provider_id: string; configured: boolean; missing: MissingField[] }>(
+      `/api/providers/${providerId}/missing`
+    ),
+
+  /** Find providers matching criteria */
+  findProviders: (query: ProviderQuery) =>
+    api.post<Provider[]>('/api/providers/find', query),
+
+  /** List all capabilities with selected provider */
+  getCapabilities: () =>
+    api.get<Capability[]>('/api/providers/capabilities'),
+
+  /** Get current provider selections */
+  getSelected: () =>
+    api.get<SelectedProviders>('/api/providers/selected'),
+
+  /** Update provider selections */
   updateSelected: (update: {
     wizard_mode?: string
     selected_providers?: Record<string, string>
   }) => api.put<SelectedProviders>('/api/providers/selected', update),
 
-  // Quick select a provider for a capability
+  /** Select a single provider for a capability */
   selectProvider: (capability: string, providerId: string) =>
-    api.post(`/api/providers/select/${capability}/${providerId}`),
+    api.put<SelectedProviders>('/api/providers/selected', {
+      selected_providers: { [capability]: providerId }
+    }),
 
-  // Apply default providers for a mode (cloud/local)
+  /** Apply default providers for a mode (cloud/local) */
   applyDefaults: (mode: 'cloud' | 'local') =>
-    api.post(`/api/providers/apply-defaults/${mode}`),
-
-  // Validate a service can be started
-  validateService: (serviceId: string) =>
-    api.get(`/api/providers/validate/${serviceId}`),
+    api.post<SelectedProviders>(`/api/providers/apply-defaults/${mode}`),
 }
 
 export const tailscaleApi = {

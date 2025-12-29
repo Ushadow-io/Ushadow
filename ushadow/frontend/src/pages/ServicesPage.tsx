@@ -20,7 +20,7 @@ import {
   ToggleLeft,
   ToggleRight
 } from 'lucide-react'
-import { servicesApi, settingsApi, dockerApi, providersApi, Capability, Provider } from '../services/api'
+import { servicesApi, settingsApi, dockerApi, providersApi, Capability, ProviderWithStatus } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
 import AddServiceModal from '../components/AddServiceModal'
 
@@ -119,7 +119,7 @@ export default function ServicesPage() {
         // Timeout after max polls
         if (pollCount >= maxPolls) {
           setStartingService(null)
-          setMessage({ type: 'warning', text: 'Service start timed out' })
+          setMessage({ type: 'error', text: 'Service start timed out' })
         }
       } catch {
         // Docker API error, keep polling (might be temporary)
@@ -215,7 +215,8 @@ export default function ServicesPage() {
   }
 
   // Refresh only the status of services without full page reload
-  const refreshStatuses = async () => {
+  // TODO: Wire up to a "refresh statuses" button in the UI
+  /* const refreshStatuses = async () => {
     try {
       const response = await dockerApi.getServicesStatus()
       const dockerStatuses = response.data
@@ -232,7 +233,7 @@ export default function ServicesPage() {
     } catch (error) {
       console.error('Failed to refresh statuses:', error)
     }
-  }
+  } */
 
   const handleStartService = async (serviceId: string) => {
     setStartingService(serviceId)
@@ -325,11 +326,11 @@ export default function ServicesPage() {
     })
   }
 
-  const handleEditProvider = (capId: string, provider: Provider) => {
+  const handleEditProvider = (capId: string, provider: ProviderWithStatus) => {
     const key = getProviderKey(capId, provider.id)
     // Initialize form with current values for non-secrets, empty for secrets
     const initialForm: Record<string, string> = {}
-    provider.credentials.forEach(cred => {
+    ;(provider.credentials || []).forEach(cred => {
       if (cred.type === 'secret') {
         // Secrets must be re-entered (we don't have the value)
         initialForm[cred.key] = ''
@@ -344,13 +345,13 @@ export default function ServicesPage() {
     setExpandedProviders(prev => new Set(prev).add(key))
   }
 
-  const handleSaveProvider = async (capId: string, provider: Provider) => {
+  const handleSaveProvider = async (_capId: string, provider: ProviderWithStatus) => {
     setSavingProvider(true)
     try {
       // Build updates object using settings_path from each credential
       const updates: Record<string, string> = {}
 
-      provider.credentials.forEach(cred => {
+      ;(provider.credentials || []).forEach(cred => {
         const value = providerEditForm[cred.key]
         // Only update if there's a value and a settings_path
         if (value && value.trim() && cred.settings_path) {
@@ -552,14 +553,26 @@ export default function ServicesPage() {
       }
     }
 
-    if (containerStatus.status === 'created' || containerStatus.status === 'restarting') {
-      // Container is starting up - YELLOW/WARNING
+    if (containerStatus.status === 'created') {
+      // Container exists but was never started - treat as stopped
+      return {
+        state: 'stopped',
+        label: 'Stopped',
+        color: 'neutral',
+        icon: Circle,
+        canStart: true,
+        canEdit: true
+      }
+    }
+
+    if (containerStatus.status === 'restarting') {
+      // Container is actively restarting - YELLOW/WARNING
       return {
         state: 'starting',
-        label: 'Starting',
+        label: 'Restarting',
         color: 'warning',
         icon: PlayCircle,
-        canEdit: false  // Don't allow edits while starting
+        canEdit: false  // Don't allow edits while restarting
       }
     }
 
@@ -736,12 +749,12 @@ export default function ServicesPage() {
       {capabilities.length > 0 && (
         <div className="space-y-6">
           {capabilities.map(cap => {
-            // Show installed providers (selected + defaults) and any with configured credentials
+            // Show installed providers (selected + defaults) and any that are configured
             const installedProviders = cap.providers.filter(p =>
-              p.is_selected || p.is_default || p.credentials.some(c => c.has_value)
+              p.is_selected || p.is_default || p.configured
             )
             const availableProviders = cap.providers.filter(p =>
-              !p.is_selected && !p.is_default && !p.credentials.some(c => c.has_value)
+              !p.is_selected && !p.is_default && !p.configured
             )
 
             return (
@@ -798,10 +811,11 @@ export default function ServicesPage() {
                     const providerKey = getProviderKey(cap.id, provider.id)
                     const isExpanded = expandedProviders.has(providerKey)
                     const isEditing = editingProviderId === providerKey
-                    const requiredCreds = provider.credentials.filter(c => c.required)
-                    const hasAllCreds = requiredCreds.every(c => c.has_value)
-                    const missingCreds = requiredCreds.filter(c => !c.has_value)
-                    const editableCreds = provider.credentials.filter(c => c.settings_path)
+                    // Use API-provided configured/missing status
+                    const isConfigured = provider.configured
+                    const missingFields = provider.missing || []
+                    // Still need credentials for the edit form
+                    const editableCreds = (provider.credentials || []).filter(c => c.settings_path)
 
                     return (
                       <div
@@ -846,12 +860,19 @@ export default function ServicesPage() {
 
                             {/* Right side: Status + Select + Expand */}
                             <div className="flex items-center gap-2">
-                              {/* Credential status indicator */}
-                              {requiredCreds.length > 0 && (
-                                hasAllCreds ? (
-                                  <CheckCircle className="h-4 w-4 text-success-500" />
+                              {/* Configuration status indicator */}
+                              {editableCreds.length > 0 && (
+                                isConfigured ? (
+                                  <span title="Configured">
+                                    <CheckCircle className="h-4 w-4 text-success-500" />
+                                  </span>
                                 ) : (
-                                  <AlertCircle className="h-4 w-4 text-warning-500" />
+                                  <span title={missingFields.length > 0
+                                    ? `Missing: ${missingFields.map(f => f.label).join(', ')}`
+                                    : 'Not configured'
+                                  }>
+                                    <AlertCircle className="h-4 w-4 text-warning-500" />
+                                  </span>
                                 )
                               )}
 
@@ -900,6 +921,24 @@ export default function ServicesPage() {
                               <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-3 mb-3">
                                 {provider.description}
                               </p>
+                            )}
+
+                            {/* Missing fields warning */}
+                            {!isConfigured && missingFields.length > 0 && !isEditing && (
+                              <div
+                                data-testid={`missing-fields-${provider.id}`}
+                                className="flex items-start gap-2 p-2 rounded-lg bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 mt-3"
+                              >
+                                <AlertCircle className="h-4 w-4 text-warning-500 mt-0.5 flex-shrink-0" />
+                                <div className="text-xs">
+                                  <span className="font-medium text-warning-700 dark:text-warning-300">
+                                    Missing required fields:
+                                  </span>
+                                  <span className="text-warning-600 dark:text-warning-400 ml-1">
+                                    {missingFields.map(f => f.label).join(', ')}
+                                  </span>
+                                </div>
+                              </div>
                             )}
 
                             {/* Credentials */}
@@ -1003,7 +1042,7 @@ export default function ServicesPage() {
                                     className="btn-ghost text-xs flex items-center gap-1"
                                   >
                                     <Edit2 className="h-4 w-4" />
-                                    {hasAllCreds ? 'Edit' : 'Configure'}
+                                    {isConfigured ? 'Edit' : 'Configure'}
                                   </button>
                                 )
                               )}

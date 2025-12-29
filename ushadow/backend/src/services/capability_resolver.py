@@ -15,11 +15,8 @@ from typing import Dict, List, Optional, Any
 
 import yaml
 
-from src.services.provider_registry import (
-    get_provider_registry,
-    Provider,
-    ProviderCredential
-)
+from src.services.provider_registry import get_provider_registry
+from src.models.provider import Provider, EnvMap
 from src.services.omegaconf_settings import get_omegaconf_settings
 
 logger = logging.getLogger(__name__)
@@ -111,27 +108,27 @@ class CapabilityResolver:
                 f"Run the wizard or set selected_providers.{capability} in settings."
             )
 
-        # Resolve each credential the provider offers
+        # Resolve each env mapping the provider offers
         env: Dict[str, str] = {}
 
-        for key, credential in provider.credentials.items():
-            value = await self._resolve_credential(credential)
+        for env_map in provider.env_maps:
+            value = await self._resolve_env_map(env_map)
 
             if value is None:
-                if credential.required:
+                if env_map.required:
                     raise ValueError(
-                        f"Provider '{provider.id}' requires {key} but it's not configured. "
-                        f"Set {credential.settings_path or key} in settings."
+                        f"Provider '{provider.id}' requires {env_map.key} but it's not configured. "
+                        f"Set {env_map.settings_path or env_map.key} in settings."
                     )
                 continue
 
             # Use provider's env_var directly, apply service env_mapping only for overrides
-            provider_env = credential.env_var or key.upper()
+            provider_env = env_map.env_var or env_map.key.upper()
             service_env = env_mapping.get(provider_env, provider_env)
 
             env[service_env] = str(value)
             logger.debug(
-                f"Resolved {capability}.{key}: "
+                f"Resolved {capability}.{env_map.key}: "
                 f"{provider_env} -> {service_env} = ***"
             )
 
@@ -166,28 +163,23 @@ class CapabilityResolver:
 
         return None
 
-    async def _resolve_credential(self, credential: ProviderCredential) -> Optional[str]:
+    async def _resolve_env_map(self, env_map) -> Optional[str]:
         """
-        Resolve a credential to its actual value.
+        Resolve an env mapping to its actual value.
 
         Priority:
-        1. Literal value (if set)
-        2. Settings path lookup
-        3. Default value
+        1. Settings path lookup (user override)
+        2. Default value (provider's default)
         """
-        # Literal value takes precedence
-        if credential.value is not None:
-            return credential.value
-
-        # Try settings path
-        if credential.settings_path:
-            value = await self._settings.get(credential.settings_path)
+        # Try settings path first (user override)
+        if env_map.settings_path:
+            value = await self._settings.get(env_map.settings_path)
             if value:
                 return str(value)
 
-        # Fall back to default
-        if credential.default is not None:
-            return credential.default
+        # Fall back to provider's default
+        if env_map.default is not None:
+            return env_map.default
 
         return None
 
@@ -288,25 +280,25 @@ class CapabilityResolver:
                     warnings.append(f"Optional capability {capability} not configured")
                 continue
 
-            # Check credentials
-            for key, cred in provider.credentials.items():
-                if not cred.required:
+            # Check env mappings
+            for env_map in provider.env_maps:
+                if not env_map.required:
                     continue
 
-                value = await self._resolve_credential(cred)
+                value = await self._resolve_env_map(env_map)
                 if not value:
                     if required:
                         missing_creds.append({
                             "capability": capability,
                             "provider": provider.id,
-                            "credential": key,
-                            "settings_path": cred.settings_path,
-                            "link": cred.link,
-                            "label": cred.label or key
+                            "credential": env_map.key,
+                            "settings_path": env_map.settings_path,
+                            "link": env_map.link,
+                            "label": env_map.label or env_map.key
                         })
                     else:
                         warnings.append(
-                            f"Optional {capability} missing {key}"
+                            f"Optional {capability} missing {env_map.key}"
                         )
 
         return {

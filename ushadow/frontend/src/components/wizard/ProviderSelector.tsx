@@ -8,8 +8,8 @@
  * and override provider selections (in Quickstart mode, defaults are used).
  */
 
-import { Check, Cloud, Server, ExternalLink, AlertCircle } from 'lucide-react'
-import type { Provider, Capability } from '../../services/api'
+import { Check, Cloud, Server, ExternalLink, AlertCircle, AlertTriangle } from 'lucide-react'
+import type { ProviderWithStatus, Capability } from '../../services/api'
 
 export interface ProviderSelectorProps {
   /** The capability to select a provider for */
@@ -36,23 +36,34 @@ function ModeIcon({ mode }: { mode: 'cloud' | 'local' }) {
 }
 
 /**
- * Credential status indicator
+ * Credential status indicator - uses API-provided configured/missing fields
  */
-function CredentialStatus({ provider }: { provider: Provider }) {
-  const requiredCreds = provider.credentials.filter(c => c.required)
-  const configuredCreds = requiredCreds.filter(c => c.has_value)
-  const allConfigured = requiredCreds.length === configuredCreds.length
+function CredentialStatus({ provider }: { provider: ProviderWithStatus }) {
+  const missingFields = provider.missing || []
+  const hasCredentials = (provider.credentials || []).some(c => c.required)
 
-  if (requiredCreds.length === 0) {
+  // Local provider needs setup (service not running)
+  if (provider.setup_needed) {
     return (
-      <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-        <Check className="w-3 h-3" />
-        No credentials required
+      <span className="text-xs text-orange-600 dark:text-orange-400 flex items-center gap-1">
+        <AlertTriangle className="w-3 h-3" />
+        Setup needed - start {provider.name} server
       </span>
     )
   }
 
-  if (allConfigured) {
+  // No required credentials
+  if (!hasCredentials) {
+    return (
+      <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+        <Check className="w-3 h-3" />
+        No configuration required
+      </span>
+    )
+  }
+
+  // All configured
+  if (provider.configured) {
     return (
       <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
         <Check className="w-3 h-3" />
@@ -61,10 +72,11 @@ function CredentialStatus({ provider }: { provider: Provider }) {
     )
   }
 
+  // Missing fields
   return (
     <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
       <AlertCircle className="w-3 h-3" />
-      {configuredCreds.length}/{requiredCreds.length} credentials
+      {missingFields.length} field{missingFields.length !== 1 ? 's' : ''} missing
     </span>
   )
 }
@@ -78,7 +90,7 @@ function ProviderCard({
   onSelect,
   disabled,
 }: {
-  provider: Provider
+  provider: ProviderWithStatus
   isSelected: boolean
   onSelect: () => void
   disabled?: boolean
@@ -133,9 +145,9 @@ function ProviderCard({
       </div>
 
       {/* Credential links */}
-      {provider.credentials.filter(c => c.link && !c.has_value).length > 0 && (
+      {(provider.credentials || []).filter(c => c.link && !c.has_value).length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {provider.credentials
+          {(provider.credentials || [])
             .filter(c => c.link && !c.has_value)
             .map(cred => (
               <a

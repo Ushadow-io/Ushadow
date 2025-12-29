@@ -14,7 +14,7 @@ from src.config.settings import get_settings
 
 from src.routers import health, wizard, chronicle, auth, feature_flags 
 from src.routers import services, deployments, providers
-drom src.routers import kubernetes, tailscale, docker_events, undodes, docker
+from src.routers import kubernetes, tailscale, docker_events, unodes, docker
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager

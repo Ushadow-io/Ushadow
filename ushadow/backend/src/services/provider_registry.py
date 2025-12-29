@@ -2,16 +2,22 @@
 Provider Registry - Loads provider definitions from YAML configuration files.
 
 Providers implement capabilities (llm, transcription, memory) with specific
-credentials and docker configurations. This registry loads all providers
+env var mappings and docker configurations. This registry loads all providers
 from config/providers/*.yaml and provides query methods.
 """
 
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
 
 import yaml
+
+from src.models.provider import (
+    EnvMap,
+    Provider,
+    Capability,
+    DockerConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,45 +39,6 @@ def _get_config_dir() -> Path:
 CONFIG_DIR = _get_config_dir()
 PROVIDERS_DIR = CONFIG_DIR / "providers"
 CAPABILITIES_FILE = CONFIG_DIR / "capabilities.yaml"
-
-
-@dataclass
-class ProviderCredential:
-    """A single credential provided by a provider."""
-    key: str
-    env_var: Optional[str] = None        # Env var name this credential exposes
-    settings_path: Optional[str] = None  # Path in settings to get value
-    value: Optional[str] = None          # Literal value
-    default: Optional[str] = None        # Default if settings_path missing
-    label: Optional[str] = None          # UI label
-    link: Optional[str] = None           # URL to get credential
-    required: bool = False
-    type: str = "string"                 # string, secret, url, boolean
-
-
-@dataclass
-class Provider:
-    """A provider that implements a capability."""
-    id: str
-    name: str
-    capability: str
-    mode: str  # 'cloud' or 'local'
-    description: Optional[str] = None
-    credentials: Dict[str, ProviderCredential] = field(default_factory=dict)
-    docker: Optional[Dict[str, Any]] = None
-    config: Dict[str, Any] = field(default_factory=dict)
-    uses: List[Dict[str, Any]] = field(default_factory=list)  # Nested capabilities
-    depends_on: Dict[str, List[str]] = field(default_factory=dict)
-    ui: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class Capability:
-    """A capability type with its canonical interface."""
-    id: str
-    description: str
-    provides: Dict[str, Dict[str, Any]]  # What this capability provides
-    # Note: Default providers are in config.defaults.yaml under selected_providers
 
 
 class ProviderRegistry:
@@ -123,10 +90,18 @@ class ProviderRegistry:
                     logger.debug(f"Skipping {cap_id} - no 'provides' section")
                     continue
 
+                # Parse provides into Dict[str, str] (key -> type)
+                provides = {}
+                for key, key_data in cap_data.get('provides', {}).items():
+                    if isinstance(key_data, dict):
+                        provides[key] = key_data.get('type', 'string')
+                    else:
+                        provides[key] = 'string'
+
                 capability = Capability(
                     id=cap_id,
                     description=cap_data.get('description', ''),
-                    provides=cap_data.get('provides', {})
+                    provides=provides
                 )
                 self._capabilities[cap_id] = capability
                 self._providers_by_capability[cap_id] = []
@@ -173,36 +148,56 @@ class ProviderRegistry:
             logger.error(f"Failed to load {file_path}: {e}")
 
     def _parse_provider(self, capability: str, data: dict) -> Provider:
-        """Parse provider data into Provider dataclass."""
+        """Parse provider data into Provider model."""
         # Get capability definition to lookup credential types
         cap_def = self._capabilities.get(capability)
         cap_provides = cap_def.provides if cap_def else {}
 
-        # Parse credentials
-        credentials = {}
+        # Parse credentials into EnvMap list
+        env_maps = []
         for key, cred_data in data.get('credentials', {}).items():
-            # Get type from capability definition, fallback to provider, then 'string'
-            cred_type = cap_provides.get(key, {}).get('type', 'string')
+            # Get type from capability definition (now just a string)
+            cred_type = cap_provides.get(key, 'string')
 
             if isinstance(cred_data, dict):
-                credentials[key] = ProviderCredential(
+                # Handle backward compatibility: 'value' becomes 'default'
+                default_val = cred_data.get('default') or cred_data.get('value')
+
+                env_maps.append(EnvMap(
                     key=key,
-                    env_var=cred_data.get('env_var'),
+                    env_var=cred_data.get('env_var', ''),
                     settings_path=cred_data.get('settings_path'),
-                    value=cred_data.get('value'),
-                    default=cred_data.get('default'),
+                    default=default_val,
+                    type=cred_type,
                     label=cred_data.get('label'),
                     link=cred_data.get('link'),
                     required=cred_data.get('required', False),
-                    type=cred_type  # From capability definition
-                )
+                ))
             else:
-                # Simple value
-                credentials[key] = ProviderCredential(
+                # Simple value (e.g., api_key: "literal-value")
+                env_maps.append(EnvMap(
                     key=key,
-                    value=str(cred_data),
-                    type=cred_type  # From capability definition
-                )
+                    env_var='',
+                    default=str(cred_data),
+                    type=cred_type,
+                ))
+
+        # Parse docker config if present
+        docker_data = data.get('docker')
+        docker_config = None
+        if docker_data:
+            docker_config = DockerConfig(
+                image=docker_data.get('image', ''),
+                compose_file=docker_data.get('compose_file'),
+                service_name=docker_data.get('service_name'),
+                ports=docker_data.get('ports', []),
+                volumes=docker_data.get('volumes', []),
+                environment=docker_data.get('environment', {}),
+                health=docker_data.get('health'),
+            )
+
+        # Parse UI config (inlined on Provider)
+        ui_data = data.get('ui', {})
 
         return Provider(
             id=data['id'],
@@ -210,12 +205,11 @@ class ProviderRegistry:
             capability=capability,
             mode=data.get('mode', 'cloud'),
             description=data.get('description'),
-            credentials=credentials,
-            docker=data.get('docker'),
-            config=data.get('config', {}),
+            env_maps=env_maps,
+            docker=docker_config,
+            icon=ui_data.get('icon'),
+            tags=ui_data.get('tags', []),
             uses=data.get('uses', []),
-            depends_on=data.get('depends_on', {}),
-            ui=data.get('ui', {})
         )
 
     def reload(self) -> None:
@@ -245,10 +239,43 @@ class ProviderRegistry:
         self._load()
         return self._providers.get(provider_id)
 
+    def get_providers(self) -> List[Provider]:
+        """Get all providers."""
+        self._load()
+        return list(self._providers.values())
+
+    def find_providers(
+        self,
+        capability: Optional[str] = None,
+        mode: Optional[str] = None
+    ) -> List[Provider]:
+        """
+        Find providers matching criteria.
+
+        Args:
+            capability: Filter by capability (e.g., 'llm')
+            mode: Filter by mode ('cloud' or 'local')
+
+        Returns:
+            List of matching providers
+        """
+        self._load()
+
+        # Start with all providers or filter by capability
+        if capability:
+            results = self._providers_by_capability.get(capability, [])
+        else:
+            results = list(self._providers.values())
+
+        # Filter by mode
+        if mode:
+            results = [p for p in results if p.mode == mode]
+
+        return results
+
     def get_providers_for_capability(self, capability: str) -> List[Provider]:
         """Get all providers that implement a capability."""
-        self._load()
-        return self._providers_by_capability.get(capability, [])
+        return self.find_providers(capability=capability)
 
     def get_providers_by_mode(
         self,
@@ -256,8 +283,7 @@ class ProviderRegistry:
         mode: str
     ) -> List[Provider]:
         """Get providers for a capability filtered by mode (cloud/local)."""
-        providers = self.get_providers_for_capability(capability)
-        return [p for p in providers if p.mode == mode]
+        return self.find_providers(capability=capability, mode=mode)
 
     def get_default_provider_id(
         self,
