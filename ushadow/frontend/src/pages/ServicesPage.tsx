@@ -20,7 +20,7 @@ import {
   ToggleLeft,
   ToggleRight
 } from 'lucide-react'
-import { servicesApi, settingsApi, dockerApi } from '../services/api'
+import { servicesApi, settingsApi, dockerApi, deploymentsApi, Deployment } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
 import AddServiceModal from '../components/AddServiceModal'
 
@@ -40,6 +40,7 @@ export default function ServicesPage() {
   const [serviceInstances, setServiceInstances] = useState<ServiceInstance[]>([])
   const [serviceConfigs, setServiceConfigs] = useState<any>({})
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
+  const [deployments, setDeployments] = useState<Deployment[]>([])
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['memory', 'llm', 'transcription']))
   const [editingService, setEditingService] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<any>({})
@@ -104,9 +105,10 @@ export default function ServicesPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [instancesResponse, configResponse] = await Promise.all([
+      const [instancesResponse, configResponse, deploymentsResponse] = await Promise.all([
         servicesApi.getInstalled(),  // Use installed services (default + user-added)
-        settingsApi.getConfig()  // Load FULL merged config (api_keys + service_preferences + defaults)
+        settingsApi.getConfig(),  // Load FULL merged config (api_keys + service_preferences + defaults)
+        deploymentsApi.listDeployments()  // Get remote deployments
       ])
 
       const instances = instancesResponse.data
@@ -137,6 +139,7 @@ export default function ServicesPage() {
 
       setServiceInstances(instances)
       setServiceConfigs(effectiveConfigs)  // Use effective merged config, not just preferences
+      setDeployments(deploymentsResponse.data)  // Store remote deployments
 
       // Load status for local services (check if containers running)
       await loadServiceStatuses(instances)
@@ -474,6 +477,22 @@ export default function ServicesPage() {
     return <span className="font-mono text-xs">{String(value).substring(0, 30)}</span>
   }
 
+  // Get deployments for a specific service (most recent per node only)
+  const getServiceDeployments = (serviceId: string) => {
+    const serviceDeployments = deployments.filter(d => d.service_id === serviceId)
+
+    // Group by node and keep only the most recent
+    const byNode = new Map<string, Deployment>()
+    for (const d of serviceDeployments) {
+      const existing = byNode.get(d.unode_hostname)
+      if (!existing || new Date(d.created_at) > new Date(existing.created_at)) {
+        byNode.set(d.unode_hostname, d)
+      }
+    }
+
+    return Array.from(byNode.values())
+  }
+
   // Group services by category
   const servicesByCategory = serviceInstances.reduce((acc, service) => {
     const category = service.template.split('.')[0]
@@ -547,7 +566,7 @@ export default function ServicesPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card-hover p-4">
           <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Available Services</p>
           <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{totalServices}</p>
@@ -555,6 +574,12 @@ export default function ServicesPage() {
         <div className="card-hover p-4">
           <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Configured</p>
           <p className="mt-2 text-2xl font-bold text-success-600 dark:text-success-400">{activeServices}</p>
+        </div>
+        <div className="card-hover p-4">
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Deployed to Nodes</p>
+          <p className="mt-2 text-2xl font-bold text-blue-600 dark:text-blue-400">
+            {deployments.filter(d => d.status === 'running').length}
+          </p>
         </div>
         <div className="card-hover p-4">
           <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Categories</p>
@@ -817,6 +842,38 @@ export default function ServicesPage() {
                         <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">
                           {service.description}
                         </p>
+
+                        {/* Remote Deployments */}
+                        {(() => {
+                          const serviceDeployments = getServiceDeployments(service.service_id)
+                          if (serviceDeployments.length === 0) return null
+
+                          return (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {serviceDeployments.map(deployment => {
+                                const statusColors = {
+                                  running: 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 border-success-200 dark:border-success-800',
+                                  failed: 'bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300 border-error-200 dark:border-error-800',
+                                  deploying: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800',
+                                  stopped: 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-neutral-200 dark:border-neutral-700',
+                                }
+                                const colorClass = statusColors[deployment.status as keyof typeof statusColors] || statusColors.stopped
+
+                                return (
+                                  <div
+                                    key={deployment.id}
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border ${colorClass}`}
+                                    title={`Deployed to ${deployment.unode_hostname} - ${deployment.status}${deployment.error ? `: ${deployment.error}` : ''}`}
+                                  >
+                                    <Server className="h-3 w-3" />
+                                    <span>{deployment.unode_hostname}</span>
+                                    <span className="opacity-70">({deployment.status})</span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
                       </div>
 
                         {/* Edit Mode Actions */}

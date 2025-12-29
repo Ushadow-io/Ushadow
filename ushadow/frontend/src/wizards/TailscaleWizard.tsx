@@ -6,7 +6,6 @@ import {
   Loader2,
   Shield,
   Server,
-  Globe,
   Lock,
   Smartphone,
   RefreshCw,
@@ -25,9 +24,7 @@ const STEPS: WizardStep[] = [
   { id: 'start_container', label: 'Start' },
   { id: 'install_app', label: 'Install' },
   { id: 'authenticate', label: 'Auth' },
-  { id: 'deployment_mode', label: 'Mode' },
-  { id: 'configure', label: 'Config' },
-  { id: 'provision', label: 'Provision' },
+  { id: 'provision', label: 'Setup' },
   { id: 'complete', label: 'Done' },
 ]
 
@@ -250,23 +247,8 @@ export default function TailscaleWizard() {
   }
 
   // ============================================================================
-  // Configuration & Certificate
+  // Certificate & Routing Setup
   // ============================================================================
-
-  const saveConfiguration = async () => {
-    setLoading(true)
-    setMessage(null)
-    try {
-      await tailscaleApi.saveConfig(config)
-      setMessage({ type: 'success', text: 'Configuration saved!' })
-      return true
-    } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to save configuration') })
-      return false
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const provisionCertificate = async () => {
     setLoading(true)
@@ -339,10 +321,6 @@ export default function TailscaleWizard() {
         return true
       case 'authenticate':
         return containerStatus?.authenticated ?? false
-      case 'deployment_mode':
-        return true
-      case 'configure':
-        return true
       case 'provision':
         return certificateProvisioned
       case 'complete':
@@ -354,11 +332,6 @@ export default function TailscaleWizard() {
 
   const handleNext = async () => {
     setMessage(null)
-
-    if (wizard.currentStep.id === 'configure') {
-      const saved = await saveConfiguration()
-      if (!saved) return
-    }
 
     if (wizard.currentStep.id === 'provision' && !certificateProvisioned) {
       const provisioned = await provisionCertificate()
@@ -688,136 +661,6 @@ export default function TailscaleWizard() {
         </div>
       )}
 
-      {/* Deployment Mode Step */}
-      {wizard.currentStep.id === 'deployment_mode' && (
-        <div id="tailscale-step-mode" className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
-              Deployment Mode
-            </h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              Choose your access configuration
-            </p>
-          </div>
-
-          {config.hostname && (
-            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-              <p className="text-sm text-green-800 dark:text-green-200">
-                <strong>Your URL:</strong> <code className="font-mono">https://{config.hostname}</code>
-              </p>
-            </div>
-          )}
-
-          <div className="grid md:grid-cols-2 gap-4">
-            <button
-              id="deployment-mode-single"
-              onClick={() => setConfig(prev => ({
-                ...prev,
-                deployment_mode: { mode: 'single', environment: 'dev' },
-                use_caddy_proxy: false,
-              }))}
-              className={`p-6 rounded-lg border-2 transition-all text-left ${
-                config.deployment_mode.mode === 'single'
-                  ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
-                  : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
-              }`}
-            >
-              <div className="flex items-center gap-3 mb-3">
-                <Server className={`w-6 h-6 ${config.deployment_mode.mode === 'single' ? 'text-primary-600' : 'text-gray-500'}`} />
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Single Environment
-                </h3>
-              </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                Simple - one environment at a time
-              </p>
-              <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                <li>• Direct routing</li>
-                <li>• Faster setup</li>
-                <li>• Perfect for individual use</li>
-              </ul>
-            </button>
-
-            <button
-              id="deployment-mode-multi"
-              onClick={() => setConfig(prev => ({
-                ...prev,
-                deployment_mode: { mode: 'multi', environment: undefined },
-                use_caddy_proxy: true,
-              }))}
-              className={`p-6 rounded-lg border-2 transition-all text-left ${
-                config.deployment_mode.mode === 'multi'
-                  ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
-                  : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
-              }`}
-            >
-              <div className="flex items-center gap-3 mb-3">
-                <Globe className={`w-6 h-6 ${config.deployment_mode.mode === 'multi' ? 'text-primary-600' : 'text-gray-500'}`} />
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Multiple Environments
-                </h3>
-              </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                Advanced - dev/test/prod simultaneously
-              </p>
-              <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                <li>• Caddy reverse proxy</li>
-                <li>• Path-based routing</li>
-                <li>• Best for teams</li>
-              </ul>
-            </button>
-          </div>
-
-          {config.deployment_mode.mode === 'single' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Select Environment
-              </label>
-              <select
-                id="single-environment-select"
-                value={config.deployment_mode.environment || 'dev'}
-                onChange={(e) => setConfig(prev => ({
-                  ...prev,
-                  deployment_mode: { ...prev.deployment_mode, environment: e.target.value }
-                }))}
-                className="input w-full"
-              >
-                <option value="dev">Development</option>
-                <option value="test">Testing</option>
-                <option value="prod">Production</option>
-              </select>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Configure Step */}
-      {wizard.currentStep.id === 'configure' && (
-        <div id="tailscale-step-config" className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
-              Review Configuration
-            </h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              Confirm your settings
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <ConfigItem label="Hostname" value={config.hostname} />
-            <ConfigItem
-              label="Deployment Mode"
-              value={config.deployment_mode.mode === 'single' ? 'Single Environment' : 'Multiple Environments'}
-            />
-            {config.deployment_mode.mode === 'single' && (
-              <ConfigItem label="Environment" value={config.deployment_mode.environment || 'dev'} />
-            )}
-            <ConfigItem label="HTTPS" value="Enabled (automatic)" />
-            <ConfigItem label="Method" value={config.use_caddy_proxy ? 'Caddy Proxy' : 'Tailscale Serve'} />
-          </div>
-        </div>
-      )}
-
       {/* Provision Step */}
       {wizard.currentStep.id === 'provision' && (
         <div id="tailscale-step-provision" className="space-y-6">
@@ -856,7 +699,7 @@ export default function TailscaleWizard() {
 
           <div className="p-4 bg-primary-50 dark:bg-primary-900/20 rounded-lg">
             <p className="text-sm text-primary-800 dark:text-primary-200">
-              This will automatically provision SSL certificates and configure routing via {config.use_caddy_proxy ? 'Caddy' : 'Tailscale Serve'}.
+              This will automatically provision SSL certificates and configure routing via Tailscale Serve.
             </p>
           </div>
         </div>
@@ -907,7 +750,7 @@ export default function TailscaleWizard() {
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                {config.deployment_mode.mode === 'single' ? 'Direct routing' : 'Caddy reverse proxy'} configured
+                Tailscale Serve routing configured
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
@@ -938,14 +781,3 @@ const StatusItem: React.FC<StatusItemProps> = ({ label, status }) => (
   </div>
 )
 
-interface ConfigItemProps {
-  label: string
-  value: string
-}
-
-const ConfigItem: React.FC<ConfigItemProps> = ({ label, value }) => (
-  <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}:</span>
-    <span className="text-sm text-gray-900 dark:text-white font-mono">{value}</span>
-  </div>
-)

@@ -4,6 +4,22 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider } from './contexts/AuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
+
+// Detect runtime base path for path-based routing (e.g., /wiz/, /prod/)
+const getBasename = () => {
+  const { pathname, port, protocol } = window.location
+  const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
+                         (protocol === 'http:' && (port === '' || port === '80'))
+
+  if (!isStandardPort) return '/' // Dev mode - no base path
+
+  // Extract first path segment as base path (e.g., /wiz from /wiz/settings)
+  const segments = pathname.split('/').filter(Boolean)
+  if (segments.length > 0 && !segments[0].includes('.')) {
+    return `/${segments[0]}`
+  }
+  return '/'
+}
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import Layout from './components/layout/Layout'
 
@@ -37,7 +53,7 @@ function App() {
         <AuthProvider>
           <FeatureFlagsProvider>
           <WizardProvider>
-            <BrowserRouter>
+            <BrowserRouter basename={getBasename()}>
               <Routes>
      
               {/* Public Routes */}

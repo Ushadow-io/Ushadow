@@ -3,21 +3,33 @@ import { getStorageKey } from '../utils/storage'
 
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
-  const { protocol, hostname, port } = window.location
+  const { protocol, hostname, port, pathname } = window.location
   console.log('Protocol:', protocol)
   console.log('Hostname:', hostname)
   console.log('Port:', port)
+  console.log('Pathname:', pathname)
 
   const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
                          (protocol === 'http:' && (port === '' || port === '80'))
 
-  // Check if we have a base path (for path-based routing)
-  const basePath = import.meta.env.BASE_URL
-  console.log('Base path from Vite:', basePath)
+  // Check if we have a base path from Vite build config
+  const viteBasePath = import.meta.env.BASE_URL
+  console.log('Base path from Vite:', viteBasePath)
 
-  if (isStandardPort && basePath && basePath !== '/') {
-    // We're using path-based routing - use the base path
-    console.log('Using path-based routing with base path')
+  // Detect runtime base path from URL (e.g., /wiz/ from /wiz/settings)
+  // This handles path-based routing via Caddy/nginx without rebuild
+  const pathSegments = pathname.split('/').filter(Boolean)
+  const runtimeBasePath = pathSegments.length > 0 && !pathSegments[0].includes('.')
+    ? `/${pathSegments[0]}`
+    : ''
+  console.log('Runtime base path detected:', runtimeBasePath || '(none)')
+
+  // Use Vite base path if set, otherwise use runtime detection
+  const basePath = (viteBasePath && viteBasePath !== '/') ? viteBasePath : runtimeBasePath
+
+  if (isStandardPort && basePath) {
+    // We're using path-based routing - use the base path for API calls
+    console.log('Using path-based routing with base path:', basePath)
     return basePath.replace(/\/$/, '')
   }
 
@@ -295,6 +307,8 @@ export interface Deployment {
   error?: string
   retry_count: number
   deployed_config?: Record<string, any>
+  access_url?: string
+  exposed_port?: number
 }
 
 export const deploymentsApi = {
@@ -341,6 +355,13 @@ export interface PlatformInfo {
   is_docker: boolean
 }
 
+export interface EnvironmentInfo {
+  name: string
+  tailscale_hostname: string
+  tailscale_container_name: string
+  tailscale_volume_name: string
+}
+
 export interface CertificateStatus {
   provisioned: boolean
   cert_path?: string
@@ -370,6 +391,9 @@ export interface AuthUrlResponse {
 }
 
 export const tailscaleApi = {
+  // Environment info (for per-environment Tailscale containers)
+  getEnvironment: () => api.get<EnvironmentInfo>('/api/tailscale/environment'),
+
   // Platform detection
   getPlatform: () => api.get<PlatformInfo>('/api/tailscale/platform'),
   getInstallationGuide: (osType: string) => api.get(`/api/tailscale/installation-guide?os_type=${osType}`),
