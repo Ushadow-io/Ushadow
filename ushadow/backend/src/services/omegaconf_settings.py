@@ -24,9 +24,9 @@ class OmegaConfSettingsManager:
     Manages settings with OmegaConf for automatic merging and interpolation.
 
     Load order (later overrides earlier):
-    1. config.defaults.yaml (shipped defaults)
-    2. secrets.yaml (credentials - gitignored)
-    3. config.local.yaml (user overrides - gitignored)
+    1. config.defaults.yaml (general app settings)
+    2. service-defaults.yaml (provider selection, default services)
+    3. secrets.yaml (credentials - gitignored)
     4. MongoDB (runtime changes)
     """
 
@@ -41,9 +41,8 @@ class OmegaConfSettingsManager:
 
         # File paths
         self.defaults_path = self.config_dir / "config.defaults.yaml"
+        self.service_defaults_path = self.config_dir / "service-defaults.yaml"
         self.secrets_path = self.config_dir / "secrets.yaml"
-        self.local_path = self.config_dir / "config.local.yaml"
-        self.services_path = self.config_dir / "services-omegaconf.yaml"
 
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
@@ -73,15 +72,15 @@ class OmegaConfSettingsManager:
             configs_to_merge.append(defaults)
             logger.debug(f"Loaded defaults from {self.defaults_path}")
 
+        if self.service_defaults_path.exists():
+            service_defaults = OmegaConf.load(self.service_defaults_path)
+            configs_to_merge.append(service_defaults)
+            logger.debug(f"Loaded service defaults from {self.service_defaults_path}")
+
         if self.secrets_path.exists():
             secrets = OmegaConf.load(self.secrets_path)
             configs_to_merge.append(secrets)
             logger.debug(f"Loaded secrets from {self.secrets_path}")
-
-        if self.local_path.exists():
-            local = OmegaConf.load(self.local_path)
-            configs_to_merge.append(local)
-            logger.debug(f"Loaded local overrides from {self.local_path}")
 
         # Load from MongoDB (runtime overrides)
         if self.db is not None:

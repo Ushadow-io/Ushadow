@@ -1,0 +1,63 @@
+# OpenMemory UI Service Definition
+# Web interface for OpenMemory
+#
+# This is a UI-only service - it doesn't use any capabilities directly.
+# It connects to openmemory (mem0) via HTTP.
+
+id: openmemory-ui
+name: "OpenMemory UI"
+description: "Web interface for browsing and managing memories"
+version: ">=1.0.0"
+
+# =============================================================================
+# CAPABILITIES THIS SERVICE USES
+# =============================================================================
+# None - UI services don't need LLM/transcription/memory directly
+uses: []
+
+# =============================================================================
+# DOCKER CONFIGURATION
+# =============================================================================
+docker:
+  image: ghcr.io/ushadow-io/u-mem0-ui:latest
+  compose_file: compose/openmemory-compose.yaml
+  service_name: mem0-ui
+
+  ports:
+    - container: 3000
+      host: 3002
+      protocol: http
+
+  health:
+    http_get: /
+    port: 3000
+
+# =============================================================================
+# INFRASTRUCTURE DEPENDENCIES
+# =============================================================================
+depends_on:
+  required:
+    - openmemory  # The backend this UI connects to
+
+# =============================================================================
+# SERVICE-SPECIFIC CONFIGURATION
+# =============================================================================
+config:
+  # Backend API URL (the UI needs to know where mem0 API is)
+  - key: api_url
+    env_var: VITE_API_URL
+    settings_path: infrastructure.openmemory_server_url
+    default: "http://mem0:8765"
+
+# =============================================================================
+# UI METADATA
+# =============================================================================
+ui:
+  icon: brain
+  category: memory
+  is_default: true
+  wizard_order: 2
+  tags: ["ui", "memory", "dashboard"]
+
+  links:
+    docs: https://github.com/ushadow-io/openmemory

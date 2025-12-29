@@ -2,13 +2,22 @@ import { useState, useEffect } from 'react'
 import { X, Plus, Loader2, Server, Cloud, HardDrive } from 'lucide-react'
 import { servicesApi } from '../services/api'
 
-interface ServiceTemplate {
-  template_id: string
+interface CatalogService {
+  service_id: string
   name: string
-  description: string
-  category: string
-  modes: ('cloud' | 'local')[]
-  config_schema: any[]
+  description?: string
+  mode?: string  // Single mode (new format)
+  modes?: ('cloud' | 'local')[]  // Legacy array format
+  template?: string | null
+  is_default?: boolean
+  installed?: boolean
+  enabled?: boolean
+  docker_image?: string
+  tags?: string[]
+  ui?: {
+    category?: string
+    icon?: string
+  }
 }
 
 interface AddServiceModalProps {
@@ -17,30 +26,45 @@ interface AddServiceModalProps {
   onServiceInstalled: () => void
 }
 
+// Helper to get modes array from service (handles both formats)
+function getServiceModes(service: CatalogService): ('cloud' | 'local')[] {
+  if (service.modes && service.modes.length > 0) {
+    return service.modes
+  }
+  if (service.mode === 'cloud' || service.mode === 'local') {
+    return [service.mode]
+  }
+  return ['cloud']  // Default fallback
+}
+
 export default function AddServiceModal({
   isOpen,
   onClose,
   onServiceInstalled,
 }: AddServiceModalProps) {
-  const [templates, setTemplates] = useState<ServiceTemplate[]>([])
+  const [services, setServices] = useState<CatalogService[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)
-  const [selectedTemplate, setSelectedTemplate] = useState<ServiceTemplate | null>(null)
+  const [selectedService, setSelectedService] = useState<CatalogService | null>(null)
   const [selectedMode, setSelectedMode] = useState<'cloud' | 'local'>('cloud')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (isOpen) {
-      loadTemplates()
+      loadCatalog()
     }
   }, [isOpen])
 
-  const loadTemplates = async () => {
+  const loadCatalog = async () => {
     setLoading(true)
     setError(null)
     try {
       const response = await servicesApi.getCatalog()
-      setTemplates(response.data || [])
+      // Filter to only show services that aren't already installed
+      const availableServices = (response.data || []).filter(
+        (s: CatalogService) => !s.installed
+      )
+      setServices(availableServices)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load service catalog')
     } finally {
@@ -49,15 +73,15 @@ export default function AddServiceModal({
   }
 
   const handleInstall = async () => {
-    if (!selectedTemplate) return
+    if (!selectedService) return
 
     setInstalling(true)
     setError(null)
     try {
-      await servicesApi.installService(selectedTemplate.template_id)
+      await servicesApi.installService(selectedService.service_id)
       onServiceInstalled()
       onClose()
-      setSelectedTemplate(null)
+      setSelectedService(null)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to install service')
     } finally {
@@ -108,93 +132,101 @@ export default function AddServiceModal({
             <div className="text-center py-12">
               <p className="text-red-600 dark:text-red-400">{error}</p>
               <button
-                onClick={loadTemplates}
+                onClick={loadCatalog}
                 className="mt-4 text-primary-600 hover:text-primary-700"
               >
                 Retry
               </button>
             </div>
-          ) : templates.length === 0 ? (
+          ) : services.length === 0 ? (
             <div className="text-center py-12">
               <Server className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-              <p className="text-gray-600 dark:text-gray-400">No service templates available</p>
+              <p className="text-gray-600 dark:text-gray-400">No additional services available</p>
             </div>
           ) : (
             <div className="space-y-4">
-              {templates.map((template) => (
-                <button
-                  key={template.template_id}
-                  id={`service-template-${template.template_id}`}
-                  onClick={() => {
-                    setSelectedTemplate(template)
-                    setSelectedMode(template.modes[0] || 'cloud')
-                  }}
-                  className={`w-full p-4 rounded-lg border-2 text-left transition-all ${
-                    selectedTemplate?.template_id === template.template_id
-                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                      : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <Server className="w-5 h-5 text-primary-600 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium text-gray-900 dark:text-white">
-                        {template.name}
-                      </h3>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        {template.description}
-                      </p>
-                      <div className="flex gap-2 mt-2">
-                        {template.modes.map((mode) => (
-                          <span
-                            key={mode}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-                          >
-                            {mode === 'cloud' ? <Cloud className="w-3 h-3" /> : <HardDrive className="w-3 h-3" />}
-                            {mode}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Mode Selection */}
-          {selectedTemplate && selectedTemplate.modes.length > 1 && (
-            <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                Deployment Mode
-              </label>
-              <div className="flex gap-4">
-                {selectedTemplate.modes.map((mode) => (
+              {services.map((service) => {
+                const modes = getServiceModes(service)
+                return (
                   <button
-                    key={mode}
-                    id={`mode-select-${mode}`}
-                    onClick={() => setSelectedMode(mode)}
-                    className={`flex-1 p-4 rounded-lg border-2 transition-all ${
-                      selectedMode === mode
+                    key={service.service_id}
+                    id={`service-catalog-${service.service_id}`}
+                    onClick={() => {
+                      setSelectedService(service)
+                      setSelectedMode(modes[0] || 'cloud')
+                    }}
+                    className={`w-full p-4 rounded-lg border-2 text-left transition-all ${
+                      selectedService?.service_id === service.service_id
                         ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
                         : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      {mode === 'cloud' ? (
-                        <Cloud className="w-5 h-5 text-primary-600" />
-                      ) : (
-                        <HardDrive className="w-5 h-5 text-primary-600" />
-                      )}
-                      <span className="font-medium text-gray-900 dark:text-white capitalize">
-                        {mode}
-                      </span>
+                    <div className="flex items-start gap-3">
+                      <Server className="w-5 h-5 text-primary-600 mt-0.5" />
+                      <div>
+                        <h3 className="font-medium text-gray-900 dark:text-white">
+                          {service.name}
+                        </h3>
+                        {service.description && (
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                            {service.description}
+                          </p>
+                        )}
+                        <div className="flex gap-2 mt-2">
+                          {modes.map((mode) => (
+                            <span
+                              key={mode}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
+                            >
+                              {mode === 'cloud' ? <Cloud className="w-3 h-3" /> : <HardDrive className="w-3 h-3" />}
+                              {mode}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </button>
-                ))}
-              </div>
+                )
+              })}
             </div>
           )}
+
+          {/* Mode Selection - only show if multiple modes available */}
+          {selectedService && (() => {
+            const modes = getServiceModes(selectedService)
+            return modes.length > 1 ? (
+              <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                  Deployment Mode
+                </label>
+                <div className="flex gap-4">
+                  {modes.map((mode) => (
+                    <button
+                      key={mode}
+                      id={`mode-select-${mode}`}
+                      onClick={() => setSelectedMode(mode)}
+                      className={`flex-1 p-4 rounded-lg border-2 transition-all ${
+                        selectedMode === mode
+                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                          : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {mode === 'cloud' ? (
+                          <Cloud className="w-5 h-5 text-primary-600" />
+                        ) : (
+                          <HardDrive className="w-5 h-5 text-primary-600" />
+                        )}
+                        <span className="font-medium text-gray-900 dark:text-white capitalize">
+                          {mode}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null
+          })()}
         </div>
 
         {/* Footer */}
@@ -209,7 +241,7 @@ export default function AddServiceModal({
           <button
             id="add-service-modal-install"
             onClick={handleInstall}
-            disabled={!selectedTemplate || installing}
+            disabled={!selectedService || installing}
             className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
           >
             {installing ? (

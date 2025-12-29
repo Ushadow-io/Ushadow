@@ -100,17 +100,17 @@ export default function RegistrationPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-emerald-50/20 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
       <EnvironmentBanner />
-      <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="flex-1 flex items-center justify-center py-6 px-4 sm:px-6 lg:px-8">
         {/* Decorative background blur circles - emerald green and fuchsia from logo */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-fuchsia-400/20 dark:bg-fuchsia-500/10 rounded-full blur-3xl"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-emerald-400/20 dark:bg-emerald-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-fuchsia-300/40 dark:bg-fuchsia-400/25 rounded-full blur-3xl"></div>
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-emerald-300/40 dark:bg-emerald-400/25 rounded-full blur-3xl"></div>
       </div>
 
       <div className="max-w-md w-full space-y-8 relative z-10">
         {/* Logo & Header */}
         <div className="text-center animate-fade-in">
-          <div className="mx-auto mb-8 transform transition-transform hover:scale-105">
+          <div className="mx-auto mb-3 transform transition-transform hover:scale-105">
             <img
               src="/logo.png"
               alt="uShadow Logo"
@@ -134,7 +134,7 @@ export default function RegistrationPage() {
             AI Orchestration Platform
           </p>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-500">
-            Create your admin account to get started
+            Powered by Chronicle
           </p>
         </div>
 

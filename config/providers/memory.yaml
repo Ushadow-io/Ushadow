@@ -1,0 +1,139 @@
+# Memory Capability Providers
+# Implements the 'memory' capability defined in capabilities.yaml
+#
+# Each provider specifies:
+#   - credentials: Values for the capability + env_var name to expose
+#   - mode: cloud or local
+#   - docker: Container config (for local providers)
+#
+# Services get the provider's env vars directly. Only need env_mapping to override.
+# Default provider selection is in config.defaults.yaml under `selected_providers`
+
+capability: memory
+
+providers:
+  # ==========================================================================
+  # OpenMemory - Graph-based Memory with MCP
+  # ==========================================================================
+  - id: openmemory
+    name: "OpenMemory"
+    description: "Graph-based memory with MCP support and Neo4j backend"
+    mode: local
+
+    docker:
+      image: ghcr.io/ushadow-io/u-mem0-api:latest
+      compose_file: compose/openmemory-compose.yaml
+      service_name: mem0
+      ports:
+        - container: 8765
+          protocol: http
+      health:
+        http_get: /health
+        port: 8765
+
+    # OpenMemory itself needs an LLM for embeddings
+    uses:
+      - capability: llm
+        required: true
+        purpose: "Embeddings and memory extraction"
+
+    credentials:
+      server_url:
+        env_var: MEMORY_SERVER_URL
+        value: "http://mem0:8765"
+      api_key:
+        env_var: MEMORY_API_KEY
+        value: ""
+
+    config:
+      enable_graph:
+        env_var: ENABLE_GRAPH_MEMORY
+        settings_path: service_preferences.openmemory.enable_graph
+        label: "Enable Graph Memory"
+        description: "Use Neo4j for relationship tracking"
+        type: boolean
+        default: false
+      neo4j_password:
+        env_var: NEO4J_PASSWORD
+        settings_path: service_preferences.openmemory.neo4j_password
+        label: "Neo4j Password"
+        type: secret
+        required_if: "enable_graph == true"
+        min_length: 8
+
+    depends_on:
+      required:
+        - qdrant
+      optional:
+        - neo4j
+
+    ui:
+      icon: brain
+      tags: ["memory", "mcp", "local", "graph"]
+
+  # ==========================================================================
+  # Cognee - RAG Framework with Knowledge Graphs
+  # ==========================================================================
+  - id: cognee
+    name: "Cognee"
+    description: "Open-source RAG framework with knowledge graphs"
+    mode: local
+
+    docker:
+      image: topoteretes/cognee:latest
+      compose_file: ""
+      service_name: cognee
+      ports:
+        - container: 8000
+          protocol: http
+      health:
+        http_get: /health
+        port: 8000
+
+    uses:
+      - capability: llm
+        required: true
+        purpose: "RAG and knowledge graph construction"
+
+    credentials:
+      server_url:
+        env_var: COGNEE_SERVER_URL
+        value: "http://cognee:8000"
+      api_key:
+        env_var: COGNEE_API_KEY
+        value: ""
+
+    depends_on:
+      required:
+        - postgres
+        - qdrant
+
+    ui:
+      icon: graph
+      tags: ["memory", "rag", "knowledge-graph"]
+      links:
+        docs: https://docs.cognee.dev
+        github: https://github.com/topoteretes/cognee
+
+  # ==========================================================================
+  # Mem0 Cloud - Managed Memory Service
+  # ==========================================================================
+  - id: mem0-cloud
+    name: "Mem0 Cloud"
+    description: "Managed memory service from Mem0"
+    mode: cloud
+
+    credentials:
+      server_url:
+        env_var: MEM0_SERVER_URL
+        value: "https://api.mem0.ai"
+      api_key:
+        env_var: MEM0_API_KEY
+        settings_path: api_keys.mem0_api_key
+        label: "Mem0 API Key"
+        link: "https://app.mem0.ai/dashboard/api-keys"
+        required: true
+
+    ui:
+      icon: cloud
+      tags: ["memory", "cloud", "managed"]
