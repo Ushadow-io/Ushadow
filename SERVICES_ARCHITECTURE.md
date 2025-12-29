@@ -1,41 +1,202 @@
-# Services Architecture Design
+# Services & Settings Architecture
+
+> **Status: IMPLEMENTED** - The capability-based service composition pattern is live.
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Core Concepts](#core-concepts)
+3. [File Structure](#file-structure)
+4. [Settings System](#settings-system)
+5. [Service Discovery](#service-discovery)
+6. [The Wiring Flow](#the-wiring-flow)
+7. [Adding New Components](#adding-new-components)
+8. [Backend Components](#backend-components)
+9. [API Reference](#api-reference)
+10. [Docker Integration](#docker-integration)
+
+---
 
 ## Overview
 
-This document defines the architecture for managing services in Ushadow. The design prioritizes:
+Ushadow uses **capability-based composition** to manage services. This pattern separates:
 
-- **Easy service integration**: Add new services with minimal code changes
-- **Portable definitions**: Same service definition works across Docker, Kubernetes, and remote nodes
-- **Shared infrastructure**: Common services (postgres, redis) are shared with opt-out
-- **Clear separation**: Service definition (what) is separate from deployment config (where/how)
-- **Simple user experience**: Users configure via wizard, no Helm/K8s knowledge required
+- **What a service needs** (capabilities like LLM, transcription)
+- **Who provides it** (providers like OpenAI, Deepgram, Ollama)
+- **How it's configured** (settings stored in YAML files and MongoDB)
 
-## Design Philosophy
+This decoupling allows users to swap providers without touching service code. Chronicle doesn't care if you use OpenAI or Anthropic for LLM - it just declares "I need an LLM" and the system wires in the right credentials.
 
-### Why Not Helm?
+### The Three Layers
 
-We considered using Helm charts but decided against it because:
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           CAPABILITIES                                   │
+│  Abstract requirements a service may have                                │
+│  ┌────────────┐  ┌────────────────┐  ┌────────────┐  ┌────────────┐     │
+│  │    llm     │  │ transcription  │  │   memory   │  │ speaker_   │     │
+│  │            │  │                │  │            │  │ recognition│     │
+│  └────────────┘  └────────────────┘  └────────────┘  └────────────┘     │
+│         │                │                │                │            │
+│         ▼                ▼                ▼                ▼            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                            PROVIDERS                                     │
+│  Concrete implementations of capabilities                                │
+│  ┌──────────────────────────────┐  ┌──────────────────────────────┐     │
+│  │ LLM Providers                │  │ Transcription Providers      │     │
+│  │ • openai (cloud)             │  │ • deepgram (cloud)           │     │
+│  │ • anthropic (cloud)          │  │ • whisper-local (local)      │     │
+│  │ • ollama (local)             │  │ • mistral-voxtral (cloud)    │     │
+│  │ • openai-compatible (local)  │  │                              │     │
+│  └──────────────────────────────┘  └──────────────────────────────┘     │
+│         │                                   │                           │
+│         ▼                                   ▼                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                            SERVICES                                      │
+│  Applications that USE capabilities                                      │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │ Chronicle                                                           │ │
+│  │ uses: [llm, transcription, memory]                                  │ │
+│  │                                                                     │ │
+│  │   LLM_API_KEY ◄── (resolved from selected provider)                │ │
+│  │   DEEPGRAM_API_KEY ◄── (resolved from selected provider)           │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-1. **Shared infrastructure**: Helm charts typically bundle their own postgres/redis. We want ONE shared instance.
-2. **Complexity barrier**: Helm requires understanding Go templating, K8s manifests, and chart structure.
-3. **Multi-target**: Helm is K8s-only. We need Docker Compose for local development.
-4. **User experience**: Our target users want "click Install, enter API key, done" - not values.yaml editing.
+---
 
-### Our Approach: Generate Standard Formats
+## Core Concepts
 
-We generate deployment artifacts ourselves:
+### Capabilities
 
-| Target | What We Generate |
-|--------|------------------|
-| Docker | `docker-compose.yml` + `.env` files |
-| Kubernetes | Deployment, Service, ConfigMap, Secret manifests |
-| Remote Node | API payload for u-node manager |
+A **capability** is an abstract interface that services can depend on. Capabilities are defined in `config/capabilities.yaml` and specify what types of credentials they provide:
 
-This gives us:
-- Control over shared infrastructure
-- Consistent env var handling across targets
-- Simple service definitions
-- No external tooling complexity for users
+```yaml
+# config/capabilities.yaml
+capabilities:
+  llm:
+    description: "Large Language Model providers"
+
+    provides:
+      api_key:
+        type: secret
+        description: "API key for the LLM provider"
+      base_url:
+        type: url
+        description: "Base URL for API requests"
+      model:
+        type: string
+        description: "Model identifier"
+```
+
+**Note:** Capabilities don't define env var names - each provider declares its own. Default provider selections are in `config/service-defaults.yaml` under `selected_providers`.
+
+### Providers
+
+A **provider** implements a capability with concrete credentials. Each credential declares its own `env_var` name. Providers are defined in `config/providers/{capability}.yaml`:
+
+```yaml
+# config/providers/llm.yaml
+capability: llm
+
+providers:
+  - id: openai
+    name: "OpenAI"
+    mode: cloud
+
+    credentials:
+      api_key:
+        env_var: OPENAI_API_KEY                   # Env var name this provider exposes
+        settings_path: api_keys.openai_api_key   # Where to read the value
+        link: "https://platform.openai.com/api-keys"
+        required: true
+      base_url:
+        env_var: OPENAI_BASE_URL
+        value: "https://api.openai.com/v1"       # Literal value
+      model:
+        env_var: OPENAI_MODEL
+        settings_path: llm.openai_model
+        default: "gpt-4o-mini"
+
+  - id: ollama
+    name: "Ollama"
+    mode: local
+
+    credentials:
+      api_key:
+        env_var: OLLAMA_API_KEY
+        value: ""                                 # No API key needed
+      base_url:
+        env_var: OLLAMA_BASE_URL
+        value: "http://ollama:11434"
+      model:
+        env_var: OLLAMA_MODEL
+        default: "llama3.1:latest"
+```
+
+**Key insight:** Each provider exposes its native env var names. Services receive these directly and only need `env_mapping` if they expect different names.
+
+### Services
+
+A **service** declares what capabilities it uses. Services are defined in `config/services/{service-id}.yaml`:
+
+```yaml
+# config/services/chronicle.yaml
+id: chronicle
+name: "Chronicle"
+description: "AI-powered conversation processing"
+
+# What capabilities this service needs
+uses:
+  - capability: llm
+    required: true
+    purpose: "Conversation analysis and summarization"
+    # No env_mapping needed - Chronicle uses OpenAI SDK natively
+    # Provider's env vars (OPENAI_API_KEY, etc.) pass through directly
+
+  - capability: transcription
+    required: true
+    # No env_mapping - Chronicle expects Deepgram env vars
+
+  - capability: memory
+    required: false                        # Optional capability
+
+# Docker configuration
+docker:
+  image: ghcr.io/chronicler-ai/chronicle:latest
+  compose_file: compose/chronicle-compose.yaml
+  service_name: chronicle-backend
+
+# Service-specific config (not from capabilities)
+config:
+  - key: mongodb_uri
+    env_var: MONGODB_URI
+    settings_path: infrastructure.mongodb_uri
+    default: "mongodb://mongo:27017"
+```
+
+**When is env_mapping needed?** Only when the service expects different env var names than what the provider exposes:
+
+```yaml
+# OpenMemory needs EMBEDDING_MODEL but provider gives OPENAI_MODEL
+uses:
+  - capability: llm
+    env_mapping:
+      OPENAI_MODEL: EMBEDDING_MODEL   # Override just this one
+```
+
+### Settings
+
+**Settings** store actual values (API keys, preferences, etc.). They're loaded from multiple sources and merged:
+
+```
+Load Order (later overrides earlier):
+1. config.defaults.yaml    - General app settings (committed)
+2. service-defaults.yaml   - Provider selection, default services (committed)
+3. secrets.yaml            - API keys (gitignored)
+4. MongoDB                 - Runtime changes via UI
+```
 
 ---
 
@@ -43,830 +204,686 @@ This gives us:
 
 ```
 config/
-├── env-mappings.yaml              # Global env var → settings path mappings
-├── settings.yaml                  # Actual settings values
-├── secrets.yaml                   # Sensitive values (gitignored)
-├── services.yaml                  # Index: defaults, service_types
-├── services/                      # Service definitions (one per service)
-│   ├── cognee.yaml
-│   ├── openmemory.yaml
-│   ├── chronicle.yaml
-│   ├── openai.yaml
-│   ├── ollama.yaml
-│   └── deepgram.yaml
-├── deployments/                   # Deployment configurations
-│   ├── local.yaml                 # Local Docker deployment
-│   ├── production.yaml            # Kubernetes production
-│   └── user-overrides.yaml        # User customizations (gitignored)
-├── user-services/                 # User-added services (gitignored)
-│   └── my-custom-service.yaml
-├── vendor/                        # Vendored upstream references (optional)
-│   └── cognee/
-│       ├── docker-compose.yml
-│       └── VERSION
-└── generated/                     # Generated at deploy time (gitignored)
-    ├── docker-compose.yml
-    ├── cognee.env
-    └── k8s/
-        └── cognee-deployment.yaml
+├── config.defaults.yaml          # General app settings (committed)
+├── service-defaults.yaml         # Provider selection, default services (committed)
+├── secrets.yaml                  # API keys (gitignored)
+│
+├── capabilities.yaml             # Capability definitions (llm, transcription, memory)
+│
+├── providers/                    # Provider implementations per capability
+│   ├── llm.yaml                 # openai, anthropic, ollama, openai-compatible
+│   ├── transcription.yaml       # deepgram, whisper-local, mistral-voxtral
+│   └── memory.yaml              # openmemory, cognee, mem0-cloud
+│
+├── services/                     # Service definitions (what gets deployed)
+│   ├── chronicle.yaml           # uses: [llm, transcription, memory]
+│   ├── chronicle-webui.yaml     # UI only (no capabilities)
+│   ├── openmemory.yaml          # uses: [llm]
+│   └── openmemory-ui.yaml       # UI only
+│
+└── compose/                      # Docker compose files
+    ├── chronicle-compose.yaml
+    └── openmemory-compose.yaml
 ```
 
 ---
 
-## Core Concepts
+## Service Discovery
 
-### Service Types
+### Where Services Come From
 
-High-level categories of services:
+**Available services** are discovered by scanning `config/services/*.yaml`. Each YAML file defines one service.
 
-| Type | Description | Examples |
-|------|-------------|----------|
-| `memory` | Memory and knowledge storage | OpenMemory, Cognee, Mem0 |
-| `llm` | Language model inference | OpenAI, Anthropic, Ollama |
-| `transcription` | Speech to text | Deepgram, Whisper, Mistral |
-| `conversation_engine` | Audio processing + analysis | Chronicle |
-| `infrastructure` | Supporting services | Postgres, Redis, Qdrant, Neo4j |
+**Default services** for the quickstart wizard are those with `ui.is_default: true` in their definition:
 
-### Service Definition vs Deployment Config
+```yaml
+# config/services/chronicle.yaml
+ui:
+  is_default: true      # Included in quickstart wizard
+  wizard_order: 1       # Order in wizard (lower = earlier)
+```
 
-| Aspect | Service Definition | Deployment Config |
-|--------|-------------------|-------------------|
-| **Purpose** | What the service IS | Where/how it RUNS |
-| **Location** | `config/services/*.yaml` | `config/deployments/*.yaml` or MongoDB |
-| **Contents** | Image, env vars, ports, health | Target, replicas, resources, networking |
-| **Portability** | Same across all environments | Environment-specific |
-| **Versioned** | Yes (git) | Partially (templates in git, values in DB) |
+**Enabled services** are tracked in MongoDB under `installed_services.{service_id}.enabled`.
+
+### env_mapping in Services
+
+The `env_mapping` in a service's `uses:` section maps **provider env vars → service-expected env vars**:
+
+```yaml
+# OpenMemory expects EMBEDDING_MODEL, but provider gives OPENAI_MODEL
+uses:
+  - capability: llm
+    env_mapping:
+      OPENAI_MODEL: EMBEDDING_MODEL    # Provider env var → Service env var
+```
+
+**In most cases, no mapping is needed!** Services typically use the same env var names as their native provider:
+- Chronicle uses OpenAI SDK → expects `OPENAI_API_KEY` → openai provider gives `OPENAI_API_KEY` ✓
+- Chronicle uses Deepgram SDK → expects `DEEPGRAM_API_KEY` → deepgram provider gives `DEEPGRAM_API_KEY` ✓
+
+`env_mapping` is only needed when:
+- **Provider** exposes one name (e.g., `OPENAI_MODEL`)
+- **Service** expects a different name (e.g., `EMBEDDING_MODEL`)
+- **env_mapping** bridges them
 
 ---
 
-## Schema Definitions
+## Settings System
 
-### services.yaml (Index)
+### OmegaConf-Based Settings
 
+Settings are managed by `OmegaConfSettingsManager` which uses [OmegaConf](https://omegaconf.readthedocs.io/) for:
+
+- **Automatic merging** of multiple config sources
+- **Dot notation access** (`api_keys.openai_api_key`)
+- **Variable interpolation** (`${api_keys.openai_api_key}`)
+
+### Settings Paths
+
+Values are accessed via dot notation paths:
+
+| Path | Description | Example Value |
+|------|-------------|---------------|
+| `api_keys.openai_api_key` | OpenAI API key | `sk-...` |
+| `api_keys.deepgram_api_key` | Deepgram API key | `...` |
+| `llm.openai_model` | OpenAI model preference | `gpt-4o-mini` |
+| `selected_providers.llm` | User's selected LLM provider | `openai` |
+| `selected_providers.transcription` | User's selected transcription provider | `deepgram` |
+| `wizard_mode` | Wizard mode (determines defaults) | `quickstart` |
+| `infrastructure.mongodb_uri` | MongoDB connection | `mongodb://mongo:27017` |
+| `security.auth_secret_key` | JWT signing key | `abc123...` |
+
+### Config Files
+
+**config.defaults.yaml** (committed) - General app settings:
 ```yaml
-# config/services.yaml
+# General application settings
+llm:
+  openai_model: gpt-4o-mini
+  ollama_model: llama3.1:latest
 
-# Default provider for each service type (used in quickstart wizard)
-defaults:
-  memory: openmemory
+transcription:
+  provider: deepgram
+  language: en
+
+infrastructure:
+  mongodb_uri: mongodb://mongo:27017
+  redis_url: redis://redis:6379/0
+  qdrant_base_url: qdrant
+  qdrant_port: "6333"
+```
+
+**service-defaults.yaml** (committed) - Provider and service defaults:
+```yaml
+# Provider selection and default services
+wizard_mode: quickstart
+
+selected_providers:
   llm: openai
   transcription: deepgram
+  memory: openmemory
 
-# Service type definitions
-service_types:
-  memory:
-    description: "Memory and knowledge storage services"
-  llm:
-    description: "Language model inference providers"
-  transcription:
-    description: "Speech to text services"
-  conversation_engine:
-    description: "Audio processing with AI analysis"
-  infrastructure:
-    description: "Supporting infrastructure services"
-    managed: true  # System-managed, not user-selectable
-
-# Services are auto-discovered from config/services/*.yaml
-# User additions from config/user-services/*.yaml
+default_services:
+  - chronicle
+  - chronicle-webui
+  - openmemory
+  - openmemory-ui
 ```
 
-### env-mappings.yaml (Global Mappings)
-
+**secrets.yaml** (gitignored):
 ```yaml
-# config/env-mappings.yaml
-# Maps environment variable names to settings/secrets paths
-# Services can override these mappings when needed
+# User's API keys
+api_keys:
+  openai_api_key: sk-...
+  deepgram_api_key: ...
+  anthropic_api_key: ...
 
-mappings:
-  # API Keys
-  OPENAI_API_KEY: settings.api_keys.openai
-  ANTHROPIC_API_KEY: settings.api_keys.anthropic
-  DEEPGRAM_API_KEY: settings.api_keys.deepgram
-  MISTRAL_API_KEY: settings.api_keys.mistral
+admin:
+  password: ...
 
-  # Postgres
-  POSTGRES_HOST: settings.infrastructure.postgres.host
-  POSTGRES_PORT: settings.infrastructure.postgres.port
-  POSTGRES_USER: settings.infrastructure.postgres.user
-  POSTGRES_PASSWORD: secrets.postgres_password
-  POSTGRES_DB: settings.infrastructure.postgres.database
-  DATABASE_URL: settings.infrastructure.postgres.url
-
-  # Redis
-  REDIS_URL: settings.infrastructure.redis.url
-  REDIS_HOST: settings.infrastructure.redis.host
-  REDIS_PORT: settings.infrastructure.redis.port
-
-  # Qdrant
-  QDRANT_HOST: settings.infrastructure.qdrant.host
-  QDRANT_PORT: settings.infrastructure.qdrant.port
-
-  # Neo4j
-  NEO4J_URI: settings.infrastructure.neo4j.uri
-  NEO4J_USER: settings.infrastructure.neo4j.user
-  NEO4J_PASSWORD: secrets.neo4j_password
-
-  # Common
-  LOG_LEVEL: settings.log_level
-  NODE_ENV: settings.environment
+security:
+  auth_secret_key: ...
 ```
 
-### Service Definition Schema
+---
 
-```yaml
-# config/services/{service-id}.yaml
+## The Wiring Flow
 
-# ============================================================================
-# IDENTITY
-# ============================================================================
-id: cognee                              # Unique identifier (lowercase, hyphens)
-type: memory                            # Service type (from service_types)
-name: "Cognee"                          # Display name
-description: "Open-source RAG framework with knowledge graphs"
-version: ">=0.1.19"                     # Version constraint
-source: https://github.com/topoteretes/cognee  # Upstream repository
+When a service is started, here's how credentials get resolved:
 
-# ============================================================================
-# CONTAINER DEFINITION(S)
-# ============================================================================
-containers:
-  - name: api                           # Container name within service
-    image: topoteretes/cognee:${version}
-
-    ports:
-      - container: 8000                 # Port inside container
-        protocol: http                  # http | tcp | udp
-
-    # -------------------------------------------------------------------------
-    # Environment Variables
-    # -------------------------------------------------------------------------
-    env:
-      # Required: Service cannot start without these
-      required:
-        - OPENAI_API_KEY                # Resolved from env-mappings.yaml
-        - POSTGRES_HOST
-        - POSTGRES_PASSWORD
-
-      # Optional: Falls back to default or skipped if not configured
-      optional:
-        - REDIS_URL
-        - NEO4J_URI
-        - LOG_LEVEL
-
-      # Overrides: This service maps these env vars differently than global
-      overrides:
-        LLM_API_KEY: settings.api_keys.openai    # Use OpenAI key for LLM_API_KEY
-        API_KEY: settings.api_keys.cognee        # Generic API_KEY = Cognee's key
-
-      # Values: Literal values (not resolved from settings)
-      values:
-        COGNEE_ENV: production
-        GRAPH_ENABLED: "true"
-
-    # -------------------------------------------------------------------------
-    # Health Check
-    # -------------------------------------------------------------------------
-    health:
-      http_get: /health                 # Endpoint to check
-      port: 8000                        # Port to check on
-      interval: 30s                     # Time between checks
-      timeout: 10s                      # Request timeout
-      retries: 3                        # Failures before unhealthy
-
-    # -------------------------------------------------------------------------
-    # Volumes (optional)
-    # -------------------------------------------------------------------------
-    volumes:
-      - name: data
-        path: /app/data
-        persistent: true                # Survives container restart
-
-# ============================================================================
-# DEPENDENCIES
-# ============================================================================
-depends_on:
-  required:
-    - postgres                          # Must be running
-  optional:
-    - redis                             # Enhanced performance if available
-    - neo4j                             # Required if GRAPH_ENABLED=true
-
-# ============================================================================
-# UI METADATA
-# ============================================================================
-ui:
-  icon: brain                           # Icon identifier
-  category: memory                      # UI grouping
-  wizard_order: 2                       # Order in quickstart wizard (if default)
-  tags: ["rag", "knowledge-graph", "local"]
-
-  # Links shown in UI
-  links:
-    docs: https://docs.cognee.dev
-    github: https://github.com/topoteretes/cognee
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. USER CLICKS "START" on Chronicle                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 2. DockerManager calls CapabilityResolver.resolve_for_service()         │
+│                                                                          │
+│    service_id = "chronicle"                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 3. CapabilityResolver loads config/services/chronicle.yaml              │
+│                                                                          │
+│    uses:                                                                 │
+│      - capability: llm                                                   │
+│        required: true                                                    │
+│        # No env_mapping - Chronicle uses OpenAI SDK natively             │
+│                                                                          │
+│      - capability: transcription                                         │
+│        required: true                                                    │
+│        # No env_mapping - Chronicle uses Deepgram SDK natively           │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 4. For each capability, resolver looks up selected_providers            │
+│                                                                          │
+│    settings.get("selected_providers.llm") → "openai"                     │
+│    settings.get("selected_providers.transcription") → "deepgram"         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 5. Resolver loads provider credentials from config/providers/llm.yaml   │
+│                                                                          │
+│    Provider "openai":                                                    │
+│      credentials:                                                        │
+│        api_key:                                                          │
+│          env_var: OPENAI_API_KEY   ◄── Provider declares its env var    │
+│          settings_path: api_keys.openai_api_key                          │
+│        base_url:                                                         │
+│          env_var: OPENAI_BASE_URL                                        │
+│          value: "https://api.openai.com/v1"                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 6. Resolver reads actual values from settings                            │
+│                                                                          │
+│    settings.get("api_keys.openai_api_key") → "sk-abc123..."              │
+│    settings.get("api_keys.deepgram_api_key") → "dg-xyz789..."            │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 7. Resolver uses provider's env_var directly (no mapping needed!)       │
+│                                                                          │
+│    Provider openai.api_key.env_var = OPENAI_API_KEY                      │
+│    → env["OPENAI_API_KEY"] = "sk-abc123..."                              │
+│                                                                          │
+│    Provider deepgram.api_key.env_var = DEEPGRAM_API_KEY                  │
+│    → env["DEEPGRAM_API_KEY"] = "dg-xyz789..."                            │
+│                                                                          │
+│    (env_mapping only consulted if service needs to override)             │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 8. Final resolved env vars returned to DockerManager:                    │
+│                                                                          │
+│    {                                                                     │
+│      "OPENAI_API_KEY": "sk-abc123...",                                   │
+│      "OPENAI_BASE_URL": "https://api.openai.com/v1",                     │
+│      "OPENAI_MODEL": "gpt-4o-mini",                                      │
+│      "DEEPGRAM_API_KEY": "dg-xyz789...",                                 │
+│      "MONGODB_URI": "mongodb://mongo:27017",                             │
+│      ...                                                                 │
+│    }                                                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 9. DockerManager writes env to file, runs docker compose up             │
+│                                                                          │
+│    Writes: /config/chronicle.env                                         │
+│    Runs: docker compose -f compose/chronicle-compose.yaml up -d          │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Deployment Config Schema
+---
+
+## Adding New Components
+
+### Adding a New Provider
+
+To add a new LLM provider (e.g., Google Gemini):
+
+1. Edit `config/providers/llm.yaml`:
 
 ```yaml
-# config/deployments/local.yaml
+providers:
+  # ... existing providers ...
 
-# Global target for this deployment config
-target: docker                          # docker | kubernetes | remote
+  - id: google-gemini
+    name: "Google Gemini"
+    description: "Google's Gemini models"
+    mode: cloud
 
-# Docker-specific global settings
+    credentials:
+      api_key:
+        env_var: GOOGLE_API_KEY               # Env var this provider exposes
+        settings_path: api_keys.google_api_key
+        label: "Google AI API Key"
+        link: "https://aistudio.google.com/apikey"
+        required: true
+      base_url:
+        env_var: GOOGLE_BASE_URL
+        value: "https://generativelanguage.googleapis.com/v1beta"
+      model:
+        env_var: GOOGLE_MODEL
+        settings_path: llm.google_model
+        default: "gemini-pro"
+
+    ui:
+      icon: google
+      tags: ["llm", "cloud", "gemini"]
+```
+
+2. Add default settings to `config.defaults.yaml`:
+
+```yaml
+llm:
+  google_model: gemini-pro
+```
+
+3. User adds their API key to `secrets.yaml`:
+
+```yaml
+api_keys:
+  google_api_key: AIza...
+```
+
+**No code changes required!** The provider is automatically loaded.
+
+**Note:** Services using this provider will receive `GOOGLE_API_KEY`, `GOOGLE_BASE_URL`, `GOOGLE_MODEL` env vars. If a service expects different names (like `OPENAI_API_KEY`), it needs `env_mapping`.
+
+### Adding a New Service
+
+To add a new service that uses capabilities:
+
+1. Create `config/services/my-service.yaml`:
+
+```yaml
+id: my-service
+name: "My Service"
+description: "Description of what it does"
+
+uses:
+  - capability: llm
+    required: true
+    # No env_mapping needed if your service uses OpenAI SDK (OPENAI_API_KEY)
+    # Only add env_mapping if your service expects different env var names:
+    # env_mapping:
+    #   OPENAI_API_KEY: MY_LLM_KEY     # Provider env → Your expected env
+
 docker:
-  network: ushadow-net
-  compose_project: ushadow
+  image: myorg/my-service:latest
+  compose_file: compose/my-service-compose.yaml
+  service_name: my-service
 
-# Per-service deployment settings
-services:
-  cognee:
-    enabled: true
+  ports:
+    - container: 8000
+      host: 8000
+      protocol: http
 
-    # Resource limits
-    resources:
-      memory: 2Gi
-      cpu: "1"
+  health:
+    http_get: /health
+    port: 8000
 
-    # Port mapping (host:container) - overrides service definition
-    ports:
-      8000: 8100                        # Expose container:8000 on host:8100
+# Service-specific config
+config:
+  - key: some_setting
+    env_var: MY_SETTING
+    settings_path: service_preferences.my_service.some_setting
+    default: "default_value"
 
-    # Docker-specific overrides
-    docker:
-      restart: unless-stopped
-      extra_hosts:
-        - "host.docker.internal:host-gateway"
-
-  chronicle:
-    enabled: true
-
-  openmemory:
-    enabled: false                      # Disabled - user chose cognee instead
+ui:
+  icon: box
+  category: my_category
+  is_default: false
+  tags: ["my-tag"]
 ```
+
+2. Create `compose/my-service-compose.yaml`:
 
 ```yaml
-# config/deployments/production.yaml
-
-target: kubernetes
-
-kubernetes:
-  namespace: ushadow
-  storage_class: fast-ssd
-  image_pull_secrets:
-    - ghcr-secret
-
 services:
-  cognee:
-    enabled: true
-    replicas: 3
+  my-service:
+    image: myorg/my-service:${MY_SERVICE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-my-service
+    env_file:
+      - ${PROJECT_ROOT}/.env
+      - ${PROJECT_ROOT}/config/my-service.env
+    ports:
+      - "${MY_SERVICE_PORT:-8000}:8000"
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-    resources:
-      requests:
-        memory: 1Gi
-        cpu: "500m"
-      limits:
-        memory: 4Gi
-        cpu: "2"
+networks:
+  infra-network:
+    name: infra-network
+    external: true
+```
 
-    ingress:
-      enabled: true
-      host: cognee.ushadow.io
-      tls: true
+### Adding a New Capability
 
-    # Kubernetes-specific
-    kubernetes:
-      service_account: cognee-sa
-      pod_annotations:
-        prometheus.io/scrape: "true"
+To add a new capability type:
+
+1. Define it in `config/capabilities.yaml`:
+
+```yaml
+capabilities:
+  # ... existing capabilities ...
+
+  tts:  # Text-to-speech capability
+    description: "Text-to-speech synthesis services"
+
+    provides:
+      api_key:
+        type: secret
+        description: "API key for TTS service"
+      server_url:
+        type: url
+        description: "TTS server endpoint"
+      voice:
+        type: string
+        description: "Voice identifier"
+```
+
+2. Add default provider selection to `config/service-defaults.yaml`:
+
+```yaml
+selected_providers:
+  # ... existing selections ...
+  tts: elevenlabs
+```
+
+3. Create `config/providers/tts.yaml`:
+
+```yaml
+capability: tts
+
+providers:
+  - id: elevenlabs
+    name: "ElevenLabs"
+    mode: cloud
+    credentials:
+      api_key:
+        env_var: ELEVENLABS_API_KEY
+        settings_path: api_keys.elevenlabs_api_key
+        required: true
+      server_url:
+        env_var: ELEVENLABS_SERVER_URL
+        value: "https://api.elevenlabs.io/v1"
+      voice:
+        env_var: ELEVENLABS_VOICE
+        settings_path: tts.elevenlabs_voice
+        default: "Rachel"
+
+  - id: coqui
+    name: "Coqui TTS"
+    mode: local
+    docker:
+      image: coqui/tts:latest
+      compose_file: compose/coqui-compose.yaml
+      service_name: coqui
+    credentials:
+      api_key:
+        env_var: COQUI_API_KEY
+        value: ""
+      server_url:
+        env_var: COQUI_SERVER_URL
+        value: "http://coqui:5000"
+      voice:
+        env_var: COQUI_VOICE
+        default: "en/vctk/vits"
 ```
 
 ---
 
-## Environment Variable Resolution
+## Backend Components
 
-### Resolution Order
+### Component Overview
 
-For each env var a service needs:
+| Component | File | Purpose |
+|-----------|------|---------|
+| `ProviderRegistry` | `src/services/provider_registry.py` | Loads providers from YAML |
+| `CapabilityResolver` | `src/services/capability_resolver.py` | Wires providers → services |
+| `ServiceRegistry` | `src/services/service_registry.py` | Loads service definitions |
+| `OmegaConfSettingsManager` | `src/services/omegaconf_settings.py` | Manages merged settings |
+| `DockerManager` | `src/services/docker_manager.py` | Starts/stops containers |
 
+### ProviderRegistry
+
+Loads and queries provider definitions:
+
+```python
+registry = get_provider_registry()
+
+# Get all providers for a capability
+llm_providers = registry.get_providers_for_capability("llm")
+
+# Get specific provider
+openai = registry.get_provider("openai")
+
+# Get default provider for mode
+default = registry.get_default_provider("llm", mode="cloud")  # → openai
 ```
-1. Service's env.values (literal)
-   └─▶ Found? Use literal value
 
-2. Service's env.overrides
-   └─▶ Found? Resolve from specified path
+### CapabilityResolver
 
-3. Global env-mappings.yaml
-   └─▶ Found? Resolve from global path
+The core component that wires everything together:
 
-4. Error: No mapping for env var
+```python
+resolver = get_capability_resolver()
+
+# Resolve all env vars for a service
+env = await resolver.resolve_for_service("chronicle")
+# Returns: {"OPENAI_API_KEY": "sk-...", "DEEPGRAM_API_KEY": "...", ...}
+
+# Validate a service can start
+validation = await resolver.validate_service("chronicle")
+# Returns: {"can_start": true, "missing_capabilities": [], ...}
 ```
 
-### Path Resolution
+### ServiceRegistry
 
-Paths use prefixes to indicate the source:
+Loads service definitions:
 
-| Prefix | Source | Example |
-|--------|--------|---------|
-| `settings.` | settings.yaml or MongoDB | `settings.api_keys.openai` |
-| `secrets.` | secrets.yaml or secrets store | `secrets.postgres_password` |
-| `config.` | User's service-specific config | `config.graph_enabled` |
+```python
+registry = get_service_registry()
 
-### Required vs Optional
+# Get all services
+services = registry.get_services()
 
-| Type | Behavior |
-|------|----------|
-| `required` | Service cannot activate if any are missing/empty |
-| `optional` | Uses default if available, skipped if not configured |
+# Get specific service
+chronicle = registry.get_service("chronicle")
 
----
-
-## Validation Flow
-
+# Get services for quickstart wizard
+defaults = registry.get_quickstart_services()
 ```
-User clicks "Activate Service"
-         │
-         ▼
-┌─────────────────────────────────────────────┐
-│ 1. Check env.required                       │
-│    - Resolve each from mappings             │
-│    - All have non-empty values?             │
-│    └─▶ No: Return missing fields for UI     │
-└─────────────────────────────────────────────┘
-         │ Yes
-         ▼
-┌─────────────────────────────────────────────┐
-│ 2. Check depends_on.required                │
-│    - Are required services running?         │
-│    └─▶ No: Return "Start X first"           │
-└─────────────────────────────────────────────┘
-         │ Yes
-         ▼
-┌─────────────────────────────────────────────┐
-│ 3. Resolve all env vars                     │
-│    - Required (validated above)             │
-│    - Optional (use defaults if missing)     │
-│    - Overrides                              │
-│    - Values (literals)                      │
-└─────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────┐
-│ 4. Generate deployment artifacts            │
-│    - Docker: .env file + compose entry      │
-│    - K8s: ConfigMap + Secret + Deployment   │
-│    - Remote: API payload for u-node         │
-└─────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────┐
-│ 5. Deploy to target                         │
-└─────────────────────────────────────────────┘
+
+### OmegaConfSettingsManager
+
+Manages the settings with automatic merging:
+
+```python
+settings = get_omegaconf_settings()
+
+# Get a value (merges all sources automatically)
+api_key = await settings.get("api_keys.openai_api_key")
+
+# Update a value (saves to MongoDB)
+await settings.update({"selected_providers.llm": "anthropic"})
+
+# Get full config
+config = await settings.load_config()
 ```
 
 ---
 
-## API Design
+## API Reference
 
-### Service Catalog
+### Provider Selection
 
 ```
-GET /api/services/catalog
+GET  /api/providers/capabilities
 ```
+Returns all capabilities with their available providers.
 
-Returns all available services from `config/services/*.yaml`:
+```
+GET  /api/providers/selected
+```
+Returns current provider selections: `{"llm": "openai", "transcription": "deepgram"}`
 
-```json
+```
+PUT  /api/providers/selected
 {
-  "services": [
-    {
-      "id": "cognee",
-      "type": "memory",
-      "name": "Cognee",
-      "description": "Open-source RAG framework with knowledge graphs",
-      "is_default": false,
-      "status": "available"
-    }
-  ]
+  "llm": "anthropic",
+  "transcription": "whisper-local"
 }
 ```
-
-### Service Status
+Update provider selections.
 
 ```
-GET /api/services/{service_id}/status
+POST /api/providers/apply-defaults/{mode}
 ```
+Apply default providers for `quickstart`, `local`, or `custom` mode.
 
-Returns activation readiness:
+### Service Validation
 
+```
+GET  /api/providers/validate/{service_id}
+```
+Check if a service can start:
 ```json
 {
-  "service_id": "cognee",
-  "can_activate": false,
-  "status": "missing_config",
-  "missing_required": [
+  "can_start": false,
+  "missing_capabilities": [],
+  "missing_credentials": [
     {
-      "env_var": "OPENAI_API_KEY",
-      "settings_path": "settings.api_keys.openai",
-      "label": "OpenAI API Key",
-      "link": "https://platform.openai.com/api-keys"
+      "capability": "llm",
+      "provider": "openai",
+      "credential": "api_key",
+      "settings_path": "api_keys.openai_api_key",
+      "link": "https://platform.openai.com/api-keys",
+      "label": "OpenAI API Key"
     }
   ],
-  "optional_missing": ["NEO4J_URI"],
-  "dependencies": {
-    "postgres": "running",
-    "redis": "not_configured"
-  }
+  "warnings": []
 }
 ```
 
-### Activate Service
+### Docker Operations
 
 ```
-POST /api/services/{service_id}/activate
+POST /api/docker/{service_id}/start
 ```
-
-```json
-{
-  "target": "docker",
-  "config_overrides": {
-    "LOG_LEVEL": "DEBUG"
-  }
-}
-```
-
-### User's Installed Services
+Start a service container.
 
 ```
-GET /api/services/installed
+POST /api/docker/{service_id}/stop
 ```
+Stop a service container.
 
-Returns services the user has activated:
-
-```json
-{
-  "services": [
-    {
-      "service_id": "openmemory",
-      "type": "memory",
-      "status": "running",
-      "target": "docker",
-      "activated_at": "2024-01-15T10:00:00Z"
-    }
-  ]
-}
 ```
+GET  /api/docker/status
+```
+Get status of all service containers.
 
 ---
 
-## Deployment Targets
+## Docker Integration
 
-### Docker (Local)
+### How Docker Compose Works
 
-1. Load service definition
-2. Resolve all env vars
-3. Generate `config/generated/{service}.env`
-4. Generate/update `config/generated/docker-compose.yml`
-5. Run `docker compose up -d {service}`
+Services run via Docker Compose. The backend container itself runs `docker compose` commands to manage service containers.
 
-### Kubernetes
+**Key challenge**: The backend runs inside a container, but Docker Compose runs on the host. Volume paths must be **host paths**, not container paths.
 
-1. Load service definition
-2. Resolve all env vars
-3. Generate ConfigMap for non-sensitive vars
-4. Generate Secret for sensitive vars
-5. Generate Deployment manifest
-6. Generate Service manifest
-7. Generate Ingress (if configured)
-8. Apply via `kubectl apply`
+**Solution**: `PROJECT_ROOT` environment variable bridges this gap.
 
-### Remote Node (u-node)
-
-1. Load service definition
-2. Resolve all env vars
-3. Send deploy command to u-node manager via HTTP:
-   ```json
-   {
-     "container_name": "cognee-abc123",
-     "image": "topoteretes/cognee:0.1.19",
-     "env": {"OPENAI_API_KEY": "sk-...", ...},
-     "ports": {"8000": 8000},
-     "health_check": "/health"
-   }
-   ```
-
----
-
-## Adding a New Service
-
-### Example: Adding Cognee
-
-1. **Create service definition**:
-   ```bash
-   touch config/services/cognee.yaml
-   ```
-
-2. **Define the service** (see schema above)
-
-3. **Optionally vendor upstream files** (for reference):
-   ```bash
-   mkdir -p config/vendor/cognee
-   curl -o config/vendor/cognee/docker-compose.yml \
-     https://raw.githubusercontent.com/topoteretes/cognee/v0.1.19/docker-compose.yml
-   echo "0.1.19" > config/vendor/cognee/VERSION
-   ```
-
-4. **Add any new settings paths** to `env-mappings.yaml` if needed:
-   ```yaml
-   mappings:
-     COGNEE_API_KEY: settings.api_keys.cognee
-   ```
-
-5. **Test**:
-   ```bash
-   ushadow service validate cognee
-   ushadow service activate cognee --target docker
-   ```
-
-### No Code Changes Required
-
-The service registry auto-discovers services from `config/services/*.yaml`. No Python code changes needed unless the service requires custom business logic.
-
----
-
-## Migration from Current Architecture
-
-### Files to Remove
-
-- `config/service-templates.yaml` - replaced by per-service definitions
-- `config/default-services.yaml` - replaced by `services.yaml` + individual files
-- `ushadow/backend/src/services/service_manager.py` - already deleted
-- `ushadow/backend/src/services/settings_manager.py` - already deleted
-
-### Files to Create
-
-- `config/env-mappings.yaml`
-- `config/services.yaml`
-- `config/services/*.yaml` (one per service)
-- `config/deployments/local.yaml`
-- `config/deployments/production.yaml`
-
-### Code to Update
-
-- `ServiceRegistry` - load from new file structure
-- `DockerManager` - generate compose from service definitions
-- `DeploymentManager` - use same service definitions for remote deployment
-
----
-
-## Future Enhancements
-
-### Service Marketplace
-
-Remote catalog of available services:
+### Compose File Pattern
 
 ```yaml
-# Fetched from https://ushadow.io/service-catalog.yaml
-catalog:
-  - id: cognee
-    version: "0.1.19"
-    definition_url: https://ushadow.io/services/cognee.yaml
-    verified: true
-```
-
-User installs:
-```bash
-ushadow service install cognee
-```
-
-### Conditional Dependencies
-
-```yaml
-depends_on:
-  optional:
-    - service: neo4j
-      condition: env.GRAPH_ENABLED == "true"
-```
-
-### Multi-Container Services
-
-Already supported via `containers` array:
-
-```yaml
-containers:
-  - name: api
-    image: myservice-api:latest
-  - name: worker
-    image: myservice-worker:latest
-```
-
----
-
-## Shared Infrastructure
-
-### Concept
-
-Infrastructure services (postgres, redis, qdrant, neo4j) are managed centrally. User services connect to these shared instances rather than spinning up their own.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        SHARED INFRASTRUCTURE                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Infrastructure Services (managed by us, always running)                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │  postgres   │  │   redis     │  │   qdrant    │  │   neo4j     │         │
-│  │  :5432      │  │   :6379     │  │   :6333     │  │   :7687     │         │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
-│         │                │                │                │                 │
-│         └────────────────┴────────────────┴────────────────┘                 │
-│                                   │                                          │
-│                          ushadow-network                                     │
-│                                   │                                          │
-│         ┌────────────────┬────────┴───────┬────────────────┐                │
-│         │                │                │                │                │
-│  ┌──────┴──────┐  ┌──────┴──────┐  ┌──────┴──────┐  ┌──────┴──────┐        │
-│  │   cognee    │  │  chronicle  │  │ openmemory  │  │   ollama    │        │
-│  │             │  │             │  │             │  │             │        │
-│  │ POSTGRES_   │  │ POSTGRES_   │  │ POSTGRES_   │  │             │        │
-│  │ HOST=       │  │ HOST=       │  │ HOST=       │  │             │        │
-│  │ "postgres"  │  │ "postgres"  │  │ "postgres"  │  │             │        │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
-│                                                                              │
-│  All services connect to SAME postgres via Docker/K8s network               │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Infrastructure Service Definition
-
-```yaml
-# config/services/infrastructure/postgres.yaml
-
-id: postgres
-type: infrastructure
-name: "PostgreSQL"
-managed: true          # System-managed, always runs, user doesn't toggle
-
-containers:
-  - name: db
-    image: postgres:16-alpine
-    ports: [5432]
-
-    env:
-      required:
-        - POSTGRES_PASSWORD
-
-      values:
-        POSTGRES_USER: ushadow
-        POSTGRES_DB: ushadow
-
+# compose/chronicle-compose.yaml
+services:
+  chronicle-backend:
+    image: ghcr.io/chronicler-ai/chronicle:${CHRONICLE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
+    env_file:
+      - ${PROJECT_ROOT}/.env                    # Host path via PROJECT_ROOT
+      - ${PROJECT_ROOT}/config/chronicle.env    # Generated by resolver
     volumes:
-      - name: pgdata
-        path: /var/lib/postgresql/data
-        persistent: true
+      - ${PROJECT_ROOT}/config/config.yml:/app/config.yml:ro
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
 
-    health:
-      tcp: 5432
+networks:
+  infra-network:
+    name: infra-network
+    external: true
 ```
 
-### Settings for Shared Infrastructure
+### Environment File Generation
 
-```yaml
-# config/settings.yaml
+When starting a service, `DockerManager`:
 
-infrastructure:
-  postgres:
-    host: postgres              # Container/service name on network
-    port: 5432
-    user: ushadow
-    database: ushadow
-    url: "postgresql://ushadow:${secrets.postgres_password}@postgres:5432/ushadow"
+1. Calls `CapabilityResolver.resolve_for_service()`
+2. Writes resolved env vars to `/config/{service_id}.env`
+3. Runs `docker compose -f {compose_file} up -d {service_name}`
 
-  redis:
-    host: redis
-    port: 6379
-    url: "redis://redis:6379"
+The compose file's `env_file:` directive loads the generated env file.
 
-  qdrant:
-    host: qdrant
-    port: 6333
+### Container Naming
 
-  neo4j:
-    host: neo4j
-    port: 7687
-    uri: "bolt://neo4j:7687"
-```
+Containers get prefixed with the project name:
+- Compose project: `ushadow-wiz-frame`
+- Service name: `chronicle-backend`
+- Container name: `ushadow-wiz-frame-chronicle-backend`
 
-### Opt-Out for Self-Managed Infrastructure
-
-If a user wants to use their own external postgres:
-
-```yaml
-# config/deployments/user-overrides.yaml
-
-infrastructure:
-  postgres:
-    managed: false                    # Don't run our postgres container
-    host: my-rds-instance.aws.com     # Use external instead
-    port: 5432
-    user: myuser
-    # Password still comes from secrets
+The backend finds containers by Docker Compose labels, not names:
+```python
+containers = client.containers.list(
+    filters={"label": f"com.docker.compose.service={service_name}"}
+)
 ```
 
 ---
 
-## Appendix: Example Services
+## Troubleshooting
 
-### Cloud LLM (OpenAI)
+### Service Won't Start
 
-```yaml
-id: openai
-type: llm
-name: "OpenAI"
-description: "OpenAI GPT models"
-source: https://platform.openai.com
+1. **Check validation**: `GET /api/providers/validate/{service_id}`
+2. **Missing API key**: Add to `config/secrets.yaml`
+3. **Wrong provider selected**: Check `selected_providers` in settings
 
-# No containers - cloud service
-cloud:
-  base_url: https://api.openai.com/v1
+### Env Vars Not Injected
 
-  env:
-    required:
-      - OPENAI_API_KEY
+1. **Check the generated env file**: `cat /config/{service_id}.env`
+2. **Check resolver output**: Add logging to `CapabilityResolver.resolve_for_service()`
+3. **Cache issue**: Call `resolver.reload()` to clear caches
 
-ui:
-  icon: openai
-  tags: ["llm", "cloud", "gpt"]
-```
+### Container Name Not Found
 
-### Local LLM (Ollama)
+If you see 404 errors when stopping services:
+- The container has project prefix (e.g., `ushadow-wiz-frame-chronicle-backend`)
+- The code should search by compose label, not container name
 
-```yaml
-id: ollama
-type: llm
-name: "Ollama"
-description: "Local LLM server"
-source: https://ollama.ai
+### Volume Mount Errors
 
-containers:
-  - name: server
-    image: ollama/ollama:latest
-    ports:
-      - container: 11434
-        protocol: http
-
-    env:
-      optional:
-        - LOG_LEVEL
-
-      values:
-        OLLAMA_HOST: "0.0.0.0"
-
-    health:
-      http_get: /api/tags
-      port: 11434
-
-    volumes:
-      - name: models
-        path: /root/.ollama
-        persistent: true
-
-ui:
-  icon: ollama
-  tags: ["llm", "local", "private"]
-```
-
-### Infrastructure (Postgres)
-
-```yaml
-id: postgres
-type: infrastructure
-name: "PostgreSQL"
-description: "Relational database"
-managed: true  # System-managed, not user-selectable
-
-containers:
-  - name: db
-    image: postgres:16-alpine
-    ports:
-      - container: 5432
-        protocol: tcp
-
-    env:
-      required:
-        - POSTGRES_PASSWORD
-
-      values:
-        POSTGRES_USER: ushadow
-        POSTGRES_DB: ushadow
-
-    health:
-      tcp: 5432
-
-    volumes:
-      - name: data
-        path: /var/lib/postgresql/data
-        persistent: true
-```
+If you see "file not found" or "IsADirectoryError":
+- Volume paths must be **host paths**, not container paths
+- Use `${PROJECT_ROOT}` in compose files to reference host paths
+- Ensure `PROJECT_ROOT` is set in `.env`

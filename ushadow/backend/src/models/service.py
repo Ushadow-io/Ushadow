@@ -145,11 +145,13 @@ class ServiceTemplate(BaseModel):
 
 class ServiceConfig(BaseModel):
     """
-    Service Instance Configuration (Template/Instance Pattern).
+    Service Instance Configuration.
 
-    Each service instance references a template and inherits its config_schema.
-    Templates are defined in config/service-templates.yaml
-    Instances are defined in config/default-services.yaml
+    Services use capability-based composition - they declare what capabilities
+    they USE (llm, transcription, memory) rather than inheriting from templates.
+
+    Templates (config/service-templates.yaml) define capabilities.
+    Services (config/services/*.yaml) declare which capabilities they use.
     """
     # Core identity
     service_id: str = Field(..., pattern=r'^[a-z0-9-]+$')

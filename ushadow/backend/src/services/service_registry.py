@@ -1,11 +1,10 @@
 """
 Service Registry - Loads service definitions from YAML configuration files.
 
-This module provides a registry for service templates and instances, supporting:
-- Template definitions with config schemas for cloud/local modes
-- Service instances that inherit from templates
-- Dynamic schema merging (template + instance overrides)
-- Quickstart filtering for wizard UI
+This module provides a registry for services using the capability-based composition pattern:
+- Services declare what capabilities they USE (llm, transcription, memory)
+- CapabilityResolver wires provider credentials at deploy time
+- Services are loaded from individual files in config/services/*.yaml
 """
 
 import logging
@@ -19,16 +18,30 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # Config file paths - check container mount first, then fallback to local
-CONFIG_DIR = Path("/config") if Path("/config").exists() else Path("config")
-TEMPLATES_FILE = CONFIG_DIR / "service-templates.yaml"
-SERVICES_FILE = CONFIG_DIR / "default-services.yaml"
+def _get_config_dir() -> Path:
+    """Resolve config directory, handling different execution contexts."""
+    # Docker container mount
+    if Path("/config").exists():
+        return Path("/config")
+    # Running from project root
+    if Path("config").exists():
+        return Path("config")
+    # Running from ushadow/backend
+    if Path("../../config").exists():
+        return Path("../../config").resolve()
+    # Fallback
+    return Path("config")
+
+CONFIG_DIR = _get_config_dir()
+CAPABILITIES_FILE = CONFIG_DIR / "capabilities.yaml"
+SERVICES_DIR = CONFIG_DIR / "services"
 
 
 class ConfigField(BaseModel):
     """Configuration field schema definition."""
     key: str
-    type: str  # secret, string, url, boolean, number
-    label: str
+    type: str = "string"  # secret, string, url, boolean, number
+    label: Optional[str] = None
     description: Optional[str] = None
     required: bool = False
     default: Optional[Any] = None
@@ -39,48 +52,91 @@ class ConfigField(BaseModel):
     min: Optional[float] = None
     max: Optional[float] = None
     min_length: Optional[int] = None
+    required_if: Optional[str] = None  # Conditional requirement
+
+
+@dataclass
+class CapabilityUse:
+    """A capability usage declaration."""
+    capability: str
+    required: bool = True
+    purpose: Optional[str] = None
+    env_mapping: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DockerConfig:
+    """Docker deployment configuration."""
+    image: str
+    compose_file: Optional[str] = None
+    service_name: Optional[str] = None
+    ports: List[Dict[str, Any]] = field(default_factory=list)
+    health: Optional[Dict[str, Any]] = None
+    volumes: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
 class ServiceConfig:
-    """Service instance configuration."""
+    """
+    Service configuration from config/services/*.yaml.
+
+    This is the new capability-based format where services declare
+    what capabilities they USE rather than extending templates.
+    """
     service_id: str
     name: str
-    description: Optional[str]
-    template: str  # References template name
-    mode: str  # 'cloud' or 'local'
+    description: Optional[str] = None
+    version: Optional[str] = None
+
+    # Capabilities this service uses
+    uses: List[CapabilityUse] = field(default_factory=list)
+
+    # Docker deployment
+    docker: Optional[DockerConfig] = None
+
+    # Infrastructure dependencies
+    depends_on: Dict[str, List[str]] = field(default_factory=dict)
+
+    # Service-specific config items
+    config: List[Dict[str, Any]] = field(default_factory=list)
+
+    # UI metadata
+    ui: Dict[str, Any] = field(default_factory=dict)
+
+    # Legacy fields (for backward compatibility)
+    template: Optional[str] = None
+    mode: str = "local"
     is_default: bool = False
     enabled: bool = True
-
-    # Docker deployment (for local mode)
-    docker_image: Optional[str] = None
-    docker_compose_file: Optional[str] = None
-    docker_service_name: Optional[str] = None
-    docker_profile: Optional[str] = None
-
-    # Cloud connection
-    connection_url: Optional[str] = None
-
-    # Config overrides (merged with template schema)
-    config_overrides: Dict[str, Any] = field(default_factory=dict)
-
-    # Additional metadata
     tags: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def docker_image(self) -> Optional[str]:
+        """Legacy accessor for docker image."""
+        return self.docker.image if self.docker else None
+
+    @property
+    def docker_compose_file(self) -> Optional[str]:
+        """Legacy accessor for docker compose file."""
+        return self.docker.compose_file if self.docker else None
+
+    @property
+    def docker_service_name(self) -> Optional[str]:
+        """Legacy accessor for docker service name."""
+        return self.docker.service_name if self.docker else None
 
 
 class ServiceRegistry:
     """
-    Registry for service templates and instances.
+    Registry for service definitions.
 
-    Loads configuration from YAML files and provides query methods
-    for the wizard UI and docker manager.
+    Loads service configurations from individual YAML files in config/services/
+    and provides query methods for the wizard UI and docker manager.
     """
 
     def __init__(self):
         self._templates: Dict[str, Dict[str, Any]] = {}
-        self._instances: List[ServiceConfig] = []
-        self._default_providers: Dict[str, str] = {}
+        self._services: Dict[str, ServiceConfig] = {}
         self._loaded = False
 
     def _load(self) -> None:
@@ -91,64 +147,115 @@ class ServiceRegistry:
         self._load_templates()
         self._load_services()
         self._loaded = True
-        logger.info(f"ServiceRegistry loaded: {len(self._templates)} templates, {len(self._instances)} services")
+        logger.info(
+            f"ServiceRegistry loaded: {len(self._templates)} templates, "
+            f"{len(self._services)} services"
+        )
 
     def _load_templates(self) -> None:
-        """Load service templates from YAML."""
+        """Load capability definitions from YAML (used for legacy template access)."""
         try:
-            if not TEMPLATES_FILE.exists():
-                logger.warning(f"Templates file not found: {TEMPLATES_FILE}")
+            if not CAPABILITIES_FILE.exists():
+                logger.warning(f"Capabilities file not found: {CAPABILITIES_FILE}")
                 return
 
-            with open(TEMPLATES_FILE, 'r') as f:
+            with open(CAPABILITIES_FILE, 'r') as f:
                 data = yaml.safe_load(f)
 
-            self._templates = data.get('templates', {})
-            logger.debug(f"Loaded {len(self._templates)} templates")
+            # Load capabilities (also available as templates for backward compat)
+            self._templates = data.get('capabilities', {})
+            logger.debug(f"Loaded {len(self._templates)} capabilities")
 
         except Exception as e:
-            logger.error(f"Failed to load templates: {e}")
+            logger.error(f"Failed to load capabilities: {e}")
 
     def _load_services(self) -> None:
-        """Load service instances from YAML."""
+        """Load service definitions from config/services/*.yaml."""
         try:
-            if not SERVICES_FILE.exists():
-                logger.warning(f"Services file not found: {SERVICES_FILE}")
+            logger.info(f"Looking for services in: {SERVICES_DIR} (exists={SERVICES_DIR.exists()})")
+            if not SERVICES_DIR.exists():
+                logger.warning(f"Services directory not found: {SERVICES_DIR}")
                 return
 
-            with open(SERVICES_FILE, 'r') as f:
-                data = yaml.safe_load(f)
+            yaml_files = list(SERVICES_DIR.glob("*.yaml"))
+            logger.info(f"Found {len(yaml_files)} YAML files in {SERVICES_DIR}")
 
-            self._default_providers = data.get('default_providers', {})
+            for service_file in yaml_files:
+                try:
+                    self._load_service_file(service_file)
+                    logger.info(f"Loaded service file: {service_file.name}")
+                except Exception as e:
+                    logger.error(f"Failed to load service {service_file}: {e}")
 
-            for svc in data.get('services', []):
-                instance = ServiceConfig(
-                    service_id=svc['service_id'],
-                    name=svc['name'],
-                    description=svc.get('description'),
-                    template=svc['template'],
-                    mode=svc.get('mode', 'cloud'),
-                    is_default=svc.get('is_default', False),
-                    enabled=svc.get('enabled', True),
-                    docker_image=svc.get('docker_image'),
-                    docker_compose_file=svc.get('docker_compose_file'),
-                    docker_service_name=svc.get('docker_service_name'),
-                    docker_profile=svc.get('docker_profile'),
-                    connection_url=svc.get('connection_url'),
-                    config_overrides=svc.get('config_overrides', {}),
-                    tags=svc.get('tags', []),
-                    metadata=svc.get('metadata', {})
-                )
-                self._instances.append(instance)
-
-            logger.debug(f"Loaded {len(self._instances)} service instances")
+            logger.info(f"Loaded {len(self._services)} services total")
 
         except Exception as e:
             logger.error(f"Failed to load services: {e}")
 
-    def get_instances(self, reload: bool = False) -> List[ServiceConfig]:
+    def _load_service_file(self, filepath: Path) -> None:
+        """Load a single service definition file."""
+        with open(filepath, 'r') as f:
+            data = yaml.safe_load(f)
+
+        if not data or 'id' not in data:
+            logger.warning(f"Invalid service file (missing 'id'): {filepath}")
+            return
+
+        # Parse uses declarations
+        uses = []
+        for use_data in data.get('uses', []):
+            uses.append(CapabilityUse(
+                capability=use_data['capability'],
+                required=use_data.get('required', True),
+                purpose=use_data.get('purpose'),
+                env_mapping=use_data.get('env_mapping', {})
+            ))
+
+        # Parse docker config
+        docker = None
+        docker_data = data.get('docker')
+        if docker_data:
+            docker = DockerConfig(
+                image=docker_data.get('image', ''),
+                compose_file=docker_data.get('compose_file'),
+                service_name=docker_data.get('service_name'),
+                ports=docker_data.get('ports', []),
+                health=docker_data.get('health'),
+                volumes=docker_data.get('volumes', [])
+            )
+
+        # Parse UI metadata
+        ui_data = data.get('ui', {})
+
+        service = ServiceConfig(
+            service_id=data['id'],
+            name=data.get('name', data['id']),
+            description=data.get('description'),
+            version=data.get('version'),
+            uses=uses,
+            docker=docker,
+            depends_on=data.get('depends_on', {}),
+            config=data.get('config', []),
+            ui=ui_data,
+            # Legacy/convenience fields
+            mode='local' if docker else 'cloud',
+            is_default=ui_data.get('is_default', False),
+            enabled=True,
+            tags=ui_data.get('tags', [])
+        )
+
+        self._services[service.service_id] = service
+
+    def reload(self) -> None:
+        """Force reload from YAML files."""
+        self._loaded = False
+        self._services = {}
+        self._templates = {}
+        self._load()
+
+    def get_services(self, reload: bool = False) -> List[ServiceConfig]:
         """
-        Get all service instances.
+        Get all service definitions.
 
         Args:
             reload: Force reload from YAML files
@@ -157,16 +264,18 @@ class ServiceRegistry:
             List of ServiceConfig instances
         """
         if reload:
-            self._loaded = False
-            self._instances = []
-            self._templates = {}
-
+            self.reload()
         self._load()
-        return self._instances
+        return list(self._services.values())
 
-    def get_instance(self, service_id: str) -> Optional[ServiceConfig]:
+    # Alias for backward compatibility
+    def get_instances(self, reload: bool = False) -> List[ServiceConfig]:
+        """Alias for get_services() for backward compatibility."""
+        return self.get_services(reload)
+
+    def get_service(self, service_id: str) -> Optional[ServiceConfig]:
         """
-        Get a specific service instance by ID.
+        Get a specific service by ID.
 
         Args:
             service_id: Service identifier
@@ -175,10 +284,12 @@ class ServiceRegistry:
             ServiceConfig or None if not found
         """
         self._load()
-        for instance in self._instances:
-            if instance.service_id == service_id:
-                return instance
-        return None
+        return self._services.get(service_id)
+
+    # Alias for backward compatibility
+    def get_instance(self, service_id: str) -> Optional[ServiceConfig]:
+        """Alias for get_service() for backward compatibility."""
+        return self.get_service(service_id)
 
     def get_quickstart_services(self) -> List[ServiceConfig]:
         """
@@ -188,7 +299,7 @@ class ServiceRegistry:
             List of default ServiceConfig instances
         """
         self._load()
-        return [s for s in self._instances if s.is_default]
+        return [s for s in self._services.values() if s.is_default]
 
     def get_services_by_category(
         self,
@@ -196,10 +307,10 @@ class ServiceRegistry:
         enabled_only: bool = True
     ) -> List[ServiceConfig]:
         """
-        Get services by template category.
+        Get services by category tag.
 
         Args:
-            category: Template name (e.g., 'llm', 'memory', 'transcription')
+            category: Category tag (e.g., 'memory', 'conversation_engine')
             enabled_only: Only return enabled services
 
         Returns:
@@ -207,84 +318,76 @@ class ServiceRegistry:
         """
         self._load()
         results = []
-        for instance in self._instances:
-            # Match template name (handles both 'memory' and 'memory.ui')
-            template_base = instance.template.split('.')[0]
-            if template_base == category:
-                if enabled_only and not instance.enabled:
+        for service in self._services.values():
+            # Check UI category
+            if service.ui.get('category') == category:
+                if enabled_only and not service.enabled:
                     continue
-                results.append(instance)
+                results.append(service)
+                continue
+
+            # Check tags
+            if category in service.tags:
+                if enabled_only and not service.enabled:
+                    continue
+                results.append(service)
+
         return results
 
-    def get_effective_schema(self, service_id: str) -> List[ConfigField]:
+    def get_service_config_schema(self, service_id: str) -> List[ConfigField]:
         """
-        Get the effective config schema for a service.
+        Get the config schema for a service.
 
-        Merges template schema with instance-specific overrides.
+        Builds ConfigField list from the service's 'config' section.
 
         Args:
             service_id: Service identifier
 
         Returns:
-            List of ConfigField with merged values
+            List of ConfigField
         """
         self._load()
 
-        instance = self.get_instance(service_id)
-        if not instance:
+        service = self.get_service(service_id)
+        if not service:
             logger.warning(f"Service not found: {service_id}")
             return []
 
-        # Get template schema for the mode (cloud/local)
-        template_name = instance.template.split('.')[0]  # Handle 'memory.ui' -> 'memory'
-        template = self._templates.get(template_name, {})
-
-        mode_config = template.get(instance.mode, {})
-        schema_defs = mode_config.get('config_schema', [])
-
-        # Build ConfigField list with overrides applied
         fields = []
-        for field_def in schema_defs:
-            # Start with template definition
-            field_data = dict(field_def)
-
-            # Apply instance overrides
-            field_key = field_data['key']
-            if field_key in instance.config_overrides:
-                override_value = instance.config_overrides[field_key]
-                # If override is a simple value, set as default
-                if not isinstance(override_value, dict):
-                    field_data['default'] = override_value
-                else:
-                    # Merge dict overrides
-                    field_data.update(override_value)
-
-            # Check for link override
-            link_key = f"{field_key}_link"
-            if link_key in instance.config_overrides:
-                field_data['link'] = instance.config_overrides[link_key]
-
-            # Check for api_key_link special case
-            if 'api_key_link' in instance.config_overrides and field_key == 'api_key':
-                field_data['link'] = instance.config_overrides['api_key_link']
-
-            # Check for settings_path override
-            settings_key = f"{field_key}_settings_path"
-            if settings_key in instance.config_overrides:
-                field_data['settings_path'] = instance.config_overrides[settings_key]
-            if 'api_key_settings_path' in instance.config_overrides and field_key == 'api_key':
-                field_data['settings_path'] = instance.config_overrides['api_key_settings_path']
-
+        for config_item in service.config:
             try:
-                fields.append(ConfigField(**field_data))
+                field = ConfigField(
+                    key=config_item.get('key', ''),
+                    type=config_item.get('type', 'string'),
+                    label=config_item.get('label', config_item.get('key', '')),
+                    description=config_item.get('description'),
+                    required=config_item.get('required', False),
+                    default=config_item.get('default'),
+                    link=config_item.get('link'),
+                    env_var=config_item.get('env_var'),
+                    settings_path=config_item.get('settings_path'),
+                    options=config_item.get('options'),
+                    min=config_item.get('min'),
+                    max=config_item.get('max'),
+                    min_length=config_item.get('min_length'),
+                    required_if=config_item.get('required_if')
+                )
+                fields.append(field)
             except Exception as e:
-                logger.warning(f"Invalid field definition for {service_id}.{field_key}: {e}")
+                logger.warning(
+                    f"Invalid config field for {service_id}.{config_item.get('key')}: {e}"
+                )
 
         return fields
 
+    # Legacy alias
+    def get_effective_schema(self, service_id: str) -> List[ConfigField]:
+        """Legacy alias for get_service_config_schema()."""
+        return self.get_service_config_schema(service_id)
+
     def get_template(self, template_name: str) -> Optional[Dict[str, Any]]:
         """
-        Get a template definition.
+        Get a template/capability definition.
 
         Args:
             template_name: Template identifier
@@ -294,19 +397,6 @@ class ServiceRegistry:
         """
         self._load()
         return self._templates.get(template_name)
-
-    def get_default_provider(self, category: str) -> Optional[str]:
-        """
-        Get the default provider for a category.
-
-        Args:
-            category: Category name (e.g., 'llm', 'memory')
-
-        Returns:
-            Service ID of default provider or None
-        """
-        self._load()
-        return self._default_providers.get(category)
 
 
 # Global singleton instance

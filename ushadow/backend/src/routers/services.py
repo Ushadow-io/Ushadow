@@ -2,8 +2,10 @@
 Services API Endpoints
 
 Provides service discovery for the wizard UI.
-Schema definitions come from ServiceRegistry (template/instance pattern).
-Actual config values are managed via the /settings endpoints.
+Schema definitions come from ServiceRegistry + ProviderRegistry.
+Services declare capabilities they USE, and the schema includes both:
+- Service-specific config (from service YAML)
+- Provider credentials (from selected provider for each capability)
 """
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -11,7 +13,8 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import logging
 
-from src.services.service_registry import get_service_registry
+from src.services.service_registry import get_service_registry, ServiceConfig
+from src.services.provider_registry import get_provider_registry
 from src.services.omegaconf_settings import get_omegaconf_settings
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,114 @@ def get_service_registry_dep():
     return get_service_registry()
 
 
+def infer_field_type(key: str, explicit_type: Optional[str] = None) -> str:
+    """Infer field type from key name if not explicitly set."""
+    if explicit_type and explicit_type != "string":
+        return explicit_type
+
+    key_lower = key.lower()
+    if any(x in key_lower for x in ['api_key', 'apikey', 'password', 'secret', 'token']):
+        return "secret"
+    if any(x in key_lower for x in ['url', 'uri', 'endpoint']):
+        return "url"
+    if any(x in key_lower for x in ['port', 'timeout', 'interval', 'count', 'max', 'min']):
+        return "number"
+    if any(x in key_lower for x in ['enable', 'enabled', 'disable', 'disabled', 'use_', 'is_']):
+        return "boolean"
+
+    return explicit_type or "string"
+
+
+async def build_service_config_schema(
+    service: ServiceConfig,
+    settings: Any
+) -> List[Dict[str, Any]]:
+    """
+    Build complete config schema for a service.
+
+    Combines:
+    1. Service-specific config fields (from service YAML)
+    2. Provider credentials for each capability the service uses
+
+    This gives the UI everything needed to configure a service.
+    """
+    registry = get_service_registry()
+    provider_registry = get_provider_registry()
+
+    schema = []
+
+    # 1. Add provider credentials for each capability this service uses
+    for use in service.uses:
+        capability = use.capability
+        required = use.required
+
+        # Get selected provider for this capability
+        selected_provider_id = await settings.get(f"selected_providers.{capability}")
+
+        if not selected_provider_id:
+            # Use default provider
+            cap = provider_registry.get_capability(capability)
+            if cap:
+                selected_provider_id = cap.default_provider.get('cloud')
+
+        if not selected_provider_id:
+            continue
+
+        provider = provider_registry.get_provider(selected_provider_id)
+        if not provider:
+            continue
+
+        # Add provider's credentials to schema
+        for key, cred in provider.credentials.items():
+            # Skip if credential has a hardcoded value (not user-configurable)
+            if cred.value is not None:
+                continue
+
+            # Check if this credential has a value
+            has_value = False
+            if cred.settings_path:
+                value = await settings.get(cred.settings_path)
+                has_value = value is not None and str(value).strip() != ""
+
+            # Infer type from field name if not explicitly set
+            field_type = infer_field_type(cred.key, cred.type)
+
+            schema.append({
+                "key": cred.key,
+                "type": field_type,
+                "label": cred.label or cred.key.replace("_", " ").title(),
+                "description": f"{capability.upper()} provider: {provider.name}",
+                "link": cred.link,
+                "required": required and cred.required,
+                "default": cred.default,
+                "settings_path": cred.settings_path,
+                "has_value": has_value,
+                # Grouping metadata
+                "capability": capability,
+                "provider_id": provider.id,
+                "provider_name": provider.name,
+            })
+
+    # 2. Add service-specific config fields
+    service_schema = registry.get_effective_schema(service.service_id)
+    for field in service_schema:
+        field_dict = field.model_dump()
+
+        # Check if has value
+        has_value = False
+        if field.settings_path:
+            value = await settings.get(field.settings_path)
+            has_value = value is not None and str(value).strip() != ""
+        elif field.default is not None:
+            has_value = True
+
+        field_dict["has_value"] = has_value
+        field_dict["capability"] = None  # Service-specific, not from a capability
+        schema.append(field_dict)
+
+    return schema
+
+
 @router.get("/quickstart", response_model=List[Dict[str, Any]])
 async def get_quickstart_services(
     registry: Any = Depends(get_service_registry_dep)
@@ -58,8 +169,8 @@ async def get_quickstart_services(
     """
     Get services for quickstart wizard with their effective config schemas.
 
-    Returns services where is_default=true, grouped by category,
-    with config_schema merged from template + instance overrides.
+    Returns services where is_default=true with full config schemas including
+    provider credentials for each capability the service uses.
     """
     try:
         quickstart = registry.get_quickstart_services()
@@ -71,23 +182,36 @@ async def get_quickstart_services(
         # Build response with effective schemas
         result = []
         for service in quickstart:
-            schema = registry.get_effective_schema(service.service_id)
+            # Build combined schema (provider credentials + service config)
+            config_schema = await build_service_config_schema(service, settings)
 
             # Get effective enabled state (MongoDB override or YAML default)
             service_state = installed.get(service.service_id, {})
             enabled_override = service_state.get("enabled")
             effective_enabled = enabled_override if enabled_override is not None else service.enabled
 
+            # Get capabilities this service uses (for UI display)
+            capabilities_used = [
+                {
+                    "capability": use.capability,
+                    "required": use.required,
+                    "purpose": use.purpose
+                }
+                for use in service.uses
+            ]
+
             result.append({
                 "service_id": service.service_id,
                 "name": service.name,
                 "description": service.description,
-                "template": service.template,  # Category name
+                "template": service.template,  # Legacy - may be null
                 "mode": service.mode,
-                "config_schema": [field.model_dump() for field in schema],
+                "config_schema": config_schema,
+                "capabilities": capabilities_used,
                 "docker_image": service.docker_image,
                 "enabled": effective_enabled,
-                "tags": service.tags
+                "tags": service.tags,
+                "ui": service.ui,
             })
 
         return result
@@ -116,7 +240,8 @@ async def get_services_by_category(
 
         result = []
         for service in services:
-            schema = registry.get_effective_schema(service.service_id)
+            # Build combined schema (provider credentials + service config)
+            config_schema = await build_service_config_schema(service, settings)
 
             # Check if dependencies are met
             available = True  # TODO: Check dependencies
@@ -126,17 +251,30 @@ async def get_services_by_category(
             enabled_override = service_state.get("enabled")
             effective_enabled = enabled_override if enabled_override is not None else service.enabled
 
+            # Get capabilities this service uses (for UI display)
+            capabilities_used = [
+                {
+                    "capability": use.capability,
+                    "required": use.required,
+                    "purpose": use.purpose
+                }
+                for use in service.uses
+            ]
+
             result.append({
                 "service_id": service.service_id,
                 "name": service.name,
                 "description": service.description,
+                "template": service.template,  # Legacy - may be null
                 "mode": service.mode,
                 "is_default": service.is_default,
                 "available": available,
-                "config_schema": [field.model_dump() for field in schema],
+                "config_schema": config_schema,
+                "capabilities": capabilities_used,
                 "docker_image": service.docker_image,
                 "enabled": effective_enabled,
-                "tags": service.tags
+                "tags": service.tags,
+                "ui": service.ui,
             })
 
         return result
@@ -181,13 +319,14 @@ async def get_service_catalog(
                 "service_id": service.service_id,
                 "name": service.name,
                 "description": service.description,
-                "template": service.template,
+                "template": service.template,  # Legacy - may be null
                 "mode": service.mode,
                 "is_default": service.is_default,
                 "installed": is_installed,
                 "enabled": effective_enabled if is_installed else False,
                 "docker_image": service.docker_image,
-                "tags": service.tags or []
+                "tags": service.tags or [],
+                "ui": service.ui,  # New: includes category, icon, etc.
             })
 
         return result
@@ -202,10 +341,12 @@ async def get_installed_services(
     registry: Any = Depends(get_service_registry_dep)
 ) -> List[Dict[str, Any]]:
     """
-    Get user's installed services.
+    Get user's installed services with full config schemas.
 
     Returns only services that are installed (default + explicitly installed).
-    This is what shows on the Services page.
+    Config schema includes BOTH:
+    - Provider credentials (for capabilities the service uses)
+    - Service-specific config fields
     """
     try:
         all_services = registry.get_instances()
@@ -223,23 +364,37 @@ async def get_installed_services(
             if not is_installed:
                 continue
 
-            schema = registry.get_effective_schema(service.service_id)
+            # Build combined schema (provider credentials + service config)
+            config_schema = await build_service_config_schema(service, settings)
 
             # Get effective enabled state
             enabled_override = service_state.get("enabled")
             effective_enabled = enabled_override if enabled_override is not None else service.enabled
 
+            # Get capabilities this service uses (for UI display)
+            capabilities_used = [
+                {
+                    "capability": use.capability,
+                    "required": use.required,
+                    "purpose": use.purpose
+                }
+                for use in service.uses
+            ]
+
             result.append({
                 "service_id": service.service_id,
                 "name": service.name,
                 "description": service.description,
-                "template": service.template,
+                "template": service.template,  # Legacy - may be null
                 "mode": service.mode,
                 "is_default": service.is_default,
-                "config_schema": [field.model_dump() for field in schema],
+                "config_schema": config_schema,
+                "capabilities": capabilities_used,  # New: what capabilities this service uses
                 "docker_image": service.docker_image,
+                "docker_service_name": service.docker_service_name,  # For docker API queries
                 "enabled": effective_enabled,
-                "tags": service.tags or []
+                "tags": service.tags or [],
+                "ui": service.ui,
             })
 
         return result

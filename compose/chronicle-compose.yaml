@@ -33,8 +33,9 @@ services:
       - chronicle_data:/app/data
       - chronicle_debug:/app/debug_dir
 
-      # Configuration
-      - ../chronicle/config.yml:/app/config.yml
+      # Model registry - defines available LLMs, embeddings, STT, TTS
+      # Uses PROJECT_ROOT env var for host path (set by backend container)
+      - ${PROJECT_ROOT}/config/config.yml:/app/config.yml:ro
 
     networks:
       - infra-network

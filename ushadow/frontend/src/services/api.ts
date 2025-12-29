@@ -174,11 +174,12 @@ export const servicesApi = {
 // Docker service management endpoints (infrastructure containers)
 export const dockerApi = {
   listServices: () => api.get('/api/docker/services'),
+  getServicesStatus: () => api.get('/api/docker/services/status'),
   getServiceInfo: (serviceName: string) => api.get(`/api/docker/services/${serviceName}`),
   startService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/start`),
   stopService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/stop`),
   restartService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/restart`),
-  getServiceLogs: (serviceName: string, tail: number = 100) => 
+  getServiceLogs: (serviceName: string, tail: number = 100) =>
     api.get(`/api/docker/services/${serviceName}/logs`, { params: { tail } }),
 }
 
@@ -367,6 +368,73 @@ export interface AuthUrlResponse {
   auth_url: string
   web_url: string
   qr_code_data: string
+}
+
+// Provider selection types (capability-based service composition)
+export interface ProviderCredential {
+  key: string
+  label: string | null
+  type: string
+  required: boolean
+  link: string | null
+  settings_path: string | null
+  has_value: boolean
+  default: string | null
+  value: string | null  // Current effective value (non-secrets only)
+}
+
+export interface Provider {
+  id: string
+  name: string
+  description: string | null
+  mode: 'cloud' | 'local'
+  is_selected: boolean
+  is_default: boolean
+  credentials: ProviderCredential[]
+  tags: string[]
+}
+
+export interface Capability {
+  id: string
+  description: string
+  selected_provider: string | null
+  providers: Provider[]
+}
+
+export interface SelectedProviders {
+  wizard_mode: 'quickstart' | 'local' | 'custom'
+  selected_providers: Record<string, string>
+}
+
+// Provider selection API (capability-based service composition)
+export const providersApi = {
+  // List all capabilities with their available providers
+  getCapabilities: () => api.get<Capability[]>('/api/providers/capabilities'),
+
+  // Get a specific capability with its providers
+  getCapability: (capabilityId: string) =>
+    api.get<Capability>(`/api/providers/capabilities/${capabilityId}`),
+
+  // Get current provider selections
+  getSelected: () => api.get<SelectedProviders>('/api/providers/selected'),
+
+  // Update provider selections
+  updateSelected: (update: {
+    wizard_mode?: string
+    selected_providers?: Record<string, string>
+  }) => api.put<SelectedProviders>('/api/providers/selected', update),
+
+  // Quick select a provider for a capability
+  selectProvider: (capability: string, providerId: string) =>
+    api.post(`/api/providers/select/${capability}/${providerId}`),
+
+  // Apply default providers for a mode (cloud/local)
+  applyDefaults: (mode: 'cloud' | 'local') =>
+    api.post(`/api/providers/apply-defaults/${mode}`),
+
+  // Validate a service can be started
+  validateService: (serviceId: string) =>
+    api.get(`/api/providers/validate/${serviceId}`),
 }
 
 export const tailscaleApi = {

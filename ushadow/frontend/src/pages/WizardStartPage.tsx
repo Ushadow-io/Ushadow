@@ -1,16 +1,31 @@
-import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle, Link, FlaskConical } from 'lucide-react'
+import { useState } from 'react'
+import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle, Link, FlaskConical, Loader2 } from 'lucide-react'
 import { useNavigate, Link as RouterLink } from 'react-router-dom'
 import { useWizard } from '../contexts/WizardContext'
 
 export default function WizardStartPage() {
   const navigate = useNavigate()
-  const { setMode, setCurrentPhase } = useWizard()
+  const { setMode, setCurrentPhase, applyDefaultProviders } = useWizard()
+  const [loadingMode, setLoadingMode] = useState<string | null>(null)
 
-  const handleModeSelection = (mode: 'quickstart' | 'local' | 'custom') => {
+  const handleModeSelection = async (mode: 'quickstart' | 'local' | 'custom') => {
+    setLoadingMode(mode)
     setMode(mode)
     setCurrentPhase('quickstart')
+
+    try {
+      // Apply default providers based on mode
+      // Quickstart = cloud defaults, Local = local defaults, Custom = cloud defaults (user can change)
+      const providerMode = mode === 'local' ? 'local' : 'cloud'
+      await applyDefaultProviders(providerMode)
+    } catch (error) {
+      console.warn('Failed to apply default providers:', error)
+      // Continue anyway - defaults will be used
+    }
+
     // Navigate to quickstart wizard (asks for required API keys)
     navigate('/wizard/quickstart')
+    setLoadingMode(null)
   }
 
   // All available wizards for testing
@@ -41,7 +56,8 @@ export default function WizardStartPage() {
         {/* Quickstart Option */}
         <button
           onClick={() => handleModeSelection('quickstart')}
-          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-primary-500 dark:hover:border-primary-400"
+          disabled={loadingMode !== null}
+          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-primary-500 dark:hover:border-primary-400 disabled:opacity-70 disabled:cursor-wait"
         >
           {/* Recommended Badge */}
           <div className="absolute top-3 right-3">
@@ -85,7 +101,11 @@ export default function WizardStartPage() {
               <span className="text-sm font-medium text-primary-600 dark:text-primary-400">
                 Start Now
               </span>
-              <ArrowRight className="h-5 w-5 text-primary-600 dark:text-primary-400 group-hover:translate-x-1 transition-transform" />
+              {loadingMode === 'quickstart' ? (
+                <Loader2 className="h-5 w-5 text-primary-600 dark:text-primary-400 animate-spin" />
+              ) : (
+                <ArrowRight className="h-5 w-5 text-primary-600 dark:text-primary-400 group-hover:translate-x-1 transition-transform" />
+              )}
             </div>
           </div>
         </button>
@@ -93,7 +113,8 @@ export default function WizardStartPage() {
         {/* Completely Local Option */}
         <button
           onClick={() => handleModeSelection('local')}
-          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-primary-500 dark:hover:border-primary-400"
+          disabled={loadingMode !== null}
+          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-primary-500 dark:hover:border-primary-400 disabled:opacity-70 disabled:cursor-wait"
         >
           <div className="flex flex-col h-full">
             {/* Icon */}
@@ -130,7 +151,11 @@ export default function WizardStartPage() {
               <span className="text-sm font-medium text-accent-600 dark:text-accent-400">
                 Self-Host
               </span>
-              <ArrowRight className="h-5 w-5 text-accent-600 dark:text-accent-400 group-hover:translate-x-1 transition-transform" />
+              {loadingMode === 'local' ? (
+                <Loader2 className="h-5 w-5 text-accent-600 dark:text-accent-400 animate-spin" />
+              ) : (
+                <ArrowRight className="h-5 w-5 text-accent-600 dark:text-accent-400 group-hover:translate-x-1 transition-transform" />
+              )}
             </div>
           </div>
         </button>
@@ -138,7 +163,8 @@ export default function WizardStartPage() {
         {/* Customise Option */}
         <button
           onClick={() => handleModeSelection('custom')}
-          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-purple-500 dark:hover:border-purple-400"
+          disabled={loadingMode !== null}
+          className="group relative card p-8 text-left transition-all hover:shadow-2xl hover:scale-105 border-2 border-transparent hover:border-purple-500 dark:hover:border-purple-400 disabled:opacity-70 disabled:cursor-wait"
         >
           <div className="flex flex-col h-full">
             {/* Icon */}
@@ -175,7 +201,11 @@ export default function WizardStartPage() {
               <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
                 Configure
               </span>
-              <ArrowRight className="h-5 w-5 text-purple-600 dark:text-purple-400 group-hover:translate-x-1 transition-transform" />
+              {loadingMode === 'custom' ? (
+                <Loader2 className="h-5 w-5 text-purple-600 dark:text-purple-400 animate-spin" />
+              ) : (
+                <ArrowRight className="h-5 w-5 text-purple-600 dark:text-purple-400 group-hover:translate-x-1 transition-transform" />
+              )}
             </div>
           </div>
         </button>

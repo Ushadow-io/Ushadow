@@ -1,0 +1,52 @@
+# OpenMemory (mem0) service definition
+# Graph-based memory with MCP support
+
+services:
+  mem0:
+    image: ghcr.io/ushadow-io/u-mem0-api:${OPENMEMORY_IMAGE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0
+    env_file:
+      - ${PROJECT_ROOT}/.env
+      - ${PROJECT_ROOT}/config/openmemory.env
+    ports:
+      - "${OPENMEMORY_PORT:-8765}:8765"
+    environment:
+      # Qdrant connection
+      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+    volumes:
+      - mem0_data:/app/data
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  mem0-ui:
+    image: ghcr.io/ushadow-io/u-mem0-ui:${OPENMEMORY_IMAGE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0-ui
+    env_file:
+      - ${PROJECT_ROOT}/.env
+    ports:
+      - "${OPENMEMORY_UI_PORT:-3002}:3000"
+    environment:
+      - VITE_API_URL=http://localhost:${OPENMEMORY_PORT:-8765}
+      - API_URL=http://mem0:8765
+    networks:
+      - infra-network
+    depends_on:
+      - mem0
+    restart: unless-stopped
+
+volumes:
+  mem0_data:
+    driver: local
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true
