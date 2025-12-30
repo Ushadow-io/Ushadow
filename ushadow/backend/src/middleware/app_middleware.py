@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 request_logger = logging.getLogger("api.requests")
 
 
+def _get_tailscale_hostname() -> str | None:
+    """Read the Tailscale hostname from config if available."""
+    try:
+        import yaml
+        config_path = "/config/tailscale.yaml"
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                return config.get('hostname')
+    except Exception as e:
+        logger.debug(f"Could not read Tailscale config: {e}")
+    return None
+
+
 def setup_cors_middleware(app: FastAPI) -> None:
     """Configure CORS middleware for the FastAPI application."""
     # Get CORS origins from environment or use defaults
@@ -28,6 +42,14 @@ def setup_cors_middleware(app: FastAPI) -> None:
         allowed_origins = ['*']
     else:
         allowed_origins = [origin.strip() for origin in cors_origins_env.split(',')]
+
+    # Add Tailscale hostname if configured
+    tailscale_hostname = _get_tailscale_hostname()
+    if tailscale_hostname:
+        tailscale_origin = f"https://{tailscale_hostname}"
+        if tailscale_origin not in allowed_origins and '*' not in allowed_origins:
+            allowed_origins.append(tailscale_origin)
+            logger.info(f"🔒 Added Tailscale origin to CORS: {tailscale_origin}")
 
     logger.info(f"🌐 CORS configured with origins: {allowed_origins}")
 

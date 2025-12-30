@@ -1,9 +1,9 @@
-# Chronicle Default Configuration
-# This file contains safe default values and serves as a template.
-# Copy to config.yaml and customize for your deployment.
+# Default Configuration
+# Contains general application settings.
 #
 # DO NOT store secrets in this file - it is committed to git.
 # Sensitive data (API keys, passwords) goes in secrets.yaml.
+# Provider/service selection is in service-defaults.yaml.
 
 version: 1.0.0
 wizard_completed: false

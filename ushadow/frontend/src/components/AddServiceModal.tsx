@@ -3,13 +3,22 @@ import { X, Plus, Loader2, Server, Cloud, HardDrive } from 'lucide-react'
 import { servicesApi } from '../services/api'
 import { useTheme } from '../contexts/ThemeContext'
 
-interface ServiceTemplate {
-  template_id: string
+interface CatalogService {
+  service_id: string
   name: string
-  description: string
-  category: string
-  modes: ('cloud' | 'local')[]
-  config_schema: any[]
+  description?: string
+  mode?: string  // Single mode (new format)
+  modes?: ('cloud' | 'local')[]  // Legacy array format
+  template?: string | null
+  is_default?: boolean
+  installed?: boolean
+  enabled?: boolean
+  docker_image?: string
+  tags?: string[]
+  ui?: {
+    category?: string
+    icon?: string
+  }
 }
 
 interface AddServiceModalProps {
@@ -18,31 +27,47 @@ interface AddServiceModalProps {
   onServiceInstalled: () => void
 }
 
+// Helper to get modes array from service (handles both formats)
+function getServiceModes(service: CatalogService): ('cloud' | 'local')[] {
+  if (service.modes && service.modes.length > 0) {
+    return service.modes
+  }
+  if (service.mode === 'cloud' || service.mode === 'local') {
+    return [service.mode]
+  }
+  return ['cloud']  // Default fallback
+}
+
 export default function AddServiceModal({
   isOpen,
   onClose,
   onServiceInstalled,
 }: AddServiceModalProps) {
+  const [services, setServices] = useState<CatalogService[]>([])
   const { isDark } = useTheme()
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)
-  const [selectedTemplate, setSelectedTemplate] = useState<ServiceTemplate | null>(null)
+  const [selectedService, setSelectedService] = useState<CatalogService | null>(null)
   const [selectedMode, setSelectedMode] = useState<'cloud' | 'local'>('cloud')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (isOpen) {
-      loadTemplates()
+      loadCatalog()
     }
   }, [isOpen])
 
-  const loadTemplates = async () => {
+  const loadCatalog = async () => {
     setLoading(true)
     setError(null)
     try {
       const response = await servicesApi.getCatalog()
-      setTemplates(response.data || [])
+      // Filter to only show services that aren't already installed
+      const availableServices = (response.data || []).filter(
+        (s: CatalogService) => !s.installed
+      )
+      setServices(availableServices)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load service catalog')
     } finally {
@@ -51,15 +76,15 @@ export default function AddServiceModal({
   }
 
   const handleInstall = async () => {
-    if (!selectedTemplate) return
+    if (!selectedService) return
 
     setInstalling(true)
     setError(null)
     try {
-      await servicesApi.installService(selectedTemplate.template_id)
+      await servicesApi.installService(selectedService.service_id)
       onServiceInstalled()
       onClose()
-      setSelectedTemplate(null)
+      setSelectedService(null)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to install service')
     } finally {
@@ -128,7 +153,7 @@ export default function AddServiceModal({
                 Retry
               </button>
             </div>
-          ) : templates.length === 0 ? (
+          ) : services.length === 0 ? (
             <div className="text-center py-12">
               <Server
                 className="w-12 h-12 mx-auto mb-4"
@@ -265,6 +290,43 @@ export default function AddServiceModal({
               </div>
             </div>
           )}
+
+          {/* Mode Selection - only show if multiple modes available */}
+          {selectedService && (() => {
+            const modes = getServiceModes(selectedService)
+            return modes.length > 1 ? (
+              <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                  Deployment Mode
+                </label>
+                <div className="flex gap-4">
+                  {modes.map((mode) => (
+                    <button
+                      key={mode}
+                      id={`mode-select-${mode}`}
+                      onClick={() => setSelectedMode(mode)}
+                      className={`flex-1 p-4 rounded-lg border-2 transition-all ${
+                        selectedMode === mode
+                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                          : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {mode === 'cloud' ? (
+                          <Cloud className="w-5 h-5 text-primary-600" />
+                        ) : (
+                          <HardDrive className="w-5 h-5 text-primary-600" />
+                        )}
+                        <span className="font-medium text-gray-900 dark:text-white capitalize">
+                          {mode}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null
+          })()}
         </div>
 
         {/* Footer */}

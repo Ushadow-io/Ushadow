@@ -1,0 +1,145 @@
+# Transcription Capability Providers
+# Implements the 'transcription' capability defined in capabilities.yaml
+#
+# Each provider specifies:
+#   - credentials: Values for the capability + env_var name to expose
+#   - mode: cloud or local
+#   - docker: Container config (for local providers)
+#
+# Services get the provider's env vars directly. Only need env_mapping to override.
+# Default provider selection is in config.defaults.yaml under `selected_providers`
+
+capability: transcription
+
+providers:
+  # ==========================================================================
+  # Deepgram - Cloud Transcription
+  # ==========================================================================
+  - id: deepgram
+    name: "Deepgram"
+    description: "Cloud speech-to-text API with real-time streaming"
+    mode: cloud
+
+    credentials:
+      api_key:
+        env_var: DEEPGRAM_API_KEY
+        settings_path: api_keys.deepgram_api_key
+        label: "Deepgram API Key"
+        link: "https://console.deepgram.com/project/default/keys"
+        required: true
+      server_url:
+        env_var: DEEPGRAM_SERVER_URL
+        value: "https://api.deepgram.com/v1"
+      language:
+        env_var: TRANSCRIPTION_LANGUAGE
+        settings_path: transcription.language
+        default: "en"
+
+    ui:
+      icon: deepgram
+      tags: ["transcription", "cloud", "realtime"]
+
+  # ==========================================================================
+  # Mistral Voxtral - Cloud Transcription
+  # ==========================================================================
+  - id: mistral-voxtral
+    name: "Mistral Voxtral"
+    description: "Mistral's voice transcription models"
+    mode: cloud
+
+    credentials:
+      api_key:
+        env_var: MISTRAL_API_KEY
+        settings_path: api_keys.mistral_api_key
+        label: "Mistral API Key"
+        link: "https://console.mistral.ai/api-keys"
+        required: true
+      server_url:
+        env_var: MISTRAL_SERVER_URL
+        value: "https://api.mistral.ai/v1"
+      language:
+        env_var: TRANSCRIPTION_LANGUAGE
+        settings_path: transcription.language
+        default: "en"
+
+    ui:
+      icon: mistral
+      tags: ["transcription", "cloud", "mistral"]
+
+  # ==========================================================================
+  # Whisper (Local) - Local Transcription
+  # ==========================================================================
+  - id: whisper-local
+    name: "Whisper (Local)"
+    description: "OpenAI Whisper running locally - private and offline"
+    mode: local
+
+    docker:
+      image: onerahmet/openai-whisper-asr-webservice:latest
+      compose_file: ""
+      service_name: whisper
+      ports:
+        - container: 9000
+          protocol: http
+      health:
+        http_get: /health
+        port: 9000
+      gpu_support: true
+
+    credentials:
+      api_key:
+        env_var: WHISPER_API_KEY
+        value: ""
+      server_url:
+        env_var: WHISPER_SERVER_URL
+        value: "http://whisper:9000"
+      language:
+        env_var: TRANSCRIPTION_LANGUAGE
+        settings_path: transcription.language
+        default: "en"
+
+    config:
+      model_size:
+        env_var: WHISPER_MODEL_SIZE
+        settings_path: transcription.whisper_model_size
+        label: "Model Size"
+        description: "Larger = more accurate but slower"
+        default: "base"
+        options: ["tiny", "base", "small", "medium", "large"]
+
+    ui:
+      icon: whisper
+      tags: ["transcription", "local", "private"]
+
+  # ==========================================================================
+  # Parakeet (Local) - NVIDIA Parakeet
+  # ==========================================================================
+  - id: parakeet
+    name: "Parakeet"
+    description: "NVIDIA Parakeet ASR model - fast and accurate"
+    mode: local
+
+    docker:
+      image: nvidia/parakeet:latest
+      compose_file: ""
+      service_name: parakeet
+      ports:
+        - container: 8001
+          protocol: http
+      gpu_support: true
+      gpu_required: true
+
+    credentials:
+      api_key:
+        env_var: PARAKEET_API_KEY
+        value: ""
+      server_url:
+        env_var: PARAKEET_SERVER_URL
+        value: "http://parakeet:8001"
+      language:
+        env_var: TRANSCRIPTION_LANGUAGE
+        default: "en"
+
+    ui:
+      icon: nvidia
+      tags: ["transcription", "local", "gpu", "nvidia"]

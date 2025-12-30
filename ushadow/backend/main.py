@@ -7,12 +7,16 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+from beanie import init_beanie
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import get_settings
+from src.models.user import User  # Beanie document model
 
-from src.routers import health, wizard, chronicle, auth, docker, unodes, feature_flags, services, deployments, tailscale, kubernetes, docker_events
+from src.routers import health, wizard, chronicle, auth, feature_flags 
+from src.routers import services, deployments, providers
+from src.routers import kubernetes, tailscale, docker_events, unodes, docker
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -58,9 +62,19 @@ async def lifespan(app: FastAPI):
     await feature_flag_service.startup()
     logger.info("✓ Feature flags initialized")
 
-    # Initialize MongoDB connection and u-node manager
+    # Initialize MongoDB connection
     client = AsyncIOMotorClient(settings.MONGODB_URI)
     db = client[settings.MONGODB_DATABASE]
+    
+    # Initialize Beanie ODM with document models
+    await init_beanie(database=db, document_models=[User])
+    logger.info("✓ Beanie ODM initialized")
+    
+    # Create admin user if configured and doesn't exist
+    from src.services.auth import create_admin_user_if_needed
+    await create_admin_user_if_needed()
+    
+    # Initialize u-node manager
     await init_unode_manager(db)
     logger.info("✓ UNode manager initialized")
 
@@ -111,6 +125,7 @@ app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
+app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
 

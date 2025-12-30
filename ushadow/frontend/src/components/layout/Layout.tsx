@@ -11,11 +11,14 @@ export default function Layout() {
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
+  const { isConnected: isChronicleConnected, recording } = useChronicle()
   const { setupLevel, getSetupLabel } = useWizard()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const userMenuRef = useRef<HTMLDivElement>(null)
 
+  // Helper to check if recording is in a processing state
+  const isRecordingProcessing = ['mic', 'websocket', 'audio-start', 'streaming', 'stopping'].includes(recording.currentStep)
   // Get dynamic wizard label based on setup level
   const wizardLabel = getSetupLabel()
 
@@ -163,6 +166,38 @@ export default function Layout() {
 
             {/* Header Actions */}
             <div className="flex items-center space-x-1">
+              {/* Chronicle Record Button - only show when connected */}
+              {isChronicleConnected && (
+                <button
+                  onClick={recording.isRecording ? recording.stopRecording : recording.startRecording}
+                  disabled={!recording.canAccessMicrophone || (isRecordingProcessing && !recording.isRecording)}
+                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg font-medium transition-all ${
+                    recording.isRecording
+                      ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                      : isRecordingProcessing
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-primary-600 hover:bg-primary-700 text-white'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  title={recording.isRecording ? 'Stop Recording' : 'Start Recording'}
+                  data-testid="chronicle-record-button"
+                >
+                  {isRecordingProcessing && !recording.isRecording ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : recording.isRecording ? (
+                    <MicOff className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline text-sm">
+                    {recording.isRecording
+                      ? recording.formatDuration(recording.recordingDuration)
+                      : isRecordingProcessing
+                        ? 'Starting...'
+                        : 'Record'}
+                  </span>
+                </button>
+              )}
+
               {/* Test Feature Flag Indicator */}
               {isEnabled('example_feature') && (
                 <div

@@ -1,6 +1,15 @@
 import { useState, useEffect } from 'react'
-import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink } from 'lucide-react'
-import { clusterApi, deploymentsApi, ServiceDefinition, Deployment } from '../services/api'
+import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle } from 'lucide-react'
+import { clusterApi, deploymentsApi, servicesApi, Deployment } from '../services/api'
+
+// Installed service from the service registry
+interface InstalledService {
+  service_id: string
+  name: string
+  description: string
+  docker_image: string
+  enabled: boolean
+}
 
 interface UNode {
   id: string
@@ -79,7 +88,7 @@ export default function ClusterPage() {
   const [copied, setCopied] = useState<string | null>(null)
 
   // Deployment state
-  const [services, setServices] = useState<ServiceDefinition[]>([])
+  const [services, setServices] = useState<InstalledService[]>([])
   const [deployments, setDeployments] = useState<Deployment[]>([])
   const [showDeployModal, setShowDeployModal] = useState(false)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
@@ -130,7 +139,7 @@ export default function ClusterPage() {
 
   const loadServices = async () => {
     try {
-      const response = await deploymentsApi.listServices()
+      const response = await servicesApi.getInstalled()
       setServices(response.data)
     } catch (err: any) {
       console.error('Error loading services:', err)
@@ -512,8 +521,10 @@ export default function ClusterPage() {
           {/* Nodes Grid */}
           {!loading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {unodes.map((node) => (
-            <div key={node.id} className="card-hover p-6">
+          {unodes.map((node) => {
+            const isNodeOffline = node.status !== 'online' && node.status !== 'connecting'
+            return (
+            <div key={node.id} className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''}`}>
               {/* Node Header */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center space-x-3">
@@ -540,6 +551,14 @@ export default function ClusterPage() {
                 <span className="text-neutral-500 dark:text-neutral-400">IP: </span>
                 <span className="font-mono text-neutral-700 dark:text-neutral-300">{node.tailscale_ip}</span>
               </div>
+
+              {/* Last Seen (for offline nodes) */}
+              {isNodeOffline && node.last_seen && (
+                <div className="mb-4 text-sm text-danger-600 dark:text-danger-400">
+                  <Clock className="h-3 w-3 inline mr-1" />
+                  Last seen: {new Date(node.last_seen).toLocaleString()}
+                </div>
+              )}
 
               {/* Metrics */}
               {node.metadata?.last_metrics && (
@@ -586,20 +605,40 @@ export default function ClusterPage() {
                     Deployed Services
                   </div>
                   <div className="space-y-2">
-                    {getNodeDeployments(node.hostname).map((deployment) => (
+                    {getNodeDeployments(node.hostname).map((deployment) => {
+                      const effectiveStatus = isNodeOffline && deployment.status === 'running' ? 'unreachable' : deployment.status
+                      return (
                       <div
                         key={deployment.id}
-                        className="flex items-center justify-between bg-neutral-50 dark:bg-neutral-800/50 rounded px-2 py-1.5"
+                        className={`flex items-center justify-between rounded px-2 py-1.5 ${isNodeOffline ? 'bg-warning-50 dark:bg-warning-900/20' : 'bg-neutral-50 dark:bg-neutral-800/50'}`}
                       >
                         <div className="flex items-center space-x-2">
-                          <span className={`px-1.5 py-0.5 text-xs rounded ${getDeploymentStatusColor(deployment.status)}`}>
-                            {deployment.status}
+                          {isNodeOffline && (
+                            <AlertTriangle className="h-3 w-3 text-warning-500" title="Node offline" />
+                          )}
+                          <span className={`px-1.5 py-0.5 text-xs rounded ${
+                            effectiveStatus === 'unreachable'
+                              ? 'text-warning-600 bg-warning-100 dark:text-warning-400 dark:bg-warning-900/30'
+                              : getDeploymentStatusColor(deployment.status)
+                          }`}>
+                            {effectiveStatus}
                           </span>
                           <span className="text-sm text-neutral-700 dark:text-neutral-300">
                             {getServiceName(deployment.service_id)}
                           </span>
                         </div>
                         <div className="flex items-center space-x-1">
+                          {deployment.access_url && deployment.status === 'running' && (
+                            <a
+                              href={deployment.access_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1 text-neutral-500 hover:text-primary-600 rounded"
+                              title={`Open ${deployment.access_url}`}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
                           {deployment.status === 'running' ? (
                             <button
                               onClick={() => handleStopDeployment(deployment.id)}
@@ -640,7 +679,7 @@ export default function ClusterPage() {
                           </button>
                         </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </div>
               )}
@@ -691,7 +730,7 @@ export default function ClusterPage() {
                 </div>
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
         </>
@@ -935,7 +974,7 @@ export default function ClusterPage() {
                             {service.name}
                           </div>
                           <div className="text-sm text-neutral-500 dark:text-neutral-400">
-                            {service.image}
+                            {service.docker_image}
                           </div>
                         </div>
                         {isDeployed && (

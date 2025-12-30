@@ -15,7 +15,7 @@ from src.services.docker_manager import (
     ServiceEndpoint,
     IntegrationType
 )
-from src.services.auth_dependencies import get_current_user
+from src.services.auth import get_current_user
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,27 @@ async def get_docker_status(
     }
 
 
+@router.get("/services/status", response_model=dict)
+async def get_services_status(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get lightweight status for all services.
+
+    Returns only name, status, and health - optimized for polling.
+    """
+    docker_manager = get_docker_manager()
+    services = docker_manager.list_services(user_controllable_only=False)
+
+    return {
+        service.name: {
+            "status": service.status.value,
+            "health": service.health,
+        }
+        for service in services
+    }
+
+
 @router.get("/services", response_model=List[ServiceInfoResponse])
 async def list_services(
     user_controllable_only: bool = True,
@@ -153,7 +174,7 @@ async def get_service(
     Get information about a specific service.
 
     Args:
-        service_name: Name of the service
+        service_name: Service ID or docker container name
 
     Returns:
         Service information
@@ -198,15 +219,18 @@ async def start_service(
     Start a Docker service.
 
     Args:
-        service_name: Name of the service to start
+        service_name: Service ID or docker container name
 
     Returns:
         Action result
     """
+    logger.info(f"POST /services/{service_name}/start - starting service")
     docker_manager = get_docker_manager()
     success, message = await docker_manager.start_service(service_name)
+    logger.info(f"start_service result: success={success}, message={message}")
 
     if not success and message in ["Service not found", "Operation not permitted"]:
+        logger.warning(f"Returning 403 for {service_name}: {message}")
         raise HTTPException(status_code=403, detail=message)
 
     return ServiceActionResponse(success=success, message=message)
@@ -221,7 +245,7 @@ async def stop_service(
     Stop a Docker service.
 
     Args:
-        service_name: Name of the service to stop
+        service_name: Service ID or docker container name
 
     Returns:
         Action result
@@ -244,7 +268,7 @@ async def restart_service(
     Restart a Docker service.
 
     Args:
-        service_name: Name of the service to restart
+        service_name: Service ID or docker container name
 
     Returns:
         Action result
@@ -268,7 +292,7 @@ async def get_service_logs(
     Get logs from a Docker service.
 
     Args:
-        service_name: Name of the service
+        service_name: Service ID or docker container name
         tail: Number of lines to retrieve (default 100)
 
     Returns:

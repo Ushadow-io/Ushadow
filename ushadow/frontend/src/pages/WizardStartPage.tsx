@@ -1,4 +1,5 @@
-import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle, Link, FlaskConical } from 'lucide-react'
+import { useState } from 'react'
+import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle, Link, FlaskConical, Loader2 } from 'lucide-react'
 import { useNavigate, Link as RouterLink } from 'react-router-dom'
 import { useWizard } from '../contexts/WizardContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -8,7 +9,8 @@ export default function WizardStartPage() {
   const { setMode, setCurrentPhase } = useWizard()
   const { isDark } = useTheme()
 
-  const handleModeSelection = (mode: 'quickstart' | 'local' | 'custom') => {
+  const handleModeSelection = async (mode: 'quickstart' | 'local' | 'custom') => {
+    setLoadingMode(mode)
     setMode(mode)
     setCurrentPhase('quickstart')
     // Navigate to appropriate wizard based on mode

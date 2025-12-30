@@ -3,21 +3,33 @@ import { getStorageKey } from '../utils/storage'
 
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
-  const { protocol, hostname, port } = window.location
+  const { protocol, hostname, port, pathname } = window.location
   console.log('Protocol:', protocol)
   console.log('Hostname:', hostname)
   console.log('Port:', port)
+  console.log('Pathname:', pathname)
 
   const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
                          (protocol === 'http:' && (port === '' || port === '80'))
 
-  // Check if we have a base path (for path-based routing)
-  const basePath = import.meta.env.BASE_URL
-  console.log('Base path from Vite:', basePath)
+  // Check if we have a base path from Vite build config
+  const viteBasePath = import.meta.env.BASE_URL
+  console.log('Base path from Vite:', viteBasePath)
 
-  if (isStandardPort && basePath && basePath !== '/') {
-    // We're using path-based routing - use the base path
-    console.log('Using path-based routing with base path')
+  // Detect runtime base path from URL (e.g., /wiz/ from /wiz/settings)
+  // This handles path-based routing via Caddy/nginx without rebuild
+  const pathSegments = pathname.split('/').filter(Boolean)
+  const runtimeBasePath = pathSegments.length > 0 && !pathSegments[0].includes('.')
+    ? `/${pathSegments[0]}`
+    : ''
+  console.log('Runtime base path detected:', runtimeBasePath || '(none)')
+
+  // Use Vite base path if set, otherwise use runtime detection
+  const basePath = (viteBasePath && viteBasePath !== '/') ? viteBasePath : runtimeBasePath
+
+  if (isStandardPort && basePath) {
+    // We're using path-based routing - use the base path for API calls
+    console.log('Using path-based routing with base path:', basePath)
     return basePath.replace(/\/$/, '')
   }
 
@@ -174,11 +186,12 @@ export const servicesApi = {
 // Docker service management endpoints (infrastructure containers)
 export const dockerApi = {
   listServices: () => api.get('/api/docker/services'),
+  getServicesStatus: () => api.get('/api/docker/services/status'),
   getServiceInfo: (serviceName: string) => api.get(`/api/docker/services/${serviceName}`),
   startService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/start`),
   stopService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/stop`),
   restartService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/restart`),
-  getServiceLogs: (serviceName: string, tail: number = 100) => 
+  getServiceLogs: (serviceName: string, tail: number = 100) =>
     api.get(`/api/docker/services/${serviceName}/logs`, { params: { tail } }),
 }
 
@@ -295,6 +308,8 @@ export interface Deployment {
   error?: string
   retry_count: number
   deployed_config?: Record<string, any>
+  access_url?: string
+  exposed_port?: number
 }
 
 export const deploymentsApi = {
@@ -341,6 +356,13 @@ export interface PlatformInfo {
   is_docker: boolean
 }
 
+export interface EnvironmentInfo {
+  name: string
+  tailscale_hostname: string
+  tailscale_container_name: string
+  tailscale_volume_name: string
+}
+
 export interface CertificateStatus {
   provisioned: boolean
   cert_path?: string
@@ -369,7 +391,328 @@ export interface AuthUrlResponse {
   qr_code_data: string
 }
 
+// =============================================================================
+// Provider Types (capability-based service composition)
+// =============================================================================
+
+/** Summary returned by list endpoints */
+export interface ProviderSummary {
+  id: string
+  name: string
+  capability: string
+}
+
+/** EnvMap - maps settings to environment variables */
+export interface EnvMap {
+  key: string
+  env_var: string
+  label: string | null
+  type: 'string' | 'secret' | 'url' | 'boolean' | 'integer'
+  required: boolean
+  settings_path: string | null
+  link: string | null
+  default: string | null
+}
+
+/** Missing required field */
+export interface MissingField {
+  key: string
+  label: string
+  settings_path: string | null
+  link: string | null
+}
+
+/** Credential with value status (from /capabilities providers) */
+export interface Credential {
+  key: string
+  type: 'string' | 'secret' | 'url' | 'boolean' | 'integer'
+  label: string
+  settings_path: string | null
+  link: string | null
+  required: boolean
+  default: string | null
+  has_value: boolean
+  value: string | null  // Actual value for non-secrets only
+}
+
+/** Provider with config status (from /providers/capability/{id} or /capabilities) */
+export interface ProviderWithStatus {
+  id: string
+  name: string
+  description: string | null
+  mode: 'cloud' | 'local'
+  icon: string | null
+  tags: string[]
+  configured: boolean
+  missing: MissingField[]
+  is_selected?: boolean
+  is_default?: boolean
+  credentials?: Credential[]
+  /** Whether the provider's service is available/reachable (for local providers) */
+  available?: boolean
+  /** Whether the provider needs external setup (local providers that aren't running) */
+  setup_needed?: boolean
+}
+
+/** Full provider details (from /providers/{id}) */
+export interface Provider {
+  id: string
+  name: string
+  description: string | null
+  capability: string
+  mode: 'cloud' | 'local'
+  icon: string | null
+  tags: string[]
+  env_maps: EnvMap[]
+  configured: boolean
+  missing: MissingField[]
+}
+
+/** Capability with providers and selection status */
+export interface Capability {
+  id: string
+  description: string
+  selected_provider: string | null
+  providers: ProviderWithStatus[]
+}
+
+/** Provider selection state */
+export interface SelectedProviders {
+  wizard_mode: 'quickstart' | 'local' | 'custom'
+  selected_providers: Record<string, string>
+}
+
+/** Query parameters for finding providers */
+export interface ProviderQuery {
+  capability?: string
+  mode?: 'cloud' | 'local'
+  configured?: boolean
+}
+
+// =============================================================================
+// Provider API
+// =============================================================================
+
+export const providersApi = {
+  /** List all providers (summary: id, name, capability) */
+  listProviders: () =>
+    api.get<ProviderSummary[]>('/api/providers'),
+
+  /** Get providers for a capability with config status */
+  getProvidersByCapability: (capability: string) =>
+    api.get<ProviderWithStatus[]>(`/api/providers/capability/${capability}`),
+
+  /** Get full provider details */
+  getProvider: (providerId: string) =>
+    api.get<Provider>(`/api/providers/${providerId}`),
+
+  /** Get missing required fields for a provider */
+  getMissingFields: (providerId: string) =>
+    api.get<{ provider_id: string; configured: boolean; missing: MissingField[] }>(
+      `/api/providers/${providerId}/missing`
+    ),
+
+  /** Find providers matching criteria */
+  findProviders: (query: ProviderQuery) =>
+    api.post<Provider[]>('/api/providers/find', query),
+
+  /** List all capabilities with selected provider */
+  getCapabilities: () =>
+    api.get<Capability[]>('/api/providers/capabilities'),
+
+  /** Get current provider selections */
+  getSelected: () =>
+    api.get<SelectedProviders>('/api/providers/selected'),
+
+  /** Update provider selections */
+  updateSelected: (update: {
+    wizard_mode?: string
+    selected_providers?: Record<string, string>
+  }) => api.put<SelectedProviders>('/api/providers/selected', update),
+
+  /** Select a single provider for a capability */
+  selectProvider: (capability: string, providerId: string) =>
+    api.put<SelectedProviders>('/api/providers/selected', {
+      selected_providers: { [capability]: providerId }
+    }),
+
+  /** Apply default providers for a mode (cloud/local) */
+  applyDefaults: (mode: 'cloud' | 'local') =>
+    api.post<SelectedProviders>(`/api/providers/apply-defaults/${mode}`),
+}
+
+// =============================================================================
+// OpenMemory API (connects to mem0 backend)
+// =============================================================================
+
+import type {
+  Memory,
+  ApiMemoryItem,
+  MemoriesApiResponse,
+  MemoryFilters,
+  MemoryAccessLog,
+  MemoryStats,
+} from '../types/memory'
+
+/** Convert API response to internal Memory format */
+const adaptMemoryItem = (item: ApiMemoryItem): Memory => ({
+  id: item.id,
+  memory: item.content,
+  created_at: new Date(item.created_at).getTime(),
+  state: item.state as Memory['state'],
+  metadata: item.metadata_ || {},
+  categories: item.categories as Memory['categories'],
+  client: 'api',
+  app_name: item.app_name,
+})
+
+export const memoriesApi = {
+  /** Get OpenMemory server URL from settings or use default */
+  getServerUrl: async (): Promise<string> => {
+    try {
+      const response = await settingsApi.getConfig()
+      return response.data?.infrastructure?.openmemory_server_url || 'http://localhost:8765'
+    } catch {
+      return 'http://localhost:8765'
+    }
+  },
+
+  /** Fetch memories with filtering and pagination */
+  fetchMemories: async (
+    userId: string,
+    query?: string,
+    page: number = 1,
+    size: number = 10,
+    filters?: MemoryFilters
+  ): Promise<{ memories: Memory[]; total: number; pages: number }> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.post<MemoriesApiResponse>(
+      `${serverUrl}/api/v1/memories/filter`,
+      {
+        user_id: userId,
+        page,
+        size,
+        search_query: query,
+        app_ids: filters?.apps,
+        category_ids: filters?.categories,
+        sort_column: filters?.sortColumn?.toLowerCase(),
+        sort_direction: filters?.sortDirection,
+        show_archived: filters?.showArchived,
+      }
+    )
+    return {
+      memories: response.data.items.map(adaptMemoryItem),
+      total: response.data.total,
+      pages: response.data.pages,
+    }
+  },
+
+  /** Get a single memory by ID */
+  getMemory: async (userId: string, memoryId: string): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<ApiMemoryItem>(
+      `${serverUrl}/api/v1/memories/${memoryId}?user_id=${userId}`
+    )
+    return adaptMemoryItem(response.data)
+  },
+
+  /** Create a new memory */
+  createMemory: async (
+    userId: string,
+    text: string,
+    infer: boolean = true,
+    app: string = 'ushadow'
+  ): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.post<ApiMemoryItem>(`${serverUrl}/api/v1/memories/`, {
+      user_id: userId,
+      text,
+      infer,
+      app,
+    })
+    return adaptMemoryItem(response.data)
+  },
+
+  /** Update memory content */
+  updateMemory: async (userId: string, memoryId: string, content: string): Promise<void> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    await axios.put(`${serverUrl}/api/v1/memories/${memoryId}`, {
+      memory_id: memoryId,
+      memory_content: content,
+      user_id: userId,
+    })
+  },
+
+  /** Update memory state (pause, archive, etc.) */
+  updateMemoryState: async (
+    userId: string,
+    memoryIds: string[],
+    state: Memory['state']
+  ): Promise<void> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    await axios.post(`${serverUrl}/api/v1/memories/actions/pause`, {
+      memory_ids: memoryIds,
+      all_for_app: true,
+      state,
+      user_id: userId,
+    })
+  },
+
+  /** Delete memories */
+  deleteMemories: async (userId: string, memoryIds: string[]): Promise<void> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    await axios.delete(`${serverUrl}/api/v1/memories/`, {
+      data: { memory_ids: memoryIds, user_id: userId },
+    })
+  },
+
+  /** Get access logs for a memory */
+  getAccessLogs: async (
+    memoryId: string,
+    page: number = 1,
+    pageSize: number = 10
+  ): Promise<{ logs: MemoryAccessLog[]; total: number }> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<{ logs: MemoryAccessLog[]; total: number }>(
+      `${serverUrl}/api/v1/memories/${memoryId}/access-log?page=${page}&page_size=${pageSize}`
+    )
+    return response.data
+  },
+
+  /** Get related memories */
+  getRelatedMemories: async (userId: string, memoryId: string): Promise<Memory[]> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<MemoriesApiResponse>(
+      `${serverUrl}/api/v1/memories/${memoryId}/related?user_id=${userId}`
+    )
+    return response.data.items.map(adaptMemoryItem)
+  },
+
+  /** Get memory statistics */
+  getStats: async (userId: string): Promise<MemoryStats> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<MemoryStats>(
+      `${serverUrl}/api/v1/stats?user_id=${userId}`
+    )
+    return response.data
+  },
+
+  /** Check if OpenMemory server is available */
+  healthCheck: async (): Promise<boolean> => {
+    try {
+      const serverUrl = await memoriesApi.getServerUrl()
+      await axios.get(`${serverUrl}/docs`, { timeout: 5000 })
+      return true
+    } catch {
+      return false
+    }
+  },
+}
+
 export const tailscaleApi = {
+  // Environment info (for per-environment Tailscale containers)
+  getEnvironment: () => api.get<EnvironmentInfo>('/api/tailscale/environment'),
+
   // Platform detection
   getPlatform: () => api.get<PlatformInfo>('/api/tailscale/platform'),
   getInstallationGuide: (osType: string) => api.get(`/api/tailscale/installation-guide?os_type=${osType}`),

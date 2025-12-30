@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,37 @@ from src.models.deployment import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_local_deployment(unode_hostname: str) -> bool:
+    """Check if deployment is to the local node (same COMPOSE_PROJECT_NAME)."""
+    env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
+    # Local if hostname matches environment name or is the local machine
+    return unode_hostname == env_name or unode_hostname == "localhost"
+
+
+def _update_tailscale_serve_route(service_id: str, container_name: str, port: int, add: bool = True) -> bool:
+    """Update tailscale serve route for a deployed service.
+
+    Args:
+        service_id: Service identifier (used as URL path)
+        container_name: Container name to route to
+        port: Container port
+        add: True to add route, False to remove
+
+    Returns:
+        True if successful
+    """
+    try:
+        from src.services.tailscale_serve import add_service_route, remove_service_route
+
+        if add:
+            return add_service_route(service_id, container_name, port)
+        else:
+            return remove_service_route(service_id)
+    except Exception as e:
+        logger.warning(f"Failed to update tailscale serve route: {e}")
+        return False
 
 # Manager API port on worker nodes
 MANAGER_PORT = 8444
@@ -162,14 +194,47 @@ class DeploymentManager:
     # Deployment Operations
     # =========================================================================
 
+    async def _get_service_from_registry(self, service_id: str) -> Optional[ServiceDefinition]:
+        """Get service from the service registry and convert to ServiceDefinition."""
+        try:
+            from src.services.service_registry import get_service_registry
+            registry = get_service_registry()
+
+            service_instance = registry.get_instance(service_id)
+            if not service_instance:
+                # Log available services for debugging
+                all_services = registry.get_instances()
+                available_ids = [s.service_id for s in all_services]
+                logger.warning(f"Service '{service_id}' not in registry. Available: {available_ids}")
+                return None
+
+            logger.info(f"Found service in registry: {service_id} -> {service_instance.docker_image}")
+
+            # Convert to ServiceDefinition format
+            return ServiceDefinition(
+                service_id=service_instance.service_id,
+                name=service_instance.name,
+                image=service_instance.docker_image or f"{service_instance.service_id}:latest",
+                ports={},  # Will be configured per service
+                environment={},
+                volumes=[],  # List, not dict
+                restart_policy="unless-stopped",
+            )
+        except Exception as e:
+            logger.error(f"Could not get service from registry: {e}", exc_info=True)
+            return None
+
     async def deploy_service(
         self,
         service_id: str,
         unode_hostname: str
     ) -> Deployment:
         """Deploy a service to a u-node."""
-        # Get service definition
+        # Get service definition (try deployment definitions first, then service registry)
         service = await self.get_service(service_id)
+        if not service:
+            # Fall back to service registry
+            service = await self._get_service_from_registry(service_id)
         if not service:
             raise ValueError(f"Service not found: {service_id}")
 
@@ -220,13 +285,36 @@ class DeploymentManager:
         try:
             result = await self._send_deploy_command(unode, service, container_name)
 
+            logger.info(f"Deploy result from {unode_hostname}: {result}")
             if result.get("success"):
                 deployment.status = DeploymentStatus.RUNNING
                 deployment.container_id = result.get("container_id")
                 deployment.deployed_at = datetime.now(timezone.utc)
+
+                # Get port from service definition (first exposed port or default 8080)
+                port = 8080
+                if service.ports:
+                    port = list(service.ports.values())[0] if service.ports else 8080
+                deployment.exposed_port = port
+
+                # Calculate access URL and update tailscale serve for local deployments
+                is_local = _is_local_deployment(unode_hostname)
+                if is_local:
+                    _update_tailscale_serve_route(service_id, container_name, port, add=True)
+
+                # Set access URL using tailscale helper
+                from src.services.tailscale_serve import get_service_access_url
+                access_url = get_service_access_url(unode_hostname, port, is_local=is_local)
+                if access_url:
+                    if is_local:
+                        # Local services have path-based routing
+                        deployment.access_url = f"{access_url}/{service_id}"
+                    else:
+                        deployment.access_url = access_url
             else:
                 deployment.status = DeploymentStatus.FAILED
                 deployment.error = result.get("error", "Unknown error")
+                logger.error(f"Deploy failed on {unode_hostname}: {deployment.error}")
 
         except Exception as e:
             logger.error(f"Deploy failed for {service_id} on {unode_hostname}: {e}")
@@ -319,6 +407,10 @@ class DeploymentManager:
             except Exception as e:
                 logger.warning(f"Failed to remove container on node: {e}")
 
+        # Remove tailscale serve route for local deployments
+        if _is_local_deployment(deployment.unode_hostname):
+            _update_tailscale_serve_route(deployment.service_id, "", 0, add=False)
+
         await self.deployments_collection.delete_one({"id": deployment_id})
         logger.info(f"Removed deployment: {deployment_id}")
         return True
@@ -389,8 +481,24 @@ class DeploymentManager:
 
     async def _get_node_secret(self, unode: Dict[str, Any]) -> str:
         """Get the secret for authenticating with a u-node."""
-        # Secret is stored in node metadata during registration
-        return unode.get("metadata", {}).get("unode_secret", "")
+        # Secret is stored encrypted - need to decrypt it
+        encrypted_secret = unode.get("unode_secret_encrypted", "")
+        hostname = unode.get('hostname', 'unknown')
+
+        if not encrypted_secret:
+            logger.warning(f"No encrypted secret found for node {hostname}")
+            logger.warning(f"Available unode fields: {list(unode.keys())}")
+            return ""
+
+        try:
+            from src.services.unode_manager import get_unode_manager
+            unode_manager = await get_unode_manager()
+            secret = unode_manager._decrypt_secret(encrypted_secret)
+            logger.info(f"Decrypted secret for {hostname}: {'[OK]' if secret else '[EMPTY]'} (length={len(secret)})")
+            return secret
+        except Exception as e:
+            logger.error(f"Failed to decrypt node secret for {hostname}: {e}")
+            return ""
 
     async def _send_deploy_command(
         self,
@@ -416,7 +524,7 @@ class DeploymentManager:
 
         headers = {"X-Node-Secret": secret}
 
-        logger.info(f"Deploying {container_name} to {unode.get('hostname')}")
+        logger.info(f"Deploying {container_name} to {unode.get('hostname')} (secret length={len(secret)})")
 
         async with session.post(
             f"{url}/deploy",

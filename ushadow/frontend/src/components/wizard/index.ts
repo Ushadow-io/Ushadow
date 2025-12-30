@@ -47,3 +47,6 @@ export type { WizardProgressProps } from './WizardProgress';
 
 export { ConfiguredSummary } from './ConfiguredSummary';
 export type { ConfiguredSummaryProps } from './ConfiguredSummary';
+
+export { ProviderSelector } from './ProviderSelector';
+export type { ProviderSelectorProps } from './ProviderSelector';

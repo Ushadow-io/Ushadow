@@ -575,18 +575,35 @@ Write-Host ""
         if heartbeat.manager_version:
             update_data["manager_version"] = heartbeat.manager_version
 
+        # Try exact hostname match first
         result = await self.unodes_collection.update_one(
             {"hostname": heartbeat.hostname},
             {"$set": update_data}
         )
 
-        if heartbeat.capabilities:
+        # If no match, try case-insensitive hostname match
+        if result.matched_count == 0:
+            logger.warning(f"Heartbeat: No exact match for hostname '{heartbeat.hostname}', trying case-insensitive")
+            result = await self.unodes_collection.update_one(
+                {"hostname": {"$regex": f"^{heartbeat.hostname}$", "$options": "i"}},
+                {"$set": {**update_data, "hostname": heartbeat.hostname}}  # Also fix the hostname
+            )
+            if result.matched_count > 0:
+                logger.info(f"Heartbeat: Found node with case-insensitive match, updated hostname to '{heartbeat.hostname}'")
+
+        # If still no match, log all known hostnames for debugging
+        if result.matched_count == 0:
+            all_nodes = await self.unodes_collection.find({}, {"hostname": 1, "tailscale_ip": 1}).to_list(100)
+            known = [(n.get("hostname"), n.get("tailscale_ip")) for n in all_nodes]
+            logger.error(f"Heartbeat: UNode '{heartbeat.hostname}' not found. Known nodes: {known}")
+
+        if heartbeat.capabilities and result.matched_count > 0:
             await self.unodes_collection.update_one(
                 {"hostname": heartbeat.hostname},
                 {"$set": {"capabilities": heartbeat.capabilities.model_dump()}}
             )
 
-        return result.modified_count > 0
+        return result.matched_count > 0
 
     async def get_unode(self, hostname: str) -> Optional[UNode]:
         """Get a u-node by hostname."""
@@ -617,6 +634,10 @@ Write-Host ""
         """Remove a u-node from the cluster."""
         result = await self.unodes_collection.delete_one({"hostname": hostname})
         if result.deleted_count > 0:
+            # Also clean up any deployments for this node
+            deployments_result = await self.db.deployments.delete_many({"unode_hostname": hostname})
+            if deployments_result.deleted_count > 0:
+                logger.info(f"Cleaned up {deployments_result.deleted_count} deployments for {hostname}")
             logger.info(f"Removed u-node: {hostname}")
             return True
         return False
@@ -660,6 +681,10 @@ Write-Host ""
         # Remove from database
         result = await self.unodes_collection.delete_one({"hostname": hostname})
         if result.deleted_count > 0:
+            # Also clean up any deployments for this node
+            deployments_result = await self.db.deployments.delete_many({"unode_hostname": hostname})
+            if deployments_result.deleted_count > 0:
+                logger.info(f"Cleaned up {deployments_result.deleted_count} deployments for {hostname}")
             logger.info(f"Released u-node: {hostname}")
             return True, f"Node {hostname} released. It can now be claimed by another leader."
 

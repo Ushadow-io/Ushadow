@@ -1,0 +1,79 @@
+# Capability Definitions
+#
+# Capabilities define abstract interfaces that services can depend on.
+# Each capability specifies:
+#   - provides: Credential keys that providers must supply (api_key, base_url, etc.)
+#
+# Note: Providers define what env vars they expose (e.g., OPENAI_API_KEY).
+# Services get the provider's env vars directly - only need env_mapping if overriding.
+#
+# Usage:
+#   1. Services declare `uses: [{capability: llm}]`
+#   2. Providers in config/providers/*.yaml implement capabilities with env_var per credential
+#   3. CapabilityResolver passes provider's env vars to service
+#   4. Service uses env_mapping only if it needs different env var names
+
+capabilities:
+  # ==========================================================================
+  # LLM Capability
+  # ==========================================================================
+  llm:
+    description: "Large Language Model providers"
+
+    # Credential keys that providers must supply
+    # Providers define the actual env_var names (e.g., OPENAI_API_KEY)
+    provides:
+      api_key:
+        type: secret
+        description: "API key for the LLM provider"
+      base_url:
+        type: url
+        description: "API endpoint URL"
+      model:
+        type: string
+        description: "Model identifier to use"
+
+  # ==========================================================================
+  # Transcription Capability
+  # ==========================================================================
+  transcription:
+    description: "Speech-to-text transcription services"
+
+    provides:
+      api_key:
+        type: secret
+        description: "API key for transcription service"
+      server_url:
+        type: url
+        description: "Transcription service endpoint"
+      language:
+        type: string
+        description: "Target language code (e.g., en, es, fr)"
+
+  # ==========================================================================
+  # Memory Capability
+  # ==========================================================================
+  memory:
+    description: "Memory and knowledge storage services"
+
+    provides:
+      server_url:
+        type: url
+        description: "Memory service endpoint"
+      api_key:
+        type: secret
+        description: "API key for memory service (if required)"
+
+  # ==========================================================================
+  # Speaker Recognition Capability
+  # ==========================================================================
+  speaker_recognition:
+    description: "Speaker identification and diarization"
+
+    provides:
+      api_key:
+        type: secret
+        description: "API key for speaker recognition"
+      server_url:
+        type: url
+        description: "Speaker recognition service endpoint"

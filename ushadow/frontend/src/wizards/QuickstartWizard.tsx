@@ -62,8 +62,13 @@ export default function QuickstartWizard() {
 
   const [loading, setLoading] = useState(true)
   const [services, setServices] = useState<QuickstartService[]>([])
+  const [capabilities, setCapabilities] = useState<Capability[]>([])
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [showProviderConfig, setShowProviderConfig] = useState(false)
+
+  // In custom mode, show provider configuration by default
+  const isCustomMode = wizardState.mode === 'custom'
 
   // Container states for service cards
   const [containers, setContainers] = useState<ContainerInfo[]>([
@@ -78,6 +83,7 @@ export default function QuickstartWizard() {
 
   useEffect(() => {
     loadQuickstartServices()
+    loadCapabilities()
   }, [])
 
   // Check container status when entering start_services step
@@ -132,6 +138,28 @@ export default function QuickstartWizard() {
       console.error('Failed to load quickstart services:', error)
       setMessage({ type: 'error', text: 'Failed to load wizard configuration' })
       setLoading(false)
+    }
+  }
+
+  const loadCapabilities = async () => {
+    try {
+      const response = await providersApi.getCapabilities()
+      setCapabilities(response.data)
+    } catch (error) {
+      console.error('Failed to load capabilities:', error)
+      // Non-fatal - wizard can still work without provider selection
+    }
+  }
+
+  const handleProviderSelect = async (capability: string, providerId: string) => {
+    try {
+      await selectProvider(capability, providerId)
+      // Reload capabilities to refresh selected state
+      await loadCapabilities()
+      setMessage({ type: 'success', text: `Selected ${providerId} for ${capability}` })
+      setTimeout(() => setMessage(null), 2000)
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to select provider') })
     }
   }
 

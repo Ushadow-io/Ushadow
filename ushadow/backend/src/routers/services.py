@@ -1,437 +1,333 @@
 """
-Services API Endpoints
+Services API - Thin HTTP layer over ServiceRegistry.
 
-Provides service discovery for the wizard UI.
-Schema definitions come from ServiceRegistry (template/instance pattern).
-Actual config values are managed via the /settings endpoints.
+Services declare capabilities they USE. The schema includes both:
+- Service-specific config (from service YAML)
+- Provider env_maps (from selected provider for each capability)
+
+Endpoints:
+- GET /services/quickstart - Default services for quickstart wizard
+- GET /services/catalog - All services with install status
+- GET /services/installed - User's installed services
+- GET /services/categories/{category} - Services by category
+- POST /services/install - Install a service
+- DELETE /services/{id}/uninstall - Uninstall a service
+- GET /services/{id}/enabled - Get enabled state
+- PUT /services/{id}/enabled - Set enabled state
 """
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 import logging
+from typing import List, Dict, Any, Optional
 
-from src.services.service_registry import get_service_registry
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from src.services.service_registry import get_service_registry, ServiceConfig
+from src.services.provider_registry import get_provider_registry
 from src.services.omegaconf_settings import get_omegaconf_settings
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
+# =============================================================================
+# Request/Response Models
+# =============================================================================
+
 class EnabledRequest(BaseModel):
-    """Request body for enabling/disabling a service."""
     enabled: bool
 
 
-class ServiceEnabledResponse(BaseModel):
-    """Response for service enabled state."""
+class InstallRequest(BaseModel):
     service_id: str
-    enabled: bool
-    message: str
+    docker_image: Optional[str] = None
 
 
-class InstallServiceRequest(BaseModel):
-    """Request body for installing a service."""
-    service_id: str
-    docker_image: Optional[str] = None  # Override default image
+# =============================================================================
+# Helper - Build config schema for a service
+# =============================================================================
 
-
-class InstallServiceResponse(BaseModel):
-    """Response for service installation."""
-    service_id: str
-    name: str
-    installed: bool
-    enabled: bool
-    message: str
-
-
-def get_service_registry_dep():
-    """Get ServiceRegistry instance."""
-    return get_service_registry()
-
-
-@router.get("/quickstart", response_model=List[Dict[str, Any]])
-async def get_quickstart_services(
-    registry: Any = Depends(get_service_registry_dep)
-) -> List[Dict[str, Any]]:
+async def build_config_schema(service: ServiceConfig, settings) -> List[Dict[str, Any]]:
     """
-    Get services for quickstart wizard with their effective config schemas.
+    Build config schema combining provider env_maps + service-specific config.
 
-    Returns services where is_default=true, grouped by category,
-    with config_schema merged from template + instance overrides.
+    For each capability the service uses, includes the selected provider's
+    required env_maps. Then adds service-specific config fields.
     """
-    try:
-        quickstart = registry.get_quickstart_services()
+    provider_registry = get_provider_registry()
+    service_registry = get_service_registry()
+    schema = []
 
-        # Get settings manager for enabled state overrides
-        settings = get_omegaconf_settings()
-        installed = await settings.get_installed_services()
+    # 1. Provider env_maps for each capability this service uses
+    for use in service.uses:
+        capability = use.capability
+        required = use.required
 
-        # Build response with effective schemas
-        result = []
-        for service in quickstart:
-            schema = registry.get_effective_schema(service.service_id)
+        # Get selected provider for this capability
+        selected_id = await settings.get(f"selected_providers.{capability}")
 
-            # Get effective enabled state (MongoDB override or YAML default)
-            service_state = installed.get(service.service_id, {})
-            enabled_override = service_state.get("enabled")
-            effective_enabled = enabled_override if enabled_override is not None else service.enabled
+        # Fall back to default if not selected
+        if not selected_id:
+            selected_id = provider_registry.get_default_provider_id(capability, 'cloud')
 
-            result.append({
-                "service_id": service.service_id,
-                "name": service.name,
-                "description": service.description,
-                "template": service.template,  # Category name
-                "mode": service.mode,
-                "config_schema": [field.model_dump() for field in schema],
-                "docker_image": service.docker_image,
-                "enabled": effective_enabled,
-                "tags": service.tags
-            })
+        if not selected_id:
+            continue
 
-        return result
+        provider = provider_registry.get_provider(selected_id)
+        if not provider:
+            continue
 
-    except Exception as e:
-        logger.error(f"Failed to get quickstart services: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/categories/{category}", response_model=List[Dict[str, Any]])
-async def get_services_by_category(
-    category: str,
-    registry: Any = Depends(get_service_registry_dep)
-) -> List[Dict[str, Any]]:
-    """
-    Get all service instances for a category with their effective schemas.
-
-    Used in customize wizard to show all available providers for a category.
-    """
-    try:
-        services = registry.get_services_by_category(category, enabled_only=False)
-
-        # Get settings manager for enabled state overrides
-        settings = get_omegaconf_settings()
-        installed = await settings.get_installed_services()
-
-        result = []
-        for service in services:
-            schema = registry.get_effective_schema(service.service_id)
-
-            # Check if dependencies are met
-            available = True  # TODO: Check dependencies
-
-            # Get effective enabled state (MongoDB override or YAML default)
-            service_state = installed.get(service.service_id, {})
-            enabled_override = service_state.get("enabled")
-            effective_enabled = enabled_override if enabled_override is not None else service.enabled
-
-            result.append({
-                "service_id": service.service_id,
-                "name": service.name,
-                "description": service.description,
-                "mode": service.mode,
-                "is_default": service.is_default,
-                "available": available,
-                "config_schema": [field.model_dump() for field in schema],
-                "docker_image": service.docker_image,
-                "enabled": effective_enabled,
-                "tags": service.tags
-            })
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Failed to get services for category {category}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/catalog", response_model=List[Dict[str, Any]])
-async def get_service_catalog(
-    registry: Any = Depends(get_service_registry_dep)
-) -> List[Dict[str, Any]]:
-    """
-    Get catalog of all available services.
-
-    Returns all services from the registry with their installation status.
-    - is_default=true services are auto-installed
-    - Other services can be installed via POST /install
-    """
-    try:
-        all_services = registry.get_instances()
-
-        # Get installed services state from MongoDB
-        settings = get_omegaconf_settings()
-        installed_state = await settings.get_installed_services()
-
-        result = []
-        for service in all_services:
-            # A service is "installed" if:
-            # 1. It's a default service (is_default=true), OR
-            # 2. User explicitly installed it (in installed_services)
-            service_state = installed_state.get(service.service_id, {})
-            is_explicitly_installed = service_state.get("installed", False)
-            is_installed = service.is_default or is_explicitly_installed
-
-            # Get effective enabled state
-            enabled_override = service_state.get("enabled")
-            effective_enabled = enabled_override if enabled_override is not None else service.enabled
-
-            result.append({
-                "service_id": service.service_id,
-                "name": service.name,
-                "description": service.description,
-                "template": service.template,
-                "mode": service.mode,
-                "is_default": service.is_default,
-                "installed": is_installed,
-                "enabled": effective_enabled if is_installed else False,
-                "docker_image": service.docker_image,
-                "tags": service.tags or []
-            })
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Failed to get service catalog: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/installed", response_model=List[Dict[str, Any]])
-async def get_installed_services(
-    registry: Any = Depends(get_service_registry_dep)
-) -> List[Dict[str, Any]]:
-    """
-    Get user's installed services.
-
-    Returns only services that are installed (default + explicitly installed).
-    This is what shows on the Services page.
-    """
-    try:
-        all_services = registry.get_instances()
-
-        # Get installed services state
-        settings = get_omegaconf_settings()
-        installed_state = await settings.get_installed_services()
-
-        result = []
-        for service in all_services:
-            service_state = installed_state.get(service.service_id, {})
-            is_explicitly_installed = service_state.get("installed", False)
-            is_installed = service.is_default or is_explicitly_installed
-
-            if not is_installed:
+        # Add provider's env_maps that have settings_path (user-configurable)
+        for em in provider.env_maps:
+            if not em.settings_path:
                 continue
 
-            schema = registry.get_effective_schema(service.service_id)
+            # Check if value exists
+            value = await settings.get(em.settings_path)
+            has_value = value is not None and str(value).strip() != ""
 
-            # Get effective enabled state
-            enabled_override = service_state.get("enabled")
-            effective_enabled = enabled_override if enabled_override is not None else service.enabled
-
-            result.append({
-                "service_id": service.service_id,
-                "name": service.name,
-                "description": service.description,
-                "template": service.template,
-                "mode": service.mode,
-                "is_default": service.is_default,
-                "config_schema": [field.model_dump() for field in schema],
-                "docker_image": service.docker_image,
-                "enabled": effective_enabled,
-                "tags": service.tags or []
+            schema.append({
+                "key": em.key,
+                "type": em.type,
+                "label": em.label or em.key.replace("_", " ").title(),
+                "description": f"{capability.upper()} provider: {provider.name}",
+                "link": em.link,
+                "required": required and em.required,
+                "default": em.default,
+                "settings_path": em.settings_path,
+                "has_value": has_value,
+                "capability": capability,
+                "provider_id": provider.id,
+                "provider_name": provider.name,
             })
 
-        return result
+    # 2. Service-specific config fields
+    for field in service_registry.get_service_config_schema(service.service_id):
+        field_dict = field.model_dump()
 
-    except Exception as e:
-        logger.error(f"Failed to get installed services: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Check if has value
+        has_value = False
+        if field.settings_path:
+            value = await settings.get(field.settings_path)
+            has_value = value is not None and str(value).strip() != ""
+        elif field.default is not None:
+            has_value = True
 
+        field_dict["has_value"] = has_value
+        field_dict["capability"] = None  # Service-specific, not from a capability
+        schema.append(field_dict)
 
-@router.post("/install", response_model=InstallServiceResponse)
-async def install_service(
-    request: InstallServiceRequest,
-    registry: Any = Depends(get_service_registry_dep)
-) -> InstallServiceResponse:
-    """
-    Install a service from the catalog.
-
-    Marks the service as installed in MongoDB, making it appear
-    on the Services page.
-    """
-    try:
-        # Verify service exists in registry
-        service = registry.get_instance(request.service_id)
-        if not service:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Service '{request.service_id}' not found in catalog"
-            )
-
-        # Get settings manager
-        settings = get_omegaconf_settings()
-
-        # Mark as installed and enabled
-        await settings.update({
-            "installed_services": {
-                request.service_id: {
-                    "installed": True,
-                    "enabled": True,
-                    "docker_image": request.docker_image or service.docker_image
-                }
-            }
-        })
-
-        logger.info(f"Service {request.service_id} installed")
-
-        return InstallServiceResponse(
-            service_id=request.service_id,
-            name=service.name,
-            installed=True,
-            enabled=True,
-            message=f"Service '{service.name}' installed successfully"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to install service {request.service_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return schema
 
 
-# Dynamic routes with path parameters must come AFTER static routes
-@router.put("/{service_id}/enabled", response_model=ServiceEnabledResponse)
-async def set_service_enabled(
-    service_id: str,
-    request: EnabledRequest,
-    registry: Any = Depends(get_service_registry_dep)
-) -> ServiceEnabledResponse:
-    """
-    Enable or disable a service.
-
-    This persists the enabled state to MongoDB without affecting the
-    service's running state. Use docker endpoints to start/stop services.
-    """
-    try:
-        # Verify service exists in registry
-        service = registry.get_instance(service_id)
-        if not service:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Service '{service_id}' not found"
-            )
-
-        # Get settings manager
-        settings = get_omegaconf_settings()
-
-        # Update enabled state
-        await settings.set_service_enabled(service_id, request.enabled)
-
-        action = "enabled" if request.enabled else "disabled"
-        return ServiceEnabledResponse(
-            service_id=service_id,
-            enabled=request.enabled,
-            message=f"Service '{service.name}' {action}"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to set enabled state for {service_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{service_id}/enabled")
-async def get_service_enabled_state(
-    service_id: str,
-    registry: Any = Depends(get_service_registry_dep)
+async def build_service_response(
+    service: ServiceConfig,
+    settings,
+    installed_state: Dict[str, Any],
+    include_schema: bool = False
 ) -> Dict[str, Any]:
-    """
-    Get the enabled state for a service.
+    """Build standard service response dict."""
+    service_state = installed_state.get(service.service_id, {})
 
-    Returns both the effective enabled state and whether it was
-    explicitly set (vs using the YAML default).
-    """
-    try:
-        # Verify service exists
-        service = registry.get_instance(service_id)
-        if not service:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Service '{service_id}' not found"
+    # Effective enabled state
+    enabled_override = service_state.get("enabled")
+    effective_enabled = enabled_override if enabled_override is not None else service.enabled
+
+    # Installation status
+    is_explicitly_installed = service_state.get("installed", False)
+    is_installed = service.is_default or is_explicitly_installed
+
+    response = {
+        "service_id": service.service_id,
+        "name": service.name,
+        "description": service.description,
+        "mode": service.mode,
+        "is_default": service.is_default,
+        "installed": is_installed,
+        "enabled": effective_enabled if is_installed else False,
+        "docker_image": service.docker_image,
+        "docker_service_name": service.docker_service_name,
+        "tags": service.tags or [],
+        "ui": service.ui,
+    }
+
+    # Capabilities this service uses
+    response["capabilities"] = [
+        {
+            "capability": use.capability,
+            "required": use.required,
+            "purpose": use.purpose
+        }
+        for use in service.uses
+    ]
+
+    # Config schema (expensive - only include when needed)
+    if include_schema:
+        response["config_schema"] = await build_config_schema(service, settings)
+
+    return response
+
+
+# =============================================================================
+# List Endpoints
+# =============================================================================
+
+@router.get("/quickstart")
+async def get_quickstart_services() -> List[Dict[str, Any]]:
+    """Get default services for quickstart wizard with config schemas."""
+    registry = get_service_registry()
+    settings = get_omegaconf_settings()
+    installed = await settings.get_installed_services()
+
+    return [
+        await build_service_response(s, settings, installed, include_schema=True)
+        for s in registry.get_quickstart_services()
+    ]
+
+
+@router.get("/catalog")
+async def get_service_catalog() -> List[Dict[str, Any]]:
+    """Get all services with installation status (no config schemas)."""
+    registry = get_service_registry()
+    settings = get_omegaconf_settings()
+    installed = await settings.get_installed_services()
+
+    return [
+        await build_service_response(s, settings, installed, include_schema=False)
+        for s in registry.get_services()
+    ]
+
+
+@router.get("/installed")
+async def get_installed_services() -> List[Dict[str, Any]]:
+    """Get user's installed services with config schemas."""
+    registry = get_service_registry()
+    settings = get_omegaconf_settings()
+    installed = await settings.get_installed_services()
+
+    result = []
+    for service in registry.get_services():
+        service_state = installed.get(service.service_id, {})
+        is_installed = service.is_default or service_state.get("installed", False)
+
+        if is_installed:
+            result.append(
+                await build_service_response(service, settings, installed, include_schema=True)
             )
 
-        # Get settings manager
-        settings = get_omegaconf_settings()
+    return result
 
-        # Get explicit override (if any)
-        override = await settings.get_service_enabled(service_id)
 
-        # Effective value: override if set, else YAML default
-        effective = override if override is not None else service.enabled
+@router.get("/categories/{category}")
+async def get_services_by_category(category: str) -> List[Dict[str, Any]]:
+    """Get services by category with config schemas."""
+    registry = get_service_registry()
+    settings = get_omegaconf_settings()
+    installed = await settings.get_installed_services()
 
-        return {
-            "service_id": service_id,
-            "enabled": effective,
-            "yaml_default": service.enabled,
-            "has_override": override is not None
+    return [
+        await build_service_response(s, settings, installed, include_schema=True)
+        for s in registry.get_services_by_category(category, enabled_only=False)
+    ]
+
+
+# =============================================================================
+# Install/Uninstall
+# =============================================================================
+
+@router.post("/install")
+async def install_service(request: InstallRequest) -> Dict[str, Any]:
+    """Install a service from the catalog."""
+    registry = get_service_registry()
+    service = registry.get_service(request.service_id)
+
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{request.service_id}' not found")
+
+    settings = get_omegaconf_settings()
+    await settings.update({
+        "installed_services": {
+            request.service_id: {
+                "installed": True,
+                "enabled": True,
+                "docker_image": request.docker_image or service.docker_image
+            }
         }
+    })
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get enabled state for {service_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(f"Service {request.service_id} installed")
+    return {
+        "service_id": request.service_id,
+        "name": service.name,
+        "installed": True,
+        "enabled": True,
+        "message": f"Service '{service.name}' installed"
+    }
 
 
 @router.delete("/{service_id}/uninstall")
-async def uninstall_service(
-    service_id: str,
-    registry: Any = Depends(get_service_registry_dep)
-) -> Dict[str, Any]:
-    """
-    Uninstall a service.
+async def uninstall_service(service_id: str) -> Dict[str, Any]:
+    """Uninstall a non-default service."""
+    registry = get_service_registry()
+    service = registry.get_service(service_id)
 
-    Removes the service from user's installed services.
-    Default services cannot be uninstalled.
-    """
-    try:
-        service = registry.get_instance(service_id)
-        if not service:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Service '{service_id}' not found"
-            )
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found")
 
-        if service.is_default:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot uninstall default service '{service.name}'"
-            )
+    if service.is_default:
+        raise HTTPException(status_code=400, detail=f"Cannot uninstall default service '{service.name}'")
 
-        # Get settings manager
-        settings = get_omegaconf_settings()
-
-        # Remove from installed services
-        await settings.update({
-            "installed_services": {
-                service_id: {
-                    "installed": False,
-                    "enabled": False
-                }
-            }
-        })
-
-        logger.info(f"Service {service_id} uninstalled")
-
-        return {
-            "service_id": service_id,
-            "message": f"Service '{service.name}' uninstalled"
+    settings = get_omegaconf_settings()
+    await settings.update({
+        "installed_services": {
+            service_id: {"installed": False, "enabled": False}
         }
+    })
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to uninstall service {service_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(f"Service {service_id} uninstalled")
+    return {"service_id": service_id, "message": f"Service '{service.name}' uninstalled"}
+
+
+# =============================================================================
+# Enable/Disable (path params must come after static routes)
+# =============================================================================
+
+@router.get("/{service_id}/enabled")
+async def get_service_enabled(service_id: str) -> Dict[str, Any]:
+    """Get enabled state for a service."""
+    registry = get_service_registry()
+    service = registry.get_service(service_id)
+
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found")
+
+    settings = get_omegaconf_settings()
+    override = await settings.get_service_enabled(service_id)
+    effective = override if override is not None else service.enabled
+
+    return {
+        "service_id": service_id,
+        "enabled": effective,
+        "yaml_default": service.enabled,
+        "has_override": override is not None
+    }
+
+
+@router.put("/{service_id}/enabled")
+async def set_service_enabled(service_id: str, request: EnabledRequest) -> Dict[str, Any]:
+    """Enable or disable a service."""
+    registry = get_service_registry()
+    service = registry.get_service(service_id)
+
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found")
+
+    settings = get_omegaconf_settings()
+    await settings.set_service_enabled(service_id, request.enabled)
+
+    action = "enabled" if request.enabled else "disabled"
+    return {
+        "service_id": service_id,
+        "enabled": request.enabled,
+        "message": f"Service '{service.name}' {action}"
+    }

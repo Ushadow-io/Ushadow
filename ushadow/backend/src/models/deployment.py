@@ -123,6 +123,16 @@ class Deployment(BaseModel):
     # The actual config used (snapshot of ServiceDefinition at deploy time)
     deployed_config: Optional[Dict[str, Any]] = None
 
+    # Access information
+    access_url: Optional[str] = Field(
+        default=None,
+        description="URL to access the deployed service"
+    )
+    exposed_port: Optional[int] = Field(
+        default=None,
+        description="Primary exposed port for the service"
+    )
+
     class Config:
         use_enum_values = True
 

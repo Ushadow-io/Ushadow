@@ -1,0 +1,67 @@
+# OpenMemory (mem0) service definition
+# Graph-based memory with MCP support
+# Environment variables are passed directly via docker compose subprocess env
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  mem0:
+    requires: [llm]
+  mem0-ui:
+    requires: []
+
+services:
+  mem0:
+    image: ghcr.io/ushadow-io/u-mem0-api:${OPENMEMORY_IMAGE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0
+    ports:
+      - "${OPENMEMORY_PORT:-8765}:8765"
+    environment:
+      # Qdrant connection (from CapabilityResolver or defaults)
+      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+
+      # LLM capability (from selected provider)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+
+      # Neo4j (optional, for graph memory)
+      - NEO4J_URI=${NEO4J_URI:-}
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-}
+    volumes:
+      - mem0_data:/app/data
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  mem0-ui:
+    image: ghcr.io/ushadow-io/u-mem0-ui:${OPENMEMORY_IMAGE_TAG:-latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0-ui
+    ports:
+      - "${OPENMEMORY_UI_PORT:-3002}:3000"
+    environment:
+      - VITE_API_URL=http://localhost:${OPENMEMORY_PORT:-8765}
+      - API_URL=http://mem0:8765
+    networks:
+      - infra-network
+    depends_on:
+      - mem0
+    restart: unless-stopped
+
+volumes:
+  mem0_data:
+    driver: local
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true

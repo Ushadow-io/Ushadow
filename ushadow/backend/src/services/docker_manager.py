@@ -3,8 +3,8 @@
 This module provides centralized Docker container management for controlling
 local services and integrations through the Ushadow backend API.
 
-Services are loaded dynamically from ServiceRegistry (config/default-services.yaml)
-with only core infrastructure defined here.
+Services are loaded dynamically from ServiceRegistry (config/services/*.yaml)
+and use capability-based composition via CapabilityResolver.
 """
 
 import logging
@@ -97,7 +97,7 @@ class DockerManager:
     """
     Manages Docker containers for Ushadow services and integrations.
 
-    Services are loaded dynamically from ServiceRegistry (config/default-services.yaml).
+    Services are loaded dynamically from ServiceRegistry (config/services/*.yaml).
     Only core infrastructure is defined here as CORE_SERVICES.
     """
 
@@ -175,28 +175,30 @@ class DockerManager:
         self._client: Optional[docker.DockerClient] = None
         self._initialized = False
         self._docker_available = False
-        self._services_cache: Optional[Dict[str, Any]] = None
 
     @property
     def MANAGEABLE_SERVICES(self) -> Dict[str, Any]:
         """
         Get all manageable services (core + dynamic from ServiceRegistry).
 
-        This property replaces the old hardcoded MANAGEABLE_SERVICES dict.
-        Services are loaded from config/default-services.yaml via ServiceRegistry.
+        Combines hardcoded CORE_SERVICES with dynamic services from config/services/*.yaml.
+        ServiceRegistry handles its own caching, so no additional cache needed here.
         """
-        if self._services_cache is not None:
-            return self._services_cache
-
         # Start with core services
         services = dict(self.CORE_SERVICES)
 
         # Load dynamic services from ServiceRegistry
         try:
             registry = get_service_registry()
-            for instance in registry.get_instances():
+            all_instances = registry.get_instances()
+            logger.debug(f"ServiceRegistry returned {len(all_instances)} instances")
+            if len(all_instances) == 0:
+                logger.warning("No services found in ServiceRegistry! Check config/services/ directory.")
+            for instance in all_instances:
+                logger.debug(f"Processing service: {instance.service_id}")
                 # Skip if no docker compose file (cloud-only services)
                 if not instance.docker_compose_file:
+                    logger.debug(f"Skipping {instance.service_id} - no compose file")
                     continue
 
                 # Skip if already in core services
@@ -215,12 +217,8 @@ class DockerManager:
                     "compose_file": instance.docker_compose_file,
                     "docker_service_name": instance.docker_service_name or instance.service_id,
                     "endpoints": self._build_endpoints(instance),
-                    "metadata": instance.metadata,
+                    "metadata": instance.ui,  # UI metadata (icon, category, tags, etc.)
                 }
-
-                # Add compose profile if specified
-                if instance.docker_profile:
-                    service_config["compose_profile"] = instance.docker_profile
 
                 services[instance.service_id] = service_config
                 logger.debug(f"Loaded dynamic service: {instance.service_id}")
@@ -228,20 +226,19 @@ class DockerManager:
         except Exception as e:
             logger.warning(f"Failed to load services from registry: {e}")
 
-        self._services_cache = services
-        logger.info(f"Loaded {len(services)} manageable services ({len(self.CORE_SERVICES)} core + {len(services) - len(self.CORE_SERVICES)} dynamic)")
+        logger.debug(f"Loaded {len(services)} manageable services")
         return services
 
     def reload_services(self) -> None:
-        """Clear the services cache to reload from ServiceRegistry."""
-        self._services_cache = None
-        # Also reload the registry
+        """Force reload services from ServiceRegistry."""
         registry = get_service_registry()
-        registry.get_instances(reload=True)
-        logger.info("Services cache cleared - will reload on next access")
+        registry.reload()
+        logger.info("ServiceRegistry reloaded")
 
-    def _template_to_service_type(self, template: str) -> ServiceType:
+    def _template_to_service_type(self, template: Optional[str]) -> ServiceType:
         """Map service template name to ServiceType enum."""
+        if not template:
+            return ServiceType.INTEGRATION
         template_base = template.split('.')[0]  # Handle "memory.ui" -> "memory"
         mapping = {
             "memory": ServiceType.MEMORY_SOURCE,
@@ -258,18 +255,31 @@ class DockerManager:
         """Build ServiceEndpoint list from ServiceConfig."""
         endpoints = []
 
-        # Get URL from config overrides or connection_url
-        url = instance.config_overrides.get("server_url") or instance.connection_url
-        if url:
-            # Determine integration type from template
+        if instance.docker and instance.docker.ports:
+            # Build URL from first port mapping
+            port_config = instance.docker.ports[0]
+            host_port = port_config.get('host', port_config.get('container'))
+            protocol = port_config.get('protocol', 'http')
+
+            # Use docker service name for internal URL
+            docker_name = instance.docker.service_name or instance.service_id
+            url = f"{protocol}://{docker_name}:{host_port}"
+
+            # Determine integration type from UI category or tags
             integration_type = IntegrationType.REST
-            if "mcp" in instance.template.lower():
+            tags = instance.ui.get('tags', [])
+            if 'mcp' in tags:
                 integration_type = IntegrationType.MCP
+
+            # Get health check path from docker config
+            health_path = "/health"
+            if instance.docker.health:
+                health_path = instance.docker.health.get('http_get', '/health')
 
             endpoints.append(ServiceEndpoint(
                 url=url,
                 integration_type=integration_type,
-                health_check_path="/health"
+                health_check_path=health_path
             ))
 
         return endpoints
@@ -330,10 +340,29 @@ class DockerManager:
             return False, "Invalid service name format"
 
         # Whitelist check - needs instance access for dynamic MANAGEABLE_SERVICES
+        available_services = list(self.MANAGEABLE_SERVICES.keys())
         if service_name not in self.MANAGEABLE_SERVICES:
+            logger.warning(f"Service '{service_name}' not in MANAGEABLE_SERVICES. Available: {available_services}")
             return False, "Service not found"
 
+        logger.debug(f"Service '{service_name}' validated OK")
         return True, None
+
+    def _get_container_name(self, service_name: str) -> str:
+        """
+        Get the actual Docker container name for a service.
+
+        Services may have a different container name than their service_id.
+        E.g., service_id='chronicle' -> container='chronicle-backend'
+
+        Args:
+            service_name: Service ID from MANAGEABLE_SERVICES
+
+        Returns:
+            Docker container name to use for API calls
+        """
+        config = self.MANAGEABLE_SERVICES.get(service_name, {})
+        return config.get("docker_service_name", service_name)
 
     def get_service_info(self, service_name: str) -> ServiceInfo:
         """
@@ -382,7 +411,23 @@ class DockerManager:
         try:
             # Use docker_service_name if specified (e.g., "mem0" for "openmemory" service)
             docker_container_name = service_config.get("docker_service_name", service_name)
-            container = self._client.containers.get(docker_container_name)
+
+            # Try to find container by exact name first
+            container = None
+            try:
+                container = self._client.containers.get(docker_container_name)
+            except NotFound:
+                # Container name may have project prefix (e.g., "ushadow-chronicle-backend")
+                # Search by compose service label as fallback
+                containers = self._client.containers.list(
+                    all=True,
+                    filters={"label": f"com.docker.compose.service={docker_container_name}"}
+                )
+                if containers:
+                    container = containers[0]
+
+            if not container:
+                raise NotFound(f"Container not found: {docker_container_name}")
 
             # Extract port mappings
             ports = {}
@@ -484,25 +529,28 @@ class DockerManager:
         Returns:
             Tuple of (success: bool, message: str)
         """
+        logger.info(f"start_service called with: {repr(service_name)}")
+
         # Validate service name first
-        valid, _ = self.validate_service_name(service_name)
+        valid, error_msg = self.validate_service_name(service_name)
         if not valid:
-            logger.warning(f"Invalid service name in start_service: {repr(service_name)}")
+            logger.warning(f"Validation failed for {repr(service_name)}: {error_msg}")
             return False, "Service not found"
 
         if not self.is_available():
             return False, "Docker not available"
 
         # Allow starting any service - user_controllable only restricts stopping/deleting
+        container_name = self._get_container_name(service_name)
 
         try:
-            container = self._client.containers.get(service_name)
+            container = self._client.containers.get(container_name)
 
             if container.status == "running":
                 return True, f"Service '{service_name}' is already running"
 
             container.start()
-            logger.info(f"Started service: {service_name}")
+            logger.info(f"Started service: {service_name} (container: {container_name})")
             return True, f"Service '{service_name}' started successfully"
 
         except NotFound:
@@ -522,72 +570,87 @@ class DockerManager:
             logger.error(f"Error starting {service_name}: {e}")
             return False, "Failed to start service"
 
-    async def _build_env_vars_for_service(self, service_name: str) -> Dict[str, str]:
+    async def _build_env_vars_for_service(
+        self, service_name: str
+    ) -> tuple[Dict[str, str], Dict[str, str]]:
         """
-        Build environment variables for a service from its configuration.
+        Build environment variables for a service using CapabilityResolver.
 
-        Maps service config fields to environment variables using the schema's env_var property.
+        Uses the capability-based composition pattern:
+        1. Load service definition from config/services/{service_name}.yaml
+        2. Resolve each capability the service `uses:` to provider credentials
+        3. Map canonical env vars to service-expected env vars
 
         Args:
             service_name: Name of the service
 
         Returns:
-            Dictionary of environment variables
+            Tuple of (subprocess_env, container_env):
+            - subprocess_env: Full environment for docker compose command (for variable substitution)
+            - container_env: Just the resolved vars to inject into the container
+
+        Raises:
+            ValueError: If service has unresolved required capabilities
         """
-        env = os.environ.copy()  # Start with system environment
+        subprocess_env = os.environ.copy()  # For compose file variable substitution
+        container_env: Dict[str, str] = {}  # For container env vars
 
         try:
             # Import here to avoid circular dependencies
-            from src.services.service_registry import get_service_registry
-            from src.services.omegaconf_settings import get_omegaconf_settings
+            from src.services.capability_resolver import get_capability_resolver
 
-            # Get service registry and effective schema
-            registry = get_service_registry()
-            schema = registry.get_effective_schema(service_name)
+            resolver = get_capability_resolver()
 
-            # Get OmegaConf settings manager
-            settings = get_omegaconf_settings()
+            # Reload to pick up any config changes (YAML files might have been edited)
+            resolver.reload()
 
-            # Map config fields to environment variables
-            for field in schema:
-                env_var_name = field.env_var
-                if not env_var_name:
-                    continue  # Skip fields without env_var mapping
+            # Validate first to get clear error messages
+            validation = await resolver.validate_service(service_name)
 
-                # Try to get value from different possible locations
-                field_value = None
+            if not validation['can_start']:
+                missing_caps = validation.get('missing_capabilities', [])
+                missing_creds = validation.get('missing_credentials', [])
 
-                # 1. Try service-specific preferences
-                try:
-                    key_path = f"service_preferences.{service_name}.{field.key}"
-                    field_value = await settings.get(key_path)
-                    if field_value:
-                        logger.debug(f"Found {field.key} in {key_path}")
-                except Exception as e:
-                    logger.debug(f"Not in service_preferences: {e}")
+                error_parts = []
+                if missing_caps:
+                    error_parts.append("Missing capabilities:")
+                    for cap in missing_caps:
+                        error_parts.append(f"  - {cap['capability']}: {cap['message']}")
 
-                # 2. Try shared api_keys namespace
-                if not field_value and field.key.endswith('_api_key'):
-                    try:
-                        key_path = f"api_keys.{field.key}"
-                        field_value = await settings.get(key_path)
-                        if field_value:
-                            logger.debug(f"Found {field.key} in {key_path}")
-                    except Exception as e:
-                        logger.warning(f"Error checking api_keys.{field.key}: {e}")
+                if missing_creds:
+                    error_parts.append("Missing credentials:")
+                    for cred in missing_creds:
+                        link_hint = f" (get at: {cred['link']})" if cred.get('link') else ""
+                        error_parts.append(
+                            f"  - {cred['label']}: set {cred['settings_path']}{link_hint}"
+                        )
 
-                # 3. Inject if we found a value
-                if field_value:
-                    env[env_var_name] = str(field_value)
-                    logger.debug(f"Injecting env var: {env_var_name}=*** for {service_name}")
-                else:
-                    logger.debug(f"No value found for {field.key} (env var: {env_var_name})")
+                logger.error(f"Service {service_name} cannot start:\n" + "\n".join(error_parts))
+                raise ValueError("\n".join(error_parts))
 
+            # Log any warnings
+            for warning in validation.get('warnings', []):
+                logger.warning(f"Service {service_name}: {warning}")
+
+            # Resolve all env vars for the container
+            container_env = await resolver.resolve_for_service(service_name)
+
+            # Also add to subprocess env for compose file substitution
+            subprocess_env.update(container_env)
+
+            logger.info(
+                f"Resolved {len(container_env)} env vars for {service_name} "
+                f"via capability resolver"
+            )
+
+        except ValueError:
+            # Re-raise validation errors
+            raise
         except Exception as e:
-            logger.warning(f"Could not load service config for {service_name}: {e}")
-            logger.warning("Starting service with system environment variables only")
+            logger.error(f"Failed to resolve env vars for {service_name}: {e}")
+            raise ValueError(f"Failed to configure service: {e}")
 
-        return env
+        return subprocess_env, container_env
 
     async def _start_service_via_compose(self, service_name: str, compose_file: str) -> tuple[bool, str]:
         """
@@ -601,8 +664,19 @@ class DockerManager:
             Tuple of (success: bool, message: str)
         """
         try:
-            # Compose file is relative to project root
-            compose_path = Path(compose_file)
+            # Translate relative paths to container mount points
+            # compose/xxx.yaml -> /compose/xxx.yaml (mounted in container)
+            # docker-compose.infra.yml -> /config/../docker-compose.infra.yml (project root)
+            if compose_file.startswith("compose/"):
+                # Compose files are mounted at /compose
+                compose_path = Path("/") / compose_file
+            elif compose_file.startswith("docker-compose"):
+                # Root compose files - check /config parent or current dir
+                compose_path = Path("/config").parent / compose_file
+                if not compose_path.exists():
+                    compose_path = Path(compose_file)
+            else:
+                compose_path = Path(compose_file)
 
             if not compose_path.exists():
                 logger.error(f"Compose file not found: {compose_path}")
@@ -627,8 +701,14 @@ class DockerManager:
             docker_service_name = self.MANAGEABLE_SERVICES[service_name].get("docker_service_name", service_name)
 
             # Build environment variables from service configuration
-            env = await self._build_env_vars_for_service(service_name)
+            # All env vars are passed via subprocess_env for compose ${VAR} substitution
+            subprocess_env, container_env = await self._build_env_vars_for_service(service_name)
 
+            logger.info(f"Resolved {len(container_env)} env vars for {service_name} (passing directly)")
+
+            # Build docker compose command with explicit env var passing
+            # Using --env-file /dev/null to clear default .env loading
+            # All env vars come from subprocess_env for ${VAR} substitution
             cmd = ["docker", "compose", "-f", str(compose_path)]
             if project_name:
                 cmd.extend(["-p", project_name])
@@ -636,9 +716,17 @@ class DockerManager:
                 cmd.extend(["--profile", compose_profile])
             cmd.extend(["up", "-d", docker_service_name])
 
+            # Log which env vars are being passed (without values for secrets)
+            secret_keys = {'API_KEY', 'SECRET', 'PASSWORD', 'TOKEN'}
+            logged_vars = []
+            for key in container_env:
+                is_secret = any(s in key.upper() for s in secret_keys)
+                logged_vars.append(f"{key}={'***' if is_secret else container_env[key][:20]+'...' if len(container_env.get(key, '')) > 20 else container_env.get(key, '')}")
+            logger.debug(f"Container env vars for {service_name}: {logged_vars}")
+
             result = subprocess.run(
                 cmd,
-                env=env,  # Inject environment variables
+                env=subprocess_env,  # All env vars passed here for compose variable substitution
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
@@ -655,6 +743,10 @@ class DockerManager:
         except subprocess.TimeoutExpired:
             logger.error(f"Timeout starting {service_name} via compose")
             return False, "Service start timeout"
+        except ValueError as e:
+            # Validation errors (missing credentials, etc.) - return the message
+            logger.warning(f"Cannot start {service_name}: {e}")
+            return False, str(e)
         except Exception as e:
             logger.error(f"Error starting {service_name} via compose: {e}")
             return False, "Failed to start service"
@@ -687,14 +779,31 @@ class DockerManager:
         if self.MANAGEABLE_SERVICES[service_name].get("required", False):
             return False, "Operation not permitted"
 
+        container_name = self._get_container_name(service_name)
+
         try:
-            container = self._client.containers.get(service_name)
+            # Try to find container by exact name first
+            container = None
+            try:
+                container = self._client.containers.get(container_name)
+            except NotFound:
+                # Container name may have project prefix - search by compose service label
+                containers = self._client.containers.list(
+                    all=True,
+                    filters={"label": f"com.docker.compose.service={container_name}"}
+                )
+                if containers:
+                    container = containers[0]
+
+            if not container:
+                logger.error(f"Container not found for service: {service_name} (container: {container_name})")
+                return False, "Service not found"
 
             if container.status != "running":
                 return True, f"Service '{service_name}' is not running"
 
             container.stop(timeout=timeout)
-            logger.info(f"Stopped service: {service_name}")
+            logger.info(f"Stopped service: {service_name} (container: {container_name})")
             return True, f"Service '{service_name}' stopped successfully"
 
         except NotFound:
@@ -734,22 +843,24 @@ class DockerManager:
         if not internal and not self.MANAGEABLE_SERVICES[service_name].get("user_controllable", True):
             return False, "Operation not permitted"
 
+        container_name = self._get_container_name(service_name)
+
         try:
             # Try to find container by exact name first
             try:
-                container = self._client.containers.get(service_name)
+                container = self._client.containers.get(container_name)
             except NotFound:
                 # If not found, search by docker-compose service label
                 containers = self._client.containers.list(
-                    filters={"label": f"com.docker.compose.service={service_name}"}
+                    filters={"label": f"com.docker.compose.service={container_name}"}
                 )
                 if not containers:
-                    logger.error(f"Container not found for service: {service_name}")
+                    logger.error(f"Container not found for service: {service_name} (container: {container_name})")
                     return False, "Service not found"
                 container = containers[0]  # Use first matching container
 
             container.restart(timeout=timeout)
-            logger.info(f"Restarted service: {service_name} (container: {container.name})")
+            logger.info(f"Restarted service: {service_name} (container: {container_name})")
             return True, f"Service '{service_name}' restarted successfully"
 
         except NotFound:
@@ -784,13 +895,15 @@ class DockerManager:
         if not self.is_available():
             return False, "Docker not available"
 
+        container_name = self._get_container_name(service_name)
+
         try:
-            container = self._client.containers.get(service_name)
+            container = self._client.containers.get(container_name)
             logs = container.logs(tail=tail, timestamps=True).decode("utf-8")
             return True, logs
 
         except NotFound:
-            logger.error(f"Container not found for service: {service_name}")
+            logger.error(f"Container not found for service: {service_name} (container: {container_name})")
             return False, "Service not found"
         except Exception as e:
             # Log detailed error but return generic message

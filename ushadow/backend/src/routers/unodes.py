@@ -20,7 +20,7 @@ from src.models.unode import (
     UNodePlatform,
 )
 from src.services.unode_manager import get_unode_manager
-from src.services.auth_dependencies import get_current_user
+from src.services.auth import get_current_user
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
