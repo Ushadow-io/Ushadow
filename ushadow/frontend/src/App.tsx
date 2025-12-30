@@ -4,6 +4,7 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider } from './contexts/AuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
+import { ChronicleProvider } from './contexts/ChronicleContext'
 
 // Detect runtime base path for path-based routing (e.g., /wiz/, /prod/)
 const getBasename = () => {
@@ -20,6 +21,7 @@ const getBasename = () => {
   }
   return '/'
 }
+
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import Layout from './components/layout/Layout'
 
@@ -53,6 +55,7 @@ function App() {
         <AuthProvider>
           <FeatureFlagsProvider>
           <WizardProvider>
+          <ChronicleProvider>
             <BrowserRouter basename={getBasename()}>
               <Routes>
      
@@ -94,6 +97,7 @@ function App() {
               </Route>
               </Routes>
             </BrowserRouter>
+          </ChronicleProvider>
           </WizardProvider>
           </FeatureFlagsProvider>
         </AuthProvider>

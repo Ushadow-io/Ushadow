@@ -1,18 +1,23 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical, Cloud } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, LayoutDashboard, Network, Flag, Wand2, FlaskConical, Cloud, Mic, MicOff, Loader2 } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
+import { useChronicle } from '../../contexts/ChronicleContext'
 
 export default function Layout() {
   const location = useLocation()
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
+  const { isConnected: isChronicleConnected, recording } = useChronicle()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const userMenuRef = useRef<HTMLDivElement>(null)
+
+  // Helper to check if recording is in a processing state
+  const isRecordingProcessing = ['mic', 'websocket', 'audio-start', 'streaming', 'stopping'].includes(recording.currentStep)
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -97,6 +102,38 @@ export default function Layout() {
 
             {/* Header Actions */}
             <div className="flex items-center space-x-1">
+              {/* Chronicle Record Button - only show when connected */}
+              {isChronicleConnected && (
+                <button
+                  onClick={recording.isRecording ? recording.stopRecording : recording.startRecording}
+                  disabled={!recording.canAccessMicrophone || (isRecordingProcessing && !recording.isRecording)}
+                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg font-medium transition-all ${
+                    recording.isRecording
+                      ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                      : isRecordingProcessing
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-primary-600 hover:bg-primary-700 text-white'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  title={recording.isRecording ? 'Stop Recording' : 'Start Recording'}
+                  data-testid="chronicle-record-button"
+                >
+                  {isRecordingProcessing && !recording.isRecording ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : recording.isRecording ? (
+                    <MicOff className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline text-sm">
+                    {recording.isRecording
+                      ? recording.formatDuration(recording.recordingDuration)
+                      : isRecordingProcessing
+                        ? 'Starting...'
+                        : 'Record'}
+                  </span>
+                </button>
+              )}
+
               {/* Test Feature Flag Indicator */}
               {isEnabled('example_feature') && (
                 <div className="mr-2 flex items-center gap-2 px-3 py-1.5 bg-purple-100 dark:bg-purple-900/30 border border-purple-300 dark:border-purple-700 rounded-lg">

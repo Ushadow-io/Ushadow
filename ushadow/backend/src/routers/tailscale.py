@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Literal, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from src.services.auth_dependencies import get_current_user
+from src.services.auth import get_current_user
 from src.models.user import User
 import logging
 

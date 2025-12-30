@@ -18,10 +18,11 @@ motor==3.6.0  # Async MongoDB driver
 redis==5.2.0
 
 # Authentication & Security
+fastapi-users[beanie]==14.0.1  # Full auth system with MongoDB/Beanie support
+beanie==1.27.0  # MongoDB ODM
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.17
-python-jose==3.3.0
+python-multipart>=0.0.20  # Required by fastapi-users
 bcrypt==4.2.1
 
 # CORS & Middleware

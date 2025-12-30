@@ -145,7 +145,8 @@ export default function ServicesPage() {
       const mergedConfig = configResponse.data
       const caps = capabilitiesResponse.data
 
-      setCapabilities(caps)
+      // Ensure capabilities is always an array (handle potential API response variations)
+      setCapabilities(Array.isArray(caps) ? caps : [])
 
       // Build effective config per service using settings_path from schema
       const effectiveConfigs: any = {}
@@ -305,7 +306,7 @@ export default function ServicesPage() {
       await providersApi.selectProvider(capabilityId, providerId)
       // Refresh capabilities to get updated selection
       const response = await providersApi.getCapabilities()
-      setCapabilities(response.data)
+      setCapabilities(Array.isArray(response.data) ? response.data : [])
       setMessage({ type: 'success', text: `Provider changed to ${providerId}` })
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to change provider' })
@@ -333,14 +334,17 @@ export default function ServicesPage() {
   const handleEditProvider = (capId: string, provider: ProviderWithStatus) => {
     const key = getProviderKey(capId, provider.id)
     // Initialize form with current values for non-secrets, empty for secrets
+    // Use full capability:provider:cred key to prevent collision
     const initialForm: Record<string, string> = {}
     ;(provider.credentials || []).forEach(cred => {
+      // Include capId to handle same provider in multiple capabilities
+      const scopedKey = `${capId}:${provider.id}:${cred.key}`
       if (cred.type === 'secret') {
         // Secrets must be re-entered (we don't have the value)
-        initialForm[cred.key] = ''
+        initialForm[scopedKey] = ''
       } else {
         // Non-secrets: use current value or default
-        initialForm[cred.key] = cred.value || cred.default || ''
+        initialForm[scopedKey] = cred.value || cred.default || ''
       }
     })
     setProviderEditForm(initialForm)
@@ -349,14 +353,16 @@ export default function ServicesPage() {
     setExpandedProviders(prev => new Set(prev).add(key))
   }
 
-  const handleSaveProvider = async (_capId: string, provider: ProviderWithStatus) => {
+  const handleSaveProvider = async (capId: string, provider: ProviderWithStatus) => {
     setSavingProvider(true)
     try {
       // Build updates object using settings_path from each credential
+      // Use full capability:provider:cred key to match handleEditProvider
       const updates: Record<string, string> = {}
 
       ;(provider.credentials || []).forEach(cred => {
-        const value = providerEditForm[cred.key]
+        const scopedKey = `${capId}:${provider.id}:${cred.key}`
+        const value = providerEditForm[scopedKey]
         // Only update if there's a value and a settings_path
         if (value && value.trim() && cred.settings_path) {
           updates[cred.settings_path] = value.trim()
@@ -373,7 +379,7 @@ export default function ServicesPage() {
 
       // Refresh capabilities to get updated credential status
       const response = await providersApi.getCapabilities()
-      setCapabilities(response.data)
+      setCapabilities(Array.isArray(response.data) ? response.data : [])
 
       setMessage({ type: 'success', text: `${provider.name} credentials saved` })
       setEditingProviderId(null)
@@ -402,10 +408,37 @@ export default function ServicesPage() {
     })
   }
 
+  // Helper to get unique form key for a field (prevents collision between providers with same key name)
+  const getFormKey = (field: any): string => field.settings_path || field.key
+
   const handleEditService = (serviceId: string) => {
     const currentConfig = serviceConfigs[serviceId] || {}
-    setEditForm({ ...currentConfig })
+    const service = serviceInstances.find(s => s.service_id === serviceId)
+
+    // Build form using unique settings_path keys to prevent collisions
+    const formWithUniqueKeys: Record<string, any> = {}
+    service?.config_schema?.forEach((field: any) => {
+      const formKey = getFormKey(field)
+      formWithUniqueKeys[formKey] = currentConfig[field.key]
+    })
+
+    setEditForm(formWithUniqueKeys)
     setEditingService(serviceId)
+
+    // Pre-validate to show which required fields are missing
+    if (service) {
+      const errors: Record<string, string> = {}
+      service.config_schema
+        ?.filter((f: any) => f.required)
+        .forEach((field: any) => {
+          const formKey = getFormKey(field)
+          const value = formWithUniqueKeys[formKey]
+          if (!value || value === '') {
+            errors[formKey] = `${field.label} is required`
+          }
+        })
+      setValidationErrors(errors)
+    }
   }
 
   const handleSaveService = async (serviceId: string) => {
@@ -415,14 +448,15 @@ export default function ServicesPage() {
     // Clear previous validation errors
     setValidationErrors({})
 
-    // Validate required fields
+    // Validate required fields using unique form keys
     const errors: Record<string, string> = {}
     service.config_schema
       ?.filter(f => f.required)
       .forEach(field => {
-        const value = editForm[field.key]
+        const formKey = getFormKey(field)
+        const value = editForm[formKey]
         if (!value || value === '') {
-          errors[field.key] = `${field.label} is required`
+          errors[formKey] = `${field.label} is required`
         }
       })
 
@@ -434,10 +468,46 @@ export default function ServicesPage() {
 
     setSaving(true)
     try {
-      await settingsApi.updateServiceConfig(serviceId, editForm)
+      // Build nested update structure based on settings_path
+      // e.g., api_keys.openai_api_key -> { api_keys: { openai_api_key: value } }
+      const updates: Record<string, any> = {}
+
+      service.config_schema?.forEach((field: any) => {
+        const formKey = getFormKey(field)
+        const value = editForm[formKey]
+
+        // Skip empty values (don't overwrite existing with empty)
+        if (value === undefined || value === '') return
+
+        if (field.settings_path) {
+          // Build nested structure from dot-notation path
+          const parts = field.settings_path.split('.')
+          let current = updates
+          for (let i = 0; i < parts.length - 1; i++) {
+            if (!current[parts[i]]) {
+              current[parts[i]] = {}
+            }
+            current = current[parts[i]]
+          }
+          current[parts[parts.length - 1]] = value
+        }
+      })
+
+      // Use the general config update API with proper nested structure
+      await settingsApi.update(updates)
+
+      // Update local state: map back to field.key for local display
+      const newLocalConfig: Record<string, any> = {}
+      service.config_schema?.forEach((field: any) => {
+        const formKey = getFormKey(field)
+        if (editForm[formKey] !== undefined && editForm[formKey] !== '') {
+          newLocalConfig[field.key] = editForm[formKey]
+        }
+      })
+
       setServiceConfigs((prev: Record<string, any>) => ({
         ...prev,
-        [serviceId]: editForm
+        [serviceId]: { ...prev[serviceId], ...newLocalConfig }
       }))
       setMessage({ type: 'success', text: 'Configuration saved' })
       setEditingService(null)
@@ -599,10 +669,13 @@ export default function ServicesPage() {
     return true
   }
 
-  const renderFieldValue = (key: string, value: any, isEditing: boolean, serviceId?: string) => {
-    const isSecret = key.includes('password') || key.includes('key')
-    const fieldId = serviceId ? `field-${serviceId}-${key}` : undefined
-    const hasError = validationErrors[key]
+  // formKey: unique key for form state (settings_path), displayKey: for UI (field.key)
+  const renderFieldValue = (formKey: string, displayKey: string, value: any, isEditing: boolean, serviceId?: string) => {
+    const isSecret = displayKey.includes('password') || displayKey.includes('key')
+    const fieldId = serviceId ? `field-${serviceId}-${displayKey}` : undefined
+    const hasError = validationErrors[formKey]
+    // For secrets: only mask if there's an existing saved value (not what user is currently typing)
+    const hasSavedSecretValue = isSecret && value && String(value).length > 0
 
     if (isEditing) {
       if (typeof value === 'boolean') {
@@ -610,8 +683,8 @@ export default function ServicesPage() {
           <input
             id={fieldId}
             type="checkbox"
-            checked={editForm[key] === true}
-            onChange={(e) => setEditForm({ ...editForm, [key]: e.target.checked })}
+            checked={editForm[formKey] === true}
+            onChange={(e) => setEditForm({ ...editForm, [formKey]: e.target.checked })}
             className="rounded"
           />
         )
@@ -620,20 +693,22 @@ export default function ServicesPage() {
         <div>
           <input
             id={fieldId}
-            type={isSecret ? 'password' : 'text'}
-            value={editForm[key] || ''}
-            onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
-            className={`input text-xs ${hasError ? 'border-error-500 focus:ring-error-500' : ''}`}
-            placeholder={isSecret ? '●●●●●●' : ''}
+            // Only mask secrets that already have a saved value
+            type={hasSavedSecretValue ? 'password' : 'text'}
+            value={editForm[formKey] || ''}
+            onChange={(e) => setEditForm({ ...editForm, [formKey]: e.target.value })}
+            className={`input text-xs ${hasError ? 'border-error-500 focus:ring-error-500 bg-error-50 dark:bg-error-900/20' : ''}`}
+            placeholder={hasSavedSecretValue ? '●●●●●● (leave blank to keep)' : ''}
             aria-invalid={hasError ? 'true' : 'false'}
-            aria-describedby={hasError ? `error-${serviceId}-${key}` : undefined}
+            aria-describedby={hasError ? `error-${serviceId}-${formKey}` : undefined}
           />
           {hasError && (
             <p
-              id={`error-${serviceId}-${key}`}
-              className="text-xs text-error-600 dark:text-error-400 mt-1"
+              id={`error-${serviceId}-${formKey}`}
+              className="text-xs text-error-600 dark:text-error-400 mt-1 flex items-center gap-1"
               role="alert"
             >
+              <span className="inline-block w-1.5 h-1.5 bg-error-500 rounded-full"></span>
               {hasError}
             </p>
           )}
@@ -643,7 +718,11 @@ export default function ServicesPage() {
 
     // Display mode
     if (isSecret) {
-      return <span className="font-mono text-xs">{value ? maskValue(String(value)) : 'Not set'}</span>
+      // Only mask if there's a value - show clear "Not set" indicator if empty
+      if (!value || String(value).length === 0) {
+        return <span className="text-xs text-warning-600 dark:text-warning-400 font-medium">Not set</span>
+      }
+      return <span className="font-mono text-xs">{maskValue(String(value))}</span>
     }
     if (typeof value === 'boolean') {
       return (
@@ -772,7 +851,7 @@ export default function ServicesPage() {
       </div>
 
       {/* Provider Selection - Card-based UI */}
-      {capabilities.length > 0 && (
+      {Array.isArray(capabilities) && capabilities.length > 0 && (
         <div className="space-y-6">
           {capabilities.map(cap => {
             // Show installed providers (selected + defaults) and any that are configured
@@ -972,9 +1051,11 @@ export default function ServicesPage() {
                               <div className="space-y-3 mt-3">
                                 {editableCreds.map(cred => {
                                   const isSecret = cred.type === 'secret'
+                                  // Use full capability:provider:cred key to prevent collision
+                                  const scopedKey = `${cap.id}:${provider.id}:${cred.key}`
 
                                   return (
-                                    <div key={cred.key}>
+                                    <div key={scopedKey} data-testid={`credential-${scopedKey}`}>
                                       {isEditing ? (
                                         <>
                                           <div className="flex items-center justify-between mb-1">
@@ -995,10 +1076,10 @@ export default function ServicesPage() {
                                           </div>
                                           <input
                                             type={isSecret ? 'password' : 'text'}
-                                            value={providerEditForm[cred.key] || ''}
+                                            value={providerEditForm[scopedKey] || ''}
                                             onChange={(e) => setProviderEditForm(prev => ({
                                               ...prev,
-                                              [cred.key]: e.target.value
+                                              [scopedKey]: e.target.value
                                             }))}
                                             placeholder={
                                               isSecret
@@ -1006,6 +1087,7 @@ export default function ServicesPage() {
                                                 : (cred.value || cred.default || `Enter ${cred.label || cred.key}`)
                                             }
                                             className="input w-full text-sm"
+                                            data-testid={`credential-input-${scopedKey}`}
                                           />
                                           {cred.has_value && (
                                             <p className="mt-1 text-xs text-success-600 dark:text-success-400">
@@ -1173,6 +1255,14 @@ export default function ServicesPage() {
                     const toggleConfig = (e: React.MouseEvent) => {
                       // Don't expand if clicking on a button
                       if ((e.target as HTMLElement).closest('button')) {
+                        return
+                      }
+
+                      // If service is not configured, go straight to edit mode
+                      if (status.state === 'not_configured') {
+                        handleEditService(service.service_id)
+                        // Also expand
+                        setExpandedConfigs(prev => new Set(prev).add(service.service_id))
                         return
                       }
 
@@ -1430,8 +1520,10 @@ export default function ServicesPage() {
                                     if (config[f.key] === undefined) return false
                                     return shouldShowField(f.key, config)
                                   })
-                                  .map((field: any) => (
-                                    <div key={field.key} className={isEditing ? '' : 'flex items-baseline gap-2'}>
+                                  .map((field: any) => {
+                                    const formKey = getFormKey(field)
+                                    return (
+                                    <div key={formKey} className={isEditing ? '' : 'flex items-baseline gap-2'}>
                                       {isEditing ? (
                                         <>
                                           <label
@@ -1442,7 +1534,7 @@ export default function ServicesPage() {
                                             {field.required && <span className="text-error-600 ml-1">*</span>}
                                           </label>
                                           <div className="text-xs">
-                                            {renderFieldValue(field.key, config[field.key], isEditing, service.service_id)}
+                                            {renderFieldValue(formKey, field.key, config[field.key], isEditing, service.service_id)}
                                           </div>
                                         </>
                                       ) : (
@@ -1451,12 +1543,12 @@ export default function ServicesPage() {
                                             {field.label}:
                                           </span>
                                           <div className="text-xs flex-1 truncate">
-                                            {renderFieldValue(field.key, config[field.key], isEditing, service.service_id)}
+                                            {renderFieldValue(formKey, field.key, config[field.key], isEditing, service.service_id)}
                                           </div>
                                         </>
                                       )}
                                     </div>
-                                  ))}
+                                  )})}
 
                                 {/* Edit Button - Inside expanded section */}
                                 {!isEditing && (
