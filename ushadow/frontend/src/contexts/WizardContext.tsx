@@ -1,22 +1,36 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import { providersApi } from '../services/api'
+import { createContext, useContext, useState, ReactNode, useMemo } from 'react'
 
 export type WizardMode = 'quickstart' | 'local' | 'custom' | null
 
 export type WizardPhase = 'quickstart' | 'memory' | 'chronicle' | 'speaker' | 'advanced'
 
-/**
- * Provider selections by capability.
- * Maps capability ID (llm, transcription, memory) to provider ID (openai, deepgram, etc.)
- */
-export type SelectedProviders = Record<string, string>
+// Setup levels for progressive onboarding
+export type SetupLevel = 0 | 1 | 2 | 3
+// 0 = Fresh install (nothing configured)
+// 1 = Core services ready (OpenMemory + Chronicle running, web client usable)
+// 2 = Network secured (Tailscale configured, mobile access)
+// 3 = Complete (Speaker recognition configured)
+
+// Individual service status tracking
+export interface ServiceStatus {
+  configured: boolean
+  running: boolean
+  error?: string
+}
+
+export interface ServicesState {
+  apiKeys: boolean // API keys or local endpoints configured
+  openMemory: ServiceStatus
+  chronicle: ServiceStatus
+  tailscale: ServiceStatus
+  speakerRecognition: ServiceStatus
+}
 
 export interface WizardState {
   mode: WizardMode
   completedPhases: WizardPhase[]
   currentPhase: WizardPhase | null
-  /** Selected providers per capability (synced with backend) */
-  selectedProviders: SelectedProviders
+  services: ServicesState
 }
 
 interface WizardContextType {
@@ -26,50 +40,47 @@ interface WizardContextType {
   setCurrentPhase: (phase: WizardPhase | null) => void
   resetWizard: () => void
   isPhaseComplete: (phase: WizardPhase) => boolean
-  /** Update a single provider selection (syncs to backend) */
-  selectProvider: (capability: string, providerId: string) => Promise<void>
-  /** Update multiple provider selections at once (syncs to backend) */
-  updateProviders: (providers: SelectedProviders) => Promise<void>
-  /** Apply default providers for a mode (cloud/local) */
-  applyDefaultProviders: (mode: 'cloud' | 'local') => Promise<void>
-  /** Whether provider selections are loading */
-  providersLoading: boolean
+  // New level-based helpers
+  setupLevel: SetupLevel
+  updateServiceStatus: (service: keyof ServicesState, status: Partial<ServiceStatus> | boolean) => void
+  getSetupLabel: () => { label: string; description: string; path: string }
+  isFirstTimeUser: () => boolean
 }
 
 const WizardContext = createContext<WizardContextType | undefined>(undefined)
+
+const defaultServiceStatus: ServiceStatus = {
+  configured: false,
+  running: false,
+}
 
 const initialState: WizardState = {
   mode: null,
   completedPhases: [],
   currentPhase: null,
-  selectedProviders: {},
+  services: {
+    apiKeys: false,
+    openMemory: { ...defaultServiceStatus },
+    chronicle: { ...defaultServiceStatus },
+    tailscale: { ...defaultServiceStatus },
+    speakerRecognition: { ...defaultServiceStatus },
+  },
 }
 
 export function WizardProvider({ children }: { children: ReactNode }) {
   const [wizardState, setWizardState] = useState<WizardState>(() => {
     // Try to load from localStorage
     const saved = localStorage.getItem('ushadow-wizard-state')
-    return saved ? { ...initialState, ...JSON.parse(saved) } : initialState
-  })
-  const [providersLoading, setProvidersLoading] = useState(false)
-
-  // Load provider selections from backend on mount
-  useEffect(() => {
-    const loadProviders = async () => {
-      try {
-        const response = await providersApi.getSelected()
-        const { wizard_mode, selected_providers } = response.data
-        setWizardState(prev => ({
-          ...prev,
-          mode: wizard_mode || prev.mode,
-          selectedProviders: selected_providers || {},
-        }))
-      } catch (error) {
-        console.warn('Failed to load provider selections:', error)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      // Ensure services object exists (migration for older saved states)
+      if (!parsed.services) {
+        parsed.services = initialState.services
       }
+      return parsed
     }
-    loadProviders()
-  }, [])
+    return initialState
+  })
 
   const saveState = (newState: WizardState) => {
     setWizardState(newState)
@@ -102,72 +113,101 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     return wizardState.completedPhases.includes(phase)
   }
 
-  /**
-   * Select a single provider for a capability.
-   * Updates both local state and backend.
-   */
-  const selectProvider = useCallback(async (capability: string, providerId: string) => {
-    setProvidersLoading(true)
-    try {
-      await providersApi.selectProvider(capability, providerId)
-      setWizardState(prev => ({
-        ...prev,
-        selectedProviders: {
-          ...prev.selectedProviders,
-          [capability]: providerId,
-        },
-      }))
-    } catch (error) {
-      console.error('Failed to select provider:', error)
-      throw error
-    } finally {
-      setProvidersLoading(false)
-    }
-  }, [])
+  // Update status for a specific service
+  const updateServiceStatus = (
+    service: keyof ServicesState,
+    status: Partial<ServiceStatus> | boolean
+  ) => {
+    const newServices = { ...wizardState.services }
 
-  /**
-   * Update multiple provider selections at once.
-   * Updates both local state and backend.
-   */
-  const updateProviders = useCallback(async (providers: SelectedProviders) => {
-    setProvidersLoading(true)
-    try {
-      const response = await providersApi.updateSelected({
-        selected_providers: providers,
-      })
-      setWizardState(prev => ({
-        ...prev,
-        selectedProviders: response.data.selected_providers || {},
-      }))
-    } catch (error) {
-      console.error('Failed to update providers:', error)
-      throw error
-    } finally {
-      setProvidersLoading(false)
+    if (service === 'apiKeys') {
+      newServices.apiKeys = typeof status === 'boolean' ? status : true
+    } else {
+      const currentStatus = newServices[service] as ServiceStatus
+      newServices[service] = typeof status === 'boolean'
+        ? { ...currentStatus, configured: status, running: status }
+        : { ...currentStatus, ...status }
     }
-  }, [])
 
-  /**
-   * Apply default providers for a mode (cloud or local).
-   * This sets all capabilities to their default provider for the mode.
-   */
-  const applyDefaultProviders = useCallback(async (mode: 'cloud' | 'local') => {
-    setProvidersLoading(true)
-    try {
-      const response = await providersApi.applyDefaults(mode)
-      // Response contains wizard_mode and selected_providers
-      setWizardState(prev => ({
-        ...prev,
-        mode: response.data.wizard_mode || prev.mode,
-        selectedProviders: response.data.selected_providers || {},
-      }))
-    } catch (error) {
-      console.error('Failed to apply default providers:', error)
-      throw error
-    } finally {
-      setProvidersLoading(false)
+    saveState({ ...wizardState, services: newServices })
+  }
+
+  // Calculate current setup level based on service states
+  const setupLevel = useMemo((): SetupLevel => {
+    const { services } = wizardState
+
+    // Level 3: Everything including speaker recognition
+    if (
+      services.apiKeys &&
+      services.openMemory.running &&
+      services.chronicle.running &&
+      services.tailscale.configured &&
+      services.speakerRecognition.configured
+    ) {
+      return 3
     }
-  }, [])
+
+    // Level 2: Core services + Tailscale
+    if (
+      services.apiKeys &&
+      services.openMemory.running &&
+      services.chronicle.running &&
+      services.tailscale.configured
+    ) {
+      return 2
+    }
+
+    // Level 1: Core services running (web client usable)
+    if (
+      services.apiKeys &&
+      services.openMemory.running &&
+      services.chronicle.running
+    ) {
+      return 1
+    }
+
+    // Level 0: Fresh install
+    return 0
+  }, [wizardState.services])
+
+  // Get dynamic label for sidebar based on setup level
+  const getSetupLabel = (): { label: string; description: string; path: string } => {
+    switch (setupLevel) {
+      case 0:
+        return {
+          label: 'Get Started',
+          description: 'Set up your AI platform',
+          path: '/wizard/start',
+        }
+      case 1:
+        return {
+          label: 'Add Mobile',
+          description: 'Secure network access',
+          path: '/wizard/tailscale',
+        }
+      case 2:
+        return {
+          label: 'Add Voice ID',
+          description: 'Speaker recognition',
+          path: '/wizard/speaker',
+        }
+      case 3:
+        return {
+          label: 'Setup Complete',
+          description: 'All services configured',
+          path: '/settings',
+        }
+    }
+  }
+
+  // Check if this is a first-time user (no setup started)
+  const isFirstTimeUser = (): boolean => {
+    return (
+      setupLevel === 0 &&
+      wizardState.mode === null &&
+      wizardState.completedPhases.length === 0
+    )
+  }
 
   return (
     <WizardContext.Provider
@@ -178,10 +218,10 @@ export function WizardProvider({ children }: { children: ReactNode }) {
         setCurrentPhase,
         resetWizard,
         isPhaseComplete,
-        selectProvider,
-        updateProviders,
-        applyDefaultProviders,
-        providersLoading,
+        setupLevel,
+        updateServiceStatus,
+        getSetupLabel,
+        isFirstTimeUser,
       }}
     >
       {children}
