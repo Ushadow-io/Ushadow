@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X, Plus, Loader2, Server, Cloud, HardDrive } from 'lucide-react'
 import { servicesApi } from '../services/api'
+import { useTheme } from '../contexts/ThemeContext'
 
 interface CatalogService {
   service_id: string
@@ -42,6 +43,7 @@ export default function AddServiceModal({
   onClose,
   onServiceInstalled,
 }: AddServiceModalProps) {
+  const { isDark } = useTheme()
   const [services, setServices] = useState<CatalogService[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)
@@ -99,16 +101,26 @@ export default function AddServiceModal({
     >
       <div
         id="add-service-modal"
-        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+        className="rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+        style={{
+          backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+          border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+        <div
+          className="flex items-center justify-between p-6"
+          style={{
+            borderBottom: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+          }}
+        >
           <div className="flex items-center gap-3">
-            <Plus className="w-6 h-6 text-primary-600" />
+            <Plus className="w-6 h-6" style={{ color: '#4ade80' }} />
             <h2
               id="add-service-modal-title"
-              className="text-xl font-semibold text-gray-900 dark:text-white"
+              className="text-xl font-semibold"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
             >
               Add Service
             </h2>
@@ -116,7 +128,8 @@ export default function AddServiceModal({
           <button
             id="add-service-modal-close"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="transition-colors"
+            style={{ color: isDark ? 'var(--surface-400)' : '#a1a1aa' }}
           >
             <X className="w-6 h-6" />
           </button>
@@ -126,14 +139,15 @@ export default function AddServiceModal({
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+              <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#4ade80' }} />
             </div>
           ) : error ? (
             <div className="text-center py-12">
-              <p className="text-red-600 dark:text-red-400">{error}</p>
+              <p style={{ color: '#f87171' }}>{error}</p>
               <button
                 onClick={loadCatalog}
-                className="mt-4 text-primary-600 hover:text-primary-700"
+                className="mt-4 transition-colors"
+                style={{ color: '#4ade80' }}
               >
                 Retry
               </button>
@@ -230,11 +244,20 @@ export default function AddServiceModal({
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-700">
+        <div
+          className="flex justify-end gap-3 p-6"
+          style={{
+            borderTop: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+          }}
+        >
           <button
             id="add-service-modal-cancel"
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+            className="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-600)' : '#e4e4e7',
+              color: isDark ? 'var(--text-primary)' : '#0f0f13',
+            }}
           >
             Cancel
           </button>
@@ -242,7 +265,11 @@ export default function AddServiceModal({
             id="add-service-modal-install"
             onClick={handleInstall}
             disabled={!selectedService || installing}
-            className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              backgroundColor: '#4ade80',
+              color: '#0f0f13',
+            }}
           >
             {installing ? (
               <>

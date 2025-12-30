@@ -25,12 +25,16 @@ export default function QuickstartWizard() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showProviderConfig, setShowProviderConfig] = useState(false)
 
-  // Form state - env var name -> value
-  const [envValues, setEnvValues] = useState<Record<string, string>>({})
-  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
+  // Container states for service cards
+  const [containers, setContainers] = useState<ContainerInfo[]>([
+    { name: 'openmemory', displayName: 'OpenMemory', status: 'unknown' },
+    { name: 'chronicle-backend', displayName: 'Chronicle', status: 'unknown' },
+  ])
 
-  // In custom mode, show provider configuration by default
-  const isCustomMode = wizardState.mode === 'custom'
+  const methods = useForm<FormData>({
+    defaultValues: {},
+    mode: 'onChange',
+  })
 
   useEffect(() => {
     loadQuickstartConfig()
@@ -136,7 +140,149 @@ export default function QuickstartWizard() {
       setTimeout(() => navigate('/'), 1500)
     } catch (error) {
       setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save configuration') })
+      return false
+    } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // Container management
+  const checkContainerStatuses = async () => {
+    try {
+      const response = await dockerApi.listServices()
+      const servicesList = response.data
+
+      setContainers((prev) =>
+        prev.map((container) => {
+          const serviceInfo = servicesList.find(
+            (s: any) => s.name === container.name || s.name.includes(container.name)
+          )
+
+          if (serviceInfo) {
+            const isRunning = serviceInfo.status === 'running'
+            return {
+              ...container,
+              status: isRunning ? 'running' : 'stopped',
+            }
+          }
+          return { ...container, status: 'stopped' }
+        })
+      )
+    } catch (error) {
+      console.error('Failed to check container statuses:', error)
+    }
+  }
+
+  const startContainer = async (containerName: string) => {
+    setContainers((prev) =>
+      prev.map((c) => (c.name === containerName ? { ...c, status: 'starting' } : c))
+    )
+
+    try {
+      await dockerApi.startService(containerName)
+
+      // Poll for status
+      let attempts = 0
+      const maxAttempts = 10
+
+      const pollStatus = async () => {
+        attempts++
+        try {
+          const response = await dockerApi.getServiceInfo(containerName)
+          const isRunning = response.data.status === 'running'
+
+          if (isRunning) {
+            setContainers((prev) =>
+              prev.map((c) => (c.name === containerName ? { ...c, status: 'running' } : c))
+            )
+
+            // Update wizard context
+            if (containerName === 'openmemory') {
+              updateServiceStatus('openMemory', { configured: true, running: true })
+            } else if (containerName === 'chronicle-backend') {
+              updateServiceStatus('chronicle', { configured: true, running: true })
+            }
+
+            setMessage({ type: 'success', text: `${containerName} started successfully!` })
+            return
+          }
+
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          } else {
+            setContainers((prev) =>
+              prev.map((c) =>
+                c.name === containerName
+                  ? { ...c, status: 'error', error: 'Timeout waiting for container to start' }
+                  : c
+              )
+            )
+          }
+        } catch (err) {
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          }
+        }
+      }
+
+      setTimeout(pollStatus, 2000)
+    } catch (error) {
+      setContainers((prev) =>
+        prev.map((c) =>
+          c.name === containerName
+            ? { ...c, status: 'error', error: getErrorMessage(error, 'Failed to start') }
+            : c
+        )
+      )
+      setMessage({ type: 'error', text: getErrorMessage(error, `Failed to start ${containerName}`) })
+    }
+  }
+
+  const allContainersRunning = containers.every((c) => c.status === 'running')
+
+  // Navigation handlers
+  const handleNext = async () => {
+    setMessage(null)
+
+    if (wizard.currentStep.id === 'api_keys') {
+      // Validate and save API keys
+      const isValid = await validateApiKeys()
+      if (!isValid) return
+
+      const saved = await saveApiKeys()
+      if (!saved) return
+
+      wizard.next()
+    } else if (wizard.currentStep.id === 'start_services') {
+      // Check all containers are running before proceeding
+      if (!allContainersRunning) {
+        setMessage({ type: 'error', text: 'Please start all services before continuing' })
+        return
+      }
+
+      markPhaseComplete('quickstart')
+      wizard.next()
+    } else if (wizard.currentStep.id === 'complete') {
+      // Navigate to dashboard
+      navigate('/')
+    }
+  }
+
+  const handleBack = () => {
+    setMessage(null)
+    wizard.back()
+  }
+
+  const canProceed = (): boolean => {
+    switch (wizard.currentStep.id) {
+      case 'api_keys':
+        return true // Validation happens on next click
+      case 'start_services':
+        return allContainersRunning
+      case 'complete':
+        return true
+      default:
+        return false
     }
   }
 
@@ -154,7 +300,7 @@ export default function QuickstartWizard() {
     <WizardShell
       wizardId="quickstart"
       title="Quickstart Setup"
-      subtitle="Get up and running in minutes with cloud services"
+      subtitle="Get up and running with cloud services"
       icon={Sparkles}
       progress={100} // Single page = always 100%
       isFirstStep={true}

@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import {
   Server,
-  CheckCircle,
   AlertCircle,
   ChevronDown,
   ChevronUp,
@@ -72,7 +71,7 @@ export default function ServicesPage() {
   // Load initial data
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
 
   // Poll for service status when starting
   useEffect(() => {
@@ -482,6 +481,7 @@ export default function ServicesPage() {
   // Render
   // ==========================================================================
 
+  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -500,7 +500,9 @@ export default function ServicesPage() {
         <div>
           <div className="flex items-center space-x-2">
             <Server className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
-            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
+            <h1 id="services-page-title" className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
+              Services
+            </h1>
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             Configure providers and compose services

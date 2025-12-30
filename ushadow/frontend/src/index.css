@@ -3,13 +3,74 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* ═══════════════════════════════════════════════════════════════════════
+     * DESIGN SYSTEM CSS VARIABLES
+     * These can be used anywhere: Tailwind, CSS, or inline styles
+     * Usage: var(--primary-400) or in Tailwind: bg-[var(--primary-400)]
+     * ═══════════════════════════════════════════════════════════════════════ */
+
+    /* Primary (Green) - from logo left arm */
+    --primary-50: #f0fdf4;
+    --primary-100: #dcfce7;
+    --primary-200: #bbf7d0;
+    --primary-300: #86efac;
+    --primary-400: #4ade80;
+    --primary-500: #22c55e;
+    --primary-600: #16a34a;
+    --primary-700: #15803d;
+    --primary-800: #166534;
+    --primary-900: #14532d;
+
+    /* Accent (Purple) - from logo right arm */
+    --accent-50: #faf5ff;
+    --accent-100: #f3e8ff;
+    --accent-200: #e9d5ff;
+    --accent-300: #d8b4fe;
+    --accent-400: #c084fc;
+    --accent-500: #a855f7;
+    --accent-600: #9333ea;
+    --accent-700: #7e22ce;
+    --accent-800: #6b21a8;
+    --accent-900: #581c87;
+
+    /* Surface (Dark backgrounds) */
+    --surface-900: #0f0f13;
+    --surface-800: #1a1a21;
+    --surface-700: #252530;
+    --surface-600: #2d2d3a;
+    --surface-500: #3d3d4a;
+    --surface-400: #52525b;
+
+    /* Text colors */
+    --text-primary: #f4f4f5;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --text-inverse: #0f0f13;
+
+    /* Semantic colors */
+    --success-400: #4ade80;
+    --success-600: #16a34a;
+    --error-400: #f87171;
+    --error-600: #dc2626;
+    --warning-400: #fbbf24;
+    --warning-600: #d97706;
+    --info-400: #60a5fa;
+    --info-600: #2563eb;
+  }
+
   html {
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     scroll-behavior: smooth;
   }
-  
+
   body {
     @apply text-neutral-900 dark:text-neutral-100;
+  }
+
+  /* Dark mode page background */
+  .dark body {
+    background-color: var(--surface-900);
   }
 }
 
@@ -29,28 +90,115 @@
   }
   
   .btn-primary {
-    @apply btn bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500;
+    @apply btn text-white focus:ring-2;
+    background-color: #16a34a;
+    --tw-ring-color: #22c55e;
   }
-  
+  .btn-primary:hover {
+    background-color: #15803d;
+  }
+
   .btn-secondary {
     @apply btn bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-neutral-900 dark:text-neutral-100 focus:ring-neutral-500;
   }
-  
+
   .btn-ghost {
     @apply btn bg-transparent hover:bg-neutral-100 dark:hover:bg-neutral-700/50 text-neutral-700 dark:text-neutral-300 focus:ring-neutral-500;
   }
-  
+
   .btn-danger {
-    @apply btn bg-error-600 hover:bg-error-700 text-white focus:ring-error-500;
+    @apply btn text-white focus:ring-2;
+    background-color: #dc2626;
+    --tw-ring-color: #ef4444;
+  }
+  .btn-danger:hover {
+    background-color: #b91c1c;
   }
 
   .btn-accent {
-    @apply btn bg-accent-600 hover:bg-accent-700 text-white focus:ring-accent-500;
+    @apply btn text-white focus:ring-2;
+    background-color: #9333ea;
+    --tw-ring-color: #a855f7;
+  }
+  .btn-accent:hover {
+    background-color: #7e22ce;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * DARK THEME BUTTONS - Using new design system colors
+   * Colors: surface-900=#0f0f13, surface-800=#1a1a21, surface-700=#252530,
+   *         surface-600=#2d2d3a, surface-500=#3d3d4a, surface-400=#52525b
+   *         text-primary=#f4f4f5, text-secondary=#a1a1aa, text-muted=#71717a
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  .btn-primary-dark {
+    @apply btn focus:ring-2;
+    background-color: var(--primary-400);
+    color: var(--surface-900);
+    --tw-ring-color: var(--primary-400);
+    --tw-ring-offset-color: var(--surface-800);
+  }
+  .btn-primary-dark:hover {
+    background-color: var(--primary-300);
+  }
+  .btn-primary-dark:active {
+    background-color: var(--primary-500);
+  }
+
+  .btn-secondary-dark {
+    @apply btn text-white focus:ring-2;
+    background-color: var(--accent-500);
+    --tw-ring-color: var(--accent-500);
+    --tw-ring-offset-color: var(--surface-800);
+  }
+  .btn-secondary-dark:hover {
+    background-color: var(--accent-400);
+  }
+  .btn-secondary-dark:active {
+    background-color: var(--accent-600);
+  }
+
+  .btn-ghost-dark {
+    @apply btn bg-transparent focus:ring-2;
+    color: var(--text-primary);
+    border: 1px solid var(--surface-400);
+    --tw-ring-color: var(--surface-400);
+    --tw-ring-offset-color: var(--surface-800);
+  }
+
+  .btn-ghost-dark:hover {
+    background-color: var(--surface-600);
+    border-color: var(--text-secondary);
+  }
+
+  .btn-danger-dark {
+    @apply btn text-white focus:ring-2;
+    background-color: var(--error-600);
+    --tw-ring-color: var(--error-400);
+    --tw-ring-offset-color: var(--surface-800);
+  }
+  .btn-danger-dark:hover {
+    background-color: var(--error-400);
+  }
+  .btn-danger-dark:active {
+    background-color: #b91c1c;
+  }
+
+  .btn-gradient {
+    @apply btn font-medium;
+    color: var(--surface-900);
+    background-image: linear-gradient(135deg, var(--primary-400) 0%, var(--accent-500) 100%);
+    box-shadow: 0 0 20px rgba(74, 222, 128, 0.2), 0 0 40px rgba(168, 85, 247, 0.2);
+  }
+
+  .btn-gradient:hover {
+    background-image: linear-gradient(135deg, var(--primary-300) 0%, var(--accent-400) 100%);
   }
   
   /* Input Components */
   .input {
-    @apply w-full px-4 py-2.5 bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-500 dark:placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all;
+    @apply w-full px-4 py-2.5 bg-white dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-500 dark:placeholder-neutral-400 focus:outline-none focus:ring-2 focus:border-transparent transition-all;
+    --tw-ring-color: #22c55e;
   }
   
   .textarea {
@@ -67,27 +215,174 @@
   }
   
   .badge-primary {
-    @apply badge bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300;
+    @apply badge;
+    background-color: #dcfce7;
+    color: #166534;
   }
-  
+  .dark .badge-primary {
+    background-color: rgba(20, 83, 45, 0.3);
+    color: #86efac;
+  }
+
   .badge-success {
-    @apply badge bg-success-100 text-success-800 dark:bg-success-900/30 dark:text-success-300;
+    @apply badge;
+    background-color: #dcfce7;
+    color: #166534;
   }
-  
+  .dark .badge-success {
+    background-color: rgba(20, 83, 45, 0.3);
+    color: #86efac;
+  }
+
   .badge-warning {
-    @apply badge bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300;
+    @apply badge;
+    background-color: #fef3c7;
+    color: #92400e;
   }
-  
+  .dark .badge-warning {
+    background-color: rgba(120, 53, 15, 0.3);
+    color: #fcd34d;
+  }
+
   .badge-error {
-    @apply badge bg-error-100 text-error-800 dark:bg-error-900/30 dark:text-error-300;
+    @apply badge;
+    background-color: #fee2e2;
+    color: #991b1b;
   }
-  
+  .dark .badge-error {
+    background-color: rgba(127, 29, 29, 0.3);
+    color: #fca5a5;
+  }
+
   .badge-neutral {
     @apply badge bg-neutral-100 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-300;
   }
 
   .badge-accent {
-    @apply badge bg-accent-100 text-accent-800 dark:bg-accent-900/30 dark:text-accent-300;
+    @apply badge;
+    background-color: #f3e8ff;
+    color: #6b21a8;
+  }
+
+  .dark .badge-accent {
+    background-color: rgba(88, 28, 135, 0.3);
+    color: #d8b4fe;
+  }
+
+  .badge-info {
+    @apply badge;
+    background-color: #dbeafe;
+    color: #1e40af;
+  }
+
+  .dark .badge-info {
+    background-color: rgba(30, 58, 138, 0.3);
+    color: #93c5fd;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * DARK THEME INPUTS - Using new surface colors
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  .input-dark {
+    @apply w-full px-4 py-2.5 rounded-lg focus:outline-none focus:ring-1 transition-all;
+    background-color: var(--surface-700);
+    border: 1px solid var(--surface-400);
+    color: var(--text-primary);
+    --tw-ring-color: var(--primary-400);
+  }
+  .input-dark:focus {
+    border-color: var(--primary-400);
+  }
+
+  .input-dark::placeholder {
+    color: var(--text-muted);
+  }
+
+  .input-dark-error {
+    @apply input-dark ring-1;
+    border-color: var(--error-400);
+    --tw-ring-color: var(--error-400);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * ALERT COMPONENTS - Using semantic colors
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  .alert {
+    @apply rounded-lg p-4 flex items-start gap-3;
+  }
+
+  .alert-success {
+    @apply alert;
+    background-color: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.2);
+  }
+
+  .alert-error {
+    @apply alert;
+    background-color: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.2);
+  }
+
+  .alert-warning {
+    @apply alert;
+    background-color: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+  }
+
+  .alert-info {
+    @apply alert;
+    background-color: rgba(96, 165, 250, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.2);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * CARD COMPONENTS - Dark theme variants
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  .card-dark {
+    @apply rounded-xl;
+    background-color: var(--surface-800);
+    border: 1px solid var(--surface-500);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4);
+  }
+
+  .card-dark-hover {
+    @apply card-dark transition-all cursor-pointer;
+  }
+
+  .card-dark-hover:hover {
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    border-color: var(--surface-400);
+  }
+
+  .card-dark-glow-green {
+    @apply card-dark;
+    background-image: radial-gradient(ellipse at top, rgba(74, 222, 128, 0.25) 0%, transparent 60%);
+    background-color: var(--surface-800);
+    border-color: rgba(74, 222, 128, 0.3);
+    box-shadow: 0 4px 20px rgba(74, 222, 128, 0.15), 0 4px 6px rgba(0, 0, 0, 0.4);
+  }
+
+  .card-dark-glow-purple {
+    @apply card-dark;
+    background-image: radial-gradient(ellipse at bottom right, rgba(168, 85, 247, 0.25) 0%, transparent 60%);
+    background-color: var(--surface-800);
+    border-color: rgba(168, 85, 247, 0.3);
+    box-shadow: 0 4px 20px rgba(168, 85, 247, 0.15), 0 4px 6px rgba(0, 0, 0, 0.4);
+  }
+
+  .card-dark-accent-green {
+    @apply card-dark;
+    border-left: 5px solid var(--primary-400);
+    box-shadow: 0 0 15px rgba(74, 222, 128, 0.1), 0 4px 6px rgba(0, 0, 0, 0.4);
+  }
+
+  .card-dark-accent-purple {
+    @apply card-dark;
+    border-left: 5px solid var(--accent-500);
+    box-shadow: 0 0 15px rgba(168, 85, 247, 0.1), 0 4px 6px rgba(0, 0, 0, 0.4);
   }
 }
 

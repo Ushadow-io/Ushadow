@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Loader2, AlertCircle, LucideIcon } from 'lucide-react';
 import { WizardProgress } from './WizardProgress';
+import { useTheme } from '../../contexts/ThemeContext';
 
 /**
  * Message type for success/error/info banners
@@ -98,6 +99,7 @@ export function WizardShell({
   children,
 }: WizardShellProps) {
   const navigate = useNavigate();
+  const { isDark } = useTheme();
 
   // Back button always visible - navigates to exitPath on first step, calls onBack otherwise
   const handleBack = () => {
@@ -115,45 +117,63 @@ export function WizardShell({
   const getMessageStyles = (type: 'success' | 'error' | 'info') => {
     switch (type) {
       case 'success':
-        return 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-400';
+        return {
+          backgroundColor: 'rgba(74, 222, 128, 0.1)',
+          border: '1px solid rgba(74, 222, 128, 0.3)',
+          color: '#4ade80',
+        };
       case 'error':
-        return 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-400';
+        return {
+          backgroundColor: 'rgba(248, 113, 113, 0.1)',
+          border: '1px solid rgba(248, 113, 113, 0.3)',
+          color: '#f87171',
+        };
       case 'info':
-        return 'bg-primary-100 dark:bg-primary-900/20 text-primary-800 dark:text-primary-400';
+        return {
+          backgroundColor: 'rgba(96, 165, 250, 0.1)',
+          border: '1px solid rgba(96, 165, 250, 0.3)',
+          color: '#60a5fa',
+        };
     }
   };
 
   return (
     <div id={`${wizardId}-container`} className="max-w-4xl mx-auto">
       <div className="relative">
-        {/* Back Arrow - Left Side (blue, always visible) */}
+        {/* Back Arrow - Left Side (green, always visible) */}
         {showBackButton && (
           <button
             id={`${wizardId}-back-button`}
             onClick={handleBack}
             disabled={nextLoading}
             className="absolute left-0 top-32 -translate-x-16 w-12 h-12 rounded-full
-                       bg-primary-600 hover:bg-primary-700
                        disabled:opacity-50 disabled:cursor-not-allowed
                        flex items-center justify-center shadow-lg z-10
-                       transition-colors"
+                       transition-all hover:scale-105"
+            style={{
+              backgroundColor: '#4ade80',
+              boxShadow: isDark ? '0 0 20px rgba(74, 222, 128, 0.3)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
             aria-label={isFirstStep ? "Back to Setup Wizard" : "Go back"}
           >
-            <ArrowLeft className="w-6 h-6 text-white" />
+            <ArrowLeft className="w-6 h-6" style={{ color: isDark ? '#0f0f13' : '#ffffff' }} />
           </button>
         )}
 
-        {/* Next Arrow - Right Side */}
+        {/* Next Arrow - Right Side (purple) */}
         {onNext && (
           <button
             id={`${wizardId}-next-button`}
             onClick={onNext}
             disabled={nextDisabled || nextLoading}
             className="absolute right-0 top-32 translate-x-16 w-12 h-12 rounded-full
-                       bg-primary-600 hover:bg-primary-700
                        disabled:opacity-50 disabled:cursor-not-allowed
                        flex items-center justify-center shadow-lg z-10
-                       transition-colors"
+                       transition-all hover:scale-105"
+            style={{
+              backgroundColor: '#a855f7',
+              boxShadow: isDark ? '0 0 20px rgba(168, 85, 247, 0.3)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
             aria-label="Continue"
           >
             {nextLoading ? (
@@ -165,20 +185,42 @@ export function WizardShell({
         )}
 
         {/* Main Card */}
-        <div id={`${wizardId}-card`} className="card">
+        <div
+          id={`${wizardId}-card`}
+          className="rounded-xl"
+          style={{
+            backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+            border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+            boxShadow: isDark
+              ? '0 4px 6px rgba(0, 0, 0, 0.4)'
+              : '0 4px 6px rgba(0, 0, 0, 0.1)',
+          }}
+        >
           {/* Header */}
-          <div className="p-8 border-b border-gray-200 dark:border-gray-700">
+          <div
+            className="p-8"
+            style={{
+              borderBottom: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+            }}
+          >
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                {Icon && <Icon className="w-8 h-8 text-primary-600" />}
-                <h1 id={`${wizardId}-title`} className="text-2xl font-semibold text-gray-900 dark:text-white">
+                {Icon && <Icon className="w-8 h-8" style={{ color: '#4ade80' }} />}
+                <h1
+                  id={`${wizardId}-title`}
+                  className="text-2xl font-semibold"
+                  style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                >
                   {title}
                 </h1>
               </div>
               {headerActions}
             </div>
             {subtitle && (
-              <p id={`${wizardId}-subtitle`} className="text-gray-600 dark:text-gray-400">
+              <p
+                id={`${wizardId}-subtitle`}
+                style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+              >
                 {subtitle}
               </p>
             )}
@@ -199,7 +241,8 @@ export function WizardShell({
           {message && (
             <div
               id={`${wizardId}-message`}
-              className={`p-4 mx-8 mt-4 rounded-lg flex items-center gap-2 ${getMessageStyles(message.type)}`}
+              className="p-4 mx-8 mt-4 rounded-lg flex items-center gap-2"
+              style={getMessageStyles(message.type)}
             >
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
               <span>{message.text}</span>

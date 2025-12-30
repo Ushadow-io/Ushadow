@@ -187,7 +187,9 @@ export default function SettingsPage() {
       )}
 
       {/* Tabs */}
-      <div className="border-b border-neutral-200 dark:border-neutral-700">
+      <div
+        style={{ borderBottom: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}` }}
+      >
         <div className="flex space-x-1">
           {tabs.map((tab) => (
             <button
