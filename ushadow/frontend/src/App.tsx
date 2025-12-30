@@ -37,6 +37,7 @@ import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
+import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
 
 // Wizards (all use WizardShell pattern)
@@ -87,6 +88,7 @@ function App() {
                 <Route path="agent-zero" element={<AgentZeroPage />} />
                 <Route path="n8n" element={<N8NPage />} />
                 <Route path="services" element={<ServicesPage />} />
+                <Route path="memories" element={<MemoriesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />
                 <Route path="settings" element={<SettingsPage />} />

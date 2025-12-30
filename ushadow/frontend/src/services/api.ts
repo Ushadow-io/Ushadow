@@ -541,6 +541,174 @@ export const providersApi = {
     api.post<SelectedProviders>(`/api/providers/apply-defaults/${mode}`),
 }
 
+// =============================================================================
+// OpenMemory API (connects to mem0 backend)
+// =============================================================================
+
+import type {
+  Memory,
+  ApiMemoryItem,
+  MemoriesApiResponse,
+  MemoryFilters,
+  MemoryAccessLog,
+  MemoryStats,
+} from '../types/memory'
+
+/** Convert API response to internal Memory format */
+const adaptMemoryItem = (item: ApiMemoryItem): Memory => ({
+  id: item.id,
+  memory: item.content,
+  created_at: new Date(item.created_at).getTime(),
+  state: item.state as Memory['state'],
+  metadata: item.metadata_ || {},
+  categories: item.categories as Memory['categories'],
+  client: 'api',
+  app_name: item.app_name,
+})
+
+export const memoriesApi = {
+  /** Get OpenMemory server URL from settings or use default */
+  getServerUrl: async (): Promise<string> => {
+    try {
+      const response = await settingsApi.getConfig()
+      return response.data?.infrastructure?.openmemory_server_url || 'http://localhost:8765'
+    } catch {
+      return 'http://localhost:8765'
+    }
+  },
+
+  /** Fetch memories with filtering and pagination */
+  fetchMemories: async (
+    userId: string,
+    query?: string,
+    page: number = 1,
+    size: number = 10,
+    filters?: MemoryFilters
+  ): Promise<{ memories: Memory[]; total: number; pages: number }> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.post<MemoriesApiResponse>(
+      `${serverUrl}/api/v1/memories/filter`,
+      {
+        user_id: userId,
+        page,
+        size,
+        search_query: query,
+        app_ids: filters?.apps,
+        category_ids: filters?.categories,
+        sort_column: filters?.sortColumn?.toLowerCase(),
+        sort_direction: filters?.sortDirection,
+        show_archived: filters?.showArchived,
+      }
+    )
+    return {
+      memories: response.data.items.map(adaptMemoryItem),
+      total: response.data.total,
+      pages: response.data.pages,
+    }
+  },
+
+  /** Get a single memory by ID */
+  getMemory: async (userId: string, memoryId: string): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<ApiMemoryItem>(
+      `${serverUrl}/api/v1/memories/${memoryId}?user_id=${userId}`
+    )
+    return adaptMemoryItem(response.data)
+  },
+
+  /** Create a new memory */
+  createMemory: async (
+    userId: string,
+    text: string,
+    infer: boolean = true,
+    app: string = 'ushadow'
+  ): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.post<ApiMemoryItem>(`${serverUrl}/api/v1/memories/`, {
+      user_id: userId,
+      text,
+      infer,
+      app,
+    })
+    return adaptMemoryItem(response.data)
+  },
+
+  /** Update memory content */
+  updateMemory: async (userId: string, memoryId: string, content: string): Promise<void> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    await axios.put(`${serverUrl}/api/v1/memories/${memoryId}`, {
+      memory_id: memoryId,
+      memory_content: content,
+      user_id: userId,
+    })
+  },
+
+  /** Update memory state (pause, archive, etc.) */
+  updateMemoryState: async (
+    userId: string,
+    memoryIds: string[],
+    state: Memory['state']
+  ): Promise<void> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    await axios.post(`${serverUrl}/api/v1/memories/actions/pause`, {
+      memory_ids: memoryIds,
+      all_for_app: true,
+      state,
+      user_id: userId,
+    })
+  },
+
+  /** Delete memories */
+  deleteMemories: async (userId: string, memoryIds: string[]): Promise<void> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    await axios.delete(`${serverUrl}/api/v1/memories/`, {
+      data: { memory_ids: memoryIds, user_id: userId },
+    })
+  },
+
+  /** Get access logs for a memory */
+  getAccessLogs: async (
+    memoryId: string,
+    page: number = 1,
+    pageSize: number = 10
+  ): Promise<{ logs: MemoryAccessLog[]; total: number }> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<{ logs: MemoryAccessLog[]; total: number }>(
+      `${serverUrl}/api/v1/memories/${memoryId}/access-log?page=${page}&page_size=${pageSize}`
+    )
+    return response.data
+  },
+
+  /** Get related memories */
+  getRelatedMemories: async (userId: string, memoryId: string): Promise<Memory[]> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<MemoriesApiResponse>(
+      `${serverUrl}/api/v1/memories/${memoryId}/related?user_id=${userId}`
+    )
+    return response.data.items.map(adaptMemoryItem)
+  },
+
+  /** Get memory statistics */
+  getStats: async (userId: string): Promise<MemoryStats> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const response = await axios.get<MemoryStats>(
+      `${serverUrl}/api/v1/stats?user_id=${userId}`
+    )
+    return response.data
+  },
+
+  /** Check if OpenMemory server is available */
+  healthCheck: async (): Promise<boolean> => {
+    try {
+      const serverUrl = await memoriesApi.getServerUrl()
+      await axios.get(`${serverUrl}/docs`, { timeout: 5000 })
+      return true
+    } catch {
+      return false
+    }
+  },
+}
+
 export const tailscaleApi = {
   // Environment info (for per-environment Tailscale containers)
   getEnvironment: () => api.get<EnvironmentInfo>('/api/tailscale/environment'),
