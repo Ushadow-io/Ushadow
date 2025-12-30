@@ -76,7 +76,7 @@ function ServicesPageContent() {
 
   // Group services by category
   const servicesByCategory = serviceInstances.reduce((acc, service) => {
-    const category = service.template.split('.')[0]
+    const category = service.template?.split('.')[0] || 'other'
     if (!acc[category]) {
       acc[category] = []
     }
