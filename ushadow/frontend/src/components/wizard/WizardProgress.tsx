@@ -1,3 +1,5 @@
+import { useTheme } from '../../contexts/ThemeContext';
+
 /**
  * WizardProgress - Progress bar with optional step indicators.
  *
@@ -28,6 +30,7 @@ export function WizardProgress({
   completedSteps,
   onStepClick,
 }: WizardProgressProps) {
+  const { isDark } = useTheme();
   const currentIndex = steps?.findIndex((s) => s.id === currentStepId) ?? -1;
 
   // Determine if a step is completed:
@@ -43,11 +46,17 @@ export function WizardProgress({
   return (
     <div id="wizard-progress" className="space-y-2">
       {/* Progress Bar */}
-      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+      <div
+        className="w-full rounded-full h-2"
+        style={{ backgroundColor: isDark ? 'var(--surface-600)' : '#e4e4e7' }}
+      >
         <div
           id="wizard-progress-bar"
-          className="bg-primary-600 h-2 rounded-full transition-all duration-300"
-          style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+          className="h-2 rounded-full transition-all duration-300"
+          style={{
+            width: `${Math.min(100, Math.max(0, progress))}%`,
+            backgroundImage: 'linear-gradient(135deg, #4ade80 0%, #a855f7 100%)',
+          }}
         />
       </div>
 
@@ -59,22 +68,34 @@ export function WizardProgress({
             const isCompleted = isStepCompleted(step, index);
             const isClickable = isCurrent || isCompleted;
 
+            const getStepStyles = () => {
+              if (isCurrent) {
+                return {
+                  color: '#4ade80',
+                  backgroundColor: isDark ? 'rgba(74, 222, 128, 0.15)' : 'rgba(74, 222, 128, 0.1)',
+                  fontWeight: 600,
+                };
+              }
+              if (isCompleted) {
+                return {
+                  color: '#4ade80',
+                  cursor: 'pointer',
+                };
+              }
+              return {
+                color: isDark ? 'var(--surface-400)' : '#a1a1aa',
+                cursor: 'not-allowed',
+              };
+            };
+
             return (
               <button
                 key={step.id}
                 id={`wizard-step-${step.id}`}
                 onClick={() => isClickable && onStepClick?.(step.id)}
                 disabled={!isClickable}
-                className={`
-                  px-2 py-1 rounded transition-all
-                  ${
-                    isCurrent
-                      ? 'text-primary-600 dark:text-primary-400 font-semibold bg-primary-50 dark:bg-primary-900/30'
-                      : isCompleted
-                        ? 'text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 cursor-pointer'
-                        : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                  }
-                `}
+                className="px-2 py-1 rounded transition-all"
+                style={getStepStyles()}
               >
                 {isCompleted && <span className="mr-1">✓</span>}
                 {step.label}

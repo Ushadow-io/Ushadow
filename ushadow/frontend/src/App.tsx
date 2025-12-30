@@ -27,8 +27,10 @@ import {
   ChronicleWizard,
   MemoryWizard,
   QuickstartWizard,
+  LocalServicesWizard,
 } from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
+import ColorSystemPreview from './components/ColorSystemPreview'
 
 function App() {
   return (
@@ -43,6 +45,7 @@ function App() {
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/design-system" element={<ColorSystemPreview />} />
 
               {/* Protected Routes - All wrapped in Layout */}
               <Route
@@ -60,6 +63,7 @@ function App() {
                 <Route path="wizard" element={<Navigate to="/wizard/start" replace />} />
                 <Route path="wizard/start" element={<WizardStartPage />} />
                 <Route path="wizard/quickstart" element={<QuickstartWizard />} />
+                <Route path="wizard/local" element={<LocalServicesWizard />} />
                 <Route path="wizard/memory" element={<MemoryWizard />} />
                 <Route path="wizard/chronicle" element={<ChronicleWizard />} />
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />
