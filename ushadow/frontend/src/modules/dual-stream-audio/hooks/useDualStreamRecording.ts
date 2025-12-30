@@ -1,0 +1,337 @@
+/**
+ * Dual-Stream Recording Hook
+ *
+ * Main React hook for dual-stream audio recording.
+ * Portable - works with any backend via callback injection.
+ *
+ * @example
+ * ```tsx
+ * const recording = useDualStreamRecording({
+ *   sampleRate: 16000,
+ *   onAudioChunk: async (chunk) => {
+ *     // Send to your backend (WebSocket, HTTP, etc.)
+ *     await sendToBackend(chunk)
+ *   }
+ * })
+ *
+ * // Start recording
+ * await recording.startRecording('dual-stream')
+ *
+ * // Stop recording
+ * recording.stopRecording()
+ * ```
+ */
+
+import { useState, useRef, useCallback, useEffect } from 'react'
+import type {
+  DualStreamConfig,
+  RecordingMode,
+  RecordingState,
+  RecordingStats,
+  StreamInfo,
+  DualStreamRecordingHook
+} from '../core/types'
+import { AudioRecordingError } from '../core/types'
+import { AudioStreamMixer } from '../core/audioMixer'
+import { AudioProcessor } from '../core/audioProcessor'
+import {
+  captureMicrophone,
+  captureDisplayMedia,
+  stopStream,
+  monitorStreamEnded
+} from '../core/streamCapture'
+import { formatDuration } from '../utils/audioUtils'
+import { getBrowserCapabilities } from '../utils/browserCompat'
+
+export function useDualStreamRecording(
+  config: DualStreamConfig
+): DualStreamRecordingHook {
+  // State
+  const [state, setState] = useState<RecordingState>('idle')
+  const [mode, setMode] = useState<RecordingMode>('microphone-only')
+  const [isRecording, setIsRecording] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+  const [recordingDuration, setRecordingDuration] = useState(0)
+  const [activeStreams, setActiveStreams] = useState<StreamInfo[]>([])
+
+  // Refs
+  const mixerRef = useRef<AudioStreamMixer | null>(null)
+  const processorRef = useRef<AudioProcessor | null>(null)
+  const micStreamRef = useRef<MediaStream | null>(null)
+  const displayStreamRef = useRef<MediaStream | null>(null)
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval>>()
+  const cleanupCallbacksRef = useRef<(() => void)[]>([])
+
+  /**
+   * Cleanup all resources
+   */
+  const cleanup = useCallback(async () => {
+    console.log('🧹 Cleaning up dual-stream recording')
+
+    // Stop streams
+    stopStream(micStreamRef.current)
+    stopStream(displayStreamRef.current)
+    micStreamRef.current = null
+    displayStreamRef.current = null
+
+    // Cleanup processor
+    processorRef.current?.cleanup()
+    processorRef.current = null
+
+    // Cleanup mixer
+    await mixerRef.current?.cleanup()
+    mixerRef.current = null
+
+    // Clear duration interval
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current)
+      durationIntervalRef.current = undefined
+    }
+
+    // Run cleanup callbacks (stream monitors, etc.)
+    cleanupCallbacksRef.current.forEach(cb => cb())
+    cleanupCallbacksRef.current = []
+
+    setActiveStreams([])
+  }, [])
+
+  /**
+   * Start recording
+   */
+  const startRecording = useCallback(
+    async (recordingMode: RecordingMode) => {
+      try {
+        // Check browser compatibility
+        const capabilities = getBrowserCapabilities()
+        if (!capabilities.isSupported) {
+          throw new AudioRecordingError(
+            'Your browser does not support audio recording',
+            'UNSUPPORTED_BROWSER'
+          )
+        }
+
+        if (recordingMode === 'dual-stream' && !capabilities.hasGetDisplayMedia) {
+          throw new AudioRecordingError(
+            'Dual-stream mode is not supported in your browser',
+            'UNSUPPORTED_BROWSER'
+          )
+        }
+
+        setError(null)
+        setMode(recordingMode)
+        setState('requesting-mic')
+
+        // Step 1: Capture microphone
+        console.log('🎤 Step 1: Capturing microphone...')
+        const micStream = await captureMicrophone(config.microphoneConstraints)
+        micStreamRef.current = micStream
+
+        // Monitor mic stream for ended event
+        const micCleanup = monitorStreamEnded(micStream, () => {
+          console.warn('⚠️  Microphone stream ended unexpectedly')
+          stopRecording()
+        })
+        cleanupCallbacksRef.current.push(micCleanup)
+
+        // Step 2: Capture display media (if dual-stream mode)
+        let displayStream: MediaStream | null = null
+        if (recordingMode === 'dual-stream') {
+          setState('requesting-display')
+          console.log('🖥️  Step 2: Capturing display media...')
+
+          displayStream = await captureDisplayMedia(config.displayConstraints?.audio)
+          displayStreamRef.current = displayStream
+
+          // Monitor display stream for ended event
+          const displayCleanup = monitorStreamEnded(displayStream, () => {
+            console.warn('⚠️  Display stream ended (user stopped sharing)')
+            stopRecording()
+          })
+          cleanupCallbacksRef.current.push(displayCleanup)
+        }
+
+        // Step 3: Set up audio mixer
+        setState('setting-up-mixer')
+        console.log('🎛️  Step 3: Setting up audio mixer...')
+
+        const mixer = new AudioStreamMixer(config.sampleRate)
+        await mixer.initialize()
+        mixerRef.current = mixer
+
+        // Add streams to mixer
+        const micStreamId = mixer.addStream(micStream, 'microphone', 1.0)
+
+        const streamIds: string[] = [micStreamId]
+        const streamTypes: Array<'microphone' | 'display'> = ['microphone']
+
+        if (displayStream) {
+          const displayStreamId = mixer.addStream(displayStream, 'display', 1.0)
+          streamIds.push(displayStreamId)
+          streamTypes.push('display')
+        }
+
+        // Update active streams
+        setActiveStreams(mixer.getActiveStreams())
+
+        // Get mixed output stream
+        const mixedStream = mixer.getMixedStream()
+        if (!mixedStream) {
+          throw new Error('Failed to get mixed stream from mixer')
+        }
+
+        // Step 4: Set up audio processor
+        console.log('🔧 Step 4: Setting up audio processor...')
+
+        const audioContext = new AudioContext({ sampleRate: config.sampleRate })
+        const source = audioContext.createMediaStreamSource(mixedStream)
+
+        const processor = new AudioProcessor(audioContext, {
+          sampleRate: config.sampleRate,
+          channelCount: config.channelCount,
+          bufferSize: config.bufferSize,
+          onAudioChunk: config.onAudioChunk,
+          streamTypes
+        })
+
+        processor.connect(source)
+        processor.connectToDestination(audioContext.destination)
+        processorRef.current = processor
+
+        // Wait brief moment for stabilization
+        await new Promise(resolve => setTimeout(resolve, 100))
+
+        // Start processing
+        processor.start()
+
+        // Mark as recording
+        setState('recording')
+        setIsRecording(true)
+        setRecordingDuration(0)
+
+        // Start duration timer
+        durationIntervalRef.current = setInterval(() => {
+          setRecordingDuration(prev => prev + 1)
+        }, 1000)
+
+        // Notify state change
+        config.onStateChange?.('recording')
+
+        console.log('🎉 Recording started successfully in', recordingMode, 'mode')
+      } catch (err) {
+        console.error('❌ Recording failed:', err)
+
+        const recordingError =
+          err instanceof AudioRecordingError
+            ? err
+            : new AudioRecordingError(
+                err instanceof Error ? err.message : 'Recording failed',
+                'UNKNOWN_ERROR',
+                err as Error
+              )
+
+        setState('error')
+        setError(recordingError)
+        config.onError?.(recordingError)
+
+        // Cleanup on error
+        await cleanup()
+      }
+    },
+    [config, cleanup]
+  )
+
+  /**
+   * Stop recording
+   */
+  const stopRecording = useCallback(async () => {
+    if (!isRecording) return
+
+    console.log('🛑 Stopping recording')
+    setState('stopping')
+
+    // Stop processing
+    processorRef.current?.stop()
+
+    // Cleanup resources
+    await cleanup()
+
+    // Reset state
+    setIsRecording(false)
+    setRecordingDuration(0)
+    setState('idle')
+
+    // Notify state change
+    config.onStateChange?.('idle')
+
+    console.log('✅ Recording stopped')
+  }, [isRecording, cleanup, config])
+
+  /**
+   * Set gain for a specific stream
+   */
+  const setStreamGain = useCallback((streamId: string, gain: number) => {
+    if (!mixerRef.current) {
+      console.warn('Mixer not initialized')
+      return
+    }
+
+    const success = mixerRef.current.setStreamGain(streamId, gain)
+    if (success) {
+      // Update active streams with new gain value
+      setActiveStreams(mixerRef.current.getActiveStreams())
+    }
+  }, [])
+
+  /**
+   * Get analyser for a stream type
+   */
+  const getAnalyser = useCallback(
+    (streamType: 'microphone' | 'display'): AnalyserNode | null => {
+      if (!mixerRef.current) return null
+      return mixerRef.current.getAnalyserByType(streamType)
+    },
+    []
+  )
+
+  /**
+   * Get recording statistics
+   */
+  const getStats = useCallback((): RecordingStats => {
+    const processorStats = processorRef.current?.getStats() || {
+      chunksProcessed: 0,
+      bytesProcessed: 0,
+      averageLevel: 0,
+      peakLevel: 0
+    }
+
+    return {
+      recordingDuration,
+      chunksProcessed: processorStats.chunksProcessed,
+      bytesProcessed: processorStats.bytesProcessed,
+      activeStreams: activeStreams.map(s => s.type),
+      averageLevel: processorStats.averageLevel,
+      peakLevel: processorStats.peakLevel
+    }
+  }, [recordingDuration, activeStreams])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanup()
+    }
+  }, [cleanup])
+
+  return {
+    state,
+    mode,
+    isRecording,
+    error,
+    stats: getStats(),
+    activeStreams,
+    startRecording,
+    stopRecording,
+    setStreamGain,
+    formatDuration,
+    getAnalyser
+  }
+}

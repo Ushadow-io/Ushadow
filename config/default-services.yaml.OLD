@@ -200,3 +200,19 @@ services:
 
     enabled: false
     tags: ["transcription", "local", "whisper"]
+
+  # ============================================
+  # Utility/Test Services
+  # ============================================
+
+  - service_id: hello-world
+    name: "Hello World"
+    description: "Simple nginx test service for verifying deployments"
+    template: utility
+    mode: local
+    is_default: true
+
+    docker_image: "nginx:alpine"
+
+    enabled: true
+    tags: ["test", "utility"]

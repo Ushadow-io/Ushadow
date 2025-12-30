@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from sse_starlette.sse import EventSourceResponse
 
 from src.services.docker_manager import get_docker_manager
-from src.services.auth_dependencies import get_current_user
+from src.services.auth import get_current_user
 from src.models.user import User
 
 logger = logging.getLogger(__name__)

@@ -4,6 +4,24 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider } from './contexts/AuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
+import { ChronicleProvider } from './contexts/ChronicleContext'
+
+// Detect runtime base path for path-based routing (e.g., /wiz/, /prod/)
+const getBasename = () => {
+  const { pathname, port, protocol } = window.location
+  const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
+                         (protocol === 'http:' && (port === '' || port === '80'))
+
+  if (!isStandardPort) return '/' // Dev mode - no base path
+
+  // Extract first path segment as base path (e.g., /wiz from /wiz/settings)
+  const segments = pathname.split('/').filter(Boolean)
+  if (segments.length > 0 && !segments[0].includes('.')) {
+    return `/${segments[0]}`
+  }
+  return '/'
+}
+
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import Layout from './components/layout/Layout'
 
@@ -19,6 +37,7 @@ import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
+import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
 
 // Wizards (all use WizardShell pattern)
@@ -37,7 +56,8 @@ function App() {
         <AuthProvider>
           <FeatureFlagsProvider>
           <WizardProvider>
-            <BrowserRouter>
+          <ChronicleProvider>
+            <BrowserRouter basename={getBasename()}>
               <Routes>
      
               {/* Public Routes */}
@@ -68,6 +88,7 @@ function App() {
                 <Route path="agent-zero" element={<AgentZeroPage />} />
                 <Route path="n8n" element={<N8NPage />} />
                 <Route path="services" element={<ServicesPage />} />
+                <Route path="memories" element={<MemoriesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />
                 <Route path="settings" element={<SettingsPage />} />
@@ -78,6 +99,7 @@ function App() {
               </Route>
               </Routes>
             </BrowserRouter>
+          </ChronicleProvider>
           </WizardProvider>
           </FeatureFlagsProvider>
         </AuthProvider>

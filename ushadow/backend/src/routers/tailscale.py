@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Literal, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from src.services.auth_dependencies import get_current_user
+from src.services.auth import get_current_user
 from src.models.user import User
 import logging
 
@@ -27,7 +27,36 @@ router = APIRouter(prefix="/api/tailscale", tags=["tailscale"])
 
 # Docker client for container management
 docker_client = docker.from_env()
-TAILSCALE_CONTAINER_NAME = "ushadow-tailscale"
+
+def get_environment_name() -> str:
+    """Get the current environment name from COMPOSE_PROJECT_NAME or default to 'ushadow'"""
+    env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip()
+    return env_name if env_name else "ushadow"
+
+def get_tailscale_hostname() -> str:
+    """Get the Tailscale hostname for this environment.
+
+    Strips 'ushadow-' prefix if present to get clean hostnames:
+    - ushadow-wiz → wiz
+    - ushadow-prod → prod
+    - ushadow → ushadow (base case unchanged)
+    - "" or None → ushadow (fallback)
+    """
+    env_name = get_environment_name()
+    if env_name.startswith("ushadow-"):
+        hostname = env_name[8:]  # Strip "ushadow-" prefix
+        return hostname if hostname else "ushadow"
+    return env_name
+
+def get_tailscale_container_name() -> str:
+    """Get the Tailscale container name for this environment"""
+    env_name = get_environment_name()
+    return f"{env_name}-tailscale"
+
+def get_tailscale_volume_name() -> str:
+    """Get the Tailscale volume name for this environment"""
+    env_name = get_environment_name()
+    return f"{env_name}-tailscale-state"
 
 
 # ============================================================================
@@ -97,6 +126,31 @@ class AuthUrlResponse(BaseModel):
     auth_url: str  # Deep link for mobile app
     web_url: str  # Web URL as fallback
     qr_code_data: str  # Data URL for QR code image
+
+
+# ============================================================================
+# Environment Info
+# ============================================================================
+
+class EnvironmentInfo(BaseModel):
+    """Current environment information"""
+    name: str
+    tailscale_hostname: str
+    tailscale_container_name: str
+    tailscale_volume_name: str
+
+
+@router.get("/environment", response_model=EnvironmentInfo)
+async def get_environment_info(
+    current_user: User = Depends(get_current_user)
+) -> EnvironmentInfo:
+    """Get current environment information for Tailscale setup"""
+    return EnvironmentInfo(
+        name=get_environment_name(),
+        tailscale_hostname=get_tailscale_hostname(),
+        tailscale_container_name=get_tailscale_container_name(),
+        tailscale_volume_name=get_tailscale_volume_name()
+    )
 
 
 # ============================================================================
@@ -501,7 +555,8 @@ async def test_connection(
 async def exec_in_container(command: str) -> tuple[int, str, str]:
     """Execute command in Tailscale container"""
     try:
-        container = docker_client.containers.get(TAILSCALE_CONTAINER_NAME)
+        container_name = get_tailscale_container_name()
+        container = docker_client.containers.get(container_name)
         result = container.exec_run(command, demux=True)
 
         # Handle both tuple and non-tuple results
@@ -534,8 +589,9 @@ async def get_container_status(
 ) -> ContainerStatus:
     """Get Tailscale container status"""
     try:
+        container_name = get_tailscale_container_name()
         try:
-            container = docker_client.containers.get(TAILSCALE_CONTAINER_NAME)
+            container = docker_client.containers.get(container_name)
             container.reload()  # Refresh status
             is_running = container.status == 'running'
 
@@ -583,11 +639,20 @@ async def get_container_status(
 async def start_tailscale_container(
     current_user: User = Depends(get_current_user)
 ) -> Dict[str, str]:
-    """Start or create Tailscale container using Docker SDK"""
+    """Start or create Tailscale container using Docker SDK.
+
+    Creates a per-environment Tailscale container using COMPOSE_PROJECT_NAME.
+    The container will be named {env}-tailscale and use {env} as its hostname.
+    """
     try:
+        container_name = get_tailscale_container_name()
+        volume_name = get_tailscale_volume_name()
+        env_name = get_environment_name()
+        ts_hostname = get_tailscale_hostname()
+
         # Check if container exists
         try:
-            container = docker_client.containers.get(TAILSCALE_CONTAINER_NAME)
+            container = docker_client.containers.get(container_name)
 
             # Reload to get fresh status
             container.reload()
@@ -602,40 +667,57 @@ async def start_tailscale_container(
 
         except docker.errors.NotFound:
             # Container doesn't exist - create it using Docker SDK
-            logger.info("Creating Tailscale container with Docker SDK...")
+            logger.info(f"Creating Tailscale container '{container_name}' for environment '{env_name}'...")
 
-            # Ensure network exists
+            # Ensure infra network exists
             try:
-                network = docker_client.networks.get("infra-network")
+                infra_network = docker_client.networks.get("infra-network")
             except docker.errors.NotFound:
                 raise HTTPException(
                     status_code=400,
                     detail="infra-network not found. Please start infrastructure first."
                 )
 
-            # Create volume if it doesn't exist
+            # Get environment's compose network if it exists
+            env_network_name = f"{env_name}_default"
+            env_network = None
             try:
-                docker_client.volumes.get("tailscale_state")
+                env_network = docker_client.networks.get(env_network_name)
             except docker.errors.NotFound:
-                docker_client.volumes.create("tailscale_state")
+                logger.warning(f"Environment network '{env_network_name}' not found - will only use infra-network")
+
+            # Create volume if it doesn't exist (per-environment)
+            try:
+                docker_client.volumes.get(volume_name)
+            except docker.errors.NotFound:
+                docker_client.volumes.create(volume_name)
+                logger.info(f"Created Tailscale volume: {volume_name}")
 
             # Ensure certs directory exists
             CERTS_DIR.mkdir(parents=True, exist_ok=True)
 
-            # Create container
+            # Create container with environment-specific name and hostname
+            # The hostname becomes the Tailscale machine name (e.g., wiz.your-tailnet.ts.net)
+            # Add Docker Compose labels so the container is part of the compose project
             container = docker_client.containers.run(
                 image="tailscale/tailscale:latest",
-                name=TAILSCALE_CONTAINER_NAME,
-                hostname="ushadow-tailscale",
+                name=container_name,
+                hostname=ts_hostname,  # This sets the Tailscale hostname (e.g., "wiz")
                 detach=True,
                 environment={
                     "TS_STATE_DIR": "/var/lib/tailscale",
                     "TS_USERSPACE": "true",
                     "TS_ACCEPT_DNS": "true",
                     "TS_EXTRA_ARGS": "--advertise-tags=tag:container",
+                    "TS_HOSTNAME": ts_hostname,  # Explicitly set Tailscale hostname
+                },
+                labels={
+                    "com.docker.compose.project": env_name,
+                    "com.docker.compose.service": "tailscale",
+                    "com.docker.compose.oneoff": "False",
                 },
                 volumes={
-                    "tailscale_state": {"bind": "/var/lib/tailscale", "mode": "rw"},
+                    volume_name: {"bind": "/var/lib/tailscale", "mode": "rw"},
                     str(CERTS_DIR.absolute()): {"bind": "/certs", "mode": "rw"},
                 },
                 cap_add=["NET_ADMIN", "NET_RAW"],
@@ -644,9 +726,20 @@ async def start_tailscale_container(
                 command="sh -c 'tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity'"
             )
 
-            logger.info(f"Tailscale container created: {container.id}")
+            # Connect to environment's compose network for routing to backend/frontend
+            if env_network:
+                try:
+                    env_network.connect(container)
+                    logger.info(f"Connected Tailscale container to environment network '{env_network_name}'")
+                except Exception as e:
+                    logger.warning(f"Failed to connect to environment network: {e}")
+
+            logger.info(f"Tailscale container '{container_name}' created with hostname '{ts_hostname}': {container.id}")
             await asyncio.sleep(2)  # Give it time to start
-            return {"status": "created", "message": "Tailscale container created and started"}
+            return {
+                "status": "created",
+                "message": f"Tailscale container '{container_name}' created and started with hostname '{ts_hostname}'"
+            }
 
     except HTTPException:
         raise
@@ -744,12 +837,14 @@ async def provision_cert_in_container(
         if cert_file.exists() and key_file.exists():
             return CertificateStatus(provisioned=True, cert_path=str(cert_file), key_path=str(key_file))
 
-        # Provision in container (saves to /tmp inside container)
-        exit_code, stdout, stderr = await exec_in_container(f"tailscale cert {hostname}")
+        # Provision in container - explicitly save to /certs directory
+        cert_cmd = f"tailscale cert --cert-file /certs/{hostname}.crt --key-file /certs/{hostname}.key {hostname}"
+        exit_code, stdout, stderr = await exec_in_container(cert_cmd)
 
         if exit_code == 0:
             # Copy files from Tailscale container's /certs to backend's /config/certs
-            container = docker_client.containers.get(TAILSCALE_CONTAINER_NAME)
+            container_name = get_tailscale_container_name()
+            container = docker_client.containers.get(container_name)
 
             import tarfile
             import io
@@ -799,47 +894,29 @@ async def configure_tailscale_serve(
     config: TailscaleConfig,
     current_user: User = Depends(get_current_user)
 ) -> Dict[str, str]:
-    """Configure Tailscale serve for routing"""
+    """Configure Tailscale serve for routing.
+
+    Sets up base routes: /api/* and /auth/* to backend, /* to frontend.
+    Uses the tailscale_serve helper module for dynamic route management.
+    """
     try:
-        if config.deployment_mode.mode != "single":
-            return {"status": "skipped", "message": "Tailscale serve only used in single mode"}
+        from src.services.tailscale_serve import configure_base_routes, get_serve_status
 
-        # Get container names from environment
-        compose_project = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-        backend_container = f"{compose_project}-backend"
-        frontend_container = f"{compose_project}-webui"
+        # Configure base routes for this environment
+        success = configure_base_routes()
 
-        # Internal ports (inside containers)
-        backend_internal_port = config.backend_port  # Use configured backend port
-        frontend_internal_port = 5173  # Vite dev server default
-
-        # Configure tailscale serve routes
-        # We always use Caddy for routing to preserve /api paths correctly
-        commands = [
-            # Reset any existing serve config
-            "tailscale serve reset",
-            # Route everything to Caddy which handles /api/* and / routing
-            "tailscale serve --bg http://ushadow-caddy:80",
-        ]
-
-        results = []
-        for cmd in commands:
-            logger.info(f"Running: {cmd}")
-            exit_code, stdout, stderr = await exec_in_container(cmd)
-            results.append({
-                "command": cmd,
-                "success": exit_code == 0,
-                "output": stdout + stderr
-            })
-
-            if exit_code != 0:
-                logger.error(f"Failed to configure serve: {stderr}")
-
-        return {
-            "status": "configured",
-            "message": "Tailscale serve configured successfully",
-            "results": str(results)
-        }
+        if success:
+            status = get_serve_status() or "Routes configured"
+            return {
+                "status": "configured",
+                "message": "Tailscale serve configured successfully",
+                "routes": status
+            }
+        else:
+            return {
+                "status": "partial",
+                "message": "Some routes may have failed to configure"
+            }
 
     except Exception as e:
         logger.error(f"Error configuring tailscale serve: {e}")
