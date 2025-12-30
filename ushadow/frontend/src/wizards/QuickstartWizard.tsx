@@ -1,19 +1,30 @@
 import { useState, useEffect } from 'react'
 import { useForm, FormProvider, useFormContext } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, Eye, EyeOff } from 'lucide-react'
+import { Sparkles, Loader2, Eye, EyeOff, CheckCircle, RefreshCw } from 'lucide-react'
 
-import { servicesApi, settingsApi } from '../services/api'
+import { servicesApi, settingsApi, dockerApi } from '../services/api'
+import { ServiceStatusCard, type ServiceStatus } from '../components/services'
 import { useWizard } from '../contexts/WizardContext'
+import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
+import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
 
 /**
- * QuickstartWizard - Dynamic single-page configuration form.
+ * QuickstartWizard - Multi-step setup for cloud services.
  *
- * Unlike multi-step wizards, this loads fields dynamically from the backend
- * service configuration schema. Uses react-hook-form for consistency.
+ * Step 1: Configure API keys for cloud services
+ * Step 2: Start core services (OpenMemory + Chronicle)
+ * Step 3: Complete - ready to use web client
  */
+
+// Step definitions
+const STEPS: WizardStep[] = [
+  { id: 'api_keys', label: 'API Keys' },
+  { id: 'start_services', label: 'Start' },
+  { id: 'complete', label: 'Done' },
+]
 
 interface ServiceField {
   key: string
@@ -36,14 +47,29 @@ interface QuickstartService {
 
 type FormData = Record<string, Record<string, any>>
 
+// Container status for service cards
+interface ContainerInfo {
+  name: string
+  displayName: string
+  status: 'unknown' | 'stopped' | 'starting' | 'running' | 'error'
+  error?: string
+}
+
 export default function QuickstartWizard() {
   const navigate = useNavigate()
-  const { markPhaseComplete } = useWizard()
+  const { markPhaseComplete, updateServiceStatus } = useWizard()
+  const wizard = useWizardSteps(STEPS)
 
   const [loading, setLoading] = useState(true)
   const [services, setServices] = useState<QuickstartService[]>([])
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Container states for service cards
+  const [containers, setContainers] = useState<ContainerInfo[]>([
+    { name: 'openmemory', displayName: 'OpenMemory', status: 'unknown' },
+    { name: 'chronicle-backend', displayName: 'Chronicle', status: 'unknown' },
+  ])
 
   const methods = useForm<FormData>({
     defaultValues: {},
@@ -53,6 +79,13 @@ export default function QuickstartWizard() {
   useEffect(() => {
     loadQuickstartServices()
   }, [])
+
+  // Check container status when entering start_services step
+  useEffect(() => {
+    if (wizard.currentStep.id === 'start_services') {
+      checkContainerStatuses()
+    }
+  }, [wizard.currentStep.id])
 
   const loadQuickstartServices = async () => {
     try {
@@ -130,7 +163,8 @@ export default function QuickstartWizard() {
     return filtered
   }
 
-  const validateForm = (servicesToValidate: QuickstartService[]): boolean => {
+  const validateApiKeys = async (): Promise<boolean> => {
+    const servicesToValidate = getFilteredServices()
     const data = methods.getValues()
 
     for (const service of servicesToValidate) {
@@ -150,10 +184,7 @@ export default function QuickstartWizard() {
     return true
   }
 
-  const handleComplete = async () => {
-    const servicesToValidate = getFilteredServices()
-    if (!validateForm(servicesToValidate)) return
-
+  const saveApiKeys = async (): Promise<boolean> => {
     setIsSubmitting(true)
     setMessage({ type: 'info', text: 'Saving configuration...' })
 
@@ -193,14 +224,154 @@ export default function QuickstartWizard() {
       }
 
       await settingsApi.update(updates)
-
-      setMessage({ type: 'success', text: 'Configuration saved successfully!' })
-      markPhaseComplete('quickstart')
-
-      setTimeout(() => navigate('/'), 1500)
+      updateServiceStatus('apiKeys', true)
+      setMessage({ type: 'success', text: 'Configuration saved!' })
+      return true
     } catch (error) {
       setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save configuration') })
+      return false
+    } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // Container management
+  const checkContainerStatuses = async () => {
+    try {
+      const response = await dockerApi.listServices()
+      const servicesList = response.data
+
+      setContainers((prev) =>
+        prev.map((container) => {
+          const serviceInfo = servicesList.find(
+            (s: any) => s.name === container.name || s.name.includes(container.name)
+          )
+
+          if (serviceInfo) {
+            const isRunning = serviceInfo.status === 'running'
+            return {
+              ...container,
+              status: isRunning ? 'running' : 'stopped',
+            }
+          }
+          return { ...container, status: 'stopped' }
+        })
+      )
+    } catch (error) {
+      console.error('Failed to check container statuses:', error)
+    }
+  }
+
+  const startContainer = async (containerName: string) => {
+    setContainers((prev) =>
+      prev.map((c) => (c.name === containerName ? { ...c, status: 'starting' } : c))
+    )
+
+    try {
+      await dockerApi.startService(containerName)
+
+      // Poll for status
+      let attempts = 0
+      const maxAttempts = 10
+
+      const pollStatus = async () => {
+        attempts++
+        try {
+          const response = await dockerApi.getServiceInfo(containerName)
+          const isRunning = response.data.status === 'running'
+
+          if (isRunning) {
+            setContainers((prev) =>
+              prev.map((c) => (c.name === containerName ? { ...c, status: 'running' } : c))
+            )
+
+            // Update wizard context
+            if (containerName === 'openmemory') {
+              updateServiceStatus('openMemory', { configured: true, running: true })
+            } else if (containerName === 'chronicle-backend') {
+              updateServiceStatus('chronicle', { configured: true, running: true })
+            }
+
+            setMessage({ type: 'success', text: `${containerName} started successfully!` })
+            return
+          }
+
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          } else {
+            setContainers((prev) =>
+              prev.map((c) =>
+                c.name === containerName
+                  ? { ...c, status: 'error', error: 'Timeout waiting for container to start' }
+                  : c
+              )
+            )
+          }
+        } catch (err) {
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          }
+        }
+      }
+
+      setTimeout(pollStatus, 2000)
+    } catch (error) {
+      setContainers((prev) =>
+        prev.map((c) =>
+          c.name === containerName
+            ? { ...c, status: 'error', error: getErrorMessage(error, 'Failed to start') }
+            : c
+        )
+      )
+      setMessage({ type: 'error', text: getErrorMessage(error, `Failed to start ${containerName}`) })
+    }
+  }
+
+  const allContainersRunning = containers.every((c) => c.status === 'running')
+
+  // Navigation handlers
+  const handleNext = async () => {
+    setMessage(null)
+
+    if (wizard.currentStep.id === 'api_keys') {
+      // Validate and save API keys
+      const isValid = await validateApiKeys()
+      if (!isValid) return
+
+      const saved = await saveApiKeys()
+      if (!saved) return
+
+      wizard.next()
+    } else if (wizard.currentStep.id === 'start_services') {
+      // Check all containers are running before proceeding
+      if (!allContainersRunning) {
+        setMessage({ type: 'error', text: 'Please start all services before continuing' })
+        return
+      }
+
+      markPhaseComplete('quickstart')
+      wizard.next()
+    } else if (wizard.currentStep.id === 'complete') {
+      // Navigate to dashboard
+      navigate('/')
+    }
+  }
+
+  const handleBack = () => {
+    setMessage(null)
+    wizard.back()
+  }
+
+  const canProceed = (): boolean => {
+    switch (wizard.currentStep.id) {
+      case 'api_keys':
+        return true // Validation happens on next click
+      case 'start_services':
+        return allContainersRunning
+      case 'complete':
+        return true
+      default:
+        return false
     }
   }
 
@@ -218,42 +389,163 @@ export default function QuickstartWizard() {
     <WizardShell
       wizardId="quickstart"
       title="Quickstart Setup"
-      subtitle="Get up and running in minutes with cloud services"
+      subtitle="Get up and running with cloud services"
       icon={Sparkles}
-      progress={100} // Single page = always 100%
-      isFirstStep={true}
-      onNext={servicesWithRequiredFields.length > 0 ? handleComplete : () => navigate('/')}
+      progress={wizard.progress}
+      steps={STEPS}
+      currentStepId={wizard.currentStep.id}
+      isFirstStep={wizard.isFirst}
+      onBack={handleBack}
+      onNext={handleNext}
+      nextDisabled={!canProceed() && wizard.currentStep.id === 'start_services'}
       nextLoading={isSubmitting}
       message={message}
     >
       <FormProvider {...methods}>
-        {servicesWithRequiredFields.length > 0 ? (
-          <div id="quickstart-form" className="space-y-6">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-                API Keys Required
-              </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Enter your API keys to enable AI features
-              </p>
-            </div>
-
-            {servicesWithRequiredFields.map((service) => (
-              <ServiceFieldGroup key={service.service_id} service={service} />
-            ))}
-          </div>
-        ) : (
-          <div id="quickstart-complete" className="text-center space-y-4">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-              All Set!
-            </h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              No additional configuration needed. Default services are ready to use.
-            </p>
-          </div>
+        {/* Step 1: API Keys */}
+        {wizard.currentStep.id === 'api_keys' && (
+          <ApiKeysStep services={servicesWithRequiredFields} />
         )}
+
+        {/* Step 2: Start Services */}
+        {wizard.currentStep.id === 'start_services' && (
+          <StartServicesStep
+            containers={containers}
+            onStart={startContainer}
+            onRefresh={checkContainerStatuses}
+          />
+        )}
+
+        {/* Step 3: Complete */}
+        {wizard.currentStep.id === 'complete' && <CompleteStep />}
       </FormProvider>
     </WizardShell>
+  )
+}
+
+// Step 1: API Keys
+function ApiKeysStep({ services }: { services: QuickstartService[] }) {
+  if (services.length === 0) {
+    return (
+      <div id="quickstart-step-api-keys" className="text-center space-y-4">
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">All Set!</h2>
+        <p className="text-gray-600 dark:text-gray-400">
+          No additional API keys needed. Click next to start services.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div id="quickstart-step-api-keys" className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Configure API Keys
+        </h2>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Enter your API keys to enable AI features. These will be securely stored.
+        </p>
+      </div>
+
+      {services.map((service) => (
+        <ServiceFieldGroup key={service.service_id} service={service} />
+      ))}
+    </div>
+  )
+}
+
+// Step 2: Start Services
+interface StartServicesStepProps {
+  containers: ContainerInfo[]
+  onStart: (name: string) => void
+  onRefresh: () => void
+}
+
+function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStepProps) {
+  return (
+    <div id="quickstart-step-start-services" className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+            Start Core Services
+          </h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Start the OpenMemory and Chronicle containers to enable the web client.
+          </p>
+        </div>
+        <button
+          id="quickstart-refresh-status"
+          onClick={onRefresh}
+          className="btn-ghost p-2 rounded-lg"
+          title="Refresh status"
+        >
+          <RefreshCw className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="space-y-4">
+        {containers.map((container) => (
+          <ServiceStatusCard
+            key={container.name}
+            id={container.name}
+            name={container.displayName}
+            status={container.status === 'unknown' ? 'stopped' : container.status as ServiceStatus}
+            error={container.error}
+            onStart={() => onStart(container.name)}
+            idPrefix="quickstart"
+          />
+        ))}
+      </div>
+
+      {containers.every((c) => c.status === 'running') && (
+        <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
+          <p className="text-sm text-green-800 dark:text-green-200 flex items-center gap-2">
+            <CheckCircle className="w-5 h-5" />
+            All services are running! Click next to continue.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Step 3: Complete
+function CompleteStep() {
+  return (
+    <div id="quickstart-step-complete" className="text-center space-y-6">
+      <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
+      <div>
+        <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
+          Level 1 Complete!
+        </h2>
+        <p className="text-gray-600 dark:text-gray-400">
+          Your core services are running. You can now use the web client for recording conversations
+          and storing memories.
+        </p>
+      </div>
+
+      <div className="p-6 bg-primary-50 dark:bg-primary-900/20 rounded-xl border border-primary-200 dark:border-primary-800">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-3">What&apos;s Next?</h3>
+        <ul className="text-left text-sm text-gray-700 dark:text-gray-300 space-y-2">
+          <li className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            OpenMemory is ready for storing your memories
+          </li>
+          <li className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            Chronicle is ready for recording conversations
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full border-2 border-gray-400" />
+            Add mobile access with Tailscale (Level 2)
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full border-2 border-gray-400" />
+            Enable speaker recognition (Level 3)
+          </li>
+        </ul>
+      </div>
+    </div>
   )
 }
 
@@ -261,9 +553,7 @@ export default function QuickstartWizard() {
 function ServiceFieldGroup({ service }: { service: QuickstartService }) {
   return (
     <div id={`quickstart-service-${service.service_id}`} className="space-y-4">
-      <h3 className="font-medium text-gray-900 dark:text-white">
-        {service.name}
-      </h3>
+      <h3 className="font-medium text-gray-900 dark:text-white">{service.name}</h3>
       {service.config_schema.map((field) => (
         <DynamicField
           key={`${service.service_id}.${field.key}`}
@@ -277,7 +567,7 @@ function ServiceFieldGroup({ service }: { service: QuickstartService }) {
 
 // Dynamic field renderer
 function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceField }) {
-  const { register, watch, setValue } = useFormContext<FormData>()
+  const { register, watch } = useFormContext<FormData>()
   const [showSecret, setShowSecret] = useState(false)
 
   const fieldPath = `${serviceId}.${field.key}` as const
@@ -324,9 +614,7 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
               </button>
             )}
           </div>
-          {field.description && (
-            <p className="text-xs text-gray-500">{field.description}</p>
-          )}
+          {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
         </div>
       )
 
@@ -343,12 +631,12 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
               className="input"
             >
               {field.options.map((opt) => (
-                <option key={opt} value={opt}>{opt}</option>
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
               ))}
             </select>
-            {field.description && (
-              <p className="text-xs text-gray-500">{field.description}</p>
-            )}
+            {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
           </div>
         )
       }
@@ -376,9 +664,7 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
             placeholder={field.default || ''}
             className="input"
           />
-          {field.description && (
-            <p className="text-xs text-gray-500">{field.description}</p>
-          )}
+          {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
         </div>
       )
 
