@@ -1,0 +1,184 @@
+# Service Definition Template
+# Copy this file and rename to <service-id>.yaml
+# Place in config/services/ for user-facing services
+# Place in config/services/infrastructure/ for infrastructure services
+#
+# Required fields are marked with (required)
+# All other fields are optional
+
+# =============================================================================
+# Identity (required)
+# =============================================================================
+
+id: my-service                    # (required) Unique identifier, lowercase with hyphens
+type: memory                      # (required) One of: memory, llm, transcription,
+                                  #            conversation_engine, infrastructure
+name: "My Service"                # (required) Display name
+description: "What this service does"
+is_default: false                 # Show in quickstart wizard (default: false)
+
+# =============================================================================
+# Service Mode
+# =============================================================================
+# Cloud services connect to external APIs
+# Local services run as Docker containers
+
+# --- For Cloud Services ---
+mode: cloud
+api_base: "https://api.example.com/v1"
+
+# Optional: Custom API authentication (defaults to Bearer token)
+api_config:
+  auth_header: "Authorization"    # Header name (default: Authorization)
+  auth_prefix: "Bearer"           # Prefix before token (default: Bearer)
+
+# --- For Local Services ---
+# Omit 'mode' field (or set to null) for local services
+# Define containers instead (see below)
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+
+# For cloud services, define env at top level:
+env:
+  required:
+    - MY_API_KEY                  # Service won't activate without these
+  optional:
+    - MY_OPTIONAL_SETTING         # Nice to have, not required
+  values:                         # Static values (not secrets)
+    DEFAULT_MODEL: "gpt-4"
+
+# Override global env mappings for this service
+env_overrides:
+  MY_API_KEY:
+    settings_path: secrets.api_keys.my_service
+    link: "https://example.com/api-keys"
+    description: "Get your API key from the dashboard"
+
+# =============================================================================
+# Containers (for local services only)
+# =============================================================================
+
+containers:
+  - name: my-service              # Container/service name in docker-compose
+    image: myorg/my-service:latest
+
+    ports:
+      - container: 8080           # Port inside container
+        host: 8080                # Port on host (optional, defaults to container)
+        protocol: http            # http, grpc, tcp, bolt
+
+    env:
+      required:
+        - OPENAI_API_KEY          # Required for this container
+      optional:
+        - DEBUG_MODE
+      values:                     # Static environment values
+        SERVER_HOST: "0.0.0.0"
+        SERVER_PORT: "8080"
+
+    volumes:
+      - name: my_service_data     # Volume name (prefix added automatically)
+        path: /data               # Mount path inside container
+        persistent: true          # Persist across restarts
+
+    health:
+      # Use ONE of http_get or exec:
+      http_get: /health           # HTTP endpoint to check
+      port: 8080                  # Port for HTTP check (required if http_get)
+      # OR
+      exec: ["cmd", "arg1"]       # Command to run for health check
+
+      interval: 10s               # How often to check
+      timeout: 5s                 # Timeout for each check
+      retries: 3                  # Retries before marking unhealthy
+      start_period: 30s           # Grace period on startup
+
+    command: ["custom", "cmd"]    # Override default container command
+
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Additional containers (e.g., UI, worker, etc.)
+  - name: my-service-ui
+    image: myorg/my-service-ui:latest
+    ports:
+      - container: 3000
+        protocol: http
+    env:
+      values:
+        API_URL: "http://my-service:8080"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+
+depends_on:
+  required:
+    - mongodb                     # Always started with this service
+    - redis
+  optional:
+    - neo4j                       # Only started if triggered by an option
+
+# =============================================================================
+# User-Configurable Options
+# =============================================================================
+# Shown in wizard and settings UI
+
+options:
+  # Boolean option
+  enable_feature:
+    type: boolean
+    label: "Enable Feature X"
+    description: "Turn on experimental feature X"
+    default: false
+    triggers_dependency: neo4j    # Start neo4j when true
+
+  # String option
+  custom_name:
+    type: string
+    label: "Custom Name"
+    description: "Name for your instance"
+    default: "default"
+
+  # Number option
+  temperature:
+    type: number
+    label: "Temperature"
+    description: "Sampling temperature (0-2)"
+    default: 0.7
+    min: 0
+    max: 2
+    step: 0.1
+
+  # Select option
+  model:
+    type: select
+    label: "Model"
+    description: "Which model to use"
+    default: standard
+    choices:
+      - value: fast
+        label: "Fast (Lower quality)"
+      - value: standard
+        label: "Standard (Balanced)"
+      - value: best
+        label: "Best (Highest quality)"
+        requires_env: PREMIUM_API_KEY    # Only available if this env is set
+
+# =============================================================================
+# Metadata
+# =============================================================================
+
+tags: ["memory", "local", "experimental"]
+
+# Infrastructure-specific fields (only for type: infrastructure)
+managed: true                     # System-managed, not user-toggled
+optional: true                    # Only started when needed by another service

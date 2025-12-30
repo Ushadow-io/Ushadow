@@ -1,0 +1,62 @@
+# Local Deployment Configuration
+# Docker Compose deployment on the local machine
+
+target: docker
+
+# Network configuration
+network:
+  name: ushadow
+  driver: bridge
+
+# Volume naming prefix
+volume_prefix: ushadow
+
+# Infrastructure services to always start
+infrastructure:
+  # These are always started regardless of which services are enabled
+  always:
+    - mongodb
+    - redis
+
+  # Started based on service dependencies
+  on_demand:
+    - qdrant    # Started if any service has qdrant in depends_on
+    - neo4j     # Started if openmemory has enable_graph=true
+
+# Port allocation strategy
+ports:
+  strategy: direct  # Use ports as defined in service YAML
+  # Alternative: 'offset' - add offset to all ports
+  # offset: 10000
+
+# Resource limits (optional, for local development)
+resources:
+  memory_limit: 8g  # Max memory per container
+  cpu_limit: 4      # Max CPUs per container
+
+# Health check overrides for local development
+health:
+  # More lenient timeouts for local dev
+  timeout_multiplier: 2
+  retries_extra: 2
+
+# Volume mount options
+volumes:
+  # Where to store persistent data
+  data_path: ~/.ushadow/data
+
+  # Backup before updates
+  backup_on_update: true
+
+# Logging configuration
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Environment variable sources (in order of precedence)
+env_sources:
+  - file: config/.env           # User's local env file (gitignored)
+  - file: config/.env.local     # Machine-specific overrides
+  - settings: true              # From ushadow settings store

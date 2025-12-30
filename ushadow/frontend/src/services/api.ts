@@ -3,27 +3,33 @@ import { getStorageKey } from '../utils/storage'
 
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
-  const { protocol, hostname, port } = window.location
+  const { protocol, hostname, port, pathname } = window.location
   console.log('Protocol:', protocol)
   console.log('Hostname:', hostname)
   console.log('Port:', port)
+  console.log('Pathname:', pathname)
 
   const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
                          (protocol === 'http:' && (port === '' || port === '80'))
 
-  // Check if we're being accessed through Tailscale
-  if (hostname.endsWith('.ts.net')) {
-    console.log('Accessed via Tailscale - using relative URLs')
-    return '' // Use relative URLs - Tailscale serve routes everything
-  }
+  // Check if we have a base path from Vite build config
+  const viteBasePath = import.meta.env.BASE_URL
+  console.log('Base path from Vite:', viteBasePath)
 
-  // Check if we have a base path (for path-based routing)
-  const basePath = import.meta.env.BASE_URL
-  console.log('Base path from Vite:', basePath)
+  // Detect runtime base path from URL (e.g., /wiz/ from /wiz/settings)
+  // This handles path-based routing via Caddy/nginx without rebuild
+  const pathSegments = pathname.split('/').filter(Boolean)
+  const runtimeBasePath = pathSegments.length > 0 && !pathSegments[0].includes('.')
+    ? `/${pathSegments[0]}`
+    : ''
+  console.log('Runtime base path detected:', runtimeBasePath || '(none)')
 
-  if (isStandardPort && basePath && basePath !== '/') {
-    // We're using path-based routing - use the base path
-    console.log('Using path-based routing with base path')
+  // Use Vite base path if set, otherwise use runtime detection
+  const basePath = (viteBasePath && viteBasePath !== '/') ? viteBasePath : runtimeBasePath
+
+  if (isStandardPort && basePath) {
+    // We're using path-based routing - use the base path for API calls
+    console.log('Using path-based routing with base path:', basePath)
     return basePath.replace(/\/$/, '')
   }
 
@@ -39,18 +45,11 @@ const getBackendUrl = () => {
     return ''
   }
 
-  // Development mode - direct access to dev server
-  // Check for common Vite dev ports: 5173 (default), 3500 (with PORT_OFFSET), etc.
-  const viteDevPorts = ['5173']
-  if (viteDevPorts.includes(port)) {
-    console.log('Development mode - using Vite proxy')
-    // Use relative URLs to go through Vite proxy, unless explicitly overridden
-    if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '') {
-      console.log('Using explicit VITE_API_URL override')
-      return import.meta.env.VITE_API_URL
-    }
-    // Use empty string to use relative URLs (goes through Vite proxy)
-    return ''
+  // Development mode - direct access to dev server (port 5173 is Vite's default)
+  if (port === '5173') {
+    console.log('Development mode - using environment backend URL or default')
+    // Use VITE_API_URL if set, otherwise fallback to localhost:8000 + offset
+    return import.meta.env.VITE_API_URL || 'http://localhost:8010'
   }
 
   // Fallback - calculate backend port from frontend port
@@ -154,19 +153,46 @@ export const n8nApi = {
 export const settingsApi = {
   getAll: () => api.get('/api/settings'),
   getSetting: (keyPath: string) => api.get(`/api/settings/${keyPath}`),
-  update: (updates: any) => api.put('/api/settings', { updates }),
+  getConfig: () => api.get('/api/settings/config'),
+  update: (updates: any) => api.put('/api/settings/config', updates),
   syncEnv: () => api.post('/api/settings/sync-env'),
+  
+  // Service-specific config namespace
+  getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
+  getServiceConfig: (serviceId: string) => api.get(`/api/settings/service-configs/${serviceId}`),
+  updateServiceConfig: (serviceId: string, updates: any) => 
+    api.put(`/api/settings/service-configs/${serviceId}`, updates),
+  deleteServiceConfig: (serviceId: string) => api.delete(`/api/settings/service-configs/${serviceId}`),
 }
 
-// Services endpoints
+// Services endpoints - provides schema for wizard forms
+// Actual config values are managed via settingsApi
 export const servicesApi = {
-  list: () => api.get('/api/services'),
-  get: (serviceId: string) => api.get(`/api/services/${serviceId}`),
-  create: (serviceData: any) => api.post('/api/services', serviceData),
-  update: (serviceId: string, updates: any) => api.put(`/api/services/${serviceId}`, updates),
-  delete: (serviceId: string) => api.delete(`/api/services/${serviceId}`),
-  testConnection: (serviceId: string) => api.post(`/api/services/${serviceId}/test`),
-  discoverSchema: (serviceId: string) => api.get(`/api/services/${serviceId}/schema`),
+  getQuickstart: () => api.get('/api/services/quickstart'),
+  getByCategory: (category: string) => api.get(`/api/services/categories/${category}`),
+  setEnabled: (serviceId: string, enabled: boolean) =>
+    api.put(`/api/services/${serviceId}/enabled`, { enabled }),
+  getEnabledState: (serviceId: string) =>
+    api.get(`/api/services/${serviceId}/enabled`),
+  // Catalog & Installation
+  getCatalog: () => api.get('/api/services/catalog'),
+  getInstalled: () => api.get('/api/services/installed'),
+  getStatus: () => api.get<Record<string, string>>('/api/services/status'),
+  installService: (serviceId: string, dockerImage?: string) =>
+    api.post('/api/services/install', { service_id: serviceId, docker_image: dockerImage }),
+  uninstallService: (serviceId: string) =>
+    api.delete(`/api/services/${serviceId}/uninstall`),
+}
+
+// Docker service management endpoints (infrastructure containers)
+export const dockerApi = {
+  listServices: () => api.get('/api/docker/services'),
+  getServiceInfo: (serviceName: string) => api.get(`/api/docker/services/${serviceName}`),
+  startService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/start`),
+  stopService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/stop`),
+  restartService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/restart`),
+  getServiceLogs: (serviceName: string, tail: number = 100) => 
+    api.get(`/api/docker/services/${serviceName}/logs`, { params: { tail } }),
 }
 
 // Users endpoints
@@ -188,6 +214,7 @@ export const wizardApi = {
     mistral_api_key?: string
     anthropic_api_key?: string
   }) => api.put('/api/wizard/api-keys', apiKeys),
+  updateProviders: (providers: any) => settingsApi.update(providers),
   detectEnvKeys: () => api.get('/api/wizard/detect-env-keys'),
   importEnvKeys: () => api.post('/api/wizard/import-env-keys'),
   complete: () => api.post('/api/wizard/complete'),
@@ -203,9 +230,11 @@ export const clusterApi = {
     api.post('/api/unodes/tokens', tokenData),
   claimNode: (hostname: string, tailscale_ip: string) =>
     api.post('/api/unodes/claim', { hostname, tailscale_ip }),
+  probeNode: (tailscale_ip: string, port: number = 8444) =>
+    api.post('/api/unodes/probe', { tailscale_ip, port }),
 }
 
-// Deployment endpoints
+// Service Definition and Deployment types
 export interface ServiceDefinition {
   service_id: string
   name: string
@@ -267,7 +296,7 @@ export const deploymentsApi = {
     api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
 }
 
-// Tailscale Setup Wizard endpoints
+// Tailscale Setup Wizard types
 export interface TailscaleConfig {
   hostname: string
   deployment_mode: {
@@ -311,8 +340,8 @@ export interface ContainerStatus {
 }
 
 export interface AuthUrlResponse {
-  auth_url: string  // Deep link for mobile app
-  web_url: string   // Web URL as fallback
+  auth_url: string
+  web_url: string
   qr_code_data: string
 }
 

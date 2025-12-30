@@ -22,8 +22,8 @@ export default function DeploymentStep(_props: any) {
         <label
           className={`p-6 rounded-lg border-2 transition-all text-left cursor-pointer ${
             deploymentType === 'new'
-              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-300 dark:border-gray-600 hover:border-blue-400'
+              ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input
@@ -33,7 +33,7 @@ export default function DeploymentStep(_props: any) {
             className="sr-only"
           />
           <div className="flex items-center gap-3 mb-3">
-            <Server className={`w-6 h-6 ${deploymentType === 'new' ? 'text-blue-600' : 'text-gray-500'}`} />
+            <Server className={`w-6 h-6 ${deploymentType === 'new' ? 'text-primary-600' : 'text-gray-500'}`} />
             <h4 className="font-semibold text-gray-900 dark:text-white">
               Create New
             </h4>
@@ -46,8 +46,8 @@ export default function DeploymentStep(_props: any) {
         <label
           className={`p-6 rounded-lg border-2 transition-all text-left cursor-pointer ${
             deploymentType === 'existing'
-              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-300 dark:border-gray-600 hover:border-blue-400'
+              ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input
@@ -57,7 +57,7 @@ export default function DeploymentStep(_props: any) {
             className="sr-only"
           />
           <div className="flex items-center gap-3 mb-3">
-            <Server className={`w-6 h-6 ${deploymentType === 'existing' ? 'text-blue-600' : 'text-gray-500'}`} />
+            <Server className={`w-6 h-6 ${deploymentType === 'existing' ? 'text-primary-600' : 'text-gray-500'}`} />
             <h4 className="font-semibold text-gray-900 dark:text-white">
               Use Existing
             </h4>
@@ -77,7 +77,7 @@ export default function DeploymentStep(_props: any) {
             type="text"
             {...register('server_url')}
             placeholder="http://openmemory:8765"
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
           />
           {errors.server_url && (
             <p className="mt-1 text-sm text-red-600 dark:text-red-400">

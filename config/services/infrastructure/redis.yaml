@@ -1,0 +1,28 @@
+# Redis - In-Memory Cache and Message Broker
+# System-managed infrastructure service
+
+id: redis
+type: infrastructure
+name: "Redis"
+description: "In-memory data store for caching and message queuing"
+managed: true
+
+containers:
+  - name: redis
+    image: redis:7-alpine
+    ports:
+      - container: 6379
+        protocol: tcp
+
+    command: ["redis-server", "--appendonly", "yes"]
+
+    volumes:
+      - name: redis_data
+        path: /data
+        persistent: true
+
+    health:
+      exec: ["redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

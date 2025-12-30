@@ -1,0 +1,88 @@
+# Global Environment Variable Mappings
+# Maps environment variable names to settings/secrets paths
+#
+# Services reference env vars by name (e.g., OPENAI_API_KEY)
+# This file defines where those values come from.
+#
+# Path prefixes:
+#   settings.  → config/settings.yaml (or config.defaults.yaml during transition)
+#   secrets.   → config/secrets.yaml
+#
+# Services can override these mappings in their own definitions
+
+mappings:
+  # ==========================================================================
+  # API Keys
+  # ==========================================================================
+  OPENAI_API_KEY: api_keys.openai_api_key
+  ANTHROPIC_API_KEY: api_keys.anthropic_api_key
+  DEEPGRAM_API_KEY: api_keys.deepgram_api_key
+  MISTRAL_API_KEY: api_keys.mistral_api_key
+  PIECES_API_KEY: api_keys.pieces_api_key
+
+  # ==========================================================================
+  # MongoDB
+  # ==========================================================================
+  MONGODB_URI: settings.infrastructure.mongodb_uri
+  MONGODB_DATABASE: settings.infrastructure.mongodb_database
+  MONGO_URI: settings.infrastructure.mongodb_uri  # Alias
+
+  # ==========================================================================
+  # Redis
+  # ==========================================================================
+  REDIS_URL: settings.infrastructure.redis_url
+  REDIS_HOST: settings.infrastructure.redis_host
+  REDIS_PORT: settings.infrastructure.redis_port
+
+  # ==========================================================================
+  # Qdrant (Vector Database)
+  # ==========================================================================
+  QDRANT_HOST: settings.infrastructure.qdrant_base_url
+  QDRANT_PORT: settings.infrastructure.qdrant_port
+  QDRANT_URL: settings.infrastructure.qdrant_url
+
+  # ==========================================================================
+  # Neo4j (Graph Database)
+  # ==========================================================================
+  NEO4J_HOST: settings.infrastructure.neo4j_host
+  NEO4J_USER: settings.infrastructure.neo4j_user
+  NEO4J_PASSWORD: secrets.database.neo4j.password
+  NEO4J_URL: settings.infrastructure.neo4j_url
+  NEO4J_URI: settings.infrastructure.neo4j_uri
+
+  # ==========================================================================
+  # LLM Configuration
+  # ==========================================================================
+  LLM_PROVIDER: settings.llm.provider
+  OPENAI_MODEL: settings.llm.openai_model
+  OPENAI_BASE_URL: settings.infrastructure.openai_base_url
+  OLLAMA_MODEL: settings.llm.ollama_model
+  OLLAMA_BASE_URL: settings.infrastructure.ollama_base_url
+  OLLAMA_EMBEDDER_MODEL: settings.llm.ollama_embedder_model
+
+  # ==========================================================================
+  # Transcription Configuration
+  # ==========================================================================
+  TRANSCRIPTION_PROVIDER: settings.transcription.provider
+  TRANSCRIPTION_LANGUAGE: settings.transcription.language
+
+  # ==========================================================================
+  # OpenMemory / Mem0
+  # ==========================================================================
+  OPENMEMORY_SERVER_URL: settings.infrastructure.openmemory_server_url
+  MEM0_API_URL: settings.infrastructure.openmemory_server_url  # Alias
+
+  # ==========================================================================
+  # Network Configuration
+  # ==========================================================================
+  HOST_IP: settings.network.host_ip
+  BACKEND_PORT: settings.network.backend_public_port
+  WEBUI_PORT: settings.network.webui_port
+  CORS_ORIGINS: settings.network.cors_origins
+
+  # ==========================================================================
+  # Common / Misc
+  # ==========================================================================
+  LOG_LEVEL: settings.misc.log_level
+  DEBUG: settings.misc.debug
+  NODE_ENV: settings.misc.node_env

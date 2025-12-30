@@ -1,0 +1,30 @@
+# Qdrant - Vector Database
+# System-managed infrastructure service
+
+id: qdrant
+type: infrastructure
+name: "Qdrant"
+description: "Vector database for semantic search and embeddings"
+managed: true
+
+containers:
+  - name: qdrant
+    image: qdrant/qdrant:latest
+    ports:
+      - container: 6333
+        protocol: http
+      - container: 6334
+        protocol: grpc
+
+    volumes:
+      - name: qdrant_data
+        path: /qdrant/storage
+        persistent: true
+
+    health:
+      http_get: /health
+      port: 6333
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

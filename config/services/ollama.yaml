@@ -1,0 +1,59 @@
+# Ollama - Local LLM Service
+# Run open-source LLMs locally
+
+id: ollama
+type: llm
+name: "Ollama"
+description: "Local LLM server for open-source models"
+is_default: false
+
+containers:
+  - name: ollama
+    image: ollama/ollama:latest
+    ports:
+      - container: 11434
+        host: 11434
+        protocol: http
+
+    # No API keys needed - local service
+    env:
+      values:
+        OLLAMA_HOST: "0.0.0.0"
+
+    volumes:
+      - name: ollama_models
+        path: /root/.ollama
+        persistent: true
+
+    health:
+      http_get: /api/tags
+      port: 11434
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    # GPU support for faster inference
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+# User-configurable options
+options:
+  model:
+    type: string
+    label: "Model Name"
+    description: "Model to use (will be auto-pulled if not present)"
+    default: llama3.1:latest
+
+  embedder_model:
+    type: string
+    label: "Embedder Model"
+    description: "Model for generating embeddings"
+    default: nomic-embed-text:latest
+
+tags: ["llm", "local", "ollama", "gpu"]

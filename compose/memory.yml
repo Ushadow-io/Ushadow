@@ -1,0 +1,50 @@
+# Memory Services
+# OpenMemory default memory provider
+#
+# Usage:
+#   docker compose -f compose/memory.yml -p memory up -d
+#
+# This file should be included in compose overrides or run separately
+
+name: memory
+
+services:
+  # OpenMemory (mem0) Server - Core memory service
+  mem0:
+    image: ghcr.io/ushadow-io/u-mem0-api:latest
+    container_name: mem0
+    ports:
+      - "8765:8765"
+    environment:
+      - NEO4J_URL=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - infra-network
+    restart: unless-stopped
+
+  # OpenMemory UI
+  mem0-ui:
+    image: ghcr.io/ushadow-io/u-mem0-ui:latest
+    container_name: mem0-ui
+    ports:
+      - "3333:3000"  # Use 3333 to avoid conflict with other UIs
+    environment:
+      - MEM0_API_URL=http://mem0:8765
+    depends_on:
+      - mem0
+    networks:
+      - infra-network
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true

@@ -1,0 +1,8 @@
+# Auto-generated compose files
+# These are generated at runtime from service definitions
+*.yml
+*.yaml
+*.env
+
+# Keep these files
+!.gitignore

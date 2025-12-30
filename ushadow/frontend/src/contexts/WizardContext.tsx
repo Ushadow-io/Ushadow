@@ -2,7 +2,7 @@ import { createContext, useContext, useState, ReactNode } from 'react'
 
 export type WizardMode = 'quickstart' | 'local' | 'custom' | null
 
-export type WizardPhase = 'memory' | 'chronicle' | 'speaker' | 'advanced'
+export type WizardPhase = 'quickstart' | 'memory' | 'chronicle' | 'speaker' | 'advanced'
 
 export interface WizardState {
   mode: WizardMode

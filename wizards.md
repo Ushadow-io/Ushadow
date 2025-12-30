@@ -60,3 +60,5 @@ A big question I have is how to deal with chronicle.  I could:
 I think that's the order we want to install things in though, memory first, voice/chronicle, then speaker recognition, and then the rest.
 Along this route we can have the default option, but be able to change it as we go through.  If we choose quickstart at the start, it will use cloud services as much as possible, local will favour local services.
 Maybe the wizard is very simpilar, it just has different defaults?  The customised version could have everything on one page rather then step by step?
+
+

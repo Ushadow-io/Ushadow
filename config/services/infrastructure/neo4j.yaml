@@ -1,0 +1,40 @@
+# Neo4j - Graph Database
+# System-managed infrastructure service
+# Used by OpenMemory when graph mode is enabled
+
+id: neo4j
+type: infrastructure
+name: "Neo4j"
+description: "Graph database for relationship-based queries"
+managed: true
+optional: true  # Only needed if a service requires graph features
+
+containers:
+  - name: neo4j
+    image: neo4j:5-community
+    ports:
+      - container: 7474
+        protocol: http
+      - container: 7687
+        protocol: bolt
+
+    env:
+      required:
+        - NEO4J_PASSWORD
+
+      values:
+        NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD}"
+        NEO4J_PLUGINS: '["apoc"]'
+
+    volumes:
+      - name: neo4j_data
+        path: /data
+        persistent: true
+
+    health:
+      http_get: /
+      port: 7474
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s

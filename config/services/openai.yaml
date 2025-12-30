@@ -1,0 +1,51 @@
+# OpenAI - Cloud LLM Service
+# GPT-4, GPT-4o, and other OpenAI models
+
+id: openai
+type: llm
+name: "OpenAI"
+description: "OpenAI GPT models (GPT-4, GPT-4o, etc.)"
+is_default: true
+
+# Cloud service - no containers
+mode: cloud
+api_base: "https://api.openai.com/v1"
+
+env:
+  required:
+    - OPENAI_API_KEY
+
+# Override global mapping for this service's API key
+env_overrides:
+  OPENAI_API_KEY:
+    settings_path: api_keys.openai_api_key
+    link: "https://platform.openai.com/api-keys"
+    description: "API key from OpenAI platform"
+
+# User-configurable options
+options:
+  model:
+    type: select
+    label: "Model"
+    description: "Which OpenAI model to use"
+    default: gpt-4o-mini
+    choices:
+      - value: gpt-4o
+        label: "GPT-4o (Best)"
+      - value: gpt-4o-mini
+        label: "GPT-4o Mini (Fast & Cheap)"
+      - value: gpt-4-turbo
+        label: "GPT-4 Turbo"
+      - value: gpt-3.5-turbo
+        label: "GPT-3.5 Turbo (Legacy)"
+
+  temperature:
+    type: number
+    label: "Temperature"
+    description: "Sampling temperature (0-2). Higher = more creative"
+    default: 0.7
+    min: 0
+    max: 2
+    step: 0.1
+
+tags: ["llm", "cloud", "openai"]

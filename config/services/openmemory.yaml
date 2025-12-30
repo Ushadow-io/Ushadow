@@ -1,0 +1,69 @@
+# OpenMemory - Graph-based Memory Service
+# Local memory service with MCP support
+
+id: openmemory
+type: memory
+name: "OpenMemory"
+description: "Graph-based memory with MCP support for AI assistants"
+is_default: true
+
+containers:
+  - name: mem0
+    image: ghcr.io/ushadow-io/u-mem0-api:latest
+    ports:
+      - container: 8765
+        host: 8765
+        protocol: http
+    env:
+      required:
+        - OPENAI_API_KEY
+      optional:
+        - NEO4J_PASSWORD  # Only if graph mode enabled
+
+      values:
+        MEM0_HOST: "0.0.0.0"
+        MEM0_PORT: "8765"
+        ENABLE_GRAPH: "${ENABLE_GRAPH:-false}"
+        NEO4J_URI: "bolt://neo4j:7687"
+        NEO4J_USERNAME: "neo4j"
+
+    health:
+      http_get: /health
+      port: 8765
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  - name: mem0-ui
+    image: ghcr.io/ushadow-io/u-mem0-ui:latest
+    ports:
+      - container: 3000
+        host: 3000
+        protocol: http
+
+    env:
+      values:
+        NEXT_PUBLIC_API_URL: "http://mem0:8765"
+
+    health:
+      http_get: /
+      port: 3000
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# Optional dependency on Neo4j for graph mode
+depends_on:
+  optional:
+    - neo4j  # Only started if ENABLE_GRAPH=true
+
+# User-configurable options shown in wizard
+options:
+  enable_graph:
+    type: boolean
+    label: "Enable Graph Memory"
+    description: "Use Neo4j for relationship-based queries"
+    default: false
+    triggers_dependency: neo4j
+
+tags: ["memory", "mcp", "local"]

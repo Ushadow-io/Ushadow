@@ -1,0 +1,32 @@
+# MongoDB - Document Database
+# System-managed infrastructure service
+
+id: mongodb
+type: infrastructure
+name: "MongoDB"
+description: "Document database for application data"
+managed: true
+
+containers:
+  - name: mongo
+    image: mongo:8.0
+    ports:
+      - container: 27017
+        protocol: tcp
+
+    env:
+      optional:
+        - MONGO_INITDB_ROOT_USERNAME
+        - MONGO_INITDB_ROOT_PASSWORD
+
+    volumes:
+      - name: mongo_data
+        path: /data/db
+        persistent: true
+
+    health:
+      exec: ["mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

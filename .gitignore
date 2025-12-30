@@ -221,3 +221,9 @@ config/certs
 .playwright-mcp
 config/Caddyfile
 config/tailscale.yaml
+
+# Service configuration (generated and user-specific)
+config/generated/
+config/user-services/
+config/.env
+config/.env.local

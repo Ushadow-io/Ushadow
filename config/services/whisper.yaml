@@ -1,0 +1,81 @@
+# Whisper - Local Transcription Service
+# OpenAI Whisper running locally
+
+id: whisper
+type: transcription
+name: "Whisper (Local)"
+description: "OpenAI Whisper running locally - no API keys needed"
+is_default: false
+
+containers:
+  - name: whisper
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    ports:
+      - container: 9000
+        host: 9000
+        protocol: http
+
+    env:
+      values:
+        ASR_MODEL: "${WHISPER_MODEL:-base}"
+        ASR_ENGINE: "openai_whisper"
+
+    volumes:
+      - name: whisper_cache
+        path: /root/.cache
+        persistent: true
+
+    health:
+      http_get: /health
+      port: 9000
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 60s  # Model loading takes time
+
+    # GPU support for faster inference
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+# User-configurable options
+options:
+  model_size:
+    type: select
+    label: "Model Size"
+    description: "Larger models are more accurate but slower"
+    default: base
+    choices:
+      - value: tiny
+        label: "Tiny (Fastest, least accurate)"
+      - value: base
+        label: "Base (Good balance)"
+      - value: small
+        label: "Small (Better accuracy)"
+      - value: medium
+        label: "Medium (High accuracy)"
+      - value: large
+        label: "Large (Best accuracy, slowest)"
+
+  language:
+    type: select
+    label: "Language"
+    description: "Primary language for transcription"
+    default: en
+    choices:
+      - value: en
+        label: "English"
+      - value: es
+        label: "Spanish"
+      - value: fr
+        label: "French"
+      - value: de
+        label: "German"
+      - value: auto
+        label: "Auto-detect"
+
+tags: ["transcription", "local", "whisper", "gpu"]

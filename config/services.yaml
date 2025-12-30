@@ -1,1 +1,43 @@
-services: []
+# Services Index
+# This file defines service types and default providers.
+# Individual service definitions are in config/services/*.yaml
+#
+# Services are auto-discovered from:
+#   - config/services/*.yaml (built-in services)
+#   - config/services/infrastructure/*.yaml (system-managed)
+#   - config/user-services/*.yaml (user-added, gitignored)
+
+# Default provider for each service type
+# Used in quickstart wizard to pre-select options
+defaults:
+  memory: openmemory
+  llm: openai
+  transcription: deepgram
+  conversation_engine: chronicle
+
+# Service type definitions
+service_types:
+  memory:
+    description: "Memory and knowledge storage services"
+    icon: brain
+    required: false  # User can skip memory service
+
+  llm:
+    description: "Large Language Model inference providers"
+    icon: cpu
+    required: true  # At least one LLM required
+
+  transcription:
+    description: "Speech-to-text transcription services"
+    icon: mic
+    required: false
+
+  conversation_engine:
+    description: "Audio processing with AI analysis"
+    icon: message-circle
+    required: false
+
+  infrastructure:
+    description: "Supporting infrastructure services"
+    icon: server
+    managed: true  # System-managed, user doesn't toggle these directly

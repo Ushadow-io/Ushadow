@@ -25,7 +25,7 @@ export default function Neo4jCredentialsStep(_props: any) {
             type="text"
             {...register('neo4j_username')}
             placeholder="neo4j"
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
           />
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Default username is "neo4j"
@@ -40,7 +40,7 @@ export default function Neo4jCredentialsStep(_props: any) {
             type="password"
             {...register('neo4j_password')}
             placeholder="Minimum 8 characters"
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
           />
           {errors.neo4j_password && (
             <p className="mt-1 text-sm text-red-600 dark:text-red-400">
@@ -57,7 +57,7 @@ export default function Neo4jCredentialsStep(_props: any) {
             type="password"
             {...register('neo4j_confirm_password')}
             placeholder="Re-enter password"
-            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
           />
           {errors.neo4j_confirm_password && (
             <p className="mt-1 text-sm text-red-600 dark:text-red-400">

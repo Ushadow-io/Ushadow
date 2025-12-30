@@ -58,6 +58,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         "/api/auth/login",
         "/api/auth/logout",
         "/api/auth/me",
+        "/api/docker/dockerstatus_events",  # SSE endpoint - don't interfere
         "/docs",
         "/redoc",
         "/openapi.json",

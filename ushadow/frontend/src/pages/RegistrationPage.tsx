@@ -30,11 +30,11 @@ export default function RegistrationPage() {
   // Show loading while checking setup status
   if (setupRequired === null || authLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col">
+      <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-emerald-50/20 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col">
         <EnvironmentBanner />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center space-x-3">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
             <span className="text-neutral-600 dark:text-neutral-400">Checking setup status...</span>
           </div>
         </div>
@@ -98,13 +98,13 @@ export default function RegistrationPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-blue-50/30 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-emerald-50/20 to-neutral-100 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 flex flex-col relative overflow-hidden">
       <EnvironmentBanner />
       <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-        {/* Decorative background blur circles */}
+        {/* Decorative background blur circles - emerald green and fuchsia from logo */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-blue-300/20 dark:bg-blue-600/10 rounded-full blur-3xl"></div>
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-fuchsia-400/20 dark:bg-fuchsia-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-emerald-400/20 dark:bg-emerald-500/10 rounded-full blur-3xl"></div>
       </div>
 
       <div className="max-w-md w-full space-y-8 relative z-10">
@@ -123,11 +123,11 @@ export default function RegistrationPage() {
                 if (fallback) fallback.style.display = 'flex';
               }}
             />
-            <div className="hidden h-32 w-32 mx-auto bg-gradient-to-br from-blue-500 to-blue-700 rounded-2xl items-center justify-center shadow-lg">
+            <div className="hidden h-32 w-32 mx-auto bg-gradient-to-br from-primary-500 to-primary-700 rounded-2xl items-center justify-center shadow-lg">
               <Layers className="h-16 w-16 text-white" />
             </div>
           </div>
-          <h2 className="text-6xl font-bold bg-gradient-to-r from-blue-600 via-primary-600 to-blue-800 dark:from-blue-400 dark:via-primary-400 dark:to-blue-600 bg-clip-text text-transparent tracking-tight mb-1">
+          <h2 className="text-6xl font-bold bg-gradient-to-r from-emerald-600 via-primary-500 to-fuchsia-600 dark:from-emerald-400 dark:via-primary-400 dark:to-fuchsia-400 bg-clip-text text-transparent tracking-tight mb-1">
             Ushadow
           </h2>
           <p className="mt-3 text-base text-neutral-600 dark:text-neutral-400 font-medium tracking-wide">
@@ -153,7 +153,7 @@ export default function RegistrationPage() {
                 required
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                className="appearance-none relative block w-full px-4 py-3 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all sm:text-sm"
+                className="appearance-none relative block w-full px-4 py-3 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all sm:text-sm"
                 placeholder="Enter your name"
               />
             </div>
@@ -169,7 +169,7 @@ export default function RegistrationPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="appearance-none relative block w-full px-4 py-3 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all sm:text-sm"
+                className="appearance-none relative block w-full px-4 py-3 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all sm:text-sm"
                 placeholder="your@email.com"
               />
             </div>
@@ -186,7 +186,7 @@ export default function RegistrationPage() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="appearance-none relative block w-full px-4 py-3 pr-12 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all sm:text-sm"
+                  className="appearance-none relative block w-full px-4 py-3 pr-12 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all sm:text-sm"
                   placeholder="Min 8 characters"
                 />
                 <button
@@ -215,7 +215,7 @@ export default function RegistrationPage() {
                   required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="appearance-none relative block w-full px-4 py-3 pr-12 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all sm:text-sm"
+                  className="appearance-none relative block w-full px-4 py-3 pr-12 border border-neutral-300 dark:border-neutral-600 placeholder-neutral-500 dark:placeholder-neutral-400 text-neutral-900 dark:text-neutral-100 rounded-lg bg-white dark:bg-neutral-700/50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all sm:text-sm"
                   placeholder="Re-enter password"
                 />
                 <button
@@ -242,7 +242,7 @@ export default function RegistrationPage() {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-3 px-4 border border-transparent text-base font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98]"
+                className="w-full py-3 px-4 border border-transparent text-base font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
                 {isLoading ? (
                   <div className="flex items-center justify-center space-x-2">

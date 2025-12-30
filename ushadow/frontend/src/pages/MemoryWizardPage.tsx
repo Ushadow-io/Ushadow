@@ -1,11 +1,13 @@
-import { Database, ArrowRight, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react'
+import { Database, ArrowLeft, ArrowRight, AlertCircle, Loader2 } from 'lucide-react'
 import { useState } from 'react'
-import { useForm, FormProvider } from 'react-hook-form'
+import { useForm, FormProvider, useFormContext } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import StepWizard from 'react-step-wizard'
 import { useNavigate } from 'react-router-dom'
 import { useWizard } from '../contexts/WizardContext'
+import { useWizardSteps } from '../hooks/useWizardSteps'
+import { WizardProgress } from '../components/wizard'
+import type { WizardStep } from '../types/wizard'
 
 // Schema
 const memorySchema = z.object({
@@ -27,6 +29,14 @@ const memorySchema = z.object({
 
 type MemoryFormData = z.infer<typeof memorySchema>
 
+// Step definitions
+const STEPS: WizardStep[] = [
+  { id: 'deployment', label: 'Deployment' },
+  { id: 'graph', label: 'Graph Config' },
+  { id: 'neo4j', label: 'Neo4j' },
+  { id: 'complete', label: 'Complete' },
+]
+
 export default function MemoryWizardPage() {
   const navigate = useNavigate()
   const { wizardState, markPhaseComplete } = useWizard()
@@ -44,6 +54,16 @@ export default function MemoryWizardPage() {
     },
     mode: 'onChange',
   })
+
+  // Watch enable_graph_memory to determine if Neo4j step should be shown
+  const enableGraphMemory = methods.watch('enable_graph_memory')
+
+  // Filter steps based on whether Neo4j is enabled
+  const activeSteps = enableGraphMemory
+    ? STEPS
+    : STEPS.filter(step => step.id !== 'neo4j')
+
+  const wizard = useWizardSteps(activeSteps)
 
   const showMessage = (type: 'success' | 'error' | 'info', text: string) => {
     setMessage({ type, text })
@@ -70,59 +90,128 @@ export default function MemoryWizardPage() {
     }
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <div className="flex items-center space-x-2">
-          <Database className="h-8 w-8 text-primary-600 dark:text-primary-400" />
-          <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Memory Setup</h1>
-        </div>
-        <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-          Configure OpenMemory for intelligent conversation memory
-        </p>
-        {wizardState.mode && (
-          <p className="mt-1 text-sm text-primary-600 dark:text-primary-400">
-            Mode: {wizardState.mode === 'quickstart' ? '🚀 Quickstart' : wizardState.mode === 'local' ? '💻 Local' : '⚙️ Custom'}
-          </p>
-        )}
-      </div>
+  const handleNext = () => {
+    setMessage(null)
+    if (wizard.isLast) {
+      methods.handleSubmit(handleSubmit)()
+    } else {
+      wizard.next()
+    }
+  }
 
-      {/* Message Banner */}
-      {message && (
-        <div className={`card p-4 border ${
-          message.type === 'success'
-            ? 'bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800 text-success-700 dark:text-success-300'
-            : message.type === 'error'
-            ? 'bg-error-50 dark:bg-error-900/20 border-error-200 dark:border-error-800 text-error-700 dark:text-error-300'
-            : 'bg-primary-50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300'
-        }`}>
-          <div className="flex items-center space-x-2">
-            <AlertCircle className="h-5 w-5" />
-            <span>{message.text}</span>
+  const handleBack = () => {
+    setMessage(null)
+    wizard.back()
+  }
+
+  const handleStepClick = (stepId: string) => {
+    const targetIndex = activeSteps.findIndex(s => s.id === stepId)
+    if (targetIndex <= wizard.currentIndex) {
+      setMessage(null)
+      wizard.goTo(stepId)
+    }
+  }
+
+  return (
+    <div id="wizard-container" className="max-w-4xl mx-auto">
+      <div className="relative">
+        {/* Back Arrow - Left Side (navigates to /wizard/start on first step) */}
+        <button
+          id="wizard-back-button"
+          onClick={() => wizard.isFirst ? navigate('/wizard/start') : handleBack()}
+          disabled={isSubmitting}
+          className="absolute left-0 top-32 -translate-x-16 w-12 h-12 rounded-full
+                     bg-primary-600 hover:bg-primary-700
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     flex items-center justify-center shadow-lg z-10
+                     transition-colors"
+          aria-label={wizard.isFirst ? "Back to Setup Wizard" : "Go back"}
+        >
+          <ArrowLeft className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Next Arrow - Right Side */}
+        <button
+          id="wizard-next-button"
+          onClick={handleNext}
+          disabled={isSubmitting}
+          className="absolute right-0 top-32 translate-x-16 w-12 h-12 rounded-full
+                     bg-primary-600 hover:bg-primary-700
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     flex items-center justify-center shadow-lg z-10
+                     transition-colors"
+          aria-label="Continue"
+        >
+          {isSubmitting ? (
+            <Loader2 className="w-6 h-6 animate-spin text-white" />
+          ) : (
+            <ArrowRight className="w-6 h-6 text-white" />
+          )}
+        </button>
+
+        <div className="card">
+          {/* Header */}
+          <div className="p-8 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center gap-3 mb-4">
+              <Database className="w-8 h-8 text-primary-600" />
+              <h1 id="wizard-title" className="text-2xl font-semibold text-gray-900 dark:text-white">
+                Memory Setup
+              </h1>
+            </div>
+            <p id="wizard-subtitle" className="text-gray-600 dark:text-gray-400">
+              Configure OpenMemory for intelligent conversation memory
+            </p>
+            {wizardState.mode && (
+              <p className="mt-1 text-sm text-primary-600 dark:text-primary-400">
+                Mode: {wizardState.mode === 'quickstart' ? 'Quickstart' : wizardState.mode === 'local' ? 'Local' : 'Custom'}
+              </p>
+            )}
+
+            {/* Progress bar */}
+            <div className="mt-6">
+              <WizardProgress
+                progress={wizard.progress}
+                steps={activeSteps}
+                currentStepId={wizard.currentStep.id}
+                onStepClick={handleStepClick}
+              />
+            </div>
+          </div>
+
+          {/* Message Banner */}
+          {message && (
+            <div
+              id="wizard-message"
+              className={`p-4 mx-8 mt-4 rounded-lg flex items-center gap-2 ${
+                message.type === 'success'
+                  ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-400'
+                  : message.type === 'error'
+                  ? 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-400'
+                  : 'bg-primary-100 dark:bg-primary-900/20 text-primary-800 dark:text-primary-400'
+              }`}
+            >
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <span>{message.text}</span>
+            </div>
+          )}
+
+          {/* Step Content */}
+          <div id="wizard-content" className="p-8">
+            <FormProvider {...methods}>
+              {wizard.currentStep.id === 'deployment' && <DeploymentStep />}
+              {wizard.currentStep.id === 'graph' && <GraphConfigStep />}
+              {wizard.currentStep.id === 'neo4j' && <Neo4jCredentialsStep />}
+              {wizard.currentStep.id === 'complete' && <CompleteStep />}
+            </FormProvider>
           </div>
         </div>
-      )}
-
-      {/* Wizard */}
-      <div className="card p-6 overflow-hidden">
-        <FormProvider {...methods}>
-          <StepWizard
-            nav={<WizardNav isSubmitting={isSubmitting} />}
-          >
-            <DeploymentStep />
-            <GraphConfigStep />
-            <Neo4jCredentialsStep />
-            <CompleteStep onSubmit={methods.handleSubmit(handleSubmit)} />
-          </StepWizard>
-        </FormProvider>
       </div>
     </div>
   )
 }
 
 // Step 1: Deployment
-function DeploymentStep(_props: any) {
+function DeploymentStep() {
   const { register, watch, formState: { errors } } = useFormContext<MemoryFormData>()
   const { wizardState } = useWizard()
   const deploymentType = watch('deployment_type')
@@ -131,52 +220,54 @@ function DeploymentStep(_props: any) {
   const showExisting = wizardState.mode === 'custom'
 
   return (
-    <div className="space-y-6 min-h-[300px]">
+    <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
+        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           OpenMemory Deployment
         </h3>
-        <p className="text-neutral-600 dark:text-neutral-400">
+        <p className="text-gray-600 dark:text-gray-400">
           {showExisting ? 'Use an existing server or create a new one.' : 'We\'ll set up OpenMemory for you with Docker.'}
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <label
+          id="deployment-option-new"
           className={`p-6 rounded-lg border-2 transition-all cursor-pointer ${
             deploymentType === 'new'
               ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-              : 'border-neutral-300 dark:border-neutral-600 hover:border-primary-400'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input type="radio" value="new" {...register('deployment_type')} className="sr-only" />
           <div className="flex items-center gap-3 mb-3">
-            <Database className={`w-6 h-6 ${deploymentType === 'new' ? 'text-primary-600' : 'text-neutral-500'}`} />
-            <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
+            <Database className={`w-6 h-6 ${deploymentType === 'new' ? 'text-primary-600' : 'text-gray-500'}`} />
+            <h4 className="font-semibold text-gray-900 dark:text-white">
               Create New
             </h4>
           </div>
-          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
             Set up OpenMemory automatically with Docker containers
           </p>
         </label>
 
         {showExisting && (
           <label
+            id="deployment-option-existing"
             className={`p-6 rounded-lg border-2 transition-all cursor-pointer ${
               deploymentType === 'existing'
                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                : 'border-neutral-300 dark:border-neutral-600 hover:border-primary-400'
+                : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
             }`}
           >
             <input type="radio" value="existing" {...register('deployment_type')} className="sr-only" />
             <div className="flex items-center gap-3 mb-3">
-              <Database className={`w-6 h-6 ${deploymentType === 'existing' ? 'text-primary-600' : 'text-neutral-500'}`} />
-              <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
+              <Database className={`w-6 h-6 ${deploymentType === 'existing' ? 'text-primary-600' : 'text-gray-500'}`} />
+              <h4 className="font-semibold text-gray-900 dark:text-white">
                 Use Existing
               </h4>
             </div>
-            <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
               Connect to an existing OpenMemory server
             </p>
           </label>
@@ -185,17 +276,18 @@ function DeploymentStep(_props: any) {
 
       {deploymentType === 'existing' && (
         <div>
-          <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             OpenMemory Server URL
           </label>
           <input
+            id="server-url-input"
             type="text"
             {...register('server_url')}
             placeholder="http://openmemory:8765"
             className="input"
           />
           {errors.server_url && (
-            <p className="mt-1 text-sm text-error-600 dark:text-error-400">
+            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
               {errors.server_url.message}
             </p>
           )}
@@ -206,17 +298,17 @@ function DeploymentStep(_props: any) {
 }
 
 // Step 2: Graph Configuration
-function GraphConfigStep(_props: any) {
+function GraphConfigStep() {
   const { register, watch } = useFormContext<MemoryFormData>()
   const enableGraph = watch('enable_graph_memory')
 
   return (
-    <div className="space-y-6 min-h-[300px]">
+    <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
+        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Graph Memory Configuration
         </h3>
-        <p className="text-neutral-600 dark:text-neutral-400">
+        <p className="text-gray-600 dark:text-gray-400">
           Enable graph-based memory for enhanced relationship tracking.
         </p>
       </div>
@@ -232,10 +324,11 @@ function GraphConfigStep(_props: any) {
 
       <div className="space-y-3">
         <label
+          id="graph-option-enabled"
           className={`w-full p-4 rounded-lg border-2 transition-all cursor-pointer flex items-start ${
             enableGraph
               ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-              : 'border-neutral-300 dark:border-neutral-600 hover:border-primary-400'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input
@@ -247,12 +340,12 @@ function GraphConfigStep(_props: any) {
             className="sr-only"
           />
           <div className="flex items-center gap-3">
-            <Database className={`w-6 h-6 flex-shrink-0 ${enableGraph ? 'text-primary-600' : 'text-neutral-500'}`} />
+            <Database className={`w-6 h-6 flex-shrink-0 ${enableGraph ? 'text-primary-600' : 'text-gray-500'}`} />
             <div>
-              <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
+              <h4 className="font-semibold text-gray-900 dark:text-white">
                 Enable Graph Memory
               </h4>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
                 Use Neo4j for advanced memory relationships
               </p>
             </div>
@@ -260,10 +353,11 @@ function GraphConfigStep(_props: any) {
         </label>
 
         <label
+          id="graph-option-disabled"
           className={`w-full p-4 rounded-lg border-2 transition-all cursor-pointer flex items-start ${
             !enableGraph
               ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-              : 'border-neutral-300 dark:border-neutral-600 hover:border-primary-400'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input
@@ -275,12 +369,12 @@ function GraphConfigStep(_props: any) {
             className="sr-only"
           />
           <div className="flex items-center gap-3">
-            <Database className={`w-6 h-6 flex-shrink-0 ${!enableGraph ? 'text-primary-600' : 'text-neutral-500'}`} />
+            <Database className={`w-6 h-6 flex-shrink-0 ${!enableGraph ? 'text-primary-600' : 'text-gray-500'}`} />
             <div>
-              <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
+              <h4 className="font-semibold text-gray-900 dark:text-white">
                 Standard Memory Only
               </h4>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
                 Use vector-based memory without graph relationships
               </p>
             </div>
@@ -291,60 +385,56 @@ function GraphConfigStep(_props: any) {
   )
 }
 
-// Step 3: Neo4j Credentials (conditional)
-function Neo4jCredentialsStep(_props: any) {
-  const { register, watch, formState: { errors } } = useFormContext<MemoryFormData>()
-  const enableGraph = watch('enable_graph_memory')
-
-  // Skip this step if graph memory is disabled
-  if (!enableGraph) {
-    return null
-  }
+// Step 3: Neo4j Credentials (conditional - only shown if graph enabled)
+function Neo4jCredentialsStep() {
+  const { register, formState: { errors } } = useFormContext<MemoryFormData>()
 
   return (
-    <div className="space-y-6 min-h-[300px]">
+    <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
+        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Neo4j Credentials
         </h3>
-        <p className="text-neutral-600 dark:text-neutral-400">
+        <p className="text-gray-600 dark:text-gray-400">
           Set a password for your Neo4j graph database.
         </p>
       </div>
 
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             Neo4j Password
           </label>
           <input
+            id="neo4j-password-input"
             type="password"
             {...register('neo4j_password')}
             placeholder="Enter Neo4j password"
             className="input"
           />
           {errors.neo4j_password && (
-            <p className="mt-1 text-sm text-error-600 dark:text-error-400">
+            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
               {errors.neo4j_password.message}
             </p>
           )}
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-gray-500">
             Minimum 8 characters
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             Confirm Password
           </label>
           <input
+            id="neo4j-confirm-password-input"
             type="password"
             {...register('neo4j_confirm_password')}
             placeholder="Confirm password"
             className="input"
           />
           {errors.neo4j_confirm_password && (
-            <p className="mt-1 text-sm text-error-600 dark:text-error-400">
+            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
               {errors.neo4j_confirm_password.message}
             </p>
           )}
@@ -355,99 +445,45 @@ function Neo4jCredentialsStep(_props: any) {
 }
 
 // Step 4: Complete
-function CompleteStep({ onSubmit }: any) {
+function CompleteStep() {
   const { watch } = useFormContext<MemoryFormData>()
   const deploymentType = watch('deployment_type')
   const enableGraph = watch('enable_graph_memory')
 
   return (
-    <div className="space-y-6 min-h-[300px] text-center">
+    <div className="space-y-6 text-center">
       <div>
-        <h3 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
+        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Ready to Configure Memory
         </h3>
-        <p className="text-neutral-600 dark:text-neutral-400">
+        <p className="text-gray-600 dark:text-gray-400">
           Review your settings and complete setup.
         </p>
       </div>
 
-      <div className="bg-neutral-50 dark:bg-neutral-900/50 rounded-lg p-6 text-left">
-        <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-3">
+      <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-6 text-left">
+        <h4 className="font-semibold text-gray-900 dark:text-white mb-3">
           Configuration Summary:
         </h4>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-neutral-600 dark:text-neutral-400">Deployment:</span>
-            <span className="font-medium text-neutral-900 dark:text-neutral-100">
+            <span className="text-gray-600 dark:text-gray-400">Deployment:</span>
+            <span className="font-medium text-gray-900 dark:text-white">
               {deploymentType === 'new' ? 'New (Docker)' : 'Existing Server'}
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-neutral-600 dark:text-neutral-400">Graph Memory:</span>
-            <span className="font-medium text-neutral-900 dark:text-neutral-100">
+            <span className="text-gray-600 dark:text-gray-400">Graph Memory:</span>
+            <span className="font-medium text-gray-900 dark:text-white">
               {enableGraph ? 'Enabled (Neo4j)' : 'Disabled'}
             </span>
           </div>
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={onSubmit}
-        className="btn-primary"
-      >
-        Complete Memory Setup
-      </button>
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        Click the arrow to complete setup
+      </p>
     </div>
   )
 }
-
-// Wizard Navigation
-interface WizardNavProps {
-  isSubmitting: boolean
-  currentStep?: number
-  totalSteps?: number
-  previousStep?: () => void
-  nextStep?: () => void
-}
-
-function WizardNav({ isSubmitting, currentStep = 1, totalSteps = 1, previousStep, nextStep }: WizardNavProps) {
-  const isFirstStep = currentStep === 1
-  const isLastStep = currentStep === totalSteps
-
-  return (
-    <div className="pt-6 border-t border-neutral-200 dark:border-neutral-700 flex justify-between">
-      <button
-        type="button"
-        onClick={previousStep}
-        disabled={isFirstStep || isSubmitting}
-        className="btn-ghost flex items-center gap-2"
-      >
-        <ArrowLeft className="w-5 h-5" />
-        Back
-      </button>
-
-      <button
-        type="button"
-        onClick={nextStep}
-        disabled={isSubmitting || isLastStep}
-        className="btn-primary flex items-center gap-2"
-      >
-        {isSubmitting ? (
-          <>
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Setting up...
-          </>
-        ) : (
-          <>
-            {isLastStep ? 'Complete' : 'Next'}
-            {!isLastStep && <ArrowRight className="w-5 h-5" />}
-          </>
-        )}
-      </button>
-    </div>
-  )
-}
-
-// Import for type safety
-import { useFormContext } from 'react-hook-form'

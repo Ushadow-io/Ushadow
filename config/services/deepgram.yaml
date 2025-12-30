@@ -1,0 +1,70 @@
+# Deepgram - Cloud Transcription Service
+# Fast and accurate speech-to-text API
+
+id: deepgram
+type: transcription
+name: "Deepgram"
+description: "Cloud speech-to-text with high accuracy"
+is_default: true
+
+# Cloud service - no containers
+mode: cloud
+api_base: "https://api.deepgram.com/v1"
+
+env:
+  required:
+    - DEEPGRAM_API_KEY
+
+env_overrides:
+  DEEPGRAM_API_KEY:
+    settings_path: api_keys.deepgram_api_key
+    link: "https://console.deepgram.com/project/default/keys"
+    description: "API key from Deepgram console"
+
+# User-configurable options
+options:
+  model:
+    type: select
+    label: "Model"
+    description: "Transcription model to use"
+    default: nova-2
+    choices:
+      - value: nova-2
+        label: "Nova 2 (Best accuracy)"
+      - value: nova
+        label: "Nova (Fast)"
+      - value: enhanced
+        label: "Enhanced (Balanced)"
+      - value: base
+        label: "Base (Fastest)"
+
+  language:
+    type: select
+    label: "Language"
+    description: "Primary language for transcription"
+    default: en
+    choices:
+      - value: en
+        label: "English"
+      - value: es
+        label: "Spanish"
+      - value: fr
+        label: "French"
+      - value: de
+        label: "German"
+      - value: multi
+        label: "Multi-language (Auto-detect)"
+
+  punctuate:
+    type: boolean
+    label: "Add Punctuation"
+    description: "Automatically add punctuation to transcripts"
+    default: true
+
+  diarize:
+    type: boolean
+    label: "Speaker Diarization"
+    description: "Identify different speakers"
+    default: true
+
+tags: ["transcription", "cloud", "deepgram"]

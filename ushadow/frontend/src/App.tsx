@@ -13,6 +13,7 @@ import LoginPage from './pages/LoginPage'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import MemoryWizardPage from './pages/MemoryWizardPage'
+import QuickstartWizardPage from './pages/QuickstartWizardPage'
 import ChronicleWizardPage from './pages/ChronicleWizardPage'
 import ChroniclePage from './pages/ChroniclePage'
 import MCPPage from './pages/MCPPage'
@@ -53,6 +54,7 @@ function App() {
                 {/* Core feature pages */}
                 <Route path="wizard" element={<Navigate to="/wizard/start" replace />} />
                 <Route path="wizard/start" element={<WizardStartPage />} />
+                <Route path="wizard/quickstart" element={<QuickstartWizardPage />} />
                 <Route path="wizard/memory" element={<MemoryWizardPage />} />
                 <Route path="wizard/chronicle" element={<ChronicleWizardPage />} />
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />

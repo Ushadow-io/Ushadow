@@ -18,11 +18,11 @@ export default function GraphConfigStep(_props: any) {
         </p>
       </div>
 
-      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-        <h4 className="font-semibold text-blue-900 dark:text-blue-200 mb-2">
+      <div className="p-4 bg-primary-50 dark:bg-primary-900/20 rounded-lg">
+        <h4 className="font-semibold text-primary-900 dark:text-primary-200 mb-2">
           What is Graph Memory?
         </h4>
-        <p className="text-sm text-blue-800 dark:text-blue-300">
+        <p className="text-sm text-primary-800 dark:text-primary-300">
           Graph memory uses Neo4j to store relationships between memories, enabling more complex queries and connections. This requires additional resources.
         </p>
       </div>
@@ -31,8 +31,8 @@ export default function GraphConfigStep(_props: any) {
         <label
           className={`w-full p-4 rounded-lg border-2 transition-all text-left cursor-pointer flex items-start ${
             enableGraph
-              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-300 dark:border-gray-600 hover:border-blue-400'
+              ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input
@@ -44,7 +44,7 @@ export default function GraphConfigStep(_props: any) {
             className="sr-only"
           />
           <div className="flex items-center gap-3">
-            <Database className={`w-6 h-6 flex-shrink-0 ${enableGraph ? 'text-blue-600' : 'text-gray-500'}`} />
+            <Database className={`w-6 h-6 flex-shrink-0 ${enableGraph ? 'text-primary-600' : 'text-gray-500'}`} />
             <div>
               <h4 className="font-semibold text-gray-900 dark:text-white">
                 Enable Graph Memory
@@ -59,8 +59,8 @@ export default function GraphConfigStep(_props: any) {
         <label
           className={`w-full p-4 rounded-lg border-2 transition-all text-left cursor-pointer flex items-start ${
             !enableGraph
-              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20'
-              : 'border-gray-300 dark:border-gray-600 hover:border-blue-400'
+              ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
           }`}
         >
           <input
@@ -72,7 +72,7 @@ export default function GraphConfigStep(_props: any) {
             className="sr-only"
           />
           <div className="flex items-center gap-3">
-            <Server className={`w-6 h-6 flex-shrink-0 ${!enableGraph ? 'text-blue-600' : 'text-gray-500'}`} />
+            <Server className={`w-6 h-6 flex-shrink-0 ${!enableGraph ? 'text-primary-600' : 'text-gray-500'}`} />
             <div>
               <h4 className="font-semibold text-gray-900 dark:text-white">
                 Standard Memory Only

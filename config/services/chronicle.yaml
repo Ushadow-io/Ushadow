@@ -1,0 +1,97 @@
+# Chronicle - Conversation Engine
+# AI-powered conversation processing with transcription and analysis
+
+id: chronicle
+type: conversation_engine
+name: "Chronicle"
+description: "Conversation engine with audio processing and AI analysis"
+is_default: true
+
+containers:
+  - name: chronicle-backend
+    image: ghcr.io/ushadow-io/chronicle-backend:latest
+    ports:
+      - container: 8000
+        host: 8080
+        protocol: http
+
+    env:
+      required:
+        - OPENAI_API_KEY
+        - DEEPGRAM_API_KEY
+      optional:
+        - ANTHROPIC_API_KEY
+        - MISTRAL_API_KEY
+
+      values:
+        # Infrastructure connections (shared)
+        MONGODB_URI: "mongodb://mongo:27017"
+        REDIS_URL: "redis://redis:6379"
+        QDRANT_URL: "http://qdrant:6333"
+
+        # Provider selection
+        TRANSCRIPTION_PROVIDER: "${TRANSCRIPTION_PROVIDER:-deepgram}"
+        LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
+
+    health:
+      http_get: /readiness
+      port: 8000
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  - name: chronicle-webui
+    image: ghcr.io/ushadow-io/chronicle-webui:latest
+    ports:
+      - container: 80
+        host: 3080
+        protocol: http
+
+    env:
+      values:
+        VITE_API_BASE_URL: "http://chronicle-backend:8000"
+
+    health:
+      http_get: /
+      port: 80
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# Required infrastructure dependencies
+depends_on:
+  required:
+    - mongodb
+    - redis
+    - qdrant
+
+# User-configurable options shown in wizard
+options:
+  transcription_provider:
+    type: select
+    label: "Transcription Provider"
+    description: "Which service to use for speech-to-text"
+    default: deepgram
+    choices:
+      - value: deepgram
+        label: "Deepgram"
+        requires_env: DEEPGRAM_API_KEY
+      - value: mistral
+        label: "Mistral Voxtral"
+        requires_env: MISTRAL_API_KEY
+
+  llm_provider:
+    type: select
+    label: "LLM Provider"
+    description: "Which LLM to use for analysis"
+    default: openai
+    choices:
+      - value: openai
+        label: "OpenAI"
+        requires_env: OPENAI_API_KEY
+      - value: anthropic
+        label: "Anthropic"
+        requires_env: ANTHROPIC_API_KEY
+
+tags: ["conversation", "audio", "transcription", "local"]
