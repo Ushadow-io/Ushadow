@@ -13,7 +13,7 @@ from src.models.deployment import (
     DeployRequest,
 )
 from src.services.deployment_manager import get_deployment_manager
-from src.routers.auth import get_current_user
+from src.services.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 

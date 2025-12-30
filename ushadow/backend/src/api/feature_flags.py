@@ -7,7 +7,7 @@ Simple endpoints to verify feature flags are working.
 from fastapi import APIRouter, Depends
 from typing import Optional
 from src.services.feature_flags import get_feature_flag_service
-from src.services.auth_dependencies import get_current_user
+from src.services.auth import get_current_user
 
 router = APIRouter(prefix="/api/feature-flags", tags=["feature-flags"])
 
