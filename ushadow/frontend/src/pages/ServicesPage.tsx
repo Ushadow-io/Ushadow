@@ -89,7 +89,7 @@ function ServicesPageContent() {
     const byNode = new Map<string, Deployment>()
     for (const d of serviceDeployments) {
       const existing = byNode.get(d.unode_hostname)
-      if (!existing || new Date(d.created_at) > new Date(existing.created_at)) {
+      if (!existing || (d.created_at && existing.created_at && new Date(d.created_at) > new Date(existing.created_at))) {
         byNode.set(d.unode_hostname, d)
       }
     }

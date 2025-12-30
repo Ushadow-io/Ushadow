@@ -524,7 +524,7 @@ export default function ClusterPage() {
           {unodes.map((node) => {
             const isNodeOffline = node.status !== 'online' && node.status !== 'connecting'
             return (
-            <div key={node.id} className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''}`}>
+            <div key={node.id} className={`card-hover p-6 ${isNodeOffline ? '!border-2 !border-error-400 dark:!border-error-600 ring-2 ring-error-300 dark:ring-error-700 bg-error-50 dark:bg-error-900/20' : ''}`} data-testid={`node-card-${node.hostname}`}>
               {/* Node Header */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center space-x-3">

@@ -49,7 +49,7 @@ UNODE_SECRET_LENGTH = 32   # Bytes for token_urlsafe (produces ~43 char string)
 # Timeout values (in seconds)
 HTTP_TIMEOUT_DEFAULT = 10.0      # Default timeout for HTTP requests to workers
 HTTP_TIMEOUT_PROBE = 2.0         # Quick timeout for health probes
-HEARTBEAT_TIMEOUT_SECONDS = 60   # Mark node offline after this many seconds
+HEARTBEAT_TIMEOUT_SECONDS = 30   # Mark node offline after this many seconds (2 missed heartbeats) = 60   # Mark node offline after this many seconds
 
 
 def is_tailscale_ip(ip_str: str) -> bool:
