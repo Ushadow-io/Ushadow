@@ -33,6 +33,11 @@ class InfraSettings(BaseSettings):
     # CORS
     CORS_ORIGINS: Union[str, List[str]] = "http://localhost:3010,http://127.0.0.1:3010"
 
+    # Authentication
+    AUTH_SECRET_KEY: str = "change-me-in-production"
+    ADMIN_EMAIL: str = "admin@ushadow.local"
+    ADMIN_PASSWORD: str = "admin"
+
     @field_validator('CORS_ORIGINS', mode='before')
     @classmethod
     def parse_cors_origins(cls, v):
