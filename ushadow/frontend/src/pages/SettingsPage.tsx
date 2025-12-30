@@ -1,74 +1,190 @@
-import { Settings, Save, Server, Key, Database, CheckCircle, XCircle } from 'lucide-react'
+import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, XCircle, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { useState, useEffect } from 'react'
-import { settingsApi, dockerApi } from '../services/api'
+import { settingsApi } from '../services/api'
+
+interface ApiKey {
+  name: string
+  value: string
+  hasValue: boolean
+}
+
+interface ServiceEnvConfig {
+  serviceId: string
+  serviceName: string
+  envVars: {
+    name: string
+    source: string
+    settingPath?: string
+    value?: string
+  }[]
+}
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState('services')
+  const [activeTab, setActiveTab] = useState('api-keys')
   const [config, setConfig] = useState<any>(null)
-  const [memoryStatus, setMemoryStatus] = useState<any>(null)
-  
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
+  const [resetting, setResetting] = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
+
   useEffect(() => {
     loadConfig()
-    loadMemoryStatus()
   }, [])
-  
+
   const loadConfig = async () => {
+    setLoading(true)
+    setError(null)
     try {
-      // Load both core config and service configs
-      const [configResponse, serviceConfigsResponse] = await Promise.all([
-        settingsApi.getConfig(),
-        settingsApi.getAllServiceConfigs()
-      ])
-      
-      setConfig({
-        ...configResponse.data,
-        service_configs: serviceConfigsResponse.data
-      })
-    } catch (error) {
-      console.error('Failed to load config:', error)
+      const response = await settingsApi.getConfig()
+      setConfig(response.data)
+    } catch (err) {
+      console.error('Failed to load config:', err)
+      setError('Failed to load settings')
+    } finally {
+      setLoading(false)
     }
   }
-  
-  const loadMemoryStatus = async () => {
-    // Check if any memory service is configured
-    const memoryProvider = config?.memory_provider
-    if (!memoryProvider) return
-    
-    try {
-      // Check if mem0 container is running (for openmemory)
-      if (memoryProvider === 'openmemory') {
-        const response = await dockerApi.getServiceInfo('mem0')
-        setMemoryStatus(response.data)
+
+  const toggleKeyVisibility = (keyName: string) => {
+    setVisibleKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(keyName)) {
+        next.delete(keyName)
+      } else {
+        next.add(keyName)
       }
-    } catch (error) {
-      console.error('Failed to load memory status:', error)
+      return next
+    })
+  }
+
+  const handleReset = async () => {
+    setResetting(true)
+    setError(null)
+    try {
+      await settingsApi.reset()
+      setShowResetConfirm(false)
+      await loadConfig()
+    } catch (err) {
+      console.error('Failed to reset config:', err)
+      setError('Failed to reset configuration')
+    } finally {
+      setResetting(false)
     }
   }
-  
-  useEffect(() => {
-    if (config?.memory_provider) {
-      loadMemoryStatus()
-    }
-  }, [config])
 
   const tabs = [
-    { id: 'services', label: 'Services', icon: Server },
     { id: 'api-keys', label: 'API Keys', icon: Key },
-    { id: 'database', label: 'Database', icon: Database },
+    { id: 'providers', label: 'Providers', icon: Server },
+    { id: 'service-config', label: 'Service Config', icon: Database },
   ]
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <div className="flex items-center space-x-2">
-          <Settings className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
-          <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Settings</h1>
-        </div>
-        <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-          Configure your ushadow platform
-        </p>
+  // Extract API keys with values
+  const apiKeys: ApiKey[] = config?.api_keys
+    ? Object.entries(config.api_keys)
+        .filter(([_, value]) => value && String(value).trim() !== '')
+        .map(([name, value]) => ({
+          name,
+          value: String(value),
+          hasValue: true,
+        }))
+    : []
+
+  // Extract selected providers
+  const selectedProviders = config?.selected_providers || {}
+
+  // Extract service env configs
+  const serviceEnvConfigs: ServiceEnvConfig[] = config?.service_env_config
+    ? Object.entries(config.service_env_config).map(([serviceKey, envConfig]: [string, any]) => ({
+        serviceId: serviceKey.replace('_', ':'),
+        serviceName: serviceKey.split('_').pop() || serviceKey,
+        envVars: Object.entries(envConfig || {}).map(([name, conf]: [string, any]) => ({
+          name,
+          source: conf?.source || 'unknown',
+          settingPath: conf?.setting_path,
+          value: conf?.value,
+        })),
+      }))
+    : []
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <RefreshCw className="h-8 w-8 animate-spin text-neutral-400" />
       </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6" data-testid="settings-page">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center space-x-2">
+            <Settings className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
+            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Settings</h1>
+          </div>
+          <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+            View saved configuration
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={loadConfig}
+            className="btn-secondary flex items-center space-x-2"
+            data-testid="refresh-settings"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span>Refresh</span>
+          </button>
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            className="btn-secondary flex items-center space-x-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+            data-testid="reset-settings"
+          >
+            <Trash2 className="h-4 w-4" />
+            <span>Reset to Defaults</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Reset Confirmation Modal */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-neutral-800 rounded-lg p-6 max-w-md mx-4 shadow-xl">
+            <div className="flex items-center space-x-3 text-red-600 mb-4">
+              <AlertTriangle className="h-6 w-6" />
+              <h3 className="text-lg font-semibold">Reset Configuration?</h3>
+            </div>
+            <p className="text-neutral-600 dark:text-neutral-400 mb-6">
+              This will delete all saved settings from the database and revert to file-based defaults.
+              This action cannot be undone.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="btn-secondary"
+                disabled={resetting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                className="btn-primary bg-red-600 hover:bg-red-700"
+                disabled={resetting}
+              >
+                {resetting ? 'Resetting...' : 'Reset'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 text-red-700 dark:text-red-300">
+          {error}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="border-b border-neutral-200 dark:border-neutral-700">
@@ -77,6 +193,7 @@ export default function SettingsPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
+              data-testid={`tab-${tab.id}`}
               className={`
                 flex items-center space-x-2 px-4 py-3 font-medium transition-all
                 ${activeTab === tab.id
@@ -92,290 +209,176 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Services Tab */}
-      {activeTab === 'services' && (
-        <div className="space-y-4">
-          {/* Memory Provider Status */}
-          {config?.memory_provider && (
-            <div className="card p-6 border-l-4 border-primary-500">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                  Memory Provider
-                </h3>
-                {memoryStatus?.status === 'running' ? (
-                  <div className="flex items-center space-x-2 text-success-600">
-                    <CheckCircle className="h-5 w-5" />
-                    <span className="text-sm font-medium">Connected</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center space-x-2 text-neutral-500">
-                    <XCircle className="h-5 w-5" />
-                    <span className="text-sm font-medium">Not Running</span>
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-neutral-600 dark:text-neutral-400">Provider:</span>
-                  <p className="font-medium text-neutral-900 dark:text-neutral-100 mt-1">
-                    {config.memory_provider === 'openmemory' ? 'OpenMemory' : config.memory_provider}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-neutral-600 dark:text-neutral-400">Server URL:</span>
-                  <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 mt-1">
-                    {config.service_configs?.openmemory?.server_url || 'Not configured'}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-neutral-600 dark:text-neutral-400">Graph Memory:</span>
-                  <p className="font-medium text-neutral-900 dark:text-neutral-100 mt-1">
-                    {config.service_configs?.openmemory?.enable_graph ? 'Enabled (Neo4j)' : 'Disabled'}
-                  </p>
-                </div>
-                {memoryStatus && (
-                  <div>
-                    <span className="text-neutral-600 dark:text-neutral-400">Container:</span>
-                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 mt-1">
-                      {memoryStatus.container_id || 'Not started'}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              Chronicle Configuration
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  Chronicle URL
-                </label>
-                <input
-                  type="url"
-                  className="input"
-                  placeholder="http://localhost:8000"
-                  defaultValue="http://localhost:8000"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <input type="checkbox" id="chronicle-enabled" className="rounded" />
-                <label htmlFor="chronicle-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
-                  Enable Chronicle Integration
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              MCP Configuration
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  MCP Server URL
-                </label>
-                <input
-                  type="url"
-                  className="input"
-                  placeholder="http://localhost:8765"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <input type="checkbox" id="mcp-enabled" className="rounded" />
-                <label htmlFor="mcp-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
-                  Enable MCP Integration
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              Agent Zero Configuration
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  Agent Zero URL
-                </label>
-                <input
-                  type="url"
-                  className="input"
-                  placeholder="http://localhost:9000"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <input type="checkbox" id="agent-enabled" className="rounded" />
-                <label htmlFor="agent-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
-                  Enable Agent Zero Integration
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              n8n Configuration
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  n8n URL
-                </label>
-                <input
-                  type="url"
-                  className="input"
-                  placeholder="http://localhost:5678"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <input type="checkbox" id="n8n-enabled" className="rounded" />
-                <label htmlFor="n8n-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
-                  Enable n8n Integration
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-end">
-            <button className="btn-primary flex items-center space-x-2">
-              <Save className="h-5 w-5" />
-              <span>Save Settings</span>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* API Keys Tab */}
       {activeTab === 'api-keys' && (
-        <div className="space-y-4">
+        <div className="space-y-4" data-testid="api-keys-tab">
           <div className="card p-6">
             <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              API Keys
+              Saved API Keys
             </h3>
-            <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
-              Shared API keys from api_keys namespace
-            </p>
 
-            {config?.api_keys && Object.entries(config.api_keys).some(([_, v]) => v) ? (
-              <div className="space-y-4">
-                {Object.entries(config.api_keys).map(([keyName, keyValue]: [string, any]) => {
-                  if (!keyValue) return null  // Skip null/empty keys
-
-                  return (
-                    <div key={keyName} className="p-4 border border-neutral-200 dark:border-neutral-700 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                          <h4 className="font-medium text-neutral-900 dark:text-neutral-100">
-                            {keyName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                          </h4>
-                          <code className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded text-xs font-mono text-neutral-500">
-                            ●●●●●●●●{keyValue.slice(-4)}
-                          </code>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <CheckCircle className="h-5 w-5 text-success-600" />
-                          <span className="text-sm text-success-600">Configured</span>
-                        </div>
+            {apiKeys.length > 0 ? (
+              <div className="space-y-3">
+                {apiKeys.map((key) => (
+                  <div
+                    key={key.name}
+                    className="flex items-center justify-between p-4 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg"
+                    data-testid={`api-key-${key.name}`}
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3">
+                        <Key className="h-4 w-4 text-neutral-500" />
+                        <span className="font-medium text-neutral-900 dark:text-neutral-100">
+                          {key.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                        </span>
+                      </div>
+                      <div className="mt-1 ml-7">
+                        <code className="text-sm font-mono text-neutral-600 dark:text-neutral-400">
+                          {visibleKeys.has(key.name) ? key.value : key.value.replace(/./g, '•').slice(0, 20) + (key.value.length > 20 ? '...' : '')}
+                        </code>
                       </div>
                     </div>
-                  )
-                })}
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => toggleKeyVisibility(key.name)}
+                        className="p-2 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                        data-testid={`toggle-visibility-${key.name}`}
+                      >
+                        {visibleKeys.has(key.name) ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                      <CheckCircle className="h-5 w-5 text-green-500" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
-              <p className="text-neutral-500 dark:text-neutral-400 text-sm">
-                No API keys configured yet. Complete the setup wizard to add services.
-              </p>
+              <div className="text-center py-8 text-neutral-500">
+                <Key className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                <p>No API keys saved yet</p>
+                <p className="text-sm mt-1">Configure services on the Services page to add API keys</p>
+              </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Database Tab (keeping original) */}
-      {activeTab === 'database' && (
-        <div className="space-y-4">
+      {/* Providers Tab */}
+      {activeTab === 'providers' && (
+        <div className="space-y-4" data-testid="providers-tab">
           <div className="card p-6">
             <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              Database Configuration
+              Selected Providers by Capability
             </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  OpenAI API Key
-                </label>
-                <input
-                  type="password"
-                  className="input"
-                  placeholder="sk-..."
-                />
+
+            {Object.keys(selectedProviders).length > 0 ? (
+              <div className="space-y-3">
+                {Object.entries(selectedProviders).map(([capability, providerId]) => (
+                  <div
+                    key={capability}
+                    className="flex items-center justify-between p-4 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg"
+                    data-testid={`provider-${capability}`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <Server className="h-4 w-4 text-neutral-500" />
+                      <div>
+                        <span className="font-medium text-neutral-900 dark:text-neutral-100 capitalize">
+                          {capability}
+                        </span>
+                        <p className="text-sm text-neutral-500">Capability</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-mono text-sm text-neutral-700 dark:text-neutral-300">
+                        {String(providerId)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  Anthropic API Key
-                </label>
-                <input
-                  type="password"
-                  className="input"
-                  placeholder="sk-ant-..."
-                />
+            ) : (
+              <div className="text-center py-8 text-neutral-500">
+                <Server className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                <p>No providers selected</p>
+                <p className="text-sm mt-1">Providers are selected when configuring services</p>
               </div>
-            </div>
-            <div className="flex justify-end mt-6">
-              <button className="btn-primary flex items-center space-x-2">
-                <Save className="h-5 w-5" />
-                <span>Save API Keys</span>
-              </button>
-            </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Database Tab */}
-      {activeTab === 'database' && (
-        <div className="space-y-4">
+      {/* Service Config Tab */}
+      {activeTab === 'service-config' && (
+        <div className="space-y-4" data-testid="service-config-tab">
           <div className="card p-6">
             <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              Database Configuration
+              Service Environment Configurations
             </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  MongoDB URI
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="mongodb://localhost:27017"
-                  defaultValue="mongodb://mongo:27017"
-                  disabled
-                />
-                <p className="mt-1 text-xs text-neutral-500">
-                  Configure via environment variables
-                </p>
+
+            {serviceEnvConfigs.length > 0 ? (
+              <div className="space-y-6">
+                {serviceEnvConfigs.map((svc) => (
+                  <div
+                    key={svc.serviceId}
+                    className="border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden"
+                    data-testid={`service-config-${svc.serviceId}`}
+                  >
+                    <div className="bg-neutral-100 dark:bg-neutral-800 px-4 py-3 border-b border-neutral-200 dark:border-neutral-700">
+                      <h4 className="font-medium text-neutral-900 dark:text-neutral-100">
+                        {svc.serviceName}
+                      </h4>
+                      <p className="text-xs text-neutral-500 font-mono">{svc.serviceId}</p>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      {svc.envVars.map((env) => (
+                        <div
+                          key={env.name}
+                          className="flex items-center justify-between py-2 border-b border-neutral-100 dark:border-neutral-800 last:border-0"
+                        >
+                          <code className="text-sm font-mono text-neutral-700 dark:text-neutral-300">
+                            {env.name}
+                          </code>
+                          <div className="flex items-center space-x-2">
+                            {env.source === 'setting' && (
+                              <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-1 rounded">
+                                → {env.settingPath}
+                              </span>
+                            )}
+                            {env.source === 'literal' && (
+                              <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-2 py-1 rounded">
+                                literal
+                              </span>
+                            )}
+                            {env.source === 'default' && (
+                              <span className="text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-400 px-2 py-1 rounded">
+                                default
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  Redis URL
-                </label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="redis://localhost:6379"
-                  defaultValue="redis://redis:6379/0"
-                  disabled
-                />
-                <p className="mt-1 text-xs text-neutral-500">
-                  Configure via environment variables
-                </p>
+            ) : (
+              <div className="text-center py-8 text-neutral-500">
+                <Database className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                <p>No service configurations saved</p>
+                <p className="text-sm mt-1">Configure services on the Services page to see their env var mappings here</p>
               </div>
-            </div>
+            )}
           </div>
         </div>
+      )}
+
+      {/* Debug: Raw Config */}
+      {process.env.NODE_ENV === 'development' && (
+        <details className="mt-8">
+          <summary className="cursor-pointer text-sm text-neutral-500">Debug: Raw Config</summary>
+          <pre className="mt-2 p-4 bg-neutral-100 dark:bg-neutral-800 rounded-lg text-xs overflow-auto max-h-96">
+            {JSON.stringify(config, null, 2)}
+          </pre>
+        </details>
       )}
     </div>
   )

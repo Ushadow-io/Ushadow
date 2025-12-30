@@ -2,46 +2,39 @@
 Settings and configuration endpoints (OmegaConf-based)
 
 Provides REST API for reading and updating settings with:
-- Automatic config merging (defaults → secrets → MongoDB)
+- Automatic config merging (defaults → secrets → overrides)
 - Variable interpolation support
 - Single source of truth via OmegaConf
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from omegaconf import OmegaConf
 
-from src.config.settings import get_settings
-from src.services.omegaconf_settings import get_omegaconf_settings
+from src.config.infra_settings import get_infra_settings
+from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.secrets import mask_dict_secrets
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-settings = get_settings()
+infra = get_infra_settings()
 
 
 class SettingsResponse(BaseModel):
-    """Settings response model."""
+    """Settings response model - infrastructure settings."""
     env_name: str
     mongodb_database: str
-    chronicle_url: str
-    mcp_enabled: bool
-    agent_zero_enabled: bool
-    n8n_enabled: bool
 
 
 @router.get("", response_model=SettingsResponse)
 async def get_settings_info():
-    """Get current settings information."""
+    """Get current infrastructure settings."""
     return SettingsResponse(
-        env_name=settings.ENV_NAME,
-        mongodb_database=settings.MONGODB_DATABASE,
-        chronicle_url=settings.CHRONICLE_URL,
-        mcp_enabled=settings.MCP_ENABLED,
-        agent_zero_enabled=settings.AGENT_ZERO_ENABLED,
-        n8n_enabled=settings.N8N_ENABLED
+        env_name=infra.ENV_NAME,
+        mongodb_database=infra.MONGODB_DATABASE,
     )
 
 
@@ -53,13 +46,10 @@ async def get_config():
         merged = await omegaconf_mgr.load_config()
         config = OmegaConf.to_container(merged, resolve=True)
 
-        # Mask sensitive values in api_keys
-        if config.get("api_keys"):
-            for key, value in config["api_keys"].items():
-                if value and len(str(value)) > 4:
-                    config["api_keys"][key] = "***" + str(value)[-4:]
+        # Recursively mask all sensitive values
+        masked_config = mask_dict_secrets(config)
 
-        return config
+        return masked_config
     except Exception as e:
         logger.error(f"Error getting config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -146,4 +136,35 @@ async def delete_service_config(service_id: str):
         return {"success": True, "message": f"Configuration deleted for {service_id}"}
     except Exception as e:
         logger.error(f"Error deleting service config for {service_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reset")
+async def reset_config():
+    """
+    Reset configuration by clearing config_settings.yaml.
+
+    This removes runtime configuration preferences, reverting to
+    file-based defaults. Note: secrets.yaml (API keys) is preserved.
+    """
+    try:
+        omegaconf_mgr = get_omegaconf_settings()
+
+        # Delete config_settings.yaml if it exists (preserves secrets.yaml)
+        deleted = 0
+        if omegaconf_mgr.settings_path.exists():
+            omegaconf_mgr.settings_path.unlink()
+            logger.info(f"Reset config: deleted {omegaconf_mgr.settings_path}")
+            deleted = 1
+
+        # Invalidate the cache
+        omegaconf_mgr._cache = None
+
+        return {
+            "success": True,
+            "message": "Configuration reset to defaults (API keys preserved)",
+            "deleted": deleted
+        }
+    except Exception as e:
+        logger.error(f"Error resetting config: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -153,9 +153,14 @@ class ComposeEnvVar:
 
     Attributes:
         name: Variable name (e.g., "OPENAI_API_KEY")
-        has_default: Whether a default value is specified
-        default_value: The default value if specified
-        is_required: True if no default (must be injected at runtime)
+        has_default: Whether a default value is specified (includes empty string)
+        default_value: The default value if specified (None, "", or actual value)
+        is_required: True if no default syntax used (${VAR} vs ${VAR:-})
+
+    Required/Optional semantics (standard bash/Docker behavior):
+        ${VAR}        → required - container won't start if unset
+        ${VAR:-}      → optional - defaults to empty string
+        ${VAR:-value} → optional - defaults to "value"
     """
     name: str
     has_default: bool = False
@@ -182,6 +187,7 @@ class ComposeService:
         profiles: Compose profiles this service belongs to
         healthcheck: Health check configuration
         requires: Capability requirements from x-ushadow (e.g., ["llm"])
+        description: Human-readable description from x-ushadow
     """
     name: str
     image: Optional[str] = None
@@ -195,6 +201,7 @@ class ComposeService:
 
     # From x-ushadow extension
     requires: List[str] = field(default_factory=list)
+    description: Optional[str] = None
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -252,9 +259,13 @@ class ComposeParser(BaseYAMLParser):
           mem0-ui:
             requires: []
 
-    Environment variables are parsed to identify:
-    - Required vars (no default): must be injected at runtime
-    - Optional vars (has default): can use compose default or override
+    Environment variables are parsed using standard Docker/bash semantics:
+        ${VAR}        → Required - must be injected at runtime
+        ${VAR:-}      → Optional - defaults to empty string if not set
+        ${VAR:-value} → Optional - has explicit default value
+
+    This allows conditional vars (like NEO4J_PASSWORD) to be marked optional
+    with empty default, while truly required vars use ${VAR} syntax.
 
     Example:
         >>> parser = ComposeParser()
@@ -262,7 +273,7 @@ class ComposeParser(BaseYAMLParser):
         >>> mem0 = result.services["mem0"]
         >>> print(mem0.requires)  # ['llm']
         >>> print([e.name for e in mem0.required_env_vars])
-        ['OPENAI_API_KEY', 'OPENAI_BASE_URL']
+        ['OPENAI_API_KEY']  # Only vars using ${VAR} syntax
     """
 
     # Regex for ${VAR:-default} pattern
@@ -339,6 +350,7 @@ class ComposeParser(BaseYAMLParser):
         # Get x-ushadow metadata for this service
         service_meta = x_ushadow.get(name, {})
         requires = service_meta.get("requires", [])
+        description = service_meta.get("description")
 
         return ComposeService(
             name=name,
@@ -351,6 +363,7 @@ class ComposeParser(BaseYAMLParser):
             volumes=volumes,
             networks=networks,
             requires=requires,
+            description=description,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:
@@ -431,13 +444,15 @@ class ComposeParser(BaseYAMLParser):
             match = self.ENV_VAR_PATTERN.search(value)
             if match:
                 var_name, default = match.groups()
-                # Empty default (${VAR:-}) is treated as required
-                has_real_default = default is not None and default.strip() != ""
+                # ${VAR} (no :-) → required (default is None)
+                # ${VAR:-} → required (empty default isn't useful)
+                # ${VAR:-value} → optional with explicit default
+                has_default = default is not None and default != ""
                 return ComposeEnvVar(
                     name=key,
-                    has_default=has_real_default,
-                    default_value=default if has_real_default else None,
-                    is_required=not has_real_default,
+                    has_default=has_default,
+                    default_value=default if has_default else None,
+                    is_required=not has_default,
                 )
 
             # Plain value - has a hardcoded default

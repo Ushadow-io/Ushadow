@@ -3,7 +3,7 @@
 This module provides centralized Docker container management for controlling
 local services and integrations through the Ushadow backend API.
 
-Services are loaded dynamically from ServiceRegistry (config/services/*.yaml)
+Services are discovered from Docker Compose files via ComposeServiceRegistry
 and use capability-based composition via CapabilityResolver.
 """
 
@@ -20,7 +20,7 @@ from datetime import datetime
 import docker
 from docker.errors import DockerException, NotFound, APIError
 
-from src.services.service_registry import get_service_registry
+from src.services.compose_registry import get_compose_registry
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +97,12 @@ class DockerManager:
     """
     Manages Docker containers for Ushadow services and integrations.
 
-    Services are loaded dynamically from ServiceRegistry (config/services/*.yaml).
+    Services are discovered from Docker Compose files via ComposeServiceRegistry.
     Only core infrastructure is defined here as CORE_SERVICES.
     """
 
     # Core infrastructure services that are always available
-    # These don't come from ServiceRegistry - they're required for the system
+    # These are required system infrastructure, not from compose files
     CORE_SERVICES = {
         "mongo": {
             "description": "MongoDB database",
@@ -179,61 +179,54 @@ class DockerManager:
     @property
     def MANAGEABLE_SERVICES(self) -> Dict[str, Any]:
         """
-        Get all manageable services (core + dynamic from ServiceRegistry).
+        Get all manageable services (core + compose-discovered).
 
-        Combines hardcoded CORE_SERVICES with dynamic services from config/services/*.yaml.
-        ServiceRegistry handles its own caching, so no additional cache needed here.
+        Combines hardcoded CORE_SERVICES with services discovered from
+        compose/*-compose.yaml files via ComposeServiceRegistry.
         """
         # Start with core services
         services = dict(self.CORE_SERVICES)
 
-        # Load dynamic services from ServiceRegistry
+        # Load services from ComposeServiceRegistry (compose-first approach)
         try:
-            registry = get_service_registry()
-            all_instances = registry.get_instances()
-            logger.debug(f"ServiceRegistry returned {len(all_instances)} instances")
-            if len(all_instances) == 0:
-                logger.warning("No services found in ServiceRegistry! Check config/services/ directory.")
-            for instance in all_instances:
-                logger.debug(f"Processing service: {instance.service_id}")
-                # Skip if no docker compose file (cloud-only services)
-                if not instance.docker_compose_file:
-                    logger.debug(f"Skipping {instance.service_id} - no compose file")
-                    continue
-
+            compose_registry = get_compose_registry()
+            for service in compose_registry.get_services():
                 # Skip if already in core services
-                if instance.service_id in services:
+                if service.service_name in services:
                     continue
 
-                # Map template to ServiceType
-                service_type = self._template_to_service_type(instance.template)
-
-                # Build service config from ServiceConfig
+                # Use service_name as the key
                 service_config = {
-                    "description": instance.description or instance.name,
-                    "service_type": service_type,
+                    "description": f"From {service.compose_file.name}",
+                    "service_type": ServiceType.INTEGRATION,
                     "required": False,
                     "user_controllable": True,
-                    "compose_file": instance.docker_compose_file,
-                    "docker_service_name": instance.docker_service_name or instance.service_id,
-                    "endpoints": self._build_endpoints(instance),
-                    "metadata": instance.ui,  # UI metadata (icon, category, tags, etc.)
+                    "compose_file": str(service.compose_file),
+                    "docker_service_name": service.service_name,
+                    "endpoints": [],
+                    "metadata": {
+                        "compose_service_id": service.service_id,
+                        "requires": service.requires,
+                        "ports": service.ports,
+                    },
+                    # All compose services use compose env var resolution
+                    "compose_discovered": True,
                 }
 
-                services[instance.service_id] = service_config
-                logger.debug(f"Loaded dynamic service: {instance.service_id}")
+                services[service.service_name] = service_config
+                logger.debug(f"Loaded compose service: {service.service_name}")
 
         except Exception as e:
-            logger.warning(f"Failed to load services from registry: {e}")
+            logger.warning(f"Failed to load services from compose registry: {e}")
 
         logger.debug(f"Loaded {len(services)} manageable services")
         return services
 
     def reload_services(self) -> None:
-        """Force reload services from ServiceRegistry."""
-        registry = get_service_registry()
+        """Force reload services from ComposeServiceRegistry."""
+        registry = get_compose_registry()
         registry.reload()
-        logger.info("ServiceRegistry reloaded")
+        logger.info("ComposeServiceRegistry reloaded")
 
     def _template_to_service_type(self, template: Optional[str]) -> ServiceType:
         """Map service template name to ServiceType enum."""
@@ -417,14 +410,33 @@ class DockerManager:
             try:
                 container = self._client.containers.get(docker_container_name)
             except NotFound:
-                # Container name may have project prefix (e.g., "ushadow-chronicle-backend")
-                # Search by compose service label as fallback
+                # Container name may have project prefix (e.g., "ushadow-wiz-frame-chronicle-backend")
+                # Search by compose service label, preferring our project
+                import os
+                current_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+
                 containers = self._client.containers.list(
                     all=True,
                     filters={"label": f"com.docker.compose.service={docker_container_name}"}
                 )
                 if containers:
-                    container = containers[0]
+                    # Prefer containers from current project, then infra
+                    preferred_projects = [current_project, "infra"]
+                    for project in preferred_projects:
+                        for c in containers:
+                            labels = c.labels or {}
+                            if labels.get("com.docker.compose.project") == project:
+                                container = c
+                                break
+                        if container:
+                            break
+                    # Fall back to first container if no preferred project found
+                    if not container:
+                        container = containers[0]
+                        logger.warning(
+                            f"Container {docker_container_name} found but not in project '{current_project}'. "
+                            f"Using: {container.name} (project: {container.labels.get('com.docker.compose.project', 'unknown')})"
+                        )
 
             if not container:
                 raise NotFound(f"Container not found: {docker_container_name}")
@@ -570,16 +582,117 @@ class DockerManager:
             logger.error(f"Error starting {service_name}: {e}")
             return False, "Failed to start service"
 
+    async def _build_env_vars_from_compose_config(
+        self, service_name: str
+    ) -> Dict[str, str]:
+        """
+        Build environment variables from user's saved compose configuration.
+
+        For compose-discovered services, users configure env vars via the
+        /api/compose/services/{id}/env endpoint. This method resolves those
+        configurations to actual values.
+
+        Args:
+            service_name: Name of the service (docker_service_name)
+
+        Returns:
+            Dict of env var name -> resolved value
+        """
+        from src.config.omegaconf_settings import get_omegaconf_settings
+
+        settings = get_omegaconf_settings()
+        compose_registry = get_compose_registry()
+
+        # Find the service in compose registry
+        service = compose_registry.get_service_by_name(service_name)
+        if not service:
+            return {}
+
+        # Load saved configuration
+        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
+        saved_config = await settings.get(config_key)
+        saved_config = saved_config or {}
+
+        resolved = {}
+
+        # Load settings for auto-mapping fallback
+        omega_config = await settings.load_config()
+        from omegaconf import OmegaConf
+        all_settings = OmegaConf.to_container(omega_config, resolve=True)
+        api_keys = all_settings.get('api_keys', {})
+        security_keys = all_settings.get('security', {})
+        admin_keys = all_settings.get('admin', {})
+
+        for env_var in service.all_env_vars:
+            config = saved_config.get(env_var.name, {})
+            source = config.get("source", "default")
+
+            if source == "setting":
+                setting_path = config.get("setting_path")
+                if setting_path:
+                    value = await settings.get(setting_path)
+                    if value:
+                        resolved[env_var.name] = str(value)
+                    elif env_var.is_required:
+                        logger.warning(
+                            f"Service {service_name}: env var {env_var.name} "
+                            f"references empty setting {setting_path}"
+                        )
+
+            elif source == "literal":
+                value = config.get("value")
+                if value:
+                    resolved[env_var.name] = value
+                elif env_var.is_required:
+                    logger.warning(
+                        f"Service {service_name}: env var {env_var.name} "
+                        f"has no literal value configured"
+                    )
+
+            elif source == "default":
+                # Try auto-mapping from settings before using compose default
+                env_lower = env_var.name.lower()
+                found_value = None
+
+                # Check api_keys
+                for key, value in api_keys.items():
+                    if value and (key in env_lower or env_lower.replace('_', '') in key.replace('_', '')):
+                        found_value = str(value)
+                        logger.debug(f"Auto-mapped {env_var.name} from api_keys.{key}")
+                        break
+
+                # Check security keys
+                if not found_value:
+                    for key, value in security_keys.items():
+                        if value and (key in env_lower or env_lower.replace('_', '') in key.replace('_', '')):
+                            found_value = str(value)
+                            logger.debug(f"Auto-mapped {env_var.name} from security.{key}")
+                            break
+
+                # Check admin keys (for ADMIN_PASSWORD, etc.)
+                if not found_value:
+                    for key, value in admin_keys.items():
+                        if value and (key in env_lower or env_lower.replace('_', '') in key.replace('_', '')):
+                            found_value = str(value)
+                            logger.debug(f"Auto-mapped {env_var.name} from admin.{key}")
+                            break
+
+                if found_value:
+                    resolved[env_var.name] = found_value
+
+        logger.info(
+            f"Resolved {len(resolved)} env vars for {service_name} from compose config"
+        )
+        return resolved
+
     async def _build_env_vars_for_service(
         self, service_name: str
     ) -> tuple[Dict[str, str], Dict[str, str]]:
         """
-        Build environment variables for a service using CapabilityResolver.
+        Build environment variables for a service.
 
-        Uses the capability-based composition pattern:
-        1. Load service definition from config/services/{service_name}.yaml
-        2. Resolve each capability the service `uses:` to provider credentials
-        3. Map canonical env vars to service-expected env vars
+        Uses saved compose config for compose-discovered services, with fallback
+        to CapabilityResolver for required capabilities.
 
         Args:
             service_name: Name of the service
@@ -595,6 +708,43 @@ class DockerManager:
         subprocess_env = os.environ.copy()  # For compose file variable substitution
         container_env: Dict[str, str] = {}  # For container env vars
 
+        # Check if this is a compose-discovered service
+        service_config = self.MANAGEABLE_SERVICES.get(service_name, {})
+        is_compose_discovered = service_config.get("compose_discovered", False)
+
+        if is_compose_discovered:
+            # Use compose config approach
+            try:
+                container_env = await self._build_env_vars_from_compose_config(service_name)
+                subprocess_env.update(container_env)
+
+                # Also try CapabilityResolver for any capabilities declared in x-ushadow
+                requires = service_config.get("metadata", {}).get("requires", [])
+                if requires:
+                    from src.services.capability_resolver import get_capability_resolver
+                    resolver = get_capability_resolver()
+                    resolver.reload()
+
+                    # Get additional env vars from capability resolver
+                    # This handles the case where user hasn't explicitly configured
+                    # all env vars but has configured providers
+                    try:
+                        cap_env = await resolver.resolve_for_service(service_name)
+                        # Only add vars not already configured
+                        for key, value in cap_env.items():
+                            if key not in container_env:
+                                container_env[key] = value
+                                subprocess_env[key] = value
+                    except Exception as e:
+                        logger.debug(f"CapabilityResolver fallback for {service_name}: {e}")
+
+                return subprocess_env, container_env
+
+            except Exception as e:
+                logger.error(f"Failed to build env vars from compose config: {e}")
+                raise ValueError(f"Failed to configure service: {e}")
+
+        # Traditional approach using CapabilityResolver
         try:
             # Import here to avoid circular dependencies
             from src.services.capability_resolver import get_capability_resolver
@@ -686,13 +836,15 @@ class DockerManager:
             compose_dir = compose_path.parent if compose_path.parent.exists() else Path(".")
 
             # Run docker-compose up -d for this service
-            # Determine project name based on compose file location
-            if "infra" in str(compose_path):
-                project_name = "infra"
-            elif "memory" in str(compose_path):
-                project_name = "memory"
-            else:
-                project_name = None
+            # Use COMPOSE_PROJECT_NAME from environment for consistent container naming
+            import os
+            project_name = os.environ.get("COMPOSE_PROJECT_NAME")
+            if not project_name:
+                # Fallback for infra services or if env not set
+                if "infra" in str(compose_path):
+                    project_name = "infra"
+                else:
+                    project_name = "ushadow"
 
             # Check if service requires a specific compose profile
             compose_profile = self.MANAGEABLE_SERVICES[service_name].get("compose_profile")
@@ -738,7 +890,12 @@ class DockerManager:
                 return True, f"Service '{service_name}' started successfully"
             else:
                 logger.error(f"Failed to start {service_name} via compose: {result.stderr}")
-                return False, "Failed to start service"
+                # Extract useful error message from stderr
+                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                # Truncate very long errors but keep useful info
+                if len(error_msg) > 300:
+                    error_msg = error_msg[:300] + "..."
+                return False, f"Failed to start: {error_msg}"
 
         except subprocess.TimeoutExpired:
             logger.error(f"Timeout starting {service_name} via compose")

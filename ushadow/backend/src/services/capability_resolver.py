@@ -17,7 +17,7 @@ import yaml
 
 from src.services.provider_registry import get_provider_registry
 from src.models.provider import Provider, EnvMap
-from src.services.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_omegaconf_settings
 
 logger = logging.getLogger(__name__)
 

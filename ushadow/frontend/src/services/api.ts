@@ -144,31 +144,151 @@ export const settingsApi = {
   getConfig: () => api.get('/api/settings/config'),
   update: (updates: any) => api.put('/api/settings/config', updates),
   syncEnv: () => api.post('/api/settings/sync-env'),
-  
+  reset: () => api.post('/api/settings/reset'),
+
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
   getServiceConfig: (serviceId: string) => api.get(`/api/settings/service-configs/${serviceId}`),
-  updateServiceConfig: (serviceId: string, updates: any) => 
+  updateServiceConfig: (serviceId: string, updates: any) =>
     api.put(`/api/settings/service-configs/${serviceId}`, updates),
   deleteServiceConfig: (serviceId: string) => api.delete(`/api/settings/service-configs/${serviceId}`),
 }
 
-// Services endpoints - provides schema for wizard forms
-// Actual config values are managed via settingsApi
+// Services endpoints - compose-first service discovery
 export const servicesApi = {
-  getQuickstart: () => api.get('/api/services/quickstart'),
-  getByCategory: (category: string) => api.get(`/api/services/categories/${category}`),
-  setEnabled: (serviceId: string, enabled: boolean) =>
-    api.put(`/api/services/${serviceId}/enabled`, { enabled }),
-  getEnabledState: (serviceId: string) =>
-    api.get(`/api/services/${serviceId}/enabled`),
-  // Catalog & Installation
-  getCatalog: () => api.get('/api/services/catalog'),
   getInstalled: () => api.get('/api/services/installed'),
-  installService: (serviceId: string, dockerImage?: string) =>
-    api.post('/api/services/install', { service_id: serviceId, docker_image: dockerImage }),
-  uninstallService: (serviceId: string) =>
-    api.delete(`/api/services/${serviceId}/uninstall`),
+  setEnabled: (serviceName: string, enabled: boolean) =>
+    api.put(`/api/services/${serviceName}/enabled`, { enabled }),
+  getEnabledState: (serviceName: string) =>
+    api.get(`/api/services/${serviceName}/enabled`),
+  // Legacy stubs - these features were removed in compose-first migration
+  // TODO: Re-implement catalog and quickstart with compose-first approach
+  getCatalog: () => Promise.resolve({ data: [] }),
+  getQuickstart: () => Promise.resolve({ data: [] }),
+  installService: (_serviceId: string) => Promise.resolve({ data: { success: false, message: 'Service catalog removed - use compose files' } }),
+}
+
+// Compose service configuration endpoints
+export interface EnvVarConfig {
+  name: string
+  source: 'setting' | 'new_setting' | 'literal' | 'default'
+  setting_path?: string      // For source='setting' - existing setting to map
+  new_setting_path?: string  // For source='new_setting' - new setting path to create
+  value?: string             // For source='literal' or 'new_setting'
+}
+
+export interface EnvVarSuggestion {
+  path: string
+  label: string
+  has_value: boolean
+  value?: string  // Masked for secrets
+  capability?: string
+  provider_name?: string
+}
+
+export interface EnvVarInfo {
+  name: string
+  is_required: boolean
+  has_default: boolean
+  default_value?: string
+  source: string
+  setting_path?: string
+  value?: string
+  resolved_value?: string
+  suggestions: EnvVarSuggestion[]
+}
+
+/** Incomplete env var for quickstart wizard */
+export interface IncompleteEnvVar {
+  name: string
+  service_id: string
+  service_name: string
+  has_default: boolean
+  default_value?: string
+  suggestions: EnvVarSuggestion[]
+  setting_type: 'secret' | 'url' | 'string'
+}
+
+/** Quickstart wizard response */
+export interface QuickstartConfig {
+  incomplete_env_vars: IncompleteEnvVar[]
+  services_needing_setup: string[]
+  total_services: number
+  ready_services: number
+}
+
+export interface PortMapping {
+  host?: string      // Host port (may contain ${VAR:-default} interpolation)
+  container: string  // Container port
+}
+
+export interface ComposeService {
+  service_id: string
+  service_name: string
+  compose_file: string
+  image: string
+  description?: string
+  requires: string[]
+  depends_on: string[]
+  ports: PortMapping[]
+  enabled: boolean
+  required_env_count: number
+  optional_env_count: number
+  needs_setup: boolean
+  installed?: boolean  // For catalog view - whether service is installed
+}
+
+export const composeServicesApi = {
+  /** List installed compose services */
+  list: () => api.get<ComposeService[]>('/api/compose/services'),
+
+  /** List all available services (catalog) */
+  catalog: () => api.get<ComposeService[]>('/api/compose/catalog'),
+
+  /** Get service details with env vars */
+  get: (serviceId: string) => api.get(`/api/compose/services/${encodeURIComponent(serviceId)}`),
+
+  /** Get env var configuration with suggestions */
+  getEnvConfig: (serviceId: string) => api.get<{
+    service_id: string
+    service_name: string
+    compose_file: string
+    requires: string[]
+    required_env_vars: EnvVarInfo[]
+    optional_env_vars: EnvVarInfo[]
+  }>(`/api/compose/services/${encodeURIComponent(serviceId)}/env`),
+
+  /** Save env var configuration */
+  updateEnvConfig: (serviceId: string, envVars: EnvVarConfig[]) =>
+    api.put(`/api/compose/services/${encodeURIComponent(serviceId)}/env`, { env_vars: envVars }),
+
+  /** Check if service is ready (all required vars resolved) */
+  resolve: (serviceId: string) => api.get<{
+    service_id: string
+    ready: boolean
+    resolved: Record<string, string>
+    missing: string[]
+    compose_file: string
+  }>(`/api/compose/services/${encodeURIComponent(serviceId)}/resolve`),
+
+  /** Install a service from the catalog */
+  install: (serviceId: string) =>
+    api.post<{ service_id: string; service_name: string; installed: boolean; message: string }>(
+      `/api/compose/services/${encodeURIComponent(serviceId)}/install`
+    ),
+
+  /** Uninstall a service */
+  uninstall: (serviceId: string) =>
+    api.post<{ service_id: string; service_name: string; installed: boolean; message: string }>(
+      `/api/compose/services/${encodeURIComponent(serviceId)}/uninstall`
+    ),
+
+  /** Get quickstart config - incomplete env vars across all installed services */
+  getQuickstart: () => api.get<QuickstartConfig>('/api/compose/quickstart'),
+
+  /** Save quickstart config - save env var values */
+  saveQuickstart: (envValues: Record<string, string>) =>
+    api.post<{ success: boolean; saved: number; message: string }>('/api/compose/quickstart', envValues),
 }
 
 // Docker service management endpoints (infrastructure containers)

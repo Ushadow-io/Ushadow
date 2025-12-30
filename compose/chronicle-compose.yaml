@@ -2,6 +2,17 @@
 # Environment variables are passed directly via docker compose subprocess env
 # No .env files needed - CapabilityResolver provides all values
 
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  chronicle-backend:
+    description: "AI-powered voice journal and life logger with transcription and LLM analysis"
+    requires: [llm, transcription]
+  chronicle-webui:
+    description: "Web interface for Chronicle voice journal"
+    requires: []
+
 services:
   chronicle-backend:
     image: ghcr.io/ushadow-io/chronicle-backend:${CHRONICLE_IMAGE_TAG:-latest}
@@ -26,19 +37,19 @@ services:
       - QDRANT_BASE_URL=${QDRANT_BASE_URL:-http://qdrant:6333}
       - QDRANT_PORT=${QDRANT_PORT:-6333}
 
-      # LLM capability (from selected provider)
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # LLM capability (from selected provider) - REQUIRED
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
 
-      # Transcription capability (from selected provider)
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      # Transcription capability (from selected provider) - REQUIRED
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
 
       # Memory capability (optional, from selected provider)
       - MEM0_API_KEY=${MEM0_API_KEY:-}
 
-      # Security (from settings)
-      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY:-}
+      # Security (from settings) - AUTH_SECRET_KEY is required for JWT auth
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 
       # CORS

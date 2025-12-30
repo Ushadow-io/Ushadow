@@ -39,11 +39,13 @@ class KubernetesManager:
 
     def _init_fernet(self) -> Fernet:
         """Initialize Fernet encryption using app secret key."""
-        from src.config.settings import get_settings
-        settings = get_settings()
+        from src.config.secrets import get_auth_secret_key
 
         # Derive a 32-byte key from the app secret
-        secret = settings.AUTH_SECRET_KEY.encode() if settings.AUTH_SECRET_KEY else b"default-secret-key"
+        try:
+            secret = get_auth_secret_key().encode()
+        except ValueError:
+            secret = b"default-secret-key"
         key = hashlib.sha256(secret).digest()
         fernet_key = base64.urlsafe_b64encode(key)
         return Fernet(fernet_key)

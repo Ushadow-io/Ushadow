@@ -11,7 +11,7 @@ import os
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from utils.yaml_parser import (
+from config.yaml_parser import (
     BaseYAMLParser,
     ComposeParser,
     ComposeEnvVar,

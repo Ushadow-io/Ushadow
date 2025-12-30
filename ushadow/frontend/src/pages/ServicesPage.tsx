@@ -4,125 +4,124 @@ import {
   CheckCircle,
   AlertCircle,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Edit2,
   Save,
   X,
-  Plus,
   RefreshCw,
-  Circle,
   PlayCircle,
   StopCircle,
   Loader2,
   Cloud,
   HardDrive,
-  ToggleLeft,
-  ToggleRight
+  Pencil,
+  Plus,
+  Package,
+  Trash2
 } from 'lucide-react'
-import { servicesApi, settingsApi, dockerApi, providersApi, Capability, ProviderWithStatus } from '../services/api'
+import {
+  settingsApi,
+  dockerApi,
+  providersApi,
+  composeServicesApi,
+  Capability,
+  ProviderWithStatus,
+  ComposeService,
+  EnvVarInfo,
+  EnvVarConfig
+} from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
-import AddServiceModal from '../components/AddServiceModal'
-
-interface ServiceInstance {
-  service_id: string
-  name: string
-  description: string
-  template?: string | null  // Legacy - may be null in new architecture
-  mode: 'cloud' | 'local'
-  is_default: boolean
-  enabled: boolean
-  config_schema: any[]
-  tags: string[]
-  ui?: {
-    category?: string
-    icon?: string
-    is_default?: boolean
-    tags?: string[]
-  }
-}
 
 export default function ServicesPage() {
-  const [serviceInstances, setServiceInstances] = useState<ServiceInstance[]>([])
-  const [serviceConfigs, setServiceConfigs] = useState<any>({})
+  // Compose services state
+  const [services, setServices] = useState<ComposeService[]>([])
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['conversation_engine', 'memory', 'llm', 'transcription']))
-  const [editingService, setEditingService] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState<any>({})
+  const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set())
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null)
+  const [envConfig, setEnvConfig] = useState<{
+    required_env_vars: EnvVarInfo[]
+    optional_env_vars: EnvVarInfo[]
+  } | null>(null)
+  const [envEditForm, setEnvEditForm] = useState<Record<string, EnvVarConfig>>({})
+
+  // Provider state
+  const [capabilities, setCapabilities] = useState<Capability[]>([])
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set())
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
+  const [providerEditForm, setProviderEditForm] = useState<Record<string, string>>({})
+  const [changingProvider, setChangingProvider] = useState<string | null>(null)
+  const [savingProvider, setSavingProvider] = useState(false)
+
+  // General state
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [startingService, setStartingService] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [serviceErrors, setServiceErrors] = useState<Record<string, string>>({})
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
-    serviceId: string | null
     serviceName: string | null
-  }>({ isOpen: false, serviceId: null, serviceName: null })
-  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
-  const [expandedConfigs, setExpandedConfigs] = useState<Set<string>>(new Set())
-  const [showAllConfigs, setShowAllConfigs] = useState(false)
-  const [togglingEnabled, setTogglingEnabled] = useState<string | null>(null)
-  const [showAddServiceModal, setShowAddServiceModal] = useState(false)
-  const [capabilities, setCapabilities] = useState<Capability[]>([])
-  const [changingProvider, setChangingProvider] = useState<string | null>(null)
-  // Provider inline editing (like services)
-  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set())
-  const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
-  const [providerEditForm, setProviderEditForm] = useState<Record<string, string>>({})
-  const [savingProvider, setSavingProvider] = useState(false)
+  }>({ isOpen: false, serviceName: null })
 
-  // Load initial data once on mount
+  // Catalog modal state
+  const [showCatalog, setShowCatalog] = useState(false)
+  const [catalogServices, setCatalogServices] = useState<ComposeService[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [installingService, setInstallingService] = useState<string | null>(null)
+
+  // Load initial data
   useEffect(() => {
     loadData()
   }, [])
 
-  // When a service is starting, poll until it's running or failed
+  // Poll for service status when starting
   useEffect(() => {
     if (!startingService) return
 
     let pollCount = 0
-    const maxPolls = 30 // 60 seconds max
+    const maxPolls = 30
+    const serviceName = startingService
 
     const pollInterval = setInterval(async () => {
       pollCount++
       try {
-        // Use thin status endpoint for polling (keyed by service_id)
         const response = await dockerApi.getServicesStatus()
-        const containerStatus = response.data[startingService]
+        const status = response.data[serviceName]
 
-        // Update status in-place without full reload
         setServiceStatuses(prev => ({
           ...prev,
-          [startingService]: containerStatus || { status: 'not_found' }
+          [serviceName]: status || { status: 'not_found' }
         }))
 
-        if (containerStatus?.status === 'running') {
+        if (status?.status === 'running') {
           setStartingService(null)
-          setMessage({ type: 'success', text: 'Service is now running' })
+          // Clear any error for this service
+          setServiceErrors(prev => {
+            const next = { ...prev }
+            delete next[serviceName]
+            return next
+          })
           return
         }
 
-        // Stop polling on failure states
-        if (containerStatus?.status === 'exited' || containerStatus?.status === 'dead') {
+        if (status?.status === 'exited' || status?.status === 'dead') {
           setStartingService(null)
-          setMessage({ type: 'error', text: 'Service failed to start' })
+          setServiceErrors(prev => ({
+            ...prev,
+            [serviceName]: 'Service failed to start. Check container logs for details.'
+          }))
           return
         }
 
-        // After 10 seconds, if still not_found, the start failed
-        if (pollCount > 5 && containerStatus?.status === 'not_found') {
-          setStartingService(null)
-          setMessage({ type: 'error', text: 'Service failed to start - check logs' })
-          return
-        }
-
-        // Timeout after max polls
         if (pollCount >= maxPolls) {
           setStartingService(null)
-          setMessage({ type: 'error', text: 'Service start timed out' })
+          setServiceErrors(prev => ({
+            ...prev,
+            [serviceName]: 'Service start timed out'
+          }))
         }
       } catch {
-        // Docker API error, keep polling (might be temporary)
+        // Keep polling
       }
     }, 2000)
 
@@ -132,185 +131,241 @@ export default function ServicesPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [instancesResponse, configResponse, capabilitiesResponse] = await Promise.all([
-        servicesApi.getInstalled(),  // Use installed services (default + user-added)
-        settingsApi.getConfig(),  // Load FULL merged config (api_keys + service_preferences + defaults)
-        providersApi.getCapabilities()  // Load capabilities with providers
+      const [servicesResponse, capsResponse] = await Promise.all([
+        composeServicesApi.list(),
+        providersApi.getCapabilities()
       ])
 
-      const instances = instancesResponse.data
-      const mergedConfig = configResponse.data
-      const caps = capabilitiesResponse.data
+      setServices(servicesResponse.data)
+      setCapabilities(capsResponse.data)
 
-      setCapabilities(caps)
-
-      // Build effective config per service using settings_path from schema
-      const effectiveConfigs: any = {}
-
-      // Helper to get nested value from config using dot notation path
-      const getNestedValue = (obj: any, path: string): any => {
-        if (!path || !obj) return undefined
-        return path.split('.').reduce((curr, key) => curr?.[key], obj)
-      }
-
-      instances.forEach((service: any) => {
-        effectiveConfigs[service.service_id] = {}
-
-        service.config_schema?.forEach((field: any) => {
-          // Use settings_path to look up value in merged config
-          if (field.settings_path) {
-            const value = getNestedValue(mergedConfig, field.settings_path)
-            if (value !== undefined && value !== null) {
-              effectiveConfigs[service.service_id][field.key] = value
-            }
-          }
-          // Fallback: use default if no value found
-          if (effectiveConfigs[service.service_id][field.key] === undefined && field.default !== undefined) {
-            effectiveConfigs[service.service_id][field.key] = field.default
-          }
-        })
-      })
-
-      setServiceInstances(instances)
-      setServiceConfigs(effectiveConfigs)  // Use effective merged config, not just preferences
-
-      // Load status for local services (check if containers running)
-      await loadServiceStatuses(instances)
+      // Load Docker statuses
+      await loadServiceStatuses(servicesResponse.data)
     } catch (error) {
-      console.error('Error loading services:', error)
+      console.error('Error loading data:', error)
+      setMessage({ type: 'error', text: 'Failed to load services' })
     } finally {
       setLoading(false)
     }
   }
 
-  const loadServiceStatuses = async (services: any[]) => {
-    const statuses: Record<string, any> = {}
-
-    // Fetch all Docker container statuses using thin endpoint
-    let dockerStatuses: Record<string, any> = {}
+  const loadServiceStatuses = async (serviceList: ComposeService[]) => {
     try {
       const response = await dockerApi.getServicesStatus()
-      dockerStatuses = response.data  // Already in {name: {status, health}} format
+      const statuses: Record<string, any> = {}
+
+      console.log('Docker status response:', response.data)
+      console.log('Service list:', serviceList.map(s => s.service_name))
+
+      for (const service of serviceList) {
+        statuses[service.service_name] = response.data[service.service_name] || { status: 'not_found' }
+      }
+
+      console.log('Mapped statuses:', statuses)
+      setServiceStatuses(statuses)
     } catch (error) {
       console.error('Failed to fetch Docker statuses:', error)
-    }
-
-    // Map service configs to their Docker status
-    // Note: thin endpoint returns data keyed by service_id, not container name
-    for (const service of services) {
-      if (service.mode === 'local') {
-        const dockerStatus = dockerStatuses[service.service_id]
-        statuses[service.service_id] = dockerStatus || { status: 'not_found' }
-      } else {
-        // Cloud service - check if configured
-        const isConfigured = serviceConfigs[service.service_id] &&
-                            Object.keys(serviceConfigs[service.service_id]).length > 0
-        statuses[service.service_id] = {
-          status: isConfigured ? 'configured' : 'not_configured'
-        }
+      // Set fallback statuses so buttons still work
+      const fallbackStatuses: Record<string, any> = {}
+      for (const service of serviceList) {
+        fallbackStatuses[service.service_name] = { status: 'not_found' }
       }
+      setServiceStatuses(fallbackStatuses)
     }
-
-    setServiceStatuses(statuses)
   }
 
-  // Refresh only the status of services without full page reload
-  // TODO: Wire up to a "refresh statuses" button in the UI
-  /* const refreshStatuses = async () => {
-    try {
-      const response = await dockerApi.getServicesStatus()
-      const dockerStatuses = response.data
+  // ==========================================================================
+  // Service Actions
+  // ==========================================================================
 
-      setServiceStatuses(prev => {
-        const updated = { ...prev }
-        for (const service of serviceInstances) {
-          if (service.mode === 'local') {
-            updated[service.service_id] = dockerStatuses[service.service_id] || { status: 'not_found' }
-          }
-        }
-        return updated
-      })
-    } catch (error) {
-      console.error('Failed to refresh statuses:', error)
-    }
-  } */
-
-  const handleStartService = async (serviceId: string) => {
-    setStartingService(serviceId)
+  const handleStartService = async (serviceName: string) => {
+    setStartingService(serviceName)
+    // Clear any previous error for this service
+    setServiceErrors(prev => {
+      const next = { ...prev }
+      delete next[serviceName]
+      return next
+    })
     try {
-      await dockerApi.startService(serviceId)
-      setMessage({ type: 'success', text: 'Service starting...' })
-      // Status will update automatically via SSE when container starts
+      const response = await dockerApi.startService(serviceName)
+      // Check for success: false in response body (API returns 200 even on failure)
+      if (response.data && response.data.success === false) {
+        const errorMsg = response.data.message || 'Failed to start service'
+        setServiceErrors(prev => ({ ...prev, [serviceName]: errorMsg }))
+        setStartingService(null)
+      }
+      // Otherwise success - status will update via polling
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to start service' })
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || 'Failed to start service'
+      setServiceErrors(prev => ({ ...prev, [serviceName]: errorMsg }))
       setStartingService(null)
     }
   }
 
-  const handleStopService = (serviceId: string) => {
-    const service = serviceInstances.find(s => s.service_id === serviceId)
-    setConfirmDialog({
-      isOpen: true,
-      serviceId,
-      serviceName: service?.name || serviceId
-    })
+  const handleStopService = (serviceName: string) => {
+    setConfirmDialog({ isOpen: true, serviceName })
   }
 
   const confirmStopService = async () => {
-    const { serviceId } = confirmDialog
-    if (!serviceId) return
+    const { serviceName } = confirmDialog
+    if (!serviceName) return
 
-    setConfirmDialog({ isOpen: false, serviceId: null, serviceName: null })
+    setConfirmDialog({ isOpen: false, serviceName: null })
 
     try {
-      await dockerApi.stopService(serviceId)
+      await dockerApi.stopService(serviceName)
       setMessage({ type: 'success', text: 'Service stopped' })
-      // Update status in-place without full reload
       setServiceStatuses(prev => ({
         ...prev,
-        [serviceId]: { status: 'not_found' }
+        [serviceName]: { status: 'not_found' }
       }))
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to stop service' })
     }
   }
 
-  const handleToggleEnabled = async (serviceId: string, currentEnabled: boolean) => {
-    setTogglingEnabled(serviceId)
+  // ==========================================================================
+  // Catalog Actions
+  // ==========================================================================
+
+  const openCatalog = async () => {
+    setShowCatalog(true)
+    setCatalogLoading(true)
     try {
-      const newEnabled = !currentEnabled
-      await servicesApi.setEnabled(serviceId, newEnabled)
-
-      // Update local state immediately
-      setServiceInstances(prev =>
-        prev.map(s => s.service_id === serviceId ? { ...s, enabled: newEnabled } : s)
-      )
-
-      const action = newEnabled ? 'enabled' : 'disabled'
-      setMessage({ type: 'success', text: `Service ${action}` })
+      const response = await composeServicesApi.catalog()
+      setCatalogServices(response.data)
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to toggle service' })
+      setMessage({ type: 'error', text: 'Failed to load service catalog' })
     } finally {
-      setTogglingEnabled(null)
+      setCatalogLoading(false)
     }
   }
 
-  const handleProviderChange = async (capabilityId: string, providerId: string) => {
-    setChangingProvider(capabilityId)
+  const handleInstallService = async (serviceId: string) => {
+    setInstallingService(serviceId)
     try {
-      await providersApi.selectProvider(capabilityId, providerId)
-      // Refresh capabilities to get updated selection
-      const response = await providersApi.getCapabilities()
-      setCapabilities(response.data)
-      setMessage({ type: 'success', text: `Provider changed to ${providerId}` })
+      await composeServicesApi.install(serviceId)
+      // Reload both catalog and services
+      const [catalogRes, servicesRes] = await Promise.all([
+        composeServicesApi.catalog(),
+        composeServicesApi.list()
+      ])
+      setCatalogServices(catalogRes.data)
+      setServices(servicesRes.data)
+      await loadServiceStatuses(servicesRes.data)
+      setMessage({ type: 'success', text: 'Service installed' })
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to change provider' })
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to install service' })
     } finally {
-      setChangingProvider(null)
+      setInstallingService(null)
     }
   }
 
-  // Provider key for tracking state (capability + provider)
+  const handleUninstallService = async (serviceId: string) => {
+    setInstallingService(serviceId)
+    try {
+      await composeServicesApi.uninstall(serviceId)
+      // Reload both catalog and services
+      const [catalogRes, servicesRes] = await Promise.all([
+        composeServicesApi.catalog(),
+        composeServicesApi.list()
+      ])
+      setCatalogServices(catalogRes.data)
+      setServices(servicesRes.data)
+      await loadServiceStatuses(servicesRes.data)
+      setMessage({ type: 'success', text: 'Service uninstalled' })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to uninstall service' })
+    } finally {
+      setInstallingService(null)
+    }
+  }
+
+  // ==========================================================================
+  // Env Var Configuration
+  // ==========================================================================
+
+  const handleSaveEnvVars = async (serviceId: string) => {
+    setSaving(true)
+    try {
+      const envVars = Object.values(envEditForm)
+      console.log('Saving env vars:', envVars)
+      const result = await composeServicesApi.updateEnvConfig(serviceId, envVars)
+      console.log('Save result:', result)
+      const newSettingsCount = (result.data as any)?.new_settings_created || 0
+      const msg = newSettingsCount > 0
+        ? `Configuration saved (${newSettingsCount} new setting${newSettingsCount > 1 ? 's' : ''} created)`
+        : 'Environment configuration saved'
+      setMessage({ type: 'success', text: msg })
+      setEditingServiceId(null)
+      setEnvConfig(null)
+      setEnvEditForm({})
+      // Reload services to update needs_setup status
+      const servicesRes = await composeServicesApi.list()
+      setServices(servicesRes.data)
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to save configuration' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleCancelEnvEdit = () => {
+    setEditingServiceId(null)
+    setEnvConfig(null)
+    setEnvEditForm({})
+  }
+
+  const handleExpandService = async (serviceId: string) => {
+    // Load env config when expanding
+    try {
+      const response = await composeServicesApi.getEnvConfig(serviceId)
+      const data = response.data
+
+      // Initialize edit form with current config
+      const formData: Record<string, EnvVarConfig> = {}
+      ;[...data.required_env_vars, ...data.optional_env_vars].forEach(ev => {
+        formData[ev.name] = {
+          name: ev.name,
+          source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
+          setting_path: ev.setting_path,
+          value: ev.value
+        }
+      })
+
+      setEnvConfig(data)
+      setEnvEditForm(formData)
+      setExpandedServices(prev => new Set(prev).add(serviceId))
+    } catch (error: any) {
+      setMessage({ type: 'error', text: 'Failed to load env configuration' })
+    }
+  }
+
+  const handleCollapseService = (serviceId: string) => {
+    setExpandedServices(prev => {
+      const next = new Set(prev)
+      next.delete(serviceId)
+      return next
+    })
+    // Clear edit state if collapsing
+    if (editingServiceId === serviceId) {
+      setEditingServiceId(null)
+      setEnvConfig(null)
+      setEnvEditForm({})
+    }
+  }
+
+  const updateEnvVar = (name: string, updates: Partial<EnvVarConfig>) => {
+    setEnvEditForm(prev => ({
+      ...prev,
+      [name]: { ...prev[name], ...updates }
+    }))
+  }
+
+  // ==========================================================================
+  // Provider Actions
+  // ==========================================================================
+
   const getProviderKey = (capId: string, providerId: string) => `${capId}:${providerId}`
 
   const toggleProviderExpanded = (capId: string, providerId: string) => {
@@ -326,34 +381,41 @@ export default function ServicesPage() {
     })
   }
 
+  const handleProviderChange = async (capabilityId: string, providerId: string) => {
+    setChangingProvider(capabilityId)
+    try {
+      await providersApi.selectProvider(capabilityId, providerId)
+      const response = await providersApi.getCapabilities()
+      setCapabilities(response.data)
+      setMessage({ type: 'success', text: `Provider changed to ${providerId}` })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to change provider' })
+    } finally {
+      setChangingProvider(null)
+    }
+  }
+
   const handleEditProvider = (capId: string, provider: ProviderWithStatus) => {
     const key = getProviderKey(capId, provider.id)
-    // Initialize form with current values for non-secrets, empty for secrets
     const initialForm: Record<string, string> = {}
     ;(provider.credentials || []).forEach(cred => {
       if (cred.type === 'secret') {
-        // Secrets must be re-entered (we don't have the value)
         initialForm[cred.key] = ''
       } else {
-        // Non-secrets: use current value or default
         initialForm[cred.key] = cred.value || cred.default || ''
       }
     })
     setProviderEditForm(initialForm)
     setEditingProviderId(key)
-    // Make sure it's expanded
     setExpandedProviders(prev => new Set(prev).add(key))
   }
 
   const handleSaveProvider = async (_capId: string, provider: ProviderWithStatus) => {
     setSavingProvider(true)
     try {
-      // Build updates object using settings_path from each credential
       const updates: Record<string, string> = {}
-
       ;(provider.credentials || []).forEach(cred => {
         const value = providerEditForm[cred.key]
-        // Only update if there's a value and a settings_path
         if (value && value.trim() && cred.settings_path) {
           updates[cred.settings_path] = value.trim()
         }
@@ -366,11 +428,8 @@ export default function ServicesPage() {
       }
 
       await settingsApi.update(updates)
-
-      // Refresh capabilities to get updated credential status
       const response = await providersApi.getCapabilities()
       setCapabilities(response.data)
-
       setMessage({ type: 'success', text: `${provider.name} credentials saved` })
       setEditingProviderId(null)
       setProviderEditForm({})
@@ -386,296 +445,42 @@ export default function ServicesPage() {
     setProviderEditForm({})
   }
 
-  const toggleCategory = (categoryId: string) => {
-    setExpandedCategories(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(categoryId)) {
-        newSet.delete(categoryId)
-      } else {
-        newSet.add(categoryId)
-      }
-      return newSet
-    })
-  }
+  // ==========================================================================
+  // Status Helpers
+  // ==========================================================================
 
-  const handleEditService = (serviceId: string) => {
-    const currentConfig = serviceConfigs[serviceId] || {}
-    setEditForm({ ...currentConfig })
-    setEditingService(serviceId)
-  }
+  const getServiceStatus = (serviceName: string) => {
+    const status = serviceStatuses[serviceName]
 
-  const handleSaveService = async (serviceId: string) => {
-    const service = serviceInstances.find(s => s.service_id === serviceId)
-    if (!service) return
-
-    // Clear previous validation errors
-    setValidationErrors({})
-
-    // Validate required fields
-    const errors: Record<string, string> = {}
-    service.config_schema
-      ?.filter(f => f.required)
-      .forEach(field => {
-        const value = editForm[field.key]
-        if (!value || value === '') {
-          errors[field.key] = `${field.label} is required`
-        }
-      })
-
-    if (Object.keys(errors).length > 0) {
-      setValidationErrors(errors)
-      setMessage({ type: 'error', text: 'Please fill in all required fields' })
-      return
+    if (!status || status.status === 'not_found') {
+      return { state: 'stopped', label: 'Stopped', canStart: true, canStop: false }
     }
 
-    setSaving(true)
-    try {
-      await settingsApi.updateServiceConfig(serviceId, editForm)
-      setServiceConfigs((prev: Record<string, any>) => ({
-        ...prev,
-        [serviceId]: editForm
-      }))
-      setMessage({ type: 'success', text: 'Configuration saved' })
-      setEditingService(null)
-      setValidationErrors({})
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to save' })
-    } finally {
-      setSaving(false)
+    // Docker container statuses: created, restarting, running, removing, paused, exited, dead
+    switch (status.status) {
+      case 'running':
+        return { state: 'running', label: 'Running', canStart: false, canStop: true }
+      case 'exited':
+      case 'stopped':
+      case 'dead':
+        return { state: 'stopped', label: 'Stopped', canStart: true, canStop: false }
+      case 'created':
+        return { state: 'stopped', label: 'Created', canStart: true, canStop: false }
+      case 'restarting':
+        return { state: 'restarting', label: 'Restarting', canStart: false, canStop: true }
+      case 'paused':
+        return { state: 'paused', label: 'Paused', canStart: true, canStop: true }
+      case 'removing':
+        return { state: 'removing', label: 'Removing...', canStart: false, canStop: false }
+      default:
+        // Unknown status - allow stop in case it's stuck
+        return { state: 'unknown', label: status.status || 'Unknown', canStart: true, canStop: true }
     }
   }
 
-  const handleCancelEdit = () => {
-    setEditingService(null)
-    setEditForm({})
-    setValidationErrors({})
-  }
-
-  const maskValue = (value: string) => {
-    if (value && value.length > 4) {
-      return '●●●●●●' + value.slice(-4)
-    }
-    return '●●●●●●'
-  }
-
-  const getServiceStatus = (service: any, config: any) => {
-    // Rule 1: Check if service has required configuration
-    const hasRequiredConfig = () => {
-      if (!service.config_schema || service.config_schema.length === 0) {
-        // No config needed (like mem0-ui) - always "configured"
-        return true
-      }
-
-      // Get list of required fields
-      const requiredFields = service.config_schema.filter((f: any) => f.required)
-
-      // If no required fields, service is always configured
-      if (requiredFields.length === 0) {
-        return true
-      }
-
-      // If no config saved at all, not configured
-      if (!config || Object.keys(config).length === 0) {
-        return false
-      }
-
-      // Check all required fields have non-null values
-      return requiredFields.every((f: any) => {
-        const value = config[f.key]
-        // Field is filled if it has a value (including defaults)
-        return value !== undefined && value !== null && value !== ''
-      })
-    }
-
-    const isConfigured = hasRequiredConfig()
-
-    // Rule 2: Not configured services - RED with alert icon
-    if (!isConfigured) {
-      return {
-        state: 'not_configured',
-        label: 'Missing Config',
-        color: 'error',
-        icon: AlertCircle,
-        canConfigure: true
-      }
-    }
-
-    // Rule 3: Cloud services - configured means active (no containers to manage)
-    if (service.mode === 'cloud') {
-      // TODO: Add pause functionality later
-      return {
-        state: 'active',
-        label: 'Active',
-        color: 'success',
-        icon: CheckCircle,
-        canEdit: true,
-        canPause: false  // Future feature
-      }
-    }
-
-    // Rule 4: Local services - check container status for started/stopped
-    const containerStatus = serviceStatuses[service.service_id]
-
-    if (!containerStatus || containerStatus.status === 'not_found') {
-      // Configured but container doesn't exist/not started yet - GRAY
-      return {
-        state: 'stopped',
-        label: 'Stopped',
-        color: 'neutral',
-        icon: Circle,
-        canStart: true,
-        canEdit: true
-      }
-    }
-
-    if (containerStatus.status === 'running') {
-      // Container running - GREEN with play icon
-      // Show "Running" regardless of health check (health checks can be misconfigured)
-      return {
-        state: 'running',
-        label: 'Running',
-        color: 'success',
-        icon: PlayCircle,
-        canStop: true,
-        canEdit: true
-      }
-    }
-
-    if (containerStatus.status === 'exited' || containerStatus.status === 'stopped') {
-      // Container exists but stopped - GRAY
-      return {
-        state: 'stopped',
-        label: 'Stopped',
-        color: 'neutral',
-        icon: Circle,
-        canStart: true,
-        canEdit: true
-      }
-    }
-
-    if (containerStatus.status === 'created') {
-      // Container exists but was never started - treat as stopped
-      return {
-        state: 'stopped',
-        label: 'Stopped',
-        color: 'neutral',
-        icon: Circle,
-        canStart: true,
-        canEdit: true
-      }
-    }
-
-    if (containerStatus.status === 'restarting') {
-      // Container is actively restarting - YELLOW/WARNING
-      return {
-        state: 'starting',
-        label: 'Restarting',
-        color: 'warning',
-        icon: PlayCircle,
-        canEdit: false  // Don't allow edits while restarting
-      }
-    }
-
-    // Unknown state - show as error
-    return {
-      state: 'error',
-      label: containerStatus.status || 'Error',
-      color: 'error',
-      icon: AlertCircle,
-      canEdit: true
-    }
-  }
-
-  const shouldShowField = (fieldKey: string, config: any): boolean => {
-    // Neo4j password only shown if graph memory enabled
-    if (fieldKey === 'neo4j_password') {
-      return config.enable_graph === true
-    }
-    // Add other conditional logic here
-    return true
-  }
-
-  const renderFieldValue = (key: string, value: any, isEditing: boolean, serviceId?: string) => {
-    const isSecret = key.includes('password') || key.includes('key')
-    const fieldId = serviceId ? `field-${serviceId}-${key}` : undefined
-    const hasError = validationErrors[key]
-
-    if (isEditing) {
-      if (typeof value === 'boolean') {
-        return (
-          <input
-            id={fieldId}
-            type="checkbox"
-            checked={editForm[key] === true}
-            onChange={(e) => setEditForm({ ...editForm, [key]: e.target.checked })}
-            className="rounded"
-          />
-        )
-      }
-      return (
-        <div>
-          <input
-            id={fieldId}
-            type={isSecret ? 'password' : 'text'}
-            value={editForm[key] || ''}
-            onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
-            className={`input text-xs ${hasError ? 'border-error-500 focus:ring-error-500' : ''}`}
-            placeholder={isSecret ? '●●●●●●' : ''}
-            aria-invalid={hasError ? 'true' : 'false'}
-            aria-describedby={hasError ? `error-${serviceId}-${key}` : undefined}
-          />
-          {hasError && (
-            <p
-              id={`error-${serviceId}-${key}`}
-              className="text-xs text-error-600 dark:text-error-400 mt-1"
-              role="alert"
-            >
-              {hasError}
-            </p>
-          )}
-        </div>
-      )
-    }
-
-    // Display mode
-    if (isSecret) {
-      return <span className="font-mono text-xs">{value ? maskValue(String(value)) : 'Not set'}</span>
-    }
-    if (typeof value === 'boolean') {
-      return (
-        <span className={`text-xs font-medium ${value ? 'text-success-600' : 'text-neutral-500'}`}>
-          {value ? 'Enabled' : 'Disabled'}
-        </span>
-      )
-    }
-    return <span className="font-mono text-xs">{String(value).substring(0, 30)}</span>
-  }
-
-  // Group services by category
-  const servicesByCategory = serviceInstances.reduce((acc, service) => {
-    // Get category from ui.category, template (legacy), or first tag
-    let category = service.ui?.category
-      || (service.template ? service.template.split('.')[0] : null)
-      || service.tags?.[0]
-      || 'other'
-
-    if (!acc[category]) {
-      acc[category] = []
-    }
-    acc[category].push(service)
-    return acc
-  }, {} as Record<string, ServiceInstance[]>)
-
-  const categories = [
-    { id: 'conversation_engine', name: 'Conversation Engine', description: 'Audio processing with AI analysis' },
-    { id: 'memory', name: 'Memory', description: 'Knowledge storage and retrieval' },
-    { id: 'llm', name: 'Language Models', description: 'AI language model providers' },
-    { id: 'transcription', name: 'Transcription', description: 'Speech-to-text services' },
-  ]
-
-  // Calculate stats
-  const totalServices = serviceInstances.length
-  const activeServices = Object.keys(serviceConfigs).length
+  // ==========================================================================
+  // Render
+  // ==========================================================================
 
   if (loading) {
     return (
@@ -698,33 +503,24 @@ export default function ServicesPage() {
             <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-            Manage service providers and integrations
+            Configure providers and compose services
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowAllConfigs(!showAllConfigs)}
-            className="btn-ghost text-sm flex items-center gap-2"
+            onClick={openCatalog}
+            data-testid="add-service-button"
+            className="btn-primary flex items-center gap-2"
           >
-            {showAllConfigs ? (
-              <>
-                <ChevronUp className="h-4 w-4" />
-                Collapse All Details
-              </>
-            ) : (
-              <>
-                <ChevronDown className="h-4 w-4" />
-                Expand All Details
-              </>
-            )}
+            <Plus className="h-4 w-4" />
+            Add Service
           </button>
           <button
-            className="btn-primary flex items-center space-x-2"
-            onClick={() => setShowAddServiceModal(true)}
-            data-testid="add-service-button"
+            onClick={loadData}
+            className="btn-ghost p-2"
+            title="Refresh"
           >
-            <Plus className="h-5 w-5" />
-            <span>Add Service</span>
+            <RefreshCw className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -732,89 +528,69 @@ export default function ServicesPage() {
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="card-hover p-4">
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Available Services</p>
-          <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{totalServices}</p>
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Compose Services</p>
+          <p className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100">{services.length}</p>
         </div>
         <div className="card-hover p-4">
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Configured</p>
-          <p className="mt-2 text-2xl font-bold text-success-600 dark:text-success-400">{activeServices}</p>
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Running</p>
+          <p className="mt-2 text-2xl font-bold text-success-600 dark:text-success-400">
+            {Object.values(serviceStatuses).filter(s => s.status === 'running').length}
+          </p>
         </div>
         <div className="card-hover p-4">
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Categories</p>
-          <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">{categories.length}</p>
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Providers</p>
+          <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">{capabilities.length}</p>
         </div>
       </div>
 
-      {/* Provider Selection - Card-based UI */}
+      {/* Message */}
+      {message && (
+        <div
+          role="alert"
+          className={`card p-4 border ${
+            message.type === 'success'
+              ? 'bg-success-50 dark:bg-success-900/20 border-success-200 text-success-700'
+              : 'bg-error-50 dark:bg-error-900/20 border-error-200 text-error-700'
+          }`}
+        >
+          <div className="flex items-center space-x-2">
+            <AlertCircle className="h-5 w-5" />
+            <span>{message.text}</span>
+            <button onClick={() => setMessage(null)} className="ml-auto">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Provider Selection */}
       {capabilities.length > 0 && (
         <div className="space-y-6">
+          <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+            Providers
+          </h2>
           {capabilities.map(cap => {
-            // Show installed providers (selected + defaults) and any that are configured
             const installedProviders = cap.providers.filter(p =>
               p.is_selected || p.is_default || p.configured
-            )
-            const availableProviders = cap.providers.filter(p =>
-              !p.is_selected && !p.is_default && !p.configured
             )
 
             return (
               <div key={cap.id} className="card p-6" data-testid={`provider-section-${cap.id}`}>
-                {/* Capability Header */}
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 capitalize">
-                      {cap.id.replace('_', ' ')} Providers
-                    </h2>
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                      {cap.description}
-                    </p>
+                    <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 capitalize">
+                      {cap.id.replace('_', ' ')}
+                    </h3>
+                    <p className="text-sm text-neutral-500">{cap.description}</p>
                   </div>
-                  {availableProviders.length > 0 && (
-                    <div className="relative group">
-                      <button
-                        className="btn-ghost text-sm flex items-center gap-1.5"
-                        data-testid={`add-provider-${cap.id}`}
-                      >
-                        <Plus className="h-4 w-4" />
-                        Add Provider
-                      </button>
-                      {/* Dropdown for available providers */}
-                      <div className="absolute right-0 top-full mt-1 w-56 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-                        <div className="p-2 space-y-1">
-                          {availableProviders.map(provider => (
-                            <button
-                              key={provider.id}
-                              onClick={() => handleProviderChange(cap.id, provider.id)}
-                              className="w-full text-left px-3 py-2 text-sm rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center justify-between"
-                            >
-                              <span>{provider.name}</span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                provider.mode === 'cloud'
-                                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                                  : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                              }`}>
-                                {provider.mode}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
-                {/* Provider Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {installedProviders.map(provider => {
                     const isSelected = provider.id === cap.selected_provider
-                    const isChanging = changingProvider === cap.id
                     const providerKey = getProviderKey(cap.id, provider.id)
                     const isExpanded = expandedProviders.has(providerKey)
                     const isEditing = editingProviderId === providerKey
-                    // Use API-provided configured/missing status
-                    const isConfigured = provider.configured
-                    const missingFields = provider.missing || []
-                    // Still need credentials for the edit form
                     const editableCreds = (provider.credentials || []).filter(c => c.settings_path)
 
                     return (
@@ -823,17 +599,15 @@ export default function ServicesPage() {
                         data-testid={`provider-card-${cap.id}-${provider.id}`}
                         className={`relative rounded-xl border-2 transition-all ${
                           isSelected
-                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 ring-2 ring-primary-500/20'
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
                             : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800'
                         }`}
                       >
-                        {/* Card Header - Clickable to expand/collapse */}
                         <div
-                          className={`p-4 cursor-pointer ${!isEditing ? 'hover:opacity-80' : ''}`}
+                          className="p-4 cursor-pointer"
                           onClick={() => !isEditing && toggleProviderExpanded(cap.id, provider.id)}
                         >
                           <div className="flex items-start gap-3">
-                            {/* Mode Icon */}
                             <div className={`p-2 rounded-lg ${
                               provider.mode === 'cloud'
                                 ? 'bg-blue-100 dark:bg-blue-900/30'
@@ -846,214 +620,125 @@ export default function ServicesPage() {
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                              <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
                                 {provider.name}
-                              </h3>
-                              <span className={`text-xs ${
-                                provider.mode === 'cloud'
-                                  ? 'text-blue-600 dark:text-blue-400'
-                                  : 'text-purple-600 dark:text-purple-400'
-                              }`}>
-                                {provider.mode === 'cloud' ? 'Cloud Service' : 'Self-Hosted'}
+                              </h4>
+                              <span className="text-xs text-neutral-500">
+                                {provider.mode === 'cloud' ? 'Cloud' : 'Self-Hosted'}
                               </span>
                             </div>
 
-                            {/* Right side: Status + Select + Expand */}
                             <div className="flex items-center gap-2">
-                              {/* Configuration status indicator */}
-                              {editableCreds.length > 0 && (
-                                isConfigured ? (
-                                  <span title="Configured">
-                                    <CheckCircle className="h-4 w-4 text-success-500" />
-                                  </span>
-                                ) : (
-                                  <span title={missingFields.length > 0
-                                    ? `Missing: ${missingFields.map(f => f.label).join(', ')}`
-                                    : 'Not configured'
-                                  }>
-                                    <AlertCircle className="h-4 w-4 text-warning-500" />
-                                  </span>
-                                )
+                              {/* Config status icon */}
+                              {provider.configured ? (
+                                <CheckCircle className="h-4 w-4 text-success-500" title="Configured" />
+                              ) : (
+                                <AlertCircle className="h-4 w-4 text-warning-500" title="Missing required fields" />
                               )}
 
-                              {/* Select/Selected indicator */}
+                              {/* Selection status */}
                               {isSelected ? (
-                                <span className="text-xs font-medium text-primary-600 dark:text-primary-400 bg-primary-100 dark:bg-primary-900/30 px-2 py-0.5 rounded">
-                                  Active
-                                </span>
-                              ) : (
+                                provider.configured ? (
+                                  <span className="text-xs font-medium text-success-600 bg-success-100 dark:bg-success-900/30 px-2 py-0.5 rounded">
+                                    Active
+                                  </span>
+                                ) : (
+                                  <span className="text-xs font-medium text-warning-600 bg-warning-100 dark:bg-warning-900/30 px-2 py-0.5 rounded">
+                                    Incomplete
+                                  </span>
+                                )
+                              ) : provider.configured ? (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     handleProviderChange(cap.id, provider.id)
                                   }}
-                                  disabled={isChanging}
-                                  className="text-xs font-medium text-neutral-600 hover:text-primary-600 dark:text-neutral-400 dark:hover:text-primary-400 px-2 py-0.5 rounded border border-neutral-300 dark:border-neutral-600 hover:border-primary-400 transition-colors"
+                                  disabled={changingProvider === cap.id}
+                                  className="text-xs px-2 py-0.5 rounded border border-primary-400 text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/20"
                                 >
                                   Select
                                 </button>
+                              ) : (
+                                <span className="text-xs text-neutral-400">Configure first</span>
                               )}
 
-                              {/* Expand chevron */}
-                              <div className="text-neutral-400">
-                                {isExpanded ? (
-                                  <ChevronUp className="h-4 w-4" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4" />
-                                )}
-                              </div>
+                              {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                             </div>
                           </div>
-
-                          {/* Description */}
-                          {provider.description && !isExpanded && (
-                            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-2 line-clamp-1">
-                              {provider.description}
-                            </p>
-                          )}
                         </div>
 
-                        {/* Expanded Content */}
                         {isExpanded && (
                           <div className="px-4 pb-4 pt-0 border-t border-neutral-200 dark:border-neutral-700">
-                            {/* Description (full) */}
-                            {provider.description && (
-                              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-3 mb-3">
-                                {provider.description}
-                              </p>
-                            )}
-
-                            {/* Missing fields warning */}
-                            {!isConfigured && missingFields.length > 0 && !isEditing && (
-                              <div
-                                data-testid={`missing-fields-${provider.id}`}
-                                className="flex items-start gap-2 p-2 rounded-lg bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 mt-3"
-                              >
-                                <AlertCircle className="h-4 w-4 text-warning-500 mt-0.5 flex-shrink-0" />
-                                <div className="text-xs">
-                                  <span className="font-medium text-warning-700 dark:text-warning-300">
-                                    Missing required fields:
-                                  </span>
-                                  <span className="text-warning-600 dark:text-warning-400 ml-1">
-                                    {missingFields.map(f => f.label).join(', ')}
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Credentials */}
                             {editableCreds.length > 0 && (
                               <div className="space-y-3 mt-3">
-                                {editableCreds.map(cred => {
-                                  const isSecret = cred.type === 'secret'
-
-                                  return (
-                                    <div key={cred.key}>
-                                      {isEditing ? (
-                                        <>
-                                          <div className="flex items-center justify-between mb-1">
-                                            <label className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
-                                              {cred.label || cred.key}
-                                              {cred.required && <span className="text-error-500 ml-1">*</span>}
-                                            </label>
-                                            {cred.link && (
-                                              <a
-                                                href={cred.link}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="text-xs text-primary-600 hover:underline"
-                                              >
-                                                Get key →
-                                              </a>
-                                            )}
-                                          </div>
-                                          <input
-                                            type={isSecret ? 'password' : 'text'}
-                                            value={providerEditForm[cred.key] || ''}
-                                            onChange={(e) => setProviderEditForm(prev => ({
-                                              ...prev,
-                                              [cred.key]: e.target.value
-                                            }))}
-                                            placeholder={
-                                              isSecret
-                                                ? (cred.has_value ? '••••••••' : `Enter ${cred.label || cred.key}`)
-                                                : (cred.value || cred.default || `Enter ${cred.label || cred.key}`)
-                                            }
-                                            className="input w-full text-sm"
-                                          />
-                                          {cred.has_value && (
-                                            <p className="mt-1 text-xs text-success-600 dark:text-success-400">
-                                              Currently set (leave blank to keep)
-                                            </p>
+                                {editableCreds.map(cred => (
+                                  <div key={cred.key}>
+                                    {isEditing ? (
+                                      <>
+                                        <div className="flex items-center justify-between mb-1">
+                                          <label className="text-xs font-medium text-neutral-600">
+                                            {cred.label || cred.key}
+                                            {cred.required && <span className="text-error-500 ml-1">*</span>}
+                                          </label>
+                                          {cred.link && (
+                                            <a href={cred.link} target="_blank" rel="noopener noreferrer"
+                                               className="text-xs text-primary-600 hover:underline">
+                                              Get key →
+                                            </a>
                                           )}
-                                        </>
-                                      ) : (
-                                        <div className="flex items-baseline gap-2">
-                                          <span className="text-xs text-neutral-500 dark:text-neutral-400 flex-shrink-0">
-                                            {cred.label || cred.key}:
-                                          </span>
-                                          <span className="text-xs font-mono flex-1 truncate">
-                                            {isSecret ? (
-                                              cred.has_value ? '••••••••' : (
-                                                <span className="text-warning-600 dark:text-warning-400">Not set</span>
-                                              )
-                                            ) : (
-                                              cred.value || cred.default || (
-                                                <span className="text-warning-600 dark:text-warning-400">Not set</span>
-                                              )
-                                            )}
-                                          </span>
                                         </div>
-                                      )}
-                                    </div>
-                                  )
-                                })}
+                                        <input
+                                          type={cred.type === 'secret' ? 'password' : 'text'}
+                                          value={providerEditForm[cred.key] || ''}
+                                          onChange={(e) => setProviderEditForm(prev => ({
+                                            ...prev, [cred.key]: e.target.value
+                                          }))}
+                                          placeholder={cred.type === 'secret' ? '••••••••' : ''}
+                                          className="input w-full text-sm"
+                                        />
+                                      </>
+                                    ) : (
+                                      <div className="flex items-baseline gap-2 text-xs">
+                                        <span className="text-neutral-500">{cred.label || cred.key}:</span>
+                                        <span className="font-mono">
+                                          {cred.type === 'secret' ? (
+                                            cred.has_value ? '••••••••' : <span className="text-warning-600">Not set</span>
+                                          ) : (
+                                            cred.value || cred.default || <span className="text-warning-600">Not set</span>
+                                          )}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
                               </div>
                             )}
 
-                            {/* Action buttons */}
                             <div className="mt-4 pt-3 border-t border-neutral-200 dark:border-neutral-700">
                               {isEditing ? (
                                 <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={handleCancelProviderEdit}
-                                    className="btn-ghost text-xs flex items-center gap-1"
-                                  >
-                                    <X className="h-4 w-4" />
-                                    Cancel
+                                  <button onClick={handleCancelProviderEdit} className="btn-ghost text-xs">
+                                    <X className="h-4 w-4 mr-1" /> Cancel
                                   </button>
                                   <button
                                     onClick={() => handleSaveProvider(cap.id, provider)}
                                     disabled={savingProvider}
-                                    className="btn-primary text-xs flex items-center gap-1"
+                                    className="btn-primary text-xs"
                                   >
-                                    {savingProvider ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <Save className="h-4 w-4" />
-                                    )}
-                                    {savingProvider ? 'Saving...' : 'Save'}
+                                    {savingProvider ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
+                                    Save
                                   </button>
                                 </div>
-                              ) : (
-                                editableCreds.length > 0 && (
-                                  <button
-                                    onClick={() => handleEditProvider(cap.id, provider)}
-                                    className="btn-ghost text-xs flex items-center gap-1"
-                                  >
-                                    <Edit2 className="h-4 w-4" />
-                                    {isConfigured ? 'Edit' : 'Configure'}
-                                  </button>
-                                )
+                              ) : editableCreds.length > 0 && (
+                                <button
+                                  onClick={() => handleEditProvider(cap.id, provider)}
+                                  className="btn-ghost text-xs"
+                                >
+                                  <Edit2 className="h-4 w-4 mr-1" />
+                                  {provider.configured ? 'Edit' : 'Configure'}
+                                </button>
                               )}
                             </div>
-                          </div>
-                        )}
-
-                        {/* Loading overlay */}
-                        {isChanging && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-neutral-800/50 rounded-xl">
-                            <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
                           </div>
                         )}
                       </div>
@@ -1066,399 +751,388 @@ export default function ServicesPage() {
         </div>
       )}
 
-      {/* Message */}
-      {message && (
-        <div 
-          role="alert"
-          aria-live="polite"
-          aria-atomic="true"
-          className={`card p-4 border ${
-          message.type === 'success'
-            ? 'bg-success-50 dark:bg-success-900/20 border-success-200 text-success-700'
-            : 'bg-error-50 dark:bg-error-900/20 border-error-200 text-error-700'
-        }`}>
-          <div className="flex items-center space-x-2">
-            <AlertCircle className="h-5 w-5" />
-            <span>{message.text}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Service Categories */}
+      {/* Compose Services */}
       <div className="space-y-4">
-        {categories.map(category => {
-          const categoryServices = servicesByCategory[category.id] || []
-          if (categoryServices.length === 0) return null
+        <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+          Compose Services
+        </h2>
 
-          const isExpanded = expandedCategories.has(category.id)
+        <div className="card p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {services.map(service => {
+              const status = getServiceStatus(service.service_name)
+              const isExpanded = expandedServices.has(service.service_id)
+              const isEditing = editingServiceId === service.service_id
+              const isStarting = startingService === service.service_name
 
-          return (
-            <div key={category.id} className="card">
-              {/* Category Header */}
-              <button
-                onClick={() => toggleCategory(category.id)}
-                className="w-full p-6 flex items-center space-x-4 hover:opacity-70 transition-opacity text-left"
-                aria-expanded={isExpanded}
-                aria-controls={`category-${category.id}-content`}
-              >
-                {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                <div>
-                  <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-                    {category.name}
-                  </h2>
-                  <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                    {category.description}
-                  </p>
-                </div>
-              </button>
+              // Card styling based on status
+              const getCardClasses = () => {
+                if (status.state === 'running') {
+                  return 'border-success-400 dark:border-success-600 bg-white dark:bg-neutral-900'
+                }
+                return 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900'
+              }
 
-              {/* Category Services */}
-              {isExpanded && (
-                <div 
-                  id={`category-${category.id}-content`}
-                  className="px-6 pb-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+              const handleCardClick = (e: React.MouseEvent) => {
+                // Don't expand if clicking on a button
+                if ((e.target as HTMLElement).closest('button')) {
+                  return
+                }
+                if (!isExpanded) {
+                  handleExpandService(service.service_id)
+                } else if (!isEditing) {
+                  handleCollapseService(service.service_id)
+                }
+              }
+
+              return (
+                <div
+                  key={service.service_id}
+                  data-testid={`service-card-${service.service_name}`}
+                  className={`rounded-lg border transition-all shadow-sm ${getCardClasses()} ${!isEditing ? 'cursor-pointer' : ''}`}
+                  onClick={!isEditing ? handleCardClick : undefined}
                 >
-                  {categoryServices.map(service => {
-                    const isEditing = editingService === service.service_id
-                    const config = serviceConfigs[service.service_id] || {}
-                    const status = getServiceStatus(service, config)
+                  <div className="p-4">
+                    {/* Header Row */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-3 flex-1">
+                        {/* Service Name Badge - Purple for local/self-hosted */}
+                        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800">
+                          <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                          <h3 className="font-semibold text-purple-900 dark:text-purple-100">
+                            {service.service_name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                          </h3>
+                        </div>
+                      </div>
 
-                    // Border and background based on status - cards should pop from page
-                    const getBorderClasses = () => {
-                      // Disabled services get grayed out appearance
-                      if (!service.enabled) {
-                        return 'border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800/50 shadow-sm opacity-60'
-                      }
-                      if (status.state === 'running') {
-                        // Subtle green border, neutral background for better button contrast
-                        return 'border-success-400 dark:border-success-600 bg-white dark:bg-neutral-900 shadow-sm'
-                      }
-                      if (status.state === 'active' || status.state === 'stopped') {
-                        return 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm'
-                      }
-                      if (status.state === 'not_configured' || status.state === 'error') {
-                        return 'border-warning-200 dark:border-warning-800 bg-warning-50/30 dark:bg-warning-950/20 shadow-sm'
-                      }
-                      return 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm'
-                    }
-
-                    const isExpanded = showAllConfigs || expandedConfigs.has(service.service_id)
-
-                    const toggleConfig = (e: React.MouseEvent) => {
-                      // Don't expand if clicking on a button
-                      if ((e.target as HTMLElement).closest('button')) {
-                        return
-                      }
-
-                      setExpandedConfigs(prev => {
-                        const next = new Set(prev)
-                        if (next.has(service.service_id)) {
-                          next.delete(service.service_id)
-                        } else {
-                          next.add(service.service_id)
-                        }
-                        return next
-                      })
-                    }
-
-                    return (
-                      <div
-                        key={service.service_id}
-                        className={`border rounded-lg transition-all ${getBorderClasses()} ${!isEditing ? 'cursor-pointer' : ''}`}
-                        onClick={!isEditing ? toggleConfig : undefined}
-                      >
-                        <div className="p-4">
-                          {/* Service Header - Colored highlight box with everything inline */}
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-3 flex-1">
-                            {/* Service name with colored icon box */}
-                            {service.mode === 'cloud' ? (
-                              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800">
-                                <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                                <h3 className="font-semibold text-blue-900 dark:text-blue-100">
-                                  {service.name}
-                                </h3>
-                              </div>
-                            ) : (
-                              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800">
-                                <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                                <h3 className="font-semibold text-purple-900 dark:text-purple-100">
-                                  {service.name}
-                                </h3>
-                              </div>
-                            )}
-
-                            {/* Setup warning */}
-                            {(() => {
-                              const status = getServiceStatus(service, config)
-                              if (status.state === 'not_configured') {
-                                return (
-                                  <span className="inline-flex items-center gap-1 text-xs text-warning-700 dark:text-warning-300">
-                                    <AlertCircle className="h-3.5 w-3.5" />
-                                    Setup Required
-                                  </span>
-                                )
+                      {/* Actions */}
+                      <div className="flex items-center gap-2">
+                        {/* Start/Stop/Setup Button */}
+                        {isStarting ? (
+                          <button
+                            onClick={() => setStartingService(null)}
+                            className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                          >
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 bg-warning-100 dark:bg-warning-900/30 group-hover:ring-warning-400">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-warning-700 dark:text-warning-300" />
+                              <span className="text-xs font-medium text-warning-700 dark:text-warning-300">Cancel</span>
+                            </div>
+                          </button>
+                        ) : service.needs_setup ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (!isExpanded) {
+                                handleExpandService(service.service_id)
                               }
-                              return null
-                            })()}
+                              setEditingServiceId(service.service_id)
+                            }}
+                            className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                          >
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 bg-warning-100 dark:bg-warning-900/30 group-hover:ring-warning-400 group-hover:bg-warning-200 dark:group-hover:bg-warning-800">
+                              <Edit2 className="h-3.5 w-3.5 text-warning-700 dark:text-warning-300" />
+                              <span className="text-xs font-medium text-warning-700 dark:text-warning-300">Setup</span>
+                            </div>
+                          </button>
+                        ) : status.canStart ? (
+                          <button
+                            onClick={() => handleStartService(service.service_name)}
+                            className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                          >
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 bg-success-100 dark:bg-success-900/30 group-hover:ring-success-400 group-hover:bg-success-200 dark:group-hover:bg-success-800">
+                              <PlayCircle className="h-3.5 w-3.5 text-success-700 dark:text-success-300" />
+                              <span className="text-xs font-medium text-success-700 dark:text-success-300">Start</span>
+                            </div>
+                          </button>
+                        ) : status.canStop ? (
+                          <button
+                            onClick={() => handleStopService(service.service_name)}
+                            className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                          >
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 bg-error-100 dark:bg-error-900/30 group-hover:ring-error-400 group-hover:bg-error-200 dark:group-hover:bg-error-800">
+                              <StopCircle className="h-3.5 w-3.5 text-error-700 dark:text-error-300" />
+                              <span className="text-xs font-medium text-error-700 dark:text-error-300">Stop</span>
+                            </div>
+                          </button>
+                        ) : null}
+
+                        {/* Expand/Collapse */}
+                        <div className="flex items-center text-neutral-400">
+                          {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">
+                      {service.description || service.image || `Docker service from ${service.compose_file.split('/').pop()}`}
+                    </p>
+
+                    {/* Service Error */}
+                    {serviceErrors[service.service_name] && (
+                      <div className="mb-2 p-2 rounded-md bg-error-50 dark:bg-error-900/20 border border-error-200 dark:border-error-800">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="h-4 w-4 text-error-500 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-error-700 dark:text-error-300">
+                              {serviceErrors[service.service_name]}
+                            </p>
                           </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setServiceErrors(prev => {
+                                const next = { ...prev }
+                                delete next[service.service_name]
+                                return next
+                              })
+                            }}
+                            className="text-error-400 hover:text-error-600 dark:hover:text-error-200"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
-                          <div className="flex items-center gap-2">
-                          
-                          {/* Actionable Status Badge */}
-                          {!isEditing && (() => {
-                            const status = getServiceStatus(service, config)
-                            const Icon = status.icon
-
-                            const colorClasses = {
-                              success: 'text-success-700 dark:text-success-300',
-                              error: 'text-error-700 dark:text-error-300',
-                              neutral: 'text-neutral-600 dark:text-neutral-400',
-                              warning: 'text-warning-700 dark:text-warning-300'
-                            }
-
-                            const bgClasses = {
-                              success: 'bg-success-100 dark:bg-success-900/30',
-                              error: 'bg-error-100 dark:bg-error-900/30',
-                              neutral: 'bg-neutral-100 dark:bg-neutral-800',
-                              warning: 'bg-warning-100 dark:bg-warning-900/30'
-                            }
-
-                            // Make status badge clickable for local services (only if enabled)
-                            const isClickable = service.enabled && service.mode === 'local' && (status.canStart || status.canStop)
-                            const handleStatusClick = () => {
-                              if (status.canStart) {
-                                handleStartService(service.service_id)
-                              } else if (status.canStop) {
-                                handleStopService(service.service_id)
-                              }
-                            }
-
-                            // Show Cancel button if this service is starting
-                            const isStarting = startingService === service.service_id
-                            if (isStarting) {
-                              return (
-                                <button
-                                  onClick={() => setStartingService(null)}
-                                  aria-label={`Cancel starting ${service.name}`}
-                                  className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                    {/* Collapsed card info */}
+                    {!isExpanded && (
+                      <div className="flex items-center justify-between text-xs">
+                        {/* Left: Capabilities & env var count */}
+                        <div className="flex items-center gap-2">
+                          {service.requires && service.requires.length > 0 && (
+                            <div className="flex items-center gap-1">
+                              {service.requires.map(cap => (
+                                <span
+                                  key={cap}
+                                  className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 capitalize"
                                 >
-                                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 bg-warning-100 dark:bg-warning-900/30 group-hover:ring-warning-400 group-hover:bg-warning-200 dark:group-hover:bg-warning-800">
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-warning-700 dark:text-warning-300" />
-                                    <span className="text-xs font-medium text-warning-700 dark:text-warning-300">
-                                      Cancel
-                                    </span>
-                                  </div>
-                                </button>
-                              )
-                            }
-
-                            if (isClickable) {
-                              // Different color schemes for Start vs Stop
-                              const isStopButton = status.canStop
-
-                              return (
-                                <button
-                                  onClick={handleStatusClick}
-                                  aria-label={status.canStart ? `Start ${service.name}` : `Stop ${service.name}`}
-                                  className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
-                                >
-                                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 ${
-                                    isStopButton
-                                      ? 'bg-error-100 dark:bg-error-900/30 group-hover:ring-error-400 group-hover:bg-error-200 dark:group-hover:bg-error-800'
-                                      : 'bg-success-100 dark:bg-success-900/30 group-hover:ring-success-400 group-hover:bg-success-200 dark:group-hover:bg-success-800'
-                                  }`}>
-                                    {status.canStart ? (
-                                      <PlayCircle className="h-3.5 w-3.5 text-success-700 dark:text-success-300" />
-                                    ) : (
-                                      <StopCircle className="h-3.5 w-3.5 text-error-700 dark:text-error-300" />
-                                    )}
-                                    <span className={`text-xs font-medium ${
-                                      isStopButton
-                                        ? 'text-error-700 dark:text-error-300'
-                                        : 'text-success-700 dark:text-success-300'
-                                    }`}>
-                                      {status.canStart ? 'Start' : 'Stop'}
-                                    </span>
-                                  </div>
-                                </button>
-                              )
-                            }
-
-                            return (
-                              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${bgClasses[status.color as keyof typeof bgClasses]}`}>
-                                <Icon className={`h-4 w-4 ${colorClasses[status.color as keyof typeof colorClasses]}`} />
-                                <span className={`text-xs font-medium ${colorClasses[status.color as keyof typeof colorClasses]}`}>
-                                  {status.label}
+                                  {cap}
                                 </span>
-                              </div>
+                              ))}
+                            </div>
+                          )}
+                          <span className="text-neutral-400">
+                            {service.required_env_count + service.optional_env_count} env vars
+                          </span>
+                        </div>
+
+                        {/* Right: Status indicator or URL */}
+                        <div className="flex items-center gap-2">
+                          {status.state === 'running' && service.ports && service.ports.length > 0 && service.ports[0].host && (() => {
+                            // Extract port from ${VAR:-default} syntax or use as-is
+                            const portStr = service.ports[0].host
+                            const match = portStr.match(/\$\{[^:]+:-(\d+)\}/)
+                            const port = match ? match[1] : portStr.replace(/\D/g, '') || portStr
+                            return (
+                              <a
+                                href={`http://localhost:${port}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-primary-600 hover:text-primary-700 dark:text-primary-400 hover:underline"
+                              >
+                                :{port}
+                              </a>
                             )
                           })()}
+                          {service.needs_setup && (
+                            <span className="text-warning-600 dark:text-warning-400">Needs Setup</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
-                            {/* Enable/Disable Toggle */}
-                            {!isEditing && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleToggleEnabled(service.service_id, service.enabled)
-                                }}
-                                disabled={togglingEnabled === service.service_id}
-                                aria-label={service.enabled ? `Disable ${service.name}` : `Enable ${service.name}`}
-                                data-testid={`toggle-enabled-${service.service_id}`}
-                                className="flex items-center gap-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
-                                title={service.enabled ? 'Click to disable' : 'Click to enable'}
-                              >
-                                {togglingEnabled === service.service_id ? (
-                                  <Loader2 className="h-5 w-5 animate-spin" />
-                                ) : service.enabled ? (
-                                  <ToggleRight className="h-5 w-5 text-success-600 dark:text-success-400" />
-                                ) : (
-                                  <ToggleLeft className="h-5 w-5 text-neutral-400" />
-                                )}
-                              </button>
-                            )}
+                  {/* Expanded Content */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 border-t border-neutral-200 dark:border-neutral-700">
+                      {/* View Mode: Show resolved env vars */}
+                      {!isEditing && envConfig && (
+                        <div className="mt-3 space-y-1.5">
+                          {[...envConfig.required_env_vars, ...envConfig.optional_env_vars].map(ev => (
+                            <div key={ev.name} className="flex items-baseline gap-2 text-sm">
+                              <span className="text-neutral-500 dark:text-neutral-400">{ev.name}:</span>
+                              <span className="font-mono text-neutral-900 dark:text-neutral-100">
+                                {ev.name.includes('KEY') || ev.name.includes('SECRET') || ev.name.includes('PASSWORD')
+                                  ? (ev.resolved_value ? '••••••' + ev.resolved_value.slice(-4) : <span className="text-warning-600">Not set</span>)
+                                  : (ev.resolved_value || ev.default_value || <span className="text-warning-600">Not set</span>)
+                                }
+                              </span>
+                            </div>
+                          ))}
 
-                            {/* Expand indicator */}
-                            {!isEditing && (
-                              <div className="flex items-center text-neutral-400">
-                                {isExpanded ? (
-                                  <ChevronUp className="h-4 w-4" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4" />
-                                )}
-                              </div>
-                            )}
+                          {/* Edit Button */}
+                          <div className="pt-3 mt-2 border-t border-neutral-200 dark:border-neutral-700">
+                            <button
+                              onClick={() => setEditingServiceId(service.service_id)}
+                              className="flex items-center gap-1.5 text-sm text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                              Edit
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Edit Mode */}
+                      {isEditing && envConfig && (
+                        <div className="mt-3">
+                          {[...envConfig.required_env_vars, ...envConfig.optional_env_vars].map(ev => (
+                            <EnvVarEditor
+                              key={ev.name}
+                              envVar={ev}
+                              config={envEditForm[ev.name]}
+                              onChange={(updates) => updateEnvVar(ev.name, updates)}
+                            />
+                          ))}
+
+                          {/* Actions */}
+                          <div className="pt-2 mt-2 flex items-center gap-2">
+                            <button onClick={handleCancelEnvEdit} className="btn-ghost text-xs">
+                              <X className="h-3 w-3 mr-1" /> Cancel
+                            </button>
+                            <button
+                              onClick={() => handleSaveEnvVars(service.service_id)}
+                              disabled={saving}
+                              className="btn-primary text-xs"
+                            >
+                              {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Service Catalog Modal */}
+      {showCatalog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="catalog-modal">
+          <div className="bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
+              <div className="flex items-center gap-2">
+                <Package className="h-5 w-5 text-primary-600" />
+                <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+                  Service Catalog
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowCatalog(false)}
+                className="p-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {catalogLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-neutral-400" />
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {catalogServices.map(service => (
+                    <div
+                      key={service.service_id}
+                      data-testid={`catalog-item-${service.service_name}`}
+                      className={`p-4 rounded-lg border transition-all ${
+                        service.installed
+                          ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20'
+                          : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                            <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                              {service.service_name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                            </h4>
+                            <p className="text-xs text-neutral-500">
+                              {service.description || service.image || 'Docker service'}
+                            </p>
                           </div>
                         </div>
 
-                        {/* Description */}
-                        <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">
-                          {service.description}
-                        </p>
-                      </div>
-
-                        {/* Edit Mode Actions */}
-                        {isEditing && (
-                          <div className="flex items-center justify-end gap-2 mb-3">
-                            <button
-                              onClick={handleCancelEdit}
-                              className="btn-ghost text-xs flex items-center gap-1"
-                            >
-                              <X className="h-4 w-4" />
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => handleSaveService(service.service_id)}
-                              disabled={saving}
-                              className="btn-primary text-xs flex items-center gap-1"
-                            >
-                              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                              {saving ? 'Saving...' : 'Save'}
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Service Configuration - Always show if there are fields to configure */}
-                        {service.config_schema && service.config_schema.length > 0 && (
-                          <>
-                            {/* Config Fields - Show if editing OR expanded */}
-                            {(isEditing || isExpanded) && (
-                              <div className={`space-y-2 px-4 pb-4 pt-3 border-t border-neutral-200 dark:border-neutral-700 ${isEditing ? 'mt-0' : 'mt-0'}`}>
-                                {service.config_schema
-                                  .filter((f: any) => {
-                                    // In edit mode, show all fields
-                                    if (isEditing) return true
-                                    // In view mode, only show if configured AND should be visible
-                                    if (config[f.key] === undefined) return false
-                                    return shouldShowField(f.key, config)
-                                  })
-                                  .map((field: any) => (
-                                    <div key={field.key} className={isEditing ? '' : 'flex items-baseline gap-2'}>
-                                      {isEditing ? (
-                                        <>
-                                          <label
-                                            htmlFor={`field-${service.service_id}-${field.key}`}
-                                            className="text-xs font-medium text-neutral-600 dark:text-neutral-400 mb-1 block"
-                                          >
-                                            {field.label}
-                                            {field.required && <span className="text-error-600 ml-1">*</span>}
-                                          </label>
-                                          <div className="text-xs">
-                                            {renderFieldValue(field.key, config[field.key], isEditing, service.service_id)}
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <span className="text-xs text-neutral-500 dark:text-neutral-400 flex-shrink-0">
-                                            {field.label}:
-                                          </span>
-                                          <div className="text-xs flex-1 truncate">
-                                            {renderFieldValue(field.key, config[field.key], isEditing, service.service_id)}
-                                          </div>
-                                        </>
-                                      )}
-                                    </div>
-                                  ))}
-
-                                {/* Edit Button - Inside expanded section */}
-                                {!isEditing && (
-                                  <div className="pt-3 mt-3 border-t border-neutral-200 dark:border-neutral-700">
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleEditService(service.service_id)
-                                      }}
-                                      className="btn-ghost text-xs flex items-center gap-1"
-                                    >
-                                      <Edit2 className="h-4 w-4" />
-                                      {(() => {
-                                        const status = getServiceStatus(service, config)
-                                        return status.canConfigure ? 'Setup' : 'Edit'
-                                      })()}
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {/* Only show "Not configured" text if service is truly not configured */}
-                        {(() => {
-                          const status = getServiceStatus(service, config)
-                          return status.state === 'not_configured' && !isEditing && !isExpanded && (
-                            <div className="px-4 pb-4">
-                              <p className="text-xs text-neutral-500 dark:text-neutral-400 text-center">
-                                Click to setup
-                              </p>
+                        <div className="flex items-center gap-2">
+                          {/* Capabilities */}
+                          {service.requires && service.requires.length > 0 && (
+                            <div className="flex items-center gap-1">
+                              {service.requires.map(cap => (
+                                <span
+                                  key={cap}
+                                  className="px-1.5 py-0.5 text-xs rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 capitalize"
+                                >
+                                  {cap}
+                                </span>
+                              ))}
                             </div>
-                          )
-                        })()}
+                          )}
+
+                          {/* Install/Uninstall Button */}
+                          {service.installed ? (
+                            <button
+                              onClick={() => handleUninstallService(service.service_id)}
+                              disabled={installingService === service.service_id}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-error-300 text-error-600 hover:bg-error-50 dark:border-error-700 dark:text-error-400 dark:hover:bg-error-900/20 disabled:opacity-50"
+                            >
+                              {installingService === service.service_id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleInstallService(service.service_id)}
+                              disabled={installingService === service.service_id}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50"
+                            >
+                              {installingService === service.service_id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Plus className="h-3 w-3" />
+                              )}
+                              Install
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    )
-                  })}
+                    </div>
+                  ))}
+
+                  {catalogServices.length === 0 && (
+                    <div className="text-center py-12 text-neutral-500">
+                      <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                      <p>No services found in the catalog</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )
-        })}
-      </div>
 
-      {Object.keys(serviceConfigs).length === 0 && (
-        <div className="card p-12 text-center">
-          <Server className="h-16 w-16 text-neutral-400 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
-            No services configured
-          </h3>
-          <p className="text-neutral-600 dark:text-neutral-400 mb-6">
-            Complete the setup wizard to configure your default services
-          </p>
-          <button
-            onClick={() => window.location.href = '/wizard/start'}
-            className="btn-primary"
-          >
-            Start Setup Wizard
-          </button>
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-neutral-200 dark:border-neutral-700 flex justify-end">
+              <button
+                onClick={() => setShowCatalog(false)}
+                className="btn-secondary"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1466,34 +1140,134 @@ export default function ServicesPage() {
       <ConfirmDialog
         isOpen={confirmDialog.isOpen}
         title="Stop Service"
-        message={`Are you sure you want to stop ${confirmDialog.serviceName}? This will shut down the service container.`}
+        message={`Are you sure you want to stop ${confirmDialog.serviceName}?`}
         confirmLabel="Stop Service"
         cancelLabel="Cancel"
         variant="warning"
         onConfirm={confirmStopService}
-        onCancel={() => setConfirmDialog({ isOpen: false, serviceId: null, serviceName: null })}
+        onCancel={() => setConfirmDialog({ isOpen: false, serviceName: null })}
       />
+    </div>
+  )
+}
 
-      {/* Live region for screen reader announcements */}
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="sr-only"
+// ==========================================================================
+// Env Var Editor Component
+// ==========================================================================
+
+interface EnvVarEditorProps {
+  envVar: EnvVarInfo
+  config: EnvVarConfig
+  onChange: (updates: Partial<EnvVarConfig>) => void
+}
+
+function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
+  const [editing, setEditing] = useState(false)
+  const [showMapping, setShowMapping] = useState(config.source === 'setting')
+
+  const isSecret = envVar.name.includes('KEY') || envVar.name.includes('SECRET') || envVar.name.includes('PASSWORD')
+  const hasDefault = envVar.has_default && envVar.default_value
+  const isUsingDefault = config.source === 'default' || (!config.value && !config.setting_path && hasDefault)
+
+  // Generate setting path from env var name for auto-creating settings
+  // Keep the full key name to match conventions like api_keys.openai_api_key
+  const autoSettingPath = () => {
+    const name = envVar.name.toLowerCase()
+    if (name.includes('api_key') || name.includes('key') || name.includes('secret') || name.includes('token')) {
+      return `api_keys.${name}`
+    }
+    return `settings.${name}`
+  }
+
+  // Handle value input - auto-create setting
+  const handleValueChange = (value: string) => {
+    if (value) {
+      onChange({ source: 'new_setting', new_setting_path: autoSettingPath(), value, setting_path: undefined })
+    } else {
+      onChange({ source: 'default', value: undefined, setting_path: undefined, new_setting_path: undefined })
+    }
+  }
+
+  // Check if there's a matching suggestion for auto-mapping
+  const matchingSuggestion = envVar.suggestions.find(s => {
+    const envName = envVar.name.toLowerCase()
+    const pathParts = s.path.toLowerCase().split('.')
+    const lastPart = pathParts[pathParts.length - 1]
+    return envName.includes(lastPart) || lastPart.includes(envName.replace(/_/g, ''))
+  })
+
+  // Auto-map if matching and not yet configured
+  const effectiveSettingPath = config.setting_path || (matchingSuggestion?.has_value ? matchingSuggestion.path : undefined)
+
+  return (
+    <div className="flex items-center gap-2 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0">
+      {/* Label */}
+      <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0" title={envVar.name}>
+        {envVar.name}
+        {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
+      </span>
+
+      {/* Map button - LEFT of input */}
+      <button
+        onClick={() => setShowMapping(!showMapping)}
+        className={`px-2 py-1 text-xs rounded transition-colors flex-shrink-0 ${
+          showMapping
+            ? 'bg-primary-900/30 text-primary-300'
+            : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700'
+        }`}
+        title={showMapping ? 'Enter value' : 'Map to setting'}
       >
-        {message?.text}
+        Map
+      </button>
+
+      {/* Input area */}
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        {showMapping ? (
+          // Mapping mode - styled dropdown
+          <select
+            value={effectiveSettingPath || ''}
+            onChange={(e) => {
+              if (e.target.value) {
+                onChange({ source: 'setting', setting_path: e.target.value, value: undefined, new_setting_path: undefined })
+              }
+            }}
+            className="flex-1 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
+          >
+            <option value="">select...</option>
+            {envVar.suggestions.map(s => (
+              <option key={s.path} value={s.path}>
+                {s.path}{s.value ? ` → ${s.value}` : ''}
+              </option>
+            ))}
+          </select>
+        ) : hasDefault && isUsingDefault && !editing ? (
+          // Default value display
+          <>
+            <button
+              onClick={() => setEditing(true)}
+              className="text-neutral-500 hover:text-neutral-300 flex-shrink-0"
+              title="Edit"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+            <span className="text-xs text-neutral-400 truncate">{envVar.default_value}</span>
+            <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-neutral-700 text-neutral-400 flex-shrink-0">default</span>
+          </>
+        ) : (
+          // Value input
+          <input
+            type={isSecret ? 'password' : 'text'}
+            value={config.source === 'setting' ? '' : (config.value || '')}
+            onChange={(e) => handleValueChange(e.target.value)}
+            placeholder="enter value"
+            className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
+            autoFocus={editing}
+            onBlur={() => {
+              if (!config.value && hasDefault) setEditing(false)
+            }}
+          />
+        )}
       </div>
-
-      {/* Add Service Modal */}
-      <AddServiceModal
-        isOpen={showAddServiceModal}
-        onClose={() => setShowAddServiceModal(false)}
-        onServiceInstalled={() => {
-          loadData()  // Refresh services list
-          setMessage({ type: 'success', text: 'Service installed successfully' })
-        }}
-      />
-
     </div>
   )
 }

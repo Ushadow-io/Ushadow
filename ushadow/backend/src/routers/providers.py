@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.services.provider_registry import get_provider_registry
-from src.services.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_omegaconf_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

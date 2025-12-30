@@ -144,9 +144,12 @@ ENV/
 env.bak/
 venv.bak/
 
-# ushadow Configuration (contains API keys)
+# ushadow Configuration (contains API keys and runtime settings)
 config.yml
 backend/config.yml
+config/overrides.yaml  # legacy, migrated to config_settings.yaml
+config/config_settings.yaml
+config/secrets.yaml
 
 # Frontend local environment (dev overrides)
 frontend/.env.local

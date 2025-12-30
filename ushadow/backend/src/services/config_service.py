@@ -8,10 +8,10 @@ from typing import Dict, Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from src.config.settings import get_settings
+from src.config.infra_settings import get_infra_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+infra = get_infra_settings()
 
 
 class ConfigService:
@@ -25,8 +25,8 @@ class ConfigService:
     async def get_collection(self):
         """Get or create MongoDB collection."""
         if self.collection is None:
-            self.client = AsyncIOMotorClient(settings.MONGODB_URI)
-            self.db = self.client[settings.MONGODB_DATABASE]
+            self.client = AsyncIOMotorClient(infra.MONGODB_URI)
+            self.db = self.client[infra.MONGODB_DATABASE]
             self.collection = self.db["configuration"]
         return self.collection
 

@@ -10,10 +10,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from src.config.settings import get_settings
+from src.config.infra_settings import get_infra_settings
 
-from src.routers import health, wizard, chronicle, auth, feature_flags 
-from src.routers import services, deployments, providers
+from src.routers import health, wizard, chronicle, auth, feature_flags
+from src.routers import services, deployments, providers, compose_services
 from src.routers import kubernetes, tailscale, docker_events, unodes, docker
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
@@ -21,7 +21,7 @@ from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
-from src.services.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_omegaconf_settings
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
+settings = get_infra_settings()
 
 
 async def check_stale_unodes_task():
@@ -66,8 +66,8 @@ async def lifespan(app: FastAPI):
     await init_unode_manager(db)
     logger.info("✓ UNode manager initialized")
 
-    # Initialize OmegaConf settings manager
-    omegaconf_settings = get_omegaconf_settings(db=db)
+    # Initialize OmegaConf settings manager (YAML-based, no DB needed)
+    omegaconf_settings = get_omegaconf_settings()
     await omegaconf_settings.load_config()  # Pre-load and cache
     logger.info("✓ OmegaConf settings initialized")
     # Initialize deployment manager
@@ -113,6 +113,7 @@ app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
+app.include_router(compose_services.router, prefix="/api/compose", tags=["compose"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])

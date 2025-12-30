@@ -1,6 +1,6 @@
 """
 Setup wizard routes for ushadow initial configuration.
-Adapted from Chronicle wizard for ushadow architecture.
+Uses OmegaConf for configuration management.
 """
 
 import logging
@@ -9,15 +9,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.config.settings import get_settings
-from src.config.config_parser import get_config_parser, UshadowConfig
+from src.config.omegaconf_settings import get_omegaconf_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-settings = get_settings()
-
-# Initialize config parser
-config_parser = get_config_parser()
+settings_manager = get_omegaconf_settings()
 
 
 # Models
@@ -62,11 +58,15 @@ async def get_wizard_status():
     Wizard is complete when basic API keys are configured.
     """
     try:
-        config = await config_parser.load()
+        # Get API keys from OmegaConf
+        openai_key = await settings_manager.get("api_keys.openai_api_key")
+        anthropic_key = await settings_manager.get("api_keys.anthropic_api_key")
+        deepgram_key = await settings_manager.get("api_keys.deepgram_api_key")
+        mistral_key = await settings_manager.get("api_keys.mistral_api_key")
 
         # Wizard is complete if LLM and transcription are configured
-        has_llm = bool(config.api_keys.openai_api_key or config.api_keys.anthropic_api_key)
-        has_transcription = bool(config.api_keys.deepgram_api_key or config.api_keys.mistral_api_key)
+        has_llm = bool(openai_key or anthropic_key)
+        has_transcription = bool(deepgram_key or mistral_key)
         wizard_completed = has_llm and has_transcription
 
         # Determine current step and completed steps
@@ -95,18 +95,16 @@ async def get_wizard_status():
 @router.get("/api-keys", response_model=ApiKeysStep)
 async def get_wizard_api_keys():
     """
-    Get current API keys configuration.
+    Get current API keys configuration from OmegaConf.
 
     Returns masked values to show which keys are configured.
     """
     try:
-        config = await config_parser.load()
-
         return ApiKeysStep(
-            openai_api_key=mask_key(config.api_keys.openai_api_key),
-            deepgram_api_key=mask_key(config.api_keys.deepgram_api_key),
-            mistral_api_key=mask_key(config.api_keys.mistral_api_key),
-            anthropic_api_key=mask_key(config.api_keys.anthropic_api_key),
+            openai_api_key=mask_key(await settings_manager.get("api_keys.openai_api_key")),
+            deepgram_api_key=mask_key(await settings_manager.get("api_keys.deepgram_api_key")),
+            mistral_api_key=mask_key(await settings_manager.get("api_keys.mistral_api_key")),
+            anthropic_api_key=mask_key(await settings_manager.get("api_keys.anthropic_api_key")),
         )
     except Exception as e:
         logger.error(f"Error getting wizard API keys: {e}")
@@ -116,34 +114,36 @@ async def get_wizard_api_keys():
 @router.put("/api-keys", response_model=ApiKeysUpdateResponse)
 async def update_wizard_api_keys(api_keys: ApiKeysStep):
     """
-    Update API keys configuration.
+    Update API keys configuration via OmegaConf.
 
     Only updates keys that are provided (non-None values).
+    Saves to secrets.yaml for persistence.
     """
     try:
-        config = await config_parser.load()
+        updates = {}
 
-        # Update only provided keys
+        # Collect updates (skip masked values)
         if api_keys.openai_api_key is not None and not api_keys.openai_api_key.startswith("***"):
-            config.api_keys.openai_api_key = api_keys.openai_api_key
+            updates["api_keys.openai_api_key"] = api_keys.openai_api_key
         if api_keys.deepgram_api_key is not None and not api_keys.deepgram_api_key.startswith("***"):
-            config.api_keys.deepgram_api_key = api_keys.deepgram_api_key
+            updates["api_keys.deepgram_api_key"] = api_keys.deepgram_api_key
         if api_keys.mistral_api_key is not None and not api_keys.mistral_api_key.startswith("***"):
-            config.api_keys.mistral_api_key = api_keys.mistral_api_key
+            updates["api_keys.mistral_api_key"] = api_keys.mistral_api_key
         if api_keys.anthropic_api_key is not None and not api_keys.anthropic_api_key.startswith("***"):
-            config.api_keys.anthropic_api_key = api_keys.anthropic_api_key
+            updates["api_keys.anthropic_api_key"] = api_keys.anthropic_api_key
 
-        # Save configuration
-        await config_parser.save(config)
-        logger.info("Wizard: API keys updated")
+        # Save to OmegaConf (writes to secrets.yaml)
+        if updates:
+            await settings_manager.update(updates)
+            logger.info(f"Wizard: API keys updated: {list(updates.keys())}")
 
         # Return masked values
         return ApiKeysUpdateResponse(
             api_keys=ApiKeysStep(
-                openai_api_key=mask_key(config.api_keys.openai_api_key),
-                deepgram_api_key=mask_key(config.api_keys.deepgram_api_key),
-                mistral_api_key=mask_key(config.api_keys.mistral_api_key),
-                anthropic_api_key=mask_key(config.api_keys.anthropic_api_key),
+                openai_api_key=mask_key(await settings_manager.get("api_keys.openai_api_key")),
+                deepgram_api_key=mask_key(await settings_manager.get("api_keys.deepgram_api_key")),
+                mistral_api_key=mask_key(await settings_manager.get("api_keys.mistral_api_key")),
+                anthropic_api_key=mask_key(await settings_manager.get("api_keys.anthropic_api_key")),
             ),
             success=True
         )
@@ -152,49 +152,23 @@ async def update_wizard_api_keys(api_keys: ApiKeysStep):
         raise HTTPException(status_code=500, detail=f"Failed to update API keys: {str(e)}")
 
 
-@router.get("/detect-env-keys")
-async def detect_env_keys():
+@router.get("/detect-keys")
+async def detect_configured_keys():
     """
-    Detect API keys in environment variables.
+    Detect which API keys are configured in OmegaConf settings.
 
-    Checks if keys are set in the environment.
-    """
-    return {
-        "openai_api_key": settings.OPENAI_API_KEY if settings.OPENAI_API_KEY else None,
-        "deepgram_api_key": settings.DEEPGRAM_API_KEY if settings.DEEPGRAM_API_KEY else None,
-        "mistral_api_key": settings.MISTRAL_API_KEY if settings.MISTRAL_API_KEY else None,
-        "anthropic_api_key": settings.ANTHROPIC_API_KEY if settings.ANTHROPIC_API_KEY else None,
-    }
-
-
-@router.post("/import-env-keys")
-async def import_env_keys():
-    """
-    Import API keys from environment variables.
-
-    Copies keys from environment to database configuration.
+    Checks secrets.yaml and merged config for existing keys.
     """
     try:
-        updates = {}
-        if settings.OPENAI_API_KEY:
-            updates['openai_api_key'] = settings.OPENAI_API_KEY
-        if settings.DEEPGRAM_API_KEY:
-            updates['deepgram_api_key'] = settings.DEEPGRAM_API_KEY
-        if settings.MISTRAL_API_KEY:
-            updates['mistral_api_key'] = settings.MISTRAL_API_KEY
-        if settings.ANTHROPIC_API_KEY:
-            updates['anthropic_api_key'] = settings.ANTHROPIC_API_KEY
-
-        if updates:
-            config = await config_service.load_config()
-            config.update(updates)
-            await config_service.save_config(config)
-            logger.info(f"Imported {len(updates)} API keys from environment")
-
-        return updates
+        return {
+            "openai_api_key": bool(await settings_manager.get("api_keys.openai_api_key")),
+            "deepgram_api_key": bool(await settings_manager.get("api_keys.deepgram_api_key")),
+            "mistral_api_key": bool(await settings_manager.get("api_keys.mistral_api_key")),
+            "anthropic_api_key": bool(await settings_manager.get("api_keys.anthropic_api_key")),
+        }
     except Exception as e:
-        logger.error(f"Error importing env keys: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to import API keys: {str(e)}")
+        logger.error(f"Error detecting keys: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to detect keys: {str(e)}")
 
 
 @router.post("/complete")

@@ -151,7 +151,7 @@ class ServiceConfig(BaseModel):
     they USE (llm, transcription, memory) rather than inheriting from templates.
 
     Templates (config/service-templates.yaml) define capabilities.
-    Services (config/services/*.yaml) declare which capabilities they use.
+    Services are discovered from Docker Compose files via ComposeServiceRegistry.
     """
     # Core identity
     service_id: str = Field(..., pattern=r'^[a-z0-9-]+$')
@@ -192,7 +192,6 @@ class ServiceConfig(BaseModel):
     metadata: Dict[str, Any] = {}
 
     # NOTE: config_schema is NOT stored here - it's inherited from the template!
-    # Use ServiceRegistry.get_effective_schema(service_id) to get merged schema
     
     class Config:
         json_schema_extra = {

@@ -1,2 +1,3 @@
 - When creating front end code, made sure that elements have a human readable identifier, so we can more easily debug and write browser tests
-- When creating wizards, use side arrow navigation (not footer buttons). Place circular arrow buttons on the left and right sides of the wizard card using absolute positioning (`-translate-x-16` and `translate-x-16` to position outside the card). Back arrow on the left (hidden on first step), Next arrow on the right (blue, always visible). This keeps navigation in a fixed position without content jumping or scrollbars.
+- There may be multiple environments running simultaneously using different worktrees. To determine the corren environment, you can get port numbers and env name from the root .env file.
+- When refactoring module names, run `grep -r "old_module_name" .` before committing to catch all remaining references (especially entry points like `main.py`). Use `__init__.py` re-exports for backward compatibility.

@@ -5,17 +5,19 @@ Handles user authentication, JWT tokens, and password hashing
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from jose import JWTError, jwt
+from omegaconf import OmegaConf
 from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from src.config.settings import get_settings
+from src.config.infra_settings import get_infra_settings
 from src.models.user import UserInDB, User
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+infra = get_infra_settings()
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -25,6 +27,28 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30 * 24 * 60  # 30 days
 
 
+def _load_auth_secret() -> str:
+    """Load AUTH_SECRET_KEY from secrets.yaml (sync)."""
+    # Try common locations
+    candidates = [
+        Path("/config/secrets.yaml"),
+        Path("config/secrets.yaml"),
+        Path(__file__).parent.parent.parent.parent / "config" / "secrets.yaml",
+    ]
+
+    for path in candidates:
+        if path.exists():
+            try:
+                secrets = OmegaConf.load(path)
+                key = OmegaConf.select(secrets, "security.auth_secret_key")
+                if key:
+                    return key
+            except Exception as e:
+                logger.warning(f"Error loading secrets from {path}: {e}")
+
+    raise ValueError("AUTH_SECRET_KEY not found in config/secrets.yaml")
+
+
 class AuthService:
     """Service for authentication operations."""
 
@@ -32,12 +56,20 @@ class AuthService:
         self.client = None
         self.db = None
         self.users_collection = None
+        self._auth_secret_key: Optional[str] = None
+
+    @property
+    def auth_secret_key(self) -> str:
+        """Lazy-load auth secret key."""
+        if self._auth_secret_key is None:
+            self._auth_secret_key = _load_auth_secret()
+        return self._auth_secret_key
 
     async def get_users_collection(self):
         """Get or create users collection."""
         if self.users_collection is None:
-            self.client = AsyncIOMotorClient(settings.MONGODB_URI)
-            self.db = self.client[settings.MONGODB_DATABASE]
+            self.client = AsyncIOMotorClient(infra.MONGODB_URI)
+            self.db = self.client[infra.MONGODB_DATABASE]
             self.users_collection = self.db["users"]
             # Create unique index on email
             await self.users_collection.create_index("email", unique=True)
@@ -59,13 +91,13 @@ class AuthService:
         else:
             expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, settings.AUTH_SECRET_KEY, algorithm=ALGORITHM)
+        encoded_jwt = jwt.encode(to_encode, self.auth_secret_key, algorithm=ALGORITHM)
         return encoded_jwt
 
     def decode_token(self, token: str) -> Optional[dict]:
         """Decode and validate a JWT token."""
         try:
-            payload = jwt.decode(token, settings.AUTH_SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(token, self.auth_secret_key, algorithms=[ALGORITHM])
             return payload
         except JWTError as e:
             logger.error(f"JWT decode error: {e}")
