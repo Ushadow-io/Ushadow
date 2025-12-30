@@ -38,6 +38,11 @@ interface WizardContextType {
 
 const WizardContext = createContext<WizardContextType | undefined>(undefined)
 
+const defaultServiceStatus: ServiceStatus = {
+  configured: false,
+  running: false,
+}
+
 const initialState: WizardState = {
   mode: null,
   completedPhases: [],
@@ -178,10 +183,10 @@ export function WizardProvider({ children }: { children: ReactNode }) {
         setCurrentPhase,
         resetWizard,
         isPhaseComplete,
-        selectProvider,
-        updateProviders,
-        applyDefaultProviders,
-        providersLoading,
+        setupLevel,
+        updateServiceStatus,
+        getSetupLabel,
+        isFirstTimeUser,
       }}
     >
       {children}

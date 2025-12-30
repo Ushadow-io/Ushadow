@@ -1,17 +1,19 @@
 import { Settings, Save, Server, Key, Database, CheckCircle, XCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { settingsApi, dockerApi } from '../services/api'
+import { useTheme } from '../contexts/ThemeContext'
 
 export default function SettingsPage() {
+  const { isDark } = useTheme()
   const [activeTab, setActiveTab] = useState('services')
   const [config, setConfig] = useState<any>(null)
   const [memoryStatus, setMemoryStatus] = useState<any>(null)
-  
+
   useEffect(() => {
     loadConfig()
     loadMemoryStatus()
   }, [])
-  
+
   const loadConfig = async () => {
     try {
       // Load both core config and service configs
@@ -19,7 +21,7 @@ export default function SettingsPage() {
         settingsApi.getConfig(),
         settingsApi.getAllServiceConfigs()
       ])
-      
+
       setConfig({
         ...configResponse.data,
         service_configs: serviceConfigsResponse.data
@@ -28,12 +30,12 @@ export default function SettingsPage() {
       console.error('Failed to load config:', error)
     }
   }
-  
+
   const loadMemoryStatus = async () => {
     // Check if any memory service is configured
     const memoryProvider = config?.memory_provider
     if (!memoryProvider) return
-    
+
     try {
       // Check if mem0 container is running (for openmemory)
       if (memoryProvider === 'openmemory') {
@@ -44,7 +46,7 @@ export default function SettingsPage() {
       console.error('Failed to load memory status:', error)
     }
   }
-  
+
   useEffect(() => {
     if (config?.memory_provider) {
       loadMemoryStatus()
@@ -58,32 +60,45 @@ export default function SettingsPage() {
   ]
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="settings-page">
       {/* Header */}
       <div>
         <div className="flex items-center space-x-2">
-          <Settings className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
-          <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Settings</h1>
+          <Settings className="h-8 w-8" style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }} />
+          <h1
+            className="text-3xl font-bold"
+            style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+          >
+            Settings
+          </h1>
         </div>
-        <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+        <p
+          className="mt-2"
+          style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+        >
           Configure your ushadow platform
         </p>
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-neutral-200 dark:border-neutral-700">
+      <div
+        style={{ borderBottom: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}` }}
+      >
         <div className="flex space-x-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`
-                flex items-center space-x-2 px-4 py-3 font-medium transition-all
-                ${activeTab === tab.id
-                  ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-600 dark:border-primary-400'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100'
-                }
-              `}
+              data-testid={`settings-tab-${tab.id}`}
+              className="flex items-center space-x-2 px-4 py-3 font-medium transition-all"
+              style={{
+                color: activeTab === tab.id
+                  ? '#4ade80'
+                  : (isDark ? 'var(--text-secondary)' : '#71717a'),
+                borderBottom: activeTab === tab.id
+                  ? '2px solid #4ade80'
+                  : '2px solid transparent',
+              }}
             >
               <tab.icon className="h-5 w-5" />
               <span>{tab.label}</span>
@@ -97,18 +112,29 @@ export default function SettingsPage() {
         <div className="space-y-4">
           {/* Memory Provider Status */}
           {config?.memory_provider && (
-            <div className="card p-6 border-l-4 border-primary-500">
+            <div
+              className="rounded-xl p-6"
+              style={{
+                backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+                border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+                borderLeft: '4px solid #4ade80',
+                boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+              }}
+            >
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                <h3
+                  className="font-semibold"
+                  style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                >
                   Memory Provider
                 </h3>
                 {memoryStatus?.status === 'running' ? (
-                  <div className="flex items-center space-x-2 text-success-600">
+                  <div className="flex items-center space-x-2" style={{ color: '#4ade80' }}>
                     <CheckCircle className="h-5 w-5" />
                     <span className="text-sm font-medium">Connected</span>
                   </div>
                 ) : (
-                  <div className="flex items-center space-x-2 text-neutral-500">
+                  <div className="flex items-center space-x-2" style={{ color: isDark ? 'var(--text-muted)' : '#a1a1aa' }}>
                     <XCircle className="h-5 w-5" />
                     <span className="text-sm font-medium">Not Running</span>
                   </div>
@@ -116,27 +142,39 @@ export default function SettingsPage() {
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <span className="text-neutral-600 dark:text-neutral-400">Provider:</span>
-                  <p className="font-medium text-neutral-900 dark:text-neutral-100 mt-1">
+                  <span style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>Provider:</span>
+                  <p
+                    className="font-medium mt-1"
+                    style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                  >
                     {config.memory_provider === 'openmemory' ? 'OpenMemory' : config.memory_provider}
                   </p>
                 </div>
                 <div>
-                  <span className="text-neutral-600 dark:text-neutral-400">Server URL:</span>
-                  <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 mt-1">
+                  <span style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>Server URL:</span>
+                  <p
+                    className="font-mono text-sm mt-1"
+                    style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                  >
                     {config.service_configs?.openmemory?.server_url || 'Not configured'}
                   </p>
                 </div>
                 <div>
-                  <span className="text-neutral-600 dark:text-neutral-400">Graph Memory:</span>
-                  <p className="font-medium text-neutral-900 dark:text-neutral-100 mt-1">
+                  <span style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>Graph Memory:</span>
+                  <p
+                    className="font-medium mt-1"
+                    style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                  >
                     {config.service_configs?.openmemory?.enable_graph ? 'Enabled (Neo4j)' : 'Disabled'}
                   </p>
                 </div>
                 {memoryStatus && (
                   <div>
-                    <span className="text-neutral-600 dark:text-neutral-400">Container:</span>
-                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 mt-1">
+                    <span style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>Container:</span>
+                    <p
+                      className="font-mono text-sm mt-1"
+                      style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                    >
                       {memoryStatus.container_id || 'Not started'}
                     </p>
                   </div>
@@ -144,98 +182,194 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
-          
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+
+          {/* Chronicle Configuration */}
+          <div
+            className="rounded-xl p-6"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+              border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+              boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <h3
+              className="font-semibold mb-4"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
               Chronicle Configuration
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label
+                  className="block text-sm font-medium mb-2"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Chronicle URL
                 </label>
                 <input
                   type="url"
-                  className="input"
+                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none focus:ring-1"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#ffffff',
+                    border: `1px solid ${isDark ? 'var(--surface-400)' : '#e4e4e7'}`,
+                    color: isDark ? 'var(--text-primary)' : '#0f0f13',
+                  }}
                   placeholder="http://localhost:8000"
                   defaultValue="http://localhost:8000"
+                  data-testid="chronicle-url-input"
                 />
               </div>
               <div className="flex items-center space-x-2">
                 <input type="checkbox" id="chronicle-enabled" className="rounded" />
-                <label htmlFor="chronicle-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
+                <label
+                  htmlFor="chronicle-enabled"
+                  className="text-sm"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Enable Chronicle Integration
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+          {/* MCP Configuration */}
+          <div
+            className="rounded-xl p-6"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+              border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+              boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <h3
+              className="font-semibold mb-4"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
               MCP Configuration
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label
+                  className="block text-sm font-medium mb-2"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   MCP Server URL
                 </label>
                 <input
                   type="url"
-                  className="input"
+                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none focus:ring-1"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#ffffff',
+                    border: `1px solid ${isDark ? 'var(--surface-400)' : '#e4e4e7'}`,
+                    color: isDark ? 'var(--text-primary)' : '#0f0f13',
+                  }}
                   placeholder="http://localhost:8765"
+                  data-testid="mcp-url-input"
                 />
               </div>
               <div className="flex items-center space-x-2">
                 <input type="checkbox" id="mcp-enabled" className="rounded" />
-                <label htmlFor="mcp-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
+                <label
+                  htmlFor="mcp-enabled"
+                  className="text-sm"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Enable MCP Integration
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+          {/* Agent Zero Configuration */}
+          <div
+            className="rounded-xl p-6"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+              border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+              boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <h3
+              className="font-semibold mb-4"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
               Agent Zero Configuration
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label
+                  className="block text-sm font-medium mb-2"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Agent Zero URL
                 </label>
                 <input
                   type="url"
-                  className="input"
+                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none focus:ring-1"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#ffffff',
+                    border: `1px solid ${isDark ? 'var(--surface-400)' : '#e4e4e7'}`,
+                    color: isDark ? 'var(--text-primary)' : '#0f0f13',
+                  }}
                   placeholder="http://localhost:9000"
+                  data-testid="agent-zero-url-input"
                 />
               </div>
               <div className="flex items-center space-x-2">
                 <input type="checkbox" id="agent-enabled" className="rounded" />
-                <label htmlFor="agent-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
+                <label
+                  htmlFor="agent-enabled"
+                  className="text-sm"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Enable Agent Zero Integration
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+          {/* n8n Configuration */}
+          <div
+            className="rounded-xl p-6"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+              border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+              boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <h3
+              className="font-semibold mb-4"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
               n8n Configuration
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label
+                  className="block text-sm font-medium mb-2"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   n8n URL
                 </label>
                 <input
                   type="url"
-                  className="input"
+                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none focus:ring-1"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#ffffff',
+                    border: `1px solid ${isDark ? 'var(--surface-400)' : '#e4e4e7'}`,
+                    color: isDark ? 'var(--text-primary)' : '#0f0f13',
+                  }}
                   placeholder="http://localhost:5678"
+                  data-testid="n8n-url-input"
                 />
               </div>
               <div className="flex items-center space-x-2">
                 <input type="checkbox" id="n8n-enabled" className="rounded" />
-                <label htmlFor="n8n-enabled" className="text-sm text-neutral-700 dark:text-neutral-300">
+                <label
+                  htmlFor="n8n-enabled"
+                  className="text-sm"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Enable n8n Integration
                 </label>
               </div>
@@ -243,7 +377,15 @@ export default function SettingsPage() {
           </div>
 
           <div className="flex justify-end">
-            <button className="btn-primary flex items-center space-x-2">
+            <button
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all hover:scale-[1.02]"
+              style={{
+                backgroundColor: '#4ade80',
+                color: '#0f0f13',
+                boxShadow: isDark ? '0 0 20px rgba(74, 222, 128, 0.2)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+              }}
+              data-testid="save-settings-button"
+            >
               <Save className="h-5 w-5" />
               <span>Save Settings</span>
             </button>
@@ -254,11 +396,24 @@ export default function SettingsPage() {
       {/* API Keys Tab */}
       {activeTab === 'api-keys' && (
         <div className="space-y-4">
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+          <div
+            className="rounded-xl p-6"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+              border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+              boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <h3
+              className="font-semibold mb-4"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
               API Keys
             </h3>
-            <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
+            <p
+              className="text-sm mb-4"
+              style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+            >
               Shared API keys from api_keys namespace
             </p>
 
@@ -268,19 +423,35 @@ export default function SettingsPage() {
                   if (!keyValue) return null  // Skip null/empty keys
 
                   return (
-                    <div key={keyName} className="p-4 border border-neutral-200 dark:border-neutral-700 rounded-lg">
+                    <div
+                      key={keyName}
+                      className="p-4 rounded-lg"
+                      style={{
+                        backgroundColor: isDark ? 'var(--surface-700)' : '#fafafa',
+                        border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+                      }}
+                    >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">
-                          <h4 className="font-medium text-neutral-900 dark:text-neutral-100">
+                          <h4
+                            className="font-medium"
+                            style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                          >
                             {keyName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                           </h4>
-                          <code className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded text-xs font-mono text-neutral-500">
+                          <code
+                            className="px-2 py-1 rounded text-xs font-mono"
+                            style={{
+                              backgroundColor: isDark ? 'var(--surface-600)' : '#f4f4f5',
+                              color: isDark ? 'var(--text-muted)' : '#71717a',
+                            }}
+                          >
                             ●●●●●●●●{keyValue.slice(-4)}
                           </code>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <CheckCircle className="h-5 w-5 text-success-600" />
-                          <span className="text-sm text-success-600">Configured</span>
+                        <div className="flex items-center space-x-2" style={{ color: '#4ade80' }}>
+                          <CheckCircle className="h-5 w-5" />
+                          <span className="text-sm">Configured</span>
                         </div>
                       </div>
                     </div>
@@ -288,7 +459,7 @@ export default function SettingsPage() {
                 })}
               </div>
             ) : (
-              <p className="text-neutral-500 dark:text-neutral-400 text-sm">
+              <p style={{ color: isDark ? 'var(--text-muted)' : '#a1a1aa' }} className="text-sm">
                 No API keys configured yet. Complete the setup wizard to add services.
               </p>
             )}
@@ -296,80 +467,75 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Database Tab (keeping original) */}
-      {activeTab === 'database' && (
-        <div className="space-y-4">
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
-              Database Configuration
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  OpenAI API Key
-                </label>
-                <input
-                  type="password"
-                  className="input"
-                  placeholder="sk-..."
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  Anthropic API Key
-                </label>
-                <input
-                  type="password"
-                  className="input"
-                  placeholder="sk-ant-..."
-                />
-              </div>
-            </div>
-            <div className="flex justify-end mt-6">
-              <button className="btn-primary flex items-center space-x-2">
-                <Save className="h-5 w-5" />
-                <span>Save API Keys</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Database Tab */}
       {activeTab === 'database' && (
         <div className="space-y-4">
-          <div className="card p-6">
-            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
+          <div
+            className="rounded-xl p-6"
+            style={{
+              backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+              border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
+              boxShadow: isDark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <h3
+              className="font-semibold mb-4"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
               Database Configuration
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label
+                  className="block text-sm font-medium mb-2"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   MongoDB URI
                 </label>
                 <input
                   type="text"
-                  className="input"
+                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none focus:ring-1 opacity-60"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#ffffff',
+                    border: `1px solid ${isDark ? 'var(--surface-400)' : '#e4e4e7'}`,
+                    color: isDark ? 'var(--text-primary)' : '#0f0f13',
+                  }}
                   placeholder="mongodb://localhost:27017"
                   defaultValue="mongodb://mongo:27017"
                   disabled
+                  data-testid="mongodb-uri-input"
                 />
-                <p className="mt-1 text-xs text-neutral-500">
+                <p
+                  className="mt-1 text-xs"
+                  style={{ color: isDark ? 'var(--text-muted)' : '#a1a1aa' }}
+                >
                   Configure via environment variables
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label
+                  className="block text-sm font-medium mb-2"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
                   Redis URL
                 </label>
                 <input
                   type="text"
-                  className="input"
+                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none focus:ring-1 opacity-60"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#ffffff',
+                    border: `1px solid ${isDark ? 'var(--surface-400)' : '#e4e4e7'}`,
+                    color: isDark ? 'var(--text-primary)' : '#0f0f13',
+                  }}
                   placeholder="redis://localhost:6379"
                   defaultValue="redis://redis:6379/0"
                   disabled
+                  data-testid="redis-url-input"
                 />
-                <p className="mt-1 text-xs text-neutral-500">
+                <p
+                  className="mt-1 text-xs"
+                  style={{ color: isDark ? 'var(--text-muted)' : '#a1a1aa' }}
+                >
                   Configure via environment variables
                 </p>
               </div>
