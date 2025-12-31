@@ -699,7 +699,10 @@ export default function ServicesPage() {
                                       </>
                                     ) : (
                                       <div className="flex items-baseline gap-2 text-xs">
-                                        <span className="text-neutral-500">{cred.label || cred.key}:</span>
+                                        <span className="text-neutral-500">
+                                          {cred.required && <span className="text-error-500 mr-0.5">*</span>}
+                                          {cred.label || cred.key}:
+                                        </span>
                                         <span className="font-mono">
                                           {cred.type === 'secret' ? (
                                             cred.has_value ? '••••••••' : <span className="text-warning-600">Not set</span>
@@ -952,7 +955,10 @@ export default function ServicesPage() {
                         <div className="mt-3 space-y-1.5">
                           {[...envConfig.required_env_vars, ...envConfig.optional_env_vars].map(ev => (
                             <div key={ev.name} className="flex items-baseline gap-2 text-sm">
-                              <span className="text-neutral-500 dark:text-neutral-400">{ev.name}:</span>
+                              <span className="text-neutral-500 dark:text-neutral-400">
+                                {ev.is_required && <span className="text-error-500 mr-0.5">*</span>}
+                                {ev.name}:
+                              </span>
                               <span className="font-mono text-neutral-900 dark:text-neutral-100">
                                 {ev.name.includes('KEY') || ev.name.includes('SECRET') || ev.name.includes('PASSWORD')
                                   ? (ev.resolved_value ? '••••••' + ev.resolved_value.slice(-4) : <span className="text-warning-600">Not set</span>)

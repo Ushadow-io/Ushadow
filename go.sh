@@ -38,7 +38,7 @@ echo ""
 # Check if .env exists
 if [ ! -f .env ]; then
     echo "❌ Error: .env file not found"
-    echo "   Run ./quick-start.sh to generate configuration"
+    echo "   Run ./start-env.sh to generate configuration"
     exit 1
 fi
 

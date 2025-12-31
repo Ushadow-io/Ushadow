@@ -3,61 +3,42 @@ import { getStorageKey } from '../utils/storage'
 
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
-  const { protocol, hostname, port, pathname } = window.location
-  console.log('Protocol:', protocol)
-  console.log('Hostname:', hostname)
-  console.log('Port:', port)
-  console.log('Pathname:', pathname)
+  const { protocol, hostname, port } = window.location
+  console.log('Location:', { protocol, hostname, port })
 
   const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
                          (protocol === 'http:' && (port === '' || port === '80'))
 
-  // Check if we have a base path from Vite build config
-  const viteBasePath = import.meta.env.BASE_URL
-  console.log('Base path from Vite:', viteBasePath)
-
-  // Detect runtime base path from URL (e.g., /wiz/ from /wiz/settings)
-  // This handles path-based routing via Caddy/nginx without rebuild
-  const pathSegments = pathname.split('/').filter(Boolean)
-  const runtimeBasePath = pathSegments.length > 0 && !pathSegments[0].includes('.')
-    ? `/${pathSegments[0]}`
-    : ''
-  console.log('Runtime base path detected:', runtimeBasePath || '(none)')
-
-  // Use Vite base path if set, otherwise use runtime detection
-  const basePath = (viteBasePath && viteBasePath !== '/') ? viteBasePath : runtimeBasePath
-
-  if (isStandardPort && basePath) {
-    // We're using path-based routing - use the base path for API calls
-    console.log('Using path-based routing with base path:', basePath)
-    return basePath.replace(/\/$/, '')
-  }
-
-  // If explicitly set in environment, use that (for direct backend access)
+  // If explicitly set in environment, use that (highest priority)
   if (import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== '') {
-    console.log('Using explicit VITE_API_URL')
+    console.log('Using explicit VITE_API_URL:', import.meta.env.VITE_API_URL)
     return import.meta.env.VITE_API_URL
   }
 
+  // Check if we have a base path from Vite build config (for path-based deployments)
+  const viteBasePath = import.meta.env.BASE_URL
+  if (viteBasePath && viteBasePath !== '/') {
+    console.log('Using Vite BASE_URL for path-based routing:', viteBasePath)
+    return viteBasePath.replace(/\/$/, '')
+  }
+
+  // Standard port (80/443) - use relative URLs via proxy
   if (isStandardPort) {
-    // We're being accessed through nginx proxy or standard proxy
-    console.log('Using standard proxy - relative URLs')
+    console.log('Using relative URLs via proxy')
     return ''
   }
 
-  // Development mode - direct access to dev server (port 5173 is Vite's default)
+  // Development mode - Vite dev server (port 5173)
   if (port === '5173') {
-    console.log('Development mode - using environment backend URL or default')
-    // Use VITE_API_URL if set, otherwise fallback to localhost:8000 + offset
-    return import.meta.env.VITE_API_URL || 'http://localhost:8010'
+    console.log('Development mode - using default backend URL')
+    return 'http://localhost:8010'
   }
 
   // Fallback - calculate backend port from frontend port
-  console.log('Fallback - calculating backend port from frontend port')
   // Frontend runs on 3000 + offset, backend on 8000 + offset
-  // So if we're on 3010, backend is on 8010
   const frontendPort = parseInt(port)
   const backendPort = frontendPort - 3000 + 8000
+  console.log('Calculated backend port:', backendPort)
   return `${protocol}//${hostname}:${backendPort}`
 }
 
@@ -157,6 +138,7 @@ export const settingsApi = {
   update: (updates: any) => api.put('/api/settings/config', updates),
   syncEnv: () => api.post('/api/settings/sync-env'),
   reset: () => api.post('/api/settings/reset'),
+  refresh: () => api.post('/api/settings/refresh'),
 
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
@@ -361,7 +343,6 @@ export interface HuggingFaceModelsResponse {
 
 // Wizard endpoints
 export const wizardApi = {
-  getStatus: () => api.get('/api/wizard/status'),
   getApiKeys: () => api.get('/api/wizard/api-keys'),
   updateApiKeys: (apiKeys: {
     openai_api_key?: string
@@ -371,8 +352,6 @@ export const wizardApi = {
     hf_token?: string  // HuggingFace token for speaker-recognition
   }) => api.put('/api/wizard/api-keys', apiKeys),
   updateProviders: (providers: any) => settingsApi.update(providers),
-  detectEnvKeys: () => api.get('/api/wizard/detect-env-keys'),
-  importEnvKeys: () => api.post('/api/wizard/import-env-keys'),
   complete: () => api.post('/api/wizard/complete'),
   // HuggingFace validation
   getHuggingFaceStatus: () => api.get<HuggingFaceStatus>('/api/wizard/huggingface/status'),

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { tailscaleApi, TailscaleConfig, ContainerStatus, AuthUrlResponse } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
+import { useWizard } from '../contexts/WizardContext'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
@@ -46,6 +47,7 @@ const OS_INSTALL_INFO = {
 
 export default function TailscaleWizard() {
   const navigate = useNavigate()
+  const { updateServiceStatus, markPhaseComplete } = useWizard()
 
   // Use the shared wizard steps hook for navigation
   const wizard = useWizardSteps(STEPS)
@@ -279,6 +281,8 @@ export default function TailscaleWizard() {
 
       if (serveResponse.data.status === 'configured' || serveResponse.data.status === 'skipped') {
         setCertificateProvisioned(true)
+        updateServiceStatus('tailscale', { configured: true, running: true })
+        markPhaseComplete('tailscale')
         setMessage({ type: 'success', text: 'HTTPS access configured and ready!' })
         return true
       } else {
@@ -339,7 +343,7 @@ export default function TailscaleWizard() {
     }
 
     if (wizard.currentStep.id === 'complete') {
-      await completeSetup()
+      // Handled by CompleteStep buttons
       return
     }
 
@@ -375,7 +379,7 @@ export default function TailscaleWizard() {
       onStepClick={handleStepClick}
       isFirstStep={wizard.isFirst}
       onBack={handleBack}
-      onNext={handleNext}
+      onNext={wizard.currentStep.id === 'complete' ? undefined : handleNext}
       nextDisabled={!canProceed()}
       nextLoading={loading}
       message={message}
@@ -711,7 +715,7 @@ export default function TailscaleWizard() {
           <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
           <div>
             <h2 className="text-3xl font-semibold text-gray-900 dark:text-white mb-2">
-              Setup Complete!
+              Level 2 Complete!
             </h2>
             <p className="text-gray-600 dark:text-gray-400">
               Your ushadow instance is now accessible securely from anywhere
@@ -757,6 +761,25 @@ export default function TailscaleWizard() {
                 Secure access enabled
               </li>
             </ul>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
+            <button
+              onClick={() => navigate('/')}
+              data-testid="tailscale-go-home"
+              className="btn-secondary px-6 py-3"
+            >
+              Go to Dashboard
+            </button>
+            <button
+              onClick={() => navigate('/wizard/speaker-recognition')}
+              data-testid="tailscale-continue-setup"
+              className="btn-primary px-6 py-3 flex items-center justify-center gap-2"
+            >
+              Continue to Level 3
+              <span className="text-xs opacity-75">(Speaker Recognition)</span>
+            </button>
           </div>
         </div>
       )}

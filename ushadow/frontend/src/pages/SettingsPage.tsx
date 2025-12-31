@@ -26,6 +26,7 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
   const [resetting, setResetting] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   useEffect(() => {
@@ -43,6 +44,22 @@ export default function SettingsPage() {
       setError('Failed to load settings')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    setError(null)
+    try {
+      // First, tell backend to reload YAML files from disk
+      await settingsApi.refresh()
+      // Then reload the config into the UI
+      await loadConfig()
+    } catch (err) {
+      console.error('Failed to refresh config:', err)
+      setError('Failed to refresh configuration')
+    } finally {
+      setRefreshing(false)
     }
   }
 
@@ -130,12 +147,13 @@ export default function SettingsPage() {
         </div>
         <div className="flex items-center space-x-2">
           <button
-            onClick={loadConfig}
+            onClick={handleRefresh}
+            disabled={refreshing}
             className="btn-secondary flex items-center space-x-2"
             data-testid="refresh-settings"
           >
-            <RefreshCw className="h-4 w-4" />
-            <span>Refresh</span>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
           </button>
           <button
             onClick={() => setShowResetConfirm(true)}

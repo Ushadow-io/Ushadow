@@ -76,11 +76,15 @@ logs-f:
 	docker compose -f docker-compose.yml logs -f
 
 build:
+	@echo "🔐 Ensuring secrets are configured..."
+	@python3 setup/setup_utils.py ensure-secrets config/secrets.yaml > /dev/null
 	@echo "🔨 Building with dev server (hot-reload enabled)..."
 	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d --build
 	@echo "✅ Build complete - frontend running on port $${WEBUI_PORT} with hot-reload"
 
 build-with-tailscale:
+	@echo "🔐 Ensuring secrets are configured..."
+	@python3 setup/setup_utils.py ensure-secrets config/secrets.yaml > /dev/null
 	@echo "🔨 Building with Tailscale socket support (Linux only)..."
 	@echo "⚠️  This requires Tailscale to be running on your Linux host"
 	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml -f compose/backend-with-tailscale.yml up -d --build

@@ -17,6 +17,8 @@ from omegaconf import OmegaConf
 from src.config.infra_settings import get_infra_settings
 from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import mask_dict_secrets
+from src.services.compose_registry import get_compose_registry
+from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -150,4 +152,40 @@ async def reset_config():
         }
     except Exception as e:
         logger.error(f"Error resetting config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/refresh")
+async def refresh_config() -> Dict[str, Any]:
+    """
+    Refresh all cached configuration.
+
+    Reloads:
+    - OmegaConf settings cache
+    - Compose service registry (compose files)
+    - Provider registry (capabilities and providers)
+
+    Use after editing YAML config files to pick up changes without restart.
+    """
+    try:
+        # Clear OmegaConf settings cache
+        settings_store = get_settings_store()
+        settings_store.clear_cache()
+
+        # Refresh compose registry
+        compose_registry = get_compose_registry()
+        compose_registry.refresh()
+
+        # Refresh provider registry
+        provider_registry = get_provider_registry()
+        provider_registry.refresh()
+
+        return {
+            "success": True,
+            "message": "Configuration refreshed",
+            "services": len(compose_registry.get_services()),
+            "providers": len(provider_registry.get_providers()),
+        }
+    except Exception as e:
+        logger.error(f"Error refreshing config: {e}")
         raise HTTPException(status_code=500, detail=str(e))

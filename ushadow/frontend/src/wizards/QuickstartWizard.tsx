@@ -283,8 +283,8 @@ function QuickstartWizardContent() {
       markPhaseComplete('quickstart')
       wizard.next()
     } else if (wizard.currentStep.id === 'complete') {
-      // Navigate to dashboard
-      navigate('/')
+      // Handled by CompleteStep buttons
+      return
     }
   }
 
@@ -328,7 +328,7 @@ function QuickstartWizardContent() {
       currentStepId={wizard.currentStep.id}
       isFirstStep={wizard.isFirst}
       onBack={handleBack}
-      onNext={handleNext}
+      onNext={wizard.currentStep.id === 'complete' ? undefined : handleNext}
       nextDisabled={!canProceed() && wizard.currentStep.id === 'start_services'}
       nextLoading={isSubmitting}
       message={message}
@@ -348,7 +348,12 @@ function QuickstartWizardContent() {
       )}
 
       {/* Step 3: Complete */}
-      {wizard.currentStep.id === 'complete' && <CompleteStep />}
+      {wizard.currentStep.id === 'complete' && (
+        <CompleteStep
+          onContinue={() => navigate('/wizard/tailscale')}
+          onGoHome={() => navigate('/')}
+        />
+      )}
     </WizardShell>
   )
 }
@@ -553,7 +558,12 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
 }
 
 // Step 3: Complete
-function CompleteStep() {
+interface CompleteStepProps {
+  onContinue: () => void
+  onGoHome: () => void
+}
+
+function CompleteStep({ onContinue, onGoHome }: CompleteStepProps) {
   return (
     <div data-testid="quickstart-step-complete" className="text-center space-y-6">
       <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
@@ -587,6 +597,25 @@ function CompleteStep() {
             Enable speaker recognition (Level 3)
           </li>
         </ul>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
+        <button
+          onClick={onGoHome}
+          data-testid="quickstart-go-home"
+          className="btn-secondary px-6 py-3"
+        >
+          Go to Dashboard
+        </button>
+        <button
+          onClick={onContinue}
+          data-testid="quickstart-continue-setup"
+          className="btn-primary px-6 py-3 flex items-center justify-center gap-2"
+        >
+          Continue to Level 2
+          <span className="text-xs opacity-75">(Tailscale)</span>
+        </button>
       </div>
     </div>
   )

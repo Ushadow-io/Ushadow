@@ -72,6 +72,16 @@ class ProviderRegistry:
             f"{len(self._providers)} providers"
         )
 
+    def refresh(self) -> None:
+        """Refresh the registry by reloading all YAML files."""
+        logger.info("Refreshing ProviderRegistry...")
+        self._capabilities.clear()
+        self._providers.clear()
+        self._providers_by_capability.clear()
+        self._loaded = False
+        self._load()
+        logger.info(f"ProviderRegistry refreshed: {len(self._providers)} providers")
+
     def _load_capabilities(self) -> None:
         """Load capability definitions from capabilities.yaml."""
         try:
@@ -339,6 +349,25 @@ class ProviderRegistry:
             return None
 
         return self._providers.get(default_id)
+
+    def get_env_to_settings_mapping(self) -> dict[str, str]:
+        """
+        Build env_var -> settings_path mapping from all providers.
+
+        This replaces hardcoded mappings by deriving them from the
+        provider YAML definitions.
+
+        Returns:
+            Dict mapping env var names to their settings paths
+        """
+        self._load()
+
+        mapping = {}
+        for provider in self._providers.values():
+            for env_map in provider.env_maps:
+                if env_map.env_var and env_map.settings_path:
+                    mapping[env_map.env_var] = env_map.settings_path
+        return mapping
 
 # Global singleton instance
 _registry: Optional[ProviderRegistry] = None

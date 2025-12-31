@@ -1,7 +1,6 @@
 import React from 'react'
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
-import { useWizard } from '../../contexts/WizardContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -10,8 +9,6 @@ interface ProtectedRouteProps {
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
   const { user, token, isLoading, isAdmin, setupRequired } = useAuth()
-  const { isFirstTimeUser } = useWizard()
-  const location = useLocation()
 
   if (isLoading) {
     return (
@@ -45,11 +42,8 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     )
   }
 
-  // Redirect first-time users to setup wizard (unless already on wizard pages)
-  const isWizardPage = location.pathname.startsWith('/wizard')
-  if (isFirstTimeUser() && !isWizardPage) {
-    return <Navigate to="/wizard/start" replace />
-  }
+  // Note: We no longer force first-time users to the wizard.
+  // The dashboard/nav can show prompts, but users should always be able to navigate freely.
 
   return <>{children}</>
 }

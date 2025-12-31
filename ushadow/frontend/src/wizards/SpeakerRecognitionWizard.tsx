@@ -3,10 +3,11 @@ import { useForm, FormProvider, useFormContext, Controller } from 'react-hook-fo
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
-import { Users, CheckCircle, Cpu, Zap, ExternalLink, AlertTriangle, Loader2, Key, ShieldCheck, XCircle } from 'lucide-react'
+import { Users, CheckCircle, Cpu, Zap, ExternalLink, AlertTriangle, Loader2, Key, ShieldCheck, XCircle, Play, RefreshCw } from 'lucide-react'
 
-import { wizardApi, composeServicesApi, settingsApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
+import { wizardApi, composeServicesApi, settingsApi, dockerApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
+import { useWizard } from '../contexts/WizardContext'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import { SecretInput } from '../components/settings'
 import type { WizardStep } from '../types/wizard'
@@ -29,22 +30,39 @@ const speakerRecSchema = z.object({
 
 type SpeakerRecFormData = z.infer<typeof speakerRecSchema>
 
-// Steps - New order: Token → Model Access → Compute → Complete
+// Container status tracking (same pattern as LocalServicesWizard)
+interface ContainerInfo {
+  name: string
+  displayName: string
+  status: 'unknown' | 'stopped' | 'starting' | 'running' | 'error'
+  error?: string
+}
+
+// Steps - New order: Token → Model Access → Compute → Start Container → Complete
 const STEPS: WizardStep[] = [
   { id: 'token', label: 'HuggingFace Token' },
   { id: 'models', label: 'Model Access' },
   { id: 'compute', label: 'Compute Mode' },
+  { id: 'start_container', label: 'Start Service' },
   { id: 'complete', label: 'Complete' },
 ] as const
 
 export default function SpeakerRecognitionWizard() {
   const navigate = useNavigate()
+  const { updateServiceStatus, markPhaseComplete } = useWizard()
   const wizard = useWizardSteps(STEPS)
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [modelAccess, setModelAccess] = useState<HuggingFaceModelsResponse | null>(null)
   const [isCheckingModels, setIsCheckingModels] = useState(false)
   const [tokenSaved, setTokenSaved] = useState(false)
+
+  // Container state for speaker-recognition service
+  const [containerStatus, setContainerStatus] = useState<ContainerInfo>({
+    name: 'speaker-recognition',
+    displayName: 'Speaker Recognition',
+    status: 'unknown',
+  })
 
   const methods = useForm<SpeakerRecFormData>({
     resolver: zodResolver(speakerRecSchema),
@@ -68,6 +86,13 @@ export default function SpeakerRecognitionWizard() {
       checkModelAccess()
     }
   }, [wizard.currentStep.id, tokenSaved])
+
+  // Check container status when entering start_container step
+  useEffect(() => {
+    if (wizard.currentStep.id === 'start_container') {
+      checkContainerStatus()
+    }
+  }, [wizard.currentStep.id])
 
   const loadExistingConfig = async () => {
     try {
@@ -100,6 +125,81 @@ export default function SpeakerRecognitionWizard() {
     }
   }
 
+  // Check container status
+  const checkContainerStatus = async () => {
+    try {
+      const response = await dockerApi.getServiceInfo('speaker-recognition')
+      const isRunning = response.data.status === 'running'
+      setContainerStatus((prev) => ({
+        ...prev,
+        status: isRunning ? 'running' : 'stopped',
+        error: undefined,
+      }))
+    } catch (error) {
+      // Service might not exist yet - that's expected
+      setContainerStatus((prev) => ({
+        ...prev,
+        status: 'stopped',
+        error: undefined,
+      }))
+    }
+  }
+
+  // Start the speaker-recognition container
+  const startContainer = async () => {
+    setContainerStatus((prev) => ({ ...prev, status: 'starting', error: undefined }))
+
+    try {
+      // First install the service (this creates the container if needed)
+      await composeServicesApi.install('speaker-recognition')
+
+      // Then start it
+      await dockerApi.startService('speaker-recognition')
+
+      // Poll for running status
+      let attempts = 0
+      const maxAttempts = 30 // Longer timeout for speaker-rec (model download)
+
+      const pollStatus = async () => {
+        attempts++
+        try {
+          const response = await dockerApi.getServiceInfo('speaker-recognition')
+          const isRunning = response.data.status === 'running'
+
+          if (isRunning) {
+            setContainerStatus((prev) => ({ ...prev, status: 'running', error: undefined }))
+            updateServiceStatus('speaker-recognition', { configured: true, running: true })
+            setMessage({ type: 'success', text: 'Speaker Recognition service started!' })
+            return
+          }
+
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          } else {
+            setContainerStatus((prev) => ({
+              ...prev,
+              status: 'error',
+              error: 'Timeout waiting for service to start',
+            }))
+          }
+        } catch (err) {
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          }
+        }
+      }
+
+      setTimeout(pollStatus, 3000) // Initial delay for container startup
+    } catch (error) {
+      setContainerStatus((prev) => ({
+        ...prev,
+        status: 'error',
+        error: getErrorMessage(error, 'Failed to start service'),
+      }))
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to start speaker recognition service') })
+    }
+  }
+
   // Map steps to form fields for validation
   const getFieldsForStep = (stepId: string): (keyof SpeakerRecFormData)[] => {
     switch (stepId) {
@@ -114,6 +214,10 @@ export default function SpeakerRecognitionWizard() {
     if (stepId === 'models') {
       // Must have all models accessible to proceed
       return modelAccess?.all_accessible ?? false
+    }
+    if (stepId === 'start_container') {
+      // Container must be running to proceed
+      return containerStatus.status === 'running'
     }
     return true
   }
@@ -149,16 +253,17 @@ export default function SpeakerRecognitionWizard() {
     }
   }
 
-  // Final submission - install the service
+  // Final submission - just mark phase complete (container already started)
   const handleComplete = async () => {
     setIsSubmitting(true)
     try {
-      // Mark the service as installed in settings
-      await composeServicesApi.install('speaker-recognition')
-      setMessage({ type: 'success', text: 'Speaker Recognition installed! Redirecting...' })
+      // Container is already running from previous step
+      // Just mark the phase complete and navigate
+      markPhaseComplete('speaker')
+      setMessage({ type: 'success', text: 'Speaker Recognition setup complete! Redirecting...' })
       setTimeout(() => navigate('/speaker-recognition'), 1500)
     } catch (error) {
-      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to install speaker recognition') })
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to complete setup') })
       setIsSubmitting(false)
     }
   }
@@ -171,6 +276,8 @@ export default function SpeakerRecognitionWizard() {
     if (!canProceed(wizard.currentStep.id)) {
       if (wizard.currentStep.id === 'models') {
         setMessage({ type: 'error', text: 'Please accept the license terms for all models before proceeding' })
+      } else if (wizard.currentStep.id === 'start_container') {
+        setMessage({ type: 'error', text: 'Please start the Speaker Recognition service before proceeding' })
       } else {
         setMessage({ type: 'error', text: 'Please complete all requirements before proceeding' })
       }
@@ -217,6 +324,9 @@ export default function SpeakerRecognitionWizard() {
     if (wizard.currentStep.id === 'models') {
       return isCheckingModels || !(modelAccess?.all_accessible ?? false)
     }
+    if (wizard.currentStep.id === 'start_container') {
+      return containerStatus.status === 'starting' || containerStatus.status !== 'running'
+    }
     return false
   }
 
@@ -246,6 +356,13 @@ export default function SpeakerRecognitionWizard() {
           />
         )}
         {wizard.currentStep.id === 'compute' && <ComputeStep />}
+        {wizard.currentStep.id === 'start_container' && (
+          <StartContainerStep
+            containerStatus={containerStatus}
+            onStart={startContainer}
+            onRefresh={checkContainerStatus}
+          />
+        )}
         {wizard.currentStep.id === 'complete' && <CompleteStep />}
       </FormProvider>
     </WizardShell>
@@ -594,7 +711,145 @@ function ComputeStep() {
   )
 }
 
-// Step 4: Complete
+// Step 4: Start Container
+interface StartContainerStepProps {
+  containerStatus: ContainerInfo
+  onStart: () => void
+  onRefresh: () => void
+}
+
+function StartContainerStep({ containerStatus, onStart, onRefresh }: StartContainerStepProps) {
+  const getStatusColor = () => {
+    switch (containerStatus.status) {
+      case 'running':
+        return 'bg-green-100 dark:bg-green-900/30 border-green-300 dark:border-green-700'
+      case 'starting':
+        return 'bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700'
+      case 'error':
+        return 'bg-red-100 dark:bg-red-900/30 border-red-300 dark:border-red-700'
+      default:
+        return 'bg-gray-100 dark:bg-gray-700/30 border-gray-300 dark:border-gray-600'
+    }
+  }
+
+  const getStatusIcon = () => {
+    switch (containerStatus.status) {
+      case 'running':
+        return <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
+      case 'starting':
+        return <Loader2 className="h-6 w-6 text-yellow-600 dark:text-yellow-400 animate-spin" />
+      case 'error':
+        return <XCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+      default:
+        return <div className="h-6 w-6 rounded-full border-2 border-gray-400" />
+    }
+  }
+
+  const getStatusText = () => {
+    switch (containerStatus.status) {
+      case 'running':
+        return 'Running'
+      case 'starting':
+        return 'Starting... (downloading models may take a few minutes)'
+      case 'error':
+        return containerStatus.error || 'Error'
+      case 'stopped':
+        return 'Stopped'
+      default:
+        return 'Unknown'
+    }
+  }
+
+  return (
+    <div data-testid="speaker-rec-step-start-container" className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <Play className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+            Start Speaker Recognition Service
+          </h2>
+        </div>
+        <button
+          onClick={onRefresh}
+          data-testid="speaker-rec-refresh-status"
+          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title="Refresh status"
+        >
+          <RefreshCw className="h-5 w-5" />
+        </button>
+      </div>
+
+      <p className="text-gray-600 dark:text-gray-400">
+        Start the Speaker Recognition container. On first run, the PyAnnote models will be downloaded
+        which may take a few minutes depending on your connection.
+      </p>
+
+      {/* Container Status Card */}
+      <div className={`p-6 rounded-lg border-2 ${getStatusColor()} transition-colors`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            {getStatusIcon()}
+            <div>
+              <h3 className="font-semibold text-gray-900 dark:text-white">
+                {containerStatus.displayName}
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                {getStatusText()}
+              </p>
+            </div>
+          </div>
+
+          {containerStatus.status !== 'running' && containerStatus.status !== 'starting' && (
+            <button
+              onClick={onStart}
+              data-testid="speaker-rec-start-container"
+              className="btn-primary flex items-center space-x-2"
+            >
+              <Play className="h-4 w-4" />
+              <span>Start</span>
+            </button>
+          )}
+        </div>
+
+        {containerStatus.error && (
+          <p className="mt-3 text-sm text-red-600 dark:text-red-400">{containerStatus.error}</p>
+        )}
+      </div>
+
+      {/* Info about what happens during start */}
+      {containerStatus.status === 'starting' && (
+        <div className="p-4 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20">
+          <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">What&apos;s happening:</h4>
+          <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
+            <li>• Creating the speaker-recognition container</li>
+            <li>• Downloading PyAnnote segmentation model (~50MB)</li>
+            <li>• Downloading PyAnnote diarization model (~50MB)</li>
+            <li>• Initializing the speaker recognition service</li>
+          </ul>
+        </div>
+      )}
+
+      {/* Success message */}
+      {containerStatus.status === 'running' && (
+        <div className="p-4 rounded-lg border-2 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20">
+          <div className="flex items-center space-x-3">
+            <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
+            <div>
+              <p className="font-medium text-green-800 dark:text-green-200">
+                Service is running!
+              </p>
+              <p className="text-sm text-green-600 dark:text-green-400">
+                Click Next to complete the setup.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Step 5: Complete
 function CompleteStep() {
   const { watch } = useFormContext<SpeakerRecFormData>()
   const computeMode = watch('computeMode')
@@ -610,10 +865,10 @@ function CompleteStep() {
 
       <div>
         <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
-          Speaker Recognition is Ready!
+          Speaker Recognition is Running!
         </h2>
         <p className="text-gray-600 dark:text-gray-400">
-          Your speaker recognition service is configured and ready to start.
+          Your speaker recognition service is configured and running.
         </p>
       </div>
 
@@ -622,6 +877,13 @@ function CompleteStep() {
           Configuration Summary:
         </h3>
         <div className="space-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-600 dark:text-gray-400">Service Status:</span>
+            <span className="font-medium text-green-600 dark:text-green-400 flex items-center space-x-2">
+              <CheckCircle className="h-4 w-4" />
+              <span>Running</span>
+            </span>
+          </div>
           <div className="flex items-center justify-between">
             <span className="text-gray-600 dark:text-gray-400">Compute Mode:</span>
             <span className="font-medium text-gray-900 dark:text-white flex items-center space-x-2">
@@ -648,7 +910,7 @@ function CompleteStep() {
       </div>
 
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        <p>Click "Complete" to install the service and start using speaker recognition.</p>
+        <p>Click "Complete" to finish setup and start using speaker recognition.</p>
       </div>
     </div>
   )

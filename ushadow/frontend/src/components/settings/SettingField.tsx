@@ -174,8 +174,8 @@ export const SettingField = forwardRef<HTMLInputElement, SettingFieldProps>(
             className="block text-sm font-medium text-neutral-700 dark:text-neutral-300"
             data-testid={`${testId}-label`}
           >
+            {required && <span className="text-red-500 mr-1">*</span>}
             {label}
-            {required && <span className="text-red-500 ml-1">*</span>}
           </label>
           {description && (
             <div className="group relative">

@@ -1,8 +1,9 @@
-import { createContext, useContext, useState, ReactNode, useMemo } from 'react'
+import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react'
+import { api } from '../services/api'
 
 export type WizardMode = 'quickstart' | 'local' | 'custom' | null
 
-export type WizardPhase = 'quickstart' | 'memory' | 'chronicle' | 'speaker' | 'advanced'
+export type WizardPhase = 'quickstart' | 'tailscale' | 'speaker' | 'advanced'
 
 // Setup levels for progressive onboarding
 export type SetupLevel = 0 | 1 | 2 | 3
@@ -73,44 +74,29 @@ const initialState: WizardState = {
 }
 
 export function WizardProvider({ children }: { children: ReactNode }) {
-  const [wizardState, setWizardState] = useState<WizardState>(() => {
-    // Try to load from localStorage
-    const saved = localStorage.getItem('ushadow-wizard-state')
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      // Migration: convert old hardcoded format to new dynamic format
-      if (parsed.services && !('services' in parsed.services)) {
-        // Old format had { apiKeys, openMemory, chronicle, ... }
-        // New format has { apiKeys, services: { ... } }
-        const { apiKeys, ...oldServices } = parsed.services
-        parsed.services = {
-          apiKeys: apiKeys || false,
-          services: Object.entries(oldServices).reduce((acc, [key, value]) => {
-            // Map old keys to new service names
-            const keyMap: Record<string, string> = {
-              openMemory: 'mem0',
-              chronicle: 'chronicle-backend',
-              tailscale: 'tailscale',
-              speakerRecognition: 'speaker-recognition',
-            }
-            const newKey = keyMap[key] || key
-            acc[newKey] = value as ServiceStatus
-            return acc
-          }, {} as Record<string, ServiceStatus>),
+  const [wizardState, setWizardState] = useState<WizardState>(initialState)
+
+  // Load state from backend on mount
+  useEffect(() => {
+    api.get('/api/wizard/setup-state')
+      .then((res) => {
+        if (res.data && Object.keys(res.data).length > 0) {
+          setWizardState({
+            ...initialState,
+            ...res.data,
+            services: {
+              apiKeys: res.data.services?.apiKeys ?? false,
+              services: res.data.services?.services ?? {},
+            },
+          })
         }
-      }
-      // Ensure services object exists
-      if (!parsed.services) {
-        parsed.services = initialState.services
-      }
-      return parsed
-    }
-    return initialState
-  })
+      })
+      .catch(() => {})
+  }, [])
 
   const saveState = (newState: WizardState) => {
     setWizardState(newState)
-    localStorage.setItem('ushadow-wizard-state', JSON.stringify(newState))
+    api.put('/api/wizard/setup-state', newState).catch(() => {})
   }
 
   const setMode = (mode: WizardMode) => {
@@ -131,8 +117,8 @@ export function WizardProvider({ children }: { children: ReactNode }) {
   }
 
   const resetWizard = () => {
-    localStorage.removeItem('ushadow-wizard-state')
     setWizardState(initialState)
+    api.put('/api/wizard/setup-state', initialState).catch(() => {})
   }
 
   const isPhaseComplete = (phase: WizardPhase) => {
@@ -217,43 +203,25 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     return 0
   }, [wizardState.services])
 
-  // Get dynamic label for sidebar based on setup level
+  // Get dynamic label for sidebar based on completed phases
   const getSetupLabel = (): { label: string; description: string; path: string } => {
-    switch (setupLevel) {
-      case 0:
-        return {
-          label: 'Get Started',
-          description: 'Set up your AI platform',
-          path: '/wizard/start',
-        }
-      case 1:
-        return {
-          label: 'Add Mobile',
-          description: 'Secure network access',
-          path: '/wizard/tailscale',
-        }
-      case 2:
-        return {
-          label: 'Add Voice ID',
-          description: 'Speaker recognition',
-          path: '/wizard/speaker',
-        }
-      case 3:
-        return {
-          label: 'Setup Complete',
-          description: 'All services configured',
-          path: '/settings',
-        }
+    const phases = wizardState.completedPhases
+
+    if (!phases.includes('quickstart')) {
+      return { label: 'Get Started', description: 'Set up your AI platform', path: '/wizard/start' }
     }
+    if (!phases.includes('tailscale')) {
+      return { label: 'Add Mobile', description: 'Secure network access', path: '/wizard/tailscale' }
+    }
+    if (!phases.includes('speaker')) {
+      return { label: 'Add Voice ID', description: 'Speaker recognition', path: '/wizard/speaker-recognition' }
+    }
+    return { label: 'Setup Complete', description: 'All services configured', path: '/settings' }
   }
 
   // Check if this is a first-time user (no setup started)
   const isFirstTimeUser = (): boolean => {
-    return (
-      setupLevel === 0 &&
-      wizardState.mode === null &&
-      wizardState.completedPhases.length === 0
-    )
+    return wizardState.completedPhases.length === 0
   }
 
   return (
