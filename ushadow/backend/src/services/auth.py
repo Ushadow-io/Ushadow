@@ -26,20 +26,27 @@ from fastapi_users.authentication import (
 )
 
 from src.config.infra_settings import get_infra_settings
+from src.config.omegaconf_settings import get_settings_store
 from src.models.user import User, UserCreate, get_user_db
 
 logger = logging.getLogger(__name__)
 settings = get_infra_settings()
+config = get_settings_store()
 
 # JWT Configuration
 JWT_LIFETIME_SECONDS = 86400  # 24 hours (matches chronicle)
 ALGORITHM = "HS256"
 
-# Get secret key from settings
-SECRET_KEY = settings.AUTH_SECRET_KEY
+# Get secret key from OmegaConf (secrets.yaml -> security.auth_secret_key)
+SECRET_KEY = config.get_sync("security.auth_secret_key")
+if not SECRET_KEY:
+    raise ValueError(
+        "AUTH_SECRET_KEY not found in config/secrets.yaml. "
+        "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
+    )
 COOKIE_SECURE = settings.NODE_ENV == "production"
 
-# Admin configuration
+# Admin configuration (still from infra_settings for backward compat)
 ADMIN_EMAIL = settings.ADMIN_EMAIL
 ADMIN_PASSWORD = settings.ADMIN_PASSWORD
 
