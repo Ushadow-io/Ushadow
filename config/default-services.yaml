@@ -15,9 +15,10 @@ selected_providers:
 
 # Default Services to Install
 # These services are installed by default in quickstart mode.
+# Names must match actual service names in compose files (not compose file basenames).
 # Users can add more services via the UI.
 default_services:
-  - chronicle
-  - chronicle-webui
-  - openmemory
-  - openmemory-ui
+  - chronicle-backend
+  # - chronicle-webui
+  - mem0
+  # - mem0-ui

@@ -131,10 +131,12 @@ async def list_services(
         List of service information
     """
     docker_manager = get_docker_manager()
+    logger.info(f"[list_services] MANAGEABLE_SERVICES keys: {list(docker_manager.MANAGEABLE_SERVICES.keys())}")
     services = docker_manager.list_services(
         user_controllable_only=user_controllable_only,
         service_type=service_type
     )
+    logger.info(f"[list_services] Returning {len(services)} services: {[(s.name, s.status.value) for s in services]}")
 
     # Convert ServiceInfo to response model
     return [
@@ -180,7 +182,10 @@ async def get_service(
         Service information
     """
     docker_manager = get_docker_manager()
+    logger.info(f"[get_service] Looking up service: {service_name}")
+    logger.info(f"[get_service] Available services: {list(docker_manager.MANAGEABLE_SERVICES.keys())}")
     service = docker_manager.get_service_info(service_name)
+    logger.info(f"[get_service] Result for {service_name}: status={service.status}, error={service.error}")
 
     if service.error and service.error == "Service not found":
         raise HTTPException(status_code=404, detail="Service not found")

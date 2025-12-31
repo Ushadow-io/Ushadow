@@ -30,7 +30,6 @@ try:
     from src.config.omegaconf_settings import (
         get_settings_store,
         SettingSuggestion,
-        infer_setting_type,
         env_var_matches_setting,
     )
     from src.services.provider_registry import get_provider_registry
@@ -43,7 +42,6 @@ except ImportError:
     from config.omegaconf_settings import (
         get_settings_store,
         SettingSuggestion,
-        infer_setting_type,
         env_var_matches_setting,
     )
     from services.provider_registry import get_provider_registry
@@ -566,139 +564,6 @@ async def resolve_service_env_vars(service_id: str) -> Dict[str, Any]:
         "resolved": resolved,
         "missing": missing,
         "compose_file": str(service.compose_file),
-    }
-
-
-# =============================================================================
-# Quickstart Wizard Support
-# =============================================================================
-
-class IncompleteEnvVar(BaseModel):
-    """An environment variable that needs configuration."""
-    name: str
-    service_id: str
-    service_name: str
-    has_default: bool = False
-    default_value: Optional[str] = None
-    suggestions: List[SettingSuggestion] = []
-    # For deduplication - multiple services might need same var (e.g., OPENAI_API_KEY)
-    setting_type: str = "secret"  # secret, url, string
-
-
-class QuickstartResponse(BaseModel):
-    """Response for quickstart wizard."""
-    incomplete_env_vars: List[IncompleteEnvVar]
-    services_needing_setup: List[str]
-    total_services: int
-    ready_services: int
-
-
-@router.get("/quickstart", response_model=QuickstartResponse)
-async def get_quickstart_config() -> QuickstartResponse:
-    """
-    Get all incomplete required env vars across default/installed services.
-
-    This endpoint powers the quickstart wizard by:
-    1. Finding all installed services (default + user-added)
-    2. Identifying required env vars without values
-    3. Deduplicating common vars (e.g., OPENAI_API_KEY used by multiple services)
-    4. Including setting suggestions for each var
-
-    Returns a flat list of env vars to configure, deduplicated by name.
-    """
-    registry = get_compose_registry()
-    settings = get_settings_store()
-    provider_registry = get_provider_registry()
-
-    # Get installed service names
-    installed_names, removed_names = await get_installed_service_names(settings)
-
-    # Get all services and filter to installed ones
-    all_services = registry.get_services()
-    installed_services = [
-        s for s in all_services
-        if service_matches_installed(s, installed_names, removed_names)
-    ]
-
-    # Track incomplete vars and which services need them
-    incomplete_vars: Dict[str, IncompleteEnvVar] = {}
-    services_needing_setup = set()
-
-    for service in installed_services:
-        # Load saved config for this service
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await settings.get(config_key) or {}
-
-        for ev in service.required_env_vars:
-            # Skip if has default
-            if ev.has_default:
-                continue
-
-            # Check if already configured
-            saved = saved_config.get(ev.name, {})
-
-            # Check saved mapping
-            if saved.get("source") == "setting" and saved.get("setting_path"):
-                value = await settings.get(saved["setting_path"])
-                if value:
-                    continue  # Has value, skip
-            elif saved.get("source") == "literal" and saved.get("value"):
-                continue  # Has literal value, skip
-
-            # Check for auto-mappable setting using centralized method
-            if await settings.has_value_for_env_var(ev.name):
-                continue  # Has auto-mappable value, skip
-
-            # This env var is incomplete
-            services_needing_setup.add(service.service_name)
-
-            # Add to incomplete vars (deduplicate by name)
-            if ev.name not in incomplete_vars:
-                # Get suggestions for this var
-                suggestions = await settings.get_suggestions_for_env_var(
-                    ev.name, provider_registry, service.requires
-                )
-
-                incomplete_vars[ev.name] = IncompleteEnvVar(
-                    name=ev.name,
-                    service_id=service.service_id,
-                    service_name=service.service_name,
-                    has_default=ev.has_default,
-                    default_value=ev.default_value,
-                    suggestions=suggestions,
-                    setting_type=infer_setting_type(ev.name),
-                )
-
-    return QuickstartResponse(
-        incomplete_env_vars=list(incomplete_vars.values()),
-        services_needing_setup=list(services_needing_setup),
-        total_services=len(installed_services),
-        ready_services=len(installed_services) - len(services_needing_setup),
-    )
-
-
-@router.post("/quickstart")
-async def save_quickstart_config(env_values: Dict[str, str]) -> Dict[str, Any]:
-    """
-    Save env var values from quickstart wizard.
-
-    Accepts a dict of env_var_name -> value.
-    Creates settings in api_keys.{name} or security.{name} as appropriate.
-    """
-    settings = get_settings_store()
-
-    # Use centralized method to save env var values
-    counts = await settings.save_env_var_values(env_values)
-    total_saved = counts["api_keys"] + counts["security"] + counts["admin"]
-
-    if total_saved > 0:
-        logger.info(f"Quickstart saved {total_saved} env vars: {counts}")
-
-    return {
-        "success": True,
-        "saved": total_saved,
-        "counts": counts,
-        "message": "Configuration saved successfully"
     }
 
 

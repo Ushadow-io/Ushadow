@@ -203,6 +203,7 @@ class DockerManager:
                     "user_controllable": True,
                     "compose_file": str(service.compose_file),
                     "docker_service_name": service.service_name,
+                    "namespace": service.namespace,  # Docker Compose project / K8s namespace
                     "endpoints": [],
                     "metadata": {
                         "compose_service_id": service.service_id,
@@ -404,38 +405,54 @@ class DockerManager:
         try:
             # Use docker_service_name if specified (e.g., "mem0" for "openmemory" service)
             docker_container_name = service_config.get("docker_service_name", service_name)
+            logger.info(f"[get_service_info] Looking for docker_container_name: {docker_container_name}")
 
             # Try to find container by exact name first
             container = None
             try:
                 container = self._client.containers.get(docker_container_name)
+                logger.info(f"[get_service_info] Found by exact name: {container.name}, status: {container.status}")
             except NotFound:
                 # Container name may have project prefix (e.g., "ushadow-wiz-frame-chronicle-backend")
-                # Search by compose service label, preferring our project
+                # Search by compose service label, preferring declared namespace
                 import os
                 current_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+
+                # Use declared namespace from x-ushadow, fall back to current project
+                service_namespace = service_config.get("namespace")
+                target_projects = []
+                if service_namespace:
+                    target_projects.append(service_namespace)
+                target_projects.append(current_project)
+
+                logger.info(f"[get_service_info] Searching by label, target_projects: {target_projects}")
 
                 containers = self._client.containers.list(
                     all=True,
                     filters={"label": f"com.docker.compose.service={docker_container_name}"}
                 )
+                logger.info(f"[get_service_info] Found {len(containers)} containers with label com.docker.compose.service={docker_container_name}")
+                for c in containers:
+                    logger.info(f"[get_service_info]   - {c.name}, project: {c.labels.get('com.docker.compose.project', 'unknown')}, status: {c.status}")
                 if containers:
-                    # Prefer containers from current project, then infra
-                    preferred_projects = [current_project, "infra"]
-                    for project in preferred_projects:
+                    # Match containers from declared namespace or current project
+                    for target_project in target_projects:
                         for c in containers:
                             labels = c.labels or {}
-                            if labels.get("com.docker.compose.project") == project:
+                            container_project = labels.get("com.docker.compose.project", "")
+                            if container_project == target_project:
                                 container = c
+                                logger.info(f"[get_service_info] Matched container {c.name} in project {container_project}")
                                 break
                         if container:
                             break
-                    # Fall back to first container if no preferred project found
+
                     if not container:
-                        container = containers[0]
-                        logger.warning(
-                            f"Container {docker_container_name} found but not in project '{current_project}'. "
-                            f"Using: {container.name} (project: {container.labels.get('com.docker.compose.project', 'unknown')})"
+                        # Log what we found but didn't match
+                        found_projects = [c.labels.get('com.docker.compose.project', 'unknown') for c in containers]
+                        logger.info(
+                            f"[get_service_info] Found {len(containers)} containers for {docker_container_name} "
+                            f"but none in projects {target_projects}. Found in: {found_projects}"
                         )
 
             if not container:
@@ -836,15 +853,20 @@ class DockerManager:
             compose_dir = compose_path.parent if compose_path.parent.exists() else Path(".")
 
             # Run docker-compose up -d for this service
-            # Use COMPOSE_PROJECT_NAME from environment for consistent container naming
+            # Use declared namespace from x-ushadow, fall back to COMPOSE_PROJECT_NAME
             import os
-            project_name = os.environ.get("COMPOSE_PROJECT_NAME")
+            service_config = self.MANAGEABLE_SERVICES[service_name]
+            project_name = service_config.get("namespace")
+            if not project_name:
+                project_name = os.environ.get("COMPOSE_PROJECT_NAME")
             if not project_name:
                 # Fallback for infra services or if env not set
                 if "infra" in str(compose_path):
                     project_name = "infra"
                 else:
                     project_name = "ushadow"
+
+            logger.info(f"[start_service_via_compose] Using project_name: {project_name} for service: {service_name}")
 
             # Check if service requires a specific compose profile
             compose_profile = self.MANAGEABLE_SERVICES[service_name].get("compose_profile")

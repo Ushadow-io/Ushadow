@@ -210,23 +210,38 @@ export interface EnvVarInfo {
   suggestions: EnvVarSuggestion[]
 }
 
-/** Incomplete env var for quickstart wizard */
-export interface IncompleteEnvVar {
-  name: string
-  service_id: string
-  service_name: string
-  has_default: boolean
-  default_value?: string
-  suggestions: EnvVarSuggestion[]
-  setting_type: 'secret' | 'url' | 'string'
+/** Missing key that needs to be configured for a provider */
+export interface MissingKey {
+  key: string
+  label: string
+  settings_path?: string
+  link?: string
+  type: 'secret' | 'url' | 'string'
 }
 
-/** Quickstart wizard response */
+/** Capability requirement with provider info and missing keys */
+export interface CapabilityRequirement {
+  id: string
+  selected_provider?: string
+  provider_name?: string
+  provider_mode?: 'cloud' | 'local'
+  configured: boolean
+  missing_keys: MissingKey[]
+  error?: string
+}
+
+/** Service info with display name for wizard */
+export interface ServiceInfo {
+  name: string  // Technical name (e.g., "mem0")
+  display_name: string  // Human-readable name (e.g., "OpenMemory")
+  description?: string
+}
+
+/** Quickstart wizard response - aggregated capability requirements */
 export interface QuickstartConfig {
-  incomplete_env_vars: IncompleteEnvVar[]
-  services_needing_setup: string[]
-  total_services: number
-  ready_services: number
+  required_capabilities: CapabilityRequirement[]
+  services: ServiceInfo[]  // Full service info, not just names
+  all_configured: boolean
 }
 
 export interface PortMapping {
@@ -295,12 +310,12 @@ export const composeServicesApi = {
       `/api/compose/services/${encodeURIComponent(serviceId)}/uninstall`
     ),
 
-  /** Get quickstart config - incomplete env vars across all installed services */
+  /** Get quickstart config - capability requirements for default services */
   getQuickstart: () => api.get<QuickstartConfig>('/api/wizard/quickstart'),
 
-  /** Save quickstart config - save env var values */
-  saveQuickstart: (envValues: Record<string, string>) =>
-    api.post<{ success: boolean; saved: number; message: string }>('/api/wizard/quickstart', envValues),
+  /** Save quickstart config - save key values (settings_path -> value) */
+  saveQuickstart: (keyValues: Record<string, string>) =>
+    api.post<{ success: boolean; saved: number; message: string }>('/api/wizard/quickstart', keyValues),
 }
 
 // Docker service management endpoints (infrastructure containers)

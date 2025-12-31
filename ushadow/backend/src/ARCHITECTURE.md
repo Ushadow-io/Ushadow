@@ -34,7 +34,7 @@ This document defines the layer responsibilities for the `src/` directory.
 | Suffix | Use When | Example |
 |--------|----------|---------|
 | `Manager` | Coordinating operations on external resources (Docker, K8s) | `DockerManager`, `KubernetesManager` |
-| `Registry` | In-memory lookup/catalog of items loaded from config | `ProviderRegistry`, `ServiceRegistry` |
+| `Registry` | In-memory lookup/catalog of items loaded from config | `ProviderRegistry`, `ComposeServiceRegistry` |
 | `Service` | Business logic that coordinates multiple concerns | `AuthService` |
 | `Resolver` | Computing/deriving values from other data | `CapabilityResolver` |
 
