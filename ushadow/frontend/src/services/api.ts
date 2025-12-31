@@ -296,11 +296,11 @@ export const composeServicesApi = {
     ),
 
   /** Get quickstart config - incomplete env vars across all installed services */
-  getQuickstart: () => api.get<QuickstartConfig>('/api/compose/quickstart'),
+  getQuickstart: () => api.get<QuickstartConfig>('/api/wizard/quickstart'),
 
   /** Save quickstart config - save env var values */
   saveQuickstart: (envValues: Record<string, string>) =>
-    api.post<{ success: boolean; saved: number; message: string }>('/api/compose/quickstart', envValues),
+    api.post<{ success: boolean; saved: number; message: string }>('/api/wizard/quickstart', envValues),
 }
 
 // Docker service management endpoints (infrastructure containers)

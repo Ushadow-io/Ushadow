@@ -4,12 +4,18 @@ Uses OmegaConf for configuration management.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import (
+    get_omegaconf_settings,
+    SettingSuggestion,
+    infer_setting_type,
+)
+from src.services.compose_registry import get_compose_registry
+from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,6 +43,25 @@ class ApiKeysUpdateResponse(BaseModel):
     """Response for API keys update operation."""
     api_keys: ApiKeysStep = Field(..., description="Updated API keys (masked)")
     success: bool = Field(default=True, description="Whether update was successful")
+
+
+class IncompleteEnvVar(BaseModel):
+    """An environment variable that needs configuration."""
+    name: str
+    service_id: str
+    service_name: str
+    has_default: bool = False
+    default_value: Optional[str] = None
+    suggestions: List[Dict[str, Any]] = []  # SettingSuggestion as dicts
+    setting_type: str = "secret"  # secret, url, string
+
+
+class QuickstartResponse(BaseModel):
+    """Response for quickstart wizard."""
+    incomplete_env_vars: List[IncompleteEnvVar]
+    services_needing_setup: List[str]
+    total_services: int
+    ready_services: int
 
 
 # Helper functions
@@ -179,3 +204,165 @@ async def complete_wizard():
     The wizard is automatically marked as complete when API keys are configured.
     """
     return {"status": "success", "message": "Wizard marked as complete"}
+
+
+# =============================================================================
+# Quickstart Wizard Endpoints
+# =============================================================================
+
+async def get_installed_service_names(settings) -> tuple[set, set]:
+    """
+    Get the sets of installed and removed service names.
+
+    Returns:
+        Tuple of (installed_names, removed_names)
+    """
+    # Get default services from config
+    default_services = await settings.get("default_services") or []
+    installed = set(default_services)
+    removed = set()
+
+    # Get user modifications
+    user_installed = await settings.get("installed_services") or {}
+
+    for service_name, state in user_installed.items():
+        if hasattr(state, 'items'):
+            state_dict = dict(state)
+        else:
+            state_dict = state if isinstance(state, dict) else {}
+
+        is_removed = state_dict.get("removed") == True
+        is_added = state_dict.get("added") == True
+
+        if is_removed:
+            installed.discard(service_name)
+            removed.add(service_name)
+        elif is_added:
+            installed.add(service_name)
+
+    return installed, removed
+
+
+def service_matches_installed(service, installed_names: set, removed_names: set) -> bool:
+    """Check if a service matches any of the installed service names."""
+    if service.service_name in removed_names:
+        return False
+
+    if service.service_name in installed_names:
+        return True
+
+    # Check compose file name
+    compose_base = service.compose_file.stem.replace('-compose', '')
+    if compose_base in installed_names:
+        return True
+
+    return False
+
+
+@router.get("/quickstart", response_model=QuickstartResponse)
+async def get_quickstart_config() -> QuickstartResponse:
+    """
+    Get all incomplete required env vars across installed services.
+
+    This endpoint powers the quickstart wizard by:
+    1. Finding all installed services (default + user-added)
+    2. Identifying required env vars without values
+    3. Deduplicating common vars (e.g., OPENAI_API_KEY used by multiple services)
+    4. Including setting suggestions for each var
+
+    Returns a flat list of env vars to configure, deduplicated by name.
+    """
+    registry = get_compose_registry()
+    settings = get_omegaconf_settings()
+    provider_registry = get_provider_registry()
+
+    # Get installed service names
+    installed_names, removed_names = await get_installed_service_names(settings)
+
+    # Get all services and filter to installed ones
+    all_services = registry.get_services()
+    installed_services = [
+        s for s in all_services
+        if service_matches_installed(s, installed_names, removed_names)
+    ]
+
+    # Track incomplete vars and which services need them
+    incomplete_vars: Dict[str, IncompleteEnvVar] = {}
+    services_needing_setup = set()
+
+    for service in installed_services:
+        # Load saved config for this service
+        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
+        saved_config = await settings.get(config_key) or {}
+
+        for ev in service.required_env_vars:
+            # Skip if has default
+            if ev.has_default:
+                continue
+
+            # Check if already configured
+            saved = saved_config.get(ev.name, {})
+
+            # Check saved mapping
+            if saved.get("source") == "setting" and saved.get("setting_path"):
+                value = await settings.get(saved["setting_path"])
+                if value:
+                    continue
+            elif saved.get("source") == "literal" and saved.get("value"):
+                continue
+
+            # Check for auto-mappable setting
+            if await settings.has_value_for_env_var(ev.name):
+                continue
+
+            # This env var is incomplete
+            services_needing_setup.add(service.service_name)
+
+            # Add to incomplete vars (deduplicate by name)
+            if ev.name not in incomplete_vars:
+                # Get suggestions for this var
+                suggestions = await settings.get_suggestions_for_env_var(
+                    ev.name, provider_registry, service.requires
+                )
+
+                incomplete_vars[ev.name] = IncompleteEnvVar(
+                    name=ev.name,
+                    service_id=service.service_id,
+                    service_name=service.service_name,
+                    has_default=ev.has_default,
+                    default_value=ev.default_value,
+                    suggestions=[s.to_dict() for s in suggestions],
+                    setting_type=infer_setting_type(ev.name),
+                )
+
+    return QuickstartResponse(
+        incomplete_env_vars=list(incomplete_vars.values()),
+        services_needing_setup=list(services_needing_setup),
+        total_services=len(installed_services),
+        ready_services=len(installed_services) - len(services_needing_setup),
+    )
+
+
+@router.post("/quickstart")
+async def save_quickstart_config(env_values: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Save env var values from quickstart wizard.
+
+    Accepts a dict of env_var_name -> value.
+    Creates settings in api_keys.{name} or security.{name} as appropriate.
+    """
+    settings = get_omegaconf_settings()
+
+    # Use centralized method to save env var values
+    counts = await settings.save_env_var_values(env_values)
+    total_saved = counts["api_keys"] + counts["security"] + counts["admin"]
+
+    if total_saved > 0:
+        logger.info(f"Quickstart saved {total_saved} env vars: {counts}")
+
+    return {
+        "success": True,
+        "saved": total_saved,
+        "counts": counts,
+        "message": "Configuration saved successfully"
+    }
