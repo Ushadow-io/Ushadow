@@ -51,11 +51,14 @@ def _load_secrets() -> dict:
 
 
 def get_auth_secret_key() -> str:
-    """Get AUTH_SECRET_KEY from secrets.yaml."""
-    secrets = _load_secrets()
-    key = secrets.get('security', {}).get('auth_secret_key')
+    """Get AUTH_SECRET_KEY from OmegaConf (secrets.yaml -> security.auth_secret_key)."""
+    from src.config.omegaconf_settings import get_settings_store
+    key = get_settings_store().get_sync("security.auth_secret_key")
     if not key:
-        raise ValueError("AUTH_SECRET_KEY not found in config/secrets.yaml")
+        raise ValueError(
+            "AUTH_SECRET_KEY not found in config/secrets.yaml. "
+            "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
+        )
     return key
 
 

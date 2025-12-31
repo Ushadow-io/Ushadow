@@ -302,6 +302,10 @@ else
     # Set defaults if not found
     BACKEND_PORT=${BACKEND_PORT:-${DEFAULT_BACKEND_PORT}}
     WEBUI_PORT=${WEBUI_PORT:-${DEFAULT_WEBUI_PORT}}
+
+    # Ensure secrets exist even when reusing config
+    python3 "$SETUP_UTILS" ensure-secrets "$SECRETS_FILE" > /dev/null 2>&1
+
     echo ""
     echo -e "${YELLOW}📋 Login via web interface at http://localhost:${WEBUI_PORT}${NC}"
     echo ""

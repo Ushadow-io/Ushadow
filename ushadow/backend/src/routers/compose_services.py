@@ -342,12 +342,17 @@ async def get_service_env_config(service_id: str) -> Dict[str, Any]:
         return None
 
     # Helper to resolve env var value based on source
-    async def resolve_env_value(source: str, setting_path: Optional[str], value: Optional[str], default_value: str | None) -> str | None:
+    async def resolve_env_value(source: str, setting_path: Optional[str], value: Optional[str], default_value: str | None, env_name: str = "") -> str | None:
         if source == "setting" and setting_path:
             return await settings.get(setting_path)
         elif source == "literal" and value:
             return value
         elif source == "default":
+            # Try OmegaConf tree search first, fall back to compose default
+            if env_name:
+                resolved = await settings.get_by_env_var(env_name)
+                if resolved:
+                    return resolved
             return default_value
         return None
 
@@ -371,7 +376,7 @@ async def get_service_env_config(service_id: str) -> Dict[str, Any]:
                 source = "setting"
                 setting_path = auto_match.path
 
-        resolved = await resolve_env_value(source, setting_path, value, ev.default_value)
+        resolved = await resolve_env_value(source, setting_path, value, ev.default_value, ev.name)
 
         required_vars.append({
             "name": ev.name,
@@ -404,7 +409,7 @@ async def get_service_env_config(service_id: str) -> Dict[str, Any]:
                 source = "setting"
                 setting_path = auto_match.path
 
-        resolved = await resolve_env_value(source, setting_path, value, ev.default_value)
+        resolved = await resolve_env_value(source, setting_path, value, ev.default_value, ev.name)
 
         optional_vars.append({
             "name": ev.name,
