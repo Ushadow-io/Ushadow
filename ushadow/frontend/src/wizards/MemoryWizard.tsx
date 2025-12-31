@@ -1,6 +1,6 @@
 import { Database } from 'lucide-react'
 import { useState } from 'react'
-import { useForm, FormProvider, useFormContext } from 'react-hook-form'
+import { useForm, FormProvider, useFormContext, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
@@ -9,6 +9,7 @@ import { settingsApi } from '../services/api'
 import { useWizard } from '../contexts/WizardContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
+import { SecretInput } from '../components/settings'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
 
@@ -169,7 +170,7 @@ function DeploymentStep() {
   const showExisting = wizardState.mode === 'custom'
 
   return (
-    <div id="memory-step-deployment" className="space-y-6">
+    <div data-testid="memory-step-deployment" className="space-y-6">
       <div>
         <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           OpenMemory Deployment
@@ -181,7 +182,7 @@ function DeploymentStep() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <label
-          id="deployment-option-new"
+          data-testid="memory-deployment-new"
           className={`p-6 rounded-lg border-2 transition-all cursor-pointer ${
             deploymentType === 'new'
               ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -202,7 +203,7 @@ function DeploymentStep() {
 
         {showExisting && (
           <label
-            id="deployment-option-existing"
+            data-testid="memory-deployment-existing"
             className={`p-6 rounded-lg border-2 transition-all cursor-pointer ${
               deploymentType === 'existing'
                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -229,7 +230,7 @@ function DeploymentStep() {
             OpenMemory Server URL
           </label>
           <input
-            id="server-url-input"
+            data-testid="memory-server-url-input"
             type="text"
             {...register('server_url')}
             placeholder="http://openmemory:8765"
@@ -252,7 +253,7 @@ function GraphConfigStep() {
   const enableGraph = watch('enable_graph_memory')
 
   return (
-    <div id="memory-step-graph" className="space-y-6">
+    <div data-testid="memory-step-graph" className="space-y-6">
       <div>
         <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Graph Memory Configuration
@@ -273,7 +274,7 @@ function GraphConfigStep() {
 
       <div className="space-y-3">
         <label
-          id="graph-option-enabled"
+          data-testid="memory-graph-enabled"
           className={`w-full p-4 rounded-lg border-2 transition-all cursor-pointer flex items-start ${
             enableGraph
               ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -302,7 +303,7 @@ function GraphConfigStep() {
         </label>
 
         <label
-          id="graph-option-disabled"
+          data-testid="memory-graph-disabled"
           className={`w-full p-4 rounded-lg border-2 transition-all cursor-pointer flex items-start ${
             !enableGraph
               ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -336,10 +337,10 @@ function GraphConfigStep() {
 
 // Step 3: Neo4j Credentials (conditional - only shown if graph enabled)
 function Neo4jCredentialsStep() {
-  const { register, formState: { errors } } = useFormContext<MemoryFormData>()
+  const { control, formState: { errors } } = useFormContext<MemoryFormData>()
 
   return (
-    <div id="memory-step-neo4j" className="space-y-6">
+    <div data-testid="memory-step-neo4j" className="space-y-6">
       <div>
         <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Neo4j Credentials
@@ -352,20 +353,23 @@ function Neo4jCredentialsStep() {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Neo4j Password
+            Neo4j Password <span className="text-red-500">*</span>
           </label>
-          <input
-            id="neo4j-password-input"
-            type="password"
-            {...register('neo4j_password')}
-            placeholder="Enter Neo4j password"
-            className="input"
+          <Controller
+            name="neo4j_password"
+            control={control}
+            render={({ field }) => (
+              <SecretInput
+                id="memory-neo4j-password"
+                name={field.name}
+                value={field.value || ''}
+                onChange={field.onChange}
+                placeholder="Enter Neo4j password"
+                error={errors.neo4j_password?.message}
+                showIcon={false}
+              />
+            )}
           />
-          {errors.neo4j_password && (
-            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-              {errors.neo4j_password.message}
-            </p>
-          )}
           <p className="mt-1 text-xs text-gray-500">
             Minimum 8 characters
           </p>
@@ -373,20 +377,23 @@ function Neo4jCredentialsStep() {
 
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Confirm Password
+            Confirm Password <span className="text-red-500">*</span>
           </label>
-          <input
-            id="neo4j-confirm-password-input"
-            type="password"
-            {...register('neo4j_confirm_password')}
-            placeholder="Confirm password"
-            className="input"
+          <Controller
+            name="neo4j_confirm_password"
+            control={control}
+            render={({ field }) => (
+              <SecretInput
+                id="memory-neo4j-confirm-password"
+                name={field.name}
+                value={field.value || ''}
+                onChange={field.onChange}
+                placeholder="Confirm password"
+                error={errors.neo4j_confirm_password?.message}
+                showIcon={false}
+              />
+            )}
           />
-          {errors.neo4j_confirm_password && (
-            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-              {errors.neo4j_confirm_password.message}
-            </p>
-          )}
         </div>
       </div>
     </div>
@@ -400,7 +407,7 @@ function CompleteStep() {
   const enableGraph = watch('enable_graph_memory')
 
   return (
-    <div id="memory-step-complete" className="space-y-6 text-center">
+    <div data-testid="memory-step-complete" className="space-y-6 text-center">
       <div>
         <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Ready to Configure Memory

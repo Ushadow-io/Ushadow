@@ -105,7 +105,7 @@ def env_var_matches_setting(env_name: str, setting_key: str) -> bool:
     return key_lower in env_lower or env_lower in key_lower
 
 
-class OmegaConfSettingsManager:
+class SettingsStore:
     """
     Manages settings with OmegaConf for automatic merging and interpolation.
 
@@ -138,9 +138,6 @@ class OmegaConfSettingsManager:
         self.secrets_path = self.config_dir / "secrets.yaml"
         self.settings_path = self.config_dir / "config_settings.yaml"
 
-        # Legacy support: migrate overrides.yaml to config_settings.yaml
-        self._legacy_overrides_path = self.config_dir / "overrides.yaml"
-
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
         self.cache_ttl: int = 5  # seconds
@@ -165,11 +162,6 @@ class OmegaConfSettingsManager:
         if use_cache and self._cache is not None:
             if time.time() - self._cache_timestamp < self.cache_ttl:
                 return self._cache
-
-        # Migrate legacy overrides.yaml if it exists and config_settings.yaml doesn't
-        if self._legacy_overrides_path.exists() and not self.settings_path.exists():
-            logger.info(f"Migrating {self._legacy_overrides_path} to {self.settings_path}")
-            self._legacy_overrides_path.rename(self.settings_path)
 
         logger.debug("Loading configuration from all sources...")
 
@@ -294,6 +286,50 @@ class OmegaConfSettingsManager:
             await self.save_to_settings(settings_updates)
 
         self._cache = None
+
+    def _filter_masked_values(self, updates: dict) -> dict:
+        """
+        Filter out masked values (****) to prevent accidental overwrites.
+        
+        Returns a new dict with masked values removed.
+        """
+        filtered = {}
+        for key, value in updates.items():
+            if isinstance(value, dict):
+                # Recursively filter nested dicts
+                filtered_nested = self._filter_masked_values(value)
+                if filtered_nested:  # Only include if not empty
+                    filtered[key] = filtered_nested
+            elif value is None or not str(value).startswith("***"):
+                filtered[key] = value
+            else:
+                logger.debug(f"Filtering masked value for key: {key}")
+        return filtered
+
+    async def reset(self, include_secrets: bool = True) -> int:
+        """
+        Reset settings by deleting config files.
+        
+        Args:
+            include_secrets: If True (default), also deletes secrets.yaml
+        
+        Returns:
+            Number of files deleted
+        """
+        deleted = 0
+        
+        if self.settings_path.exists():
+            self.settings_path.unlink()
+            logger.info(f"Reset: deleted {self.settings_path}")
+            deleted += 1
+        
+        if include_secrets and self.secrets_path.exists():
+            self.secrets_path.unlink()
+            logger.info(f"Reset: deleted {self.secrets_path}")
+            deleted += 1
+        
+        self._cache = None
+        return deleted
 
     # =========================================================================
     # Environment Variable Mapping
@@ -507,12 +543,17 @@ class OmegaConfSettingsManager:
 
 
 # Global instance
-_settings_manager: Optional[OmegaConfSettingsManager] = None
+_settings_store: Optional[SettingsStore] = None
 
 
-def get_omegaconf_settings(config_dir: Optional[Path] = None) -> OmegaConfSettingsManager:
-    """Get global OmegaConf settings manager instance."""
-    global _settings_manager
-    if _settings_manager is None:
-        _settings_manager = OmegaConfSettingsManager(config_dir)
-    return _settings_manager
+def get_settings_store(config_dir: Optional[Path] = None) -> SettingsStore:
+    """Get global SettingsStore instance."""
+    global _settings_store
+    if _settings_store is None:
+        _settings_store = SettingsStore(config_dir)
+    return _settings_store
+
+
+# Backward compatibility aliases
+OmegaConfSettingsManager = SettingsStore
+get_omegaconf_settings = get_settings_store

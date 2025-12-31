@@ -13,8 +13,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config.omegaconf_settings import (
+    SettingsStore,
+    get_settings_store,
+    # Backward compatibility aliases (tested separately)
     OmegaConfSettingsManager,
     get_omegaconf_settings,
+    # Helpers
     SettingSuggestion,
     infer_setting_type,
     categorize_setting,
@@ -34,17 +38,17 @@ def temp_config_dir():
 
 @pytest.fixture
 def settings_manager(temp_config_dir):
-    """Create a settings manager with temp directory."""
-    return OmegaConfSettingsManager(config_dir=temp_config_dir)
+    """Create a settings store with temp directory."""
+    return SettingsStore(config_dir=temp_config_dir)
 
 
-class TestOmegaConfSettingsManager:
-    """Tests for OmegaConfSettingsManager class."""
+class TestSettingsStore:
+    """Tests for SettingsStore class."""
 
     @pytest.mark.asyncio
     async def test_init_paths(self, temp_config_dir):
         """Test that paths are initialized correctly."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         assert manager.config_dir == temp_config_dir
         assert manager.defaults_path == temp_config_dir / "config.defaults.yaml"
@@ -275,6 +279,61 @@ invalid: yaml: content:
         # Config should be empty due to parse error
         assert config is not None
 
+    @pytest.mark.asyncio
+    async def test_reset_deletes_all_files(self, temp_config_dir, settings_manager):
+        """Test that reset() deletes both settings and secrets files."""
+        # Create both files
+        await settings_manager.update({"some_setting": "value"})
+        await settings_manager.update({"api_keys.test": "secret-key"})
+        assert settings_manager.settings_path.exists()
+        assert settings_manager.secrets_path.exists()
+
+        # Reset should delete both
+        deleted = await settings_manager.reset(include_secrets=True)
+        assert deleted == 2
+        assert not settings_manager.settings_path.exists()
+        assert not settings_manager.secrets_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_reset_preserves_secrets_when_requested(self, temp_config_dir, settings_manager):
+        """Test that reset(include_secrets=False) preserves secrets."""
+        await settings_manager.update({"some_setting": "value"})
+        await settings_manager.update({"api_keys.test": "secret-key"})
+        
+        deleted = await settings_manager.reset(include_secrets=False)
+        assert deleted == 1
+        assert not settings_manager.settings_path.exists()
+        assert settings_manager.secrets_path.exists()  # Preserved
+
+    @pytest.mark.asyncio
+    async def test_reset_returns_zero_when_no_files(self, settings_manager):
+        """Test that reset() returns 0 when no files exist."""
+        assert not settings_manager.settings_path.exists()
+        deleted = await settings_manager.reset()
+        assert deleted == 0
+
+    def test_filter_masked_values_removes_masked(self, settings_manager):
+        """Test that _filter_masked_values removes masked values."""
+        updates = {
+            "api_keys": {
+                "openai": "****abcd",  # masked - should be removed
+                "anthropic": "sk-real-key",  # not masked - should remain
+            },
+            "other": "value",
+        }
+        filtered = settings_manager._filter_masked_values(updates)
+        
+        assert "api_keys" in filtered
+        assert "openai" not in filtered["api_keys"]
+        assert filtered["api_keys"]["anthropic"] == "sk-real-key"
+        assert filtered["other"] == "value"
+
+    def test_filter_masked_values_empty_result(self, settings_manager):
+        """Test that _filter_masked_values returns empty dict when all masked."""
+        updates = {"api_key": "****1234"}
+        filtered = settings_manager._filter_masked_values(updates)
+        assert filtered == {}
+
 
 class TestOmegaConfInterpolation:
     """Tests for OmegaConf interpolation features."""
@@ -282,7 +341,7 @@ class TestOmegaConfInterpolation:
     @pytest.mark.asyncio
     async def test_variable_interpolation(self, temp_config_dir):
         """Test OmegaConf variable interpolation."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         defaults = temp_config_dir / "config.defaults.yaml"
         defaults.write_text("""
@@ -301,7 +360,7 @@ api:
     @pytest.mark.asyncio
     async def test_cross_file_interpolation(self, temp_config_dir):
         """Test interpolation across merged files."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         # Define base URL in defaults
         defaults = temp_config_dir / "config.defaults.yaml"
@@ -324,27 +383,37 @@ api_keys:
         assert OmegaConf.select(config, "services.chronicle.url") == "http://chronicle:8000"
 
 
-class TestGetOmegaconfSettings:
-    """Tests for get_omegaconf_settings() singleton."""
+class TestGetSettingsStore:
+    """Tests for get_settings_store() singleton."""
 
-    def test_returns_manager_instance(self):
-        """Function returns OmegaConfSettingsManager instance."""
+    def test_returns_store_instance(self):
+        """Function returns SettingsStore instance."""
         # Reset global
         import config.omegaconf_settings as module
-        module._settings_manager = None
+        module._settings_store = None
 
-        manager = get_omegaconf_settings()
-        assert isinstance(manager, OmegaConfSettingsManager)
+        store = get_settings_store()
+        assert isinstance(store, SettingsStore)
 
     def test_returns_singleton(self):
         """Function returns same instance on multiple calls."""
         import config.omegaconf_settings as module
-        module._settings_manager = None
+        module._settings_store = None
 
-        manager1 = get_omegaconf_settings()
-        manager2 = get_omegaconf_settings()
+        store1 = get_settings_store()
+        store2 = get_settings_store()
 
-        assert manager1 is manager2
+        assert store1 is store2
+
+    def test_backward_compat_aliases(self):
+        """Backward compatibility aliases work correctly."""
+        import config.omegaconf_settings as module
+        module._settings_store = None
+
+        # Old names should still work
+        manager = get_omegaconf_settings()
+        assert isinstance(manager, OmegaConfSettingsManager)
+        assert OmegaConfSettingsManager is SettingsStore
 
 
 class TestServiceDefaults:
@@ -353,7 +422,7 @@ class TestServiceDefaults:
     @pytest.mark.asyncio
     async def test_loads_service_defaults(self, temp_config_dir):
         """Test loading service defaults file."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         service_defaults = temp_config_dir / "default-services.yaml"
         service_defaults.write_text("""
@@ -490,7 +559,7 @@ class TestEnvVarMapping:
     @pytest.mark.asyncio
     async def test_get_config_as_dict(self, temp_config_dir):
         """Test getting config as plain dict."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         defaults = temp_config_dir / "config.defaults.yaml"
         defaults.write_text("""
@@ -509,7 +578,7 @@ settings:
     @pytest.mark.asyncio
     async def test_find_setting_for_env_var_found(self, temp_config_dir):
         """Test finding a setting that matches env var."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         secrets = temp_config_dir / "secrets.yaml"
         secrets.write_text("""
@@ -528,7 +597,7 @@ api_keys:
     @pytest.mark.asyncio
     async def test_find_setting_for_env_var_not_found(self, temp_config_dir):
         """Test searching for non-existent env var."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         secrets = temp_config_dir / "secrets.yaml"
         secrets.write_text("""
@@ -542,7 +611,7 @@ api_keys:
     @pytest.mark.asyncio
     async def test_has_value_for_env_var_true(self, temp_config_dir):
         """Test checking if env var has value - exists."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         secrets = temp_config_dir / "secrets.yaml"
         secrets.write_text("""
@@ -555,7 +624,7 @@ api_keys:
     @pytest.mark.asyncio
     async def test_has_value_for_env_var_empty(self, temp_config_dir):
         """Test checking if env var has value - empty."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         secrets = temp_config_dir / "secrets.yaml"
         secrets.write_text("""
@@ -568,13 +637,13 @@ api_keys:
     @pytest.mark.asyncio
     async def test_has_value_for_env_var_not_found(self, temp_config_dir):
         """Test checking if env var has value - not found."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
         assert await manager.has_value_for_env_var("NONEXISTENT_KEY") is False
 
     @pytest.mark.asyncio
     async def test_get_suggestions_for_env_var(self, temp_config_dir):
         """Test getting suggestions for env var."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         secrets = temp_config_dir / "secrets.yaml"
         secrets.write_text("""
@@ -593,7 +662,7 @@ api_keys:
     @pytest.mark.asyncio
     async def test_save_env_var_values(self, temp_config_dir):
         """Test saving env var values to config."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         result = await manager.save_env_var_values({
             "OPENAI_API_KEY": "sk-new-key",
@@ -613,7 +682,7 @@ api_keys:
     @pytest.mark.asyncio
     async def test_save_env_var_values_skips_masked(self, temp_config_dir):
         """Test that masked values are skipped."""
-        manager = OmegaConfSettingsManager(config_dir=temp_config_dir)
+        manager = SettingsStore(config_dir=temp_config_dir)
 
         result = await manager.save_env_var_values({
             "OPENAI_API_KEY": "sk-real-key",

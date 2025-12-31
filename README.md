@@ -169,6 +169,46 @@ ushadow/
 └── README.md
 ```
 
+### Settings Architecture
+
+ushadow uses a dual-layer configuration system:
+
+```
+┌─────────────────────────────────────────────────┐
+│              SETTINGS ARCHITECTURE              │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  .env file (infrastructure)                     │
+│      ↓                                          │
+│  InfraSettings (Pydantic BaseSettings)          │
+│      → Database URLs, ports, auth tokens        │
+│      → Loaded once at startup                   │
+│                                                 │
+│  YAML files (config/)                           │
+│      ├── config.defaults.yaml (shipped)         │
+│      ├── default-services.yaml (shipped)        │
+│      ├── secrets.yaml (gitignored)              │
+│      └── config_settings.yaml (gitignored)      │
+│      ↓                                          │
+│  SettingsStore (OmegaConf)                      │
+│      → API keys, provider selection, prefs      │
+│      → Merged with override semantics           │
+│      → Variable interpolation supported         │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+**Key concepts:**
+- **Infrastructure settings** (`.env`): Database URLs, Redis, ports - things that vary by deployment
+- **Application settings** (YAML): API keys, feature flags, provider selection - things users configure
+- **Secrets** (`secrets.yaml`): Sensitive values like API keys, stored separately and gitignored
+- **OmegaConf interpolation**: Reference values across files with `${api_keys.openai_api_key}`
+
+**API Endpoints:**
+- `GET /api/settings/config` - Get merged config (secrets masked)
+- `PUT /api/settings/config` - Update settings (auto-routes to correct file)
+- `POST /api/settings/reset` - Reset all settings to defaults
+
 ### Local Development
 
 **Backend:**

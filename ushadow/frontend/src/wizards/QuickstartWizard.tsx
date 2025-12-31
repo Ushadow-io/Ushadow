@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useForm, FormProvider, useFormContext } from 'react-hook-form'
+import { useForm, FormProvider, useFormContext, Controller } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, Eye, EyeOff, CheckCircle, RefreshCw } from 'lucide-react'
+import { Sparkles, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
+// Note: Eye/EyeOff icons removed - now handled by SecretInput component
 
-import { servicesApi, settingsApi, dockerApi } from '../services/api'
+import { composeServicesApi, settingsApi, dockerApi, type IncompleteEnvVar } from '../services/api'
 import { ServiceStatusCard, type ServiceStatus } from '../components/services'
+import { SecretInput, SettingField } from '../components/settings'
 import { useWizard } from '../contexts/WizardContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
@@ -26,23 +28,24 @@ const STEPS: WizardStep[] = [
   { id: 'complete', label: 'Done' },
 ]
 
-interface ServiceField {
-  key: string
-  type: 'secret' | 'string' | 'boolean' | 'number'
+interface EnvVarField {
+  name: string
+  type: 'secret' | 'url' | 'string'
   label: string
-  description?: string
-  required: boolean
-  default?: any
-  link?: string
-  env_var?: string
-  options?: string[]
+  has_default: boolean
+  default_value?: string
+  suggestions: Array<{
+    path: string
+    label: string
+    has_value: boolean
+    value?: string
+  }>
 }
 
-interface QuickstartService {
+interface ServiceEnvGroup {
   service_id: string
-  name: string
-  description: string
-  config_schema: ServiceField[]
+  service_name: string
+  env_vars: EnvVarField[]
 }
 
 type FormData = Record<string, Record<string, any>>
@@ -61,7 +64,7 @@ export default function QuickstartWizard() {
   const wizard = useWizardSteps(STEPS)
 
   const [loading, setLoading] = useState(true)
-  const [services, setServices] = useState<QuickstartService[]>([])
+  const [serviceGroups, setServiceGroups] = useState<ServiceEnvGroup[]>([])
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -89,95 +92,77 @@ export default function QuickstartWizard() {
 
   const loadQuickstartServices = async () => {
     try {
-      const [servicesResponse, configResponse] = await Promise.all([
-        servicesApi.getQuickstart(),
-        settingsApi.getConfig(),
-      ])
+      const quickstartResponse = await composeServicesApi.getQuickstart()
+      const { incomplete_env_vars } = quickstartResponse.data
 
-      const quickstartServices = servicesResponse.data
-      const mergedConfig = configResponse.data
+      // Group incomplete env vars by service
+      const groupedByService = new Map<string, ServiceEnvGroup>()
 
-      // Initialize form data from OmegaConf merged config
-      const initialData: FormData = {}
+      incomplete_env_vars.forEach((envVar: IncompleteEnvVar) => {
+        if (!groupedByService.has(envVar.service_id)) {
+          groupedByService.set(envVar.service_id, {
+            service_id: envVar.service_id,
+            service_name: envVar.service_name,
+            env_vars: [],
+          })
+        }
 
-      quickstartServices.forEach((service: QuickstartService) => {
-        initialData[service.service_id] = {}
-
-        service.config_schema.forEach((field) => {
-          // Set default value
-          if (field.default !== null && field.default !== undefined) {
-            initialData[service.service_id][field.key] = field.default
-          }
-
-          // Check for existing value in merged config
-          if (field.env_var) {
-            const keyName = field.env_var.toLowerCase()
-            const value = mergedConfig?.api_keys?.[keyName]
-            if (value) {
-              initialData[service.service_id][field.key] = value
-            }
-          } else {
-            const value = mergedConfig?.service_preferences?.[service.service_id]?.[field.key]
-            if (value !== undefined && value !== null) {
-              initialData[service.service_id][field.key] = value
-            }
-          }
+        const group = groupedByService.get(envVar.service_id)!
+        group.env_vars.push({
+          name: envVar.name,
+          type: envVar.setting_type,
+          label: envVar.name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          has_default: envVar.has_default,
+          default_value: envVar.default_value,
+          suggestions: envVar.suggestions.map((s: any) => ({
+            path: s.path,
+            label: s.label,
+            has_value: s.has_value,
+            value: s.value,
+          })),
         })
       })
 
-      setServices(quickstartServices)
+      const groups = Array.from(groupedByService.values())
+
+      // Initialize form data - key by env var name for simplicity
+      const initialData: FormData = { env_vars: {} }
+      incomplete_env_vars.forEach((envVar: IncompleteEnvVar) => {
+        // Pre-fill with default if available
+        if (envVar.default_value) {
+          initialData.env_vars[envVar.name] = envVar.default_value
+        }
+      })
+
+      setServiceGroups(groups)
       methods.reset(initialData)
       setLoading(false)
     } catch (error) {
-      console.error('Failed to load quickstart services:', error)
+      console.error('Failed to load quickstart config:', error)
       setMessage({ type: 'error', text: 'Failed to load wizard configuration' })
       setLoading(false)
     }
   }
 
-  // Filter to only required fields and deduplicate by env_var
-  const getFilteredServices = (): QuickstartService[] => {
-    const seenEnvVars = new Set<string>()
-    const filtered: QuickstartService[] = []
-
-    services.forEach((service) => {
-      const requiredFields = service.config_schema.filter((f) => {
-        if (!f.required) return false
-
-        if (f.env_var) {
-          if (seenEnvVars.has(f.env_var)) return false
-          seenEnvVars.add(f.env_var)
-        }
-
-        return true
-      })
-
-      if (requiredFields.length > 0) {
-        filtered.push({
-          ...service,
-          config_schema: requiredFields,
-        })
-      }
-    })
-
-    return filtered
+  // Get all env vars that need configuration (already filtered by backend)
+  const getAllEnvVars = (): EnvVarField[] => {
+    return serviceGroups.flatMap((group) => group.env_vars)
   }
 
-  const validateApiKeys = async (): Promise<boolean> => {
-    const servicesToValidate = getFilteredServices()
+  const validateEnvVars = async (): Promise<boolean> => {
+    const envVars = getAllEnvVars()
     const data = methods.getValues()
 
-    for (const service of servicesToValidate) {
-      for (const field of service.config_schema) {
-        if (field.required) {
-          const value = data[service.service_id]?.[field.key]
-          if (!value || (typeof value === 'string' && value.trim() === '')) {
-            setMessage({
-              type: 'error',
-              text: `${service.name}: ${field.label} is required`,
-            })
-            return false
-          }
+    for (const envVar of envVars) {
+      // All env vars from quickstart are required (filtered by backend)
+      if (!envVar.has_default) {
+        const value = data.env_vars?.[envVar.name]
+        if (!value || (typeof value === 'string' && value.trim() === '')) {
+          setMessage({
+            type: 'error',
+            text: `${envVar.label} is required`,
+          })
+          return false
         }
       }
     }
@@ -377,7 +362,7 @@ export default function QuickstartWizard() {
 
   if (loading) {
     return (
-      <div id="quickstart-loading" className="flex items-center justify-center min-h-[400px]">
+      <div data-testid="quickstart-loading" className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
       </div>
     )
@@ -427,7 +412,7 @@ export default function QuickstartWizard() {
 function ApiKeysStep({ services }: { services: QuickstartService[] }) {
   if (services.length === 0) {
     return (
-      <div id="quickstart-step-api-keys" className="text-center space-y-4">
+      <div data-testid="quickstart-step-api-keys" className="text-center space-y-4">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">All Set!</h2>
         <p className="text-gray-600 dark:text-gray-400">
           No additional API keys needed. Click next to start services.
@@ -437,7 +422,7 @@ function ApiKeysStep({ services }: { services: QuickstartService[] }) {
   }
 
   return (
-    <div id="quickstart-step-api-keys" className="space-y-6">
+    <div data-testid="quickstart-step-api-keys" className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
           Configure API Keys
@@ -463,7 +448,7 @@ interface StartServicesStepProps {
 
 function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStepProps) {
   return (
-    <div id="quickstart-step-start-services" className="space-y-6">
+    <div data-testid="quickstart-step-start-services" className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
@@ -474,7 +459,7 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
           </p>
         </div>
         <button
-          id="quickstart-refresh-status"
+          data-testid="quickstart-refresh-status"
           onClick={onRefresh}
           className="btn-ghost p-2 rounded-lg"
           title="Refresh status"
@@ -512,7 +497,7 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
 // Step 3: Complete
 function CompleteStep() {
   return (
-    <div id="quickstart-step-complete" className="text-center space-y-6">
+    <div data-testid="quickstart-step-complete" className="text-center space-y-6">
       <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
       <div>
         <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
@@ -552,7 +537,7 @@ function CompleteStep() {
 // Service field group component
 function ServiceFieldGroup({ service }: { service: QuickstartService }) {
   return (
-    <div id={`quickstart-service-${service.service_id}`} className="space-y-4">
+    <div data-testid={`quickstart-service-${service.service_id}`} className="space-y-4">
       <h3 className="font-medium text-gray-900 dark:text-white">{service.name}</h3>
       {service.config_schema.map((field) => (
         <DynamicField
@@ -567,17 +552,17 @@ function ServiceFieldGroup({ service }: { service: QuickstartService }) {
 
 // Dynamic field renderer
 function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceField }) {
-  const { register, watch } = useFormContext<FormData>()
-  const [showSecret, setShowSecret] = useState(false)
+  const { control, watch } = useFormContext<FormData>()
 
   const fieldPath = `${serviceId}.${field.key}` as const
+  const fieldId = `quickstart-${serviceId}-${field.key}`
   const value = watch(fieldPath as any) || ''
   const hasExistingValue = value && String(value).length > 0
 
   switch (field.type) {
     case 'secret':
       return (
-        <div id={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
+        <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
               {field.label} {field.required && <span className="text-red-600">*</span>}
@@ -596,24 +581,19 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
               </a>
             )}
           </div>
-          <div className="relative">
-            <input
-              id={`quickstart-${serviceId}-${field.key}`}
-              type={showSecret ? 'text' : 'password'}
-              {...register(fieldPath as any)}
-              placeholder={hasExistingValue ? '●●●●●●●●' : `Enter ${field.label}`}
-              className="input pr-10"
-            />
-            {hasExistingValue && (
-              <button
-                type="button"
-                onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-              >
-                {showSecret ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-              </button>
+          <Controller
+            name={fieldPath as any}
+            control={control}
+            render={({ field: controllerField }) => (
+              <SecretInput
+                id={fieldId}
+                name={controllerField.name}
+                value={controllerField.value || ''}
+                onChange={controllerField.onChange}
+                placeholder={hasExistingValue ? '●●●●●●●●' : `Enter ${field.label}`}
+              />
             )}
-          </div>
+          />
           {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
         </div>
       )
@@ -621,27 +601,28 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
     case 'string':
       if (field.options && field.options.length > 0) {
         return (
-          <div id={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              {field.label}
-            </label>
-            <select
-              id={`quickstart-${serviceId}-${field.key}`}
-              {...register(fieldPath as any)}
-              className="input"
-            >
-              {field.options.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-            {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
+          <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
+            <Controller
+              name={fieldPath as any}
+              control={control}
+              render={({ field: controllerField }) => (
+                <SettingField
+                  id={fieldId}
+                  name={controllerField.name}
+                  label={field.label}
+                  type="select"
+                  value={controllerField.value || ''}
+                  onChange={controllerField.onChange}
+                  options={field.options!.map(opt => ({ value: opt, label: opt }))}
+                  description={field.description}
+                />
+              )}
+            />
           </div>
         )
       }
       return (
-        <div id={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
+        <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
               {field.label}
@@ -657,12 +638,20 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
               </a>
             )}
           </div>
-          <input
-            id={`quickstart-${serviceId}-${field.key}`}
-            type="text"
-            {...register(fieldPath as any)}
-            placeholder={field.default || ''}
-            className="input"
+          <Controller
+            name={fieldPath as any}
+            control={control}
+            render={({ field: controllerField }) => (
+              <SettingField
+                id={fieldId}
+                name={controllerField.name}
+                label=""
+                type="text"
+                value={controllerField.value || ''}
+                onChange={(v) => controllerField.onChange(v)}
+                placeholder={field.default || ''}
+              />
+            )}
           />
           {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
         </div>
@@ -670,19 +659,21 @@ function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceF
 
     case 'boolean':
       return (
-        <div id={`quickstart-field-${serviceId}-${field.key}`} className="flex items-center space-x-2">
-          <input
-            type="checkbox"
-            id={`quickstart-${serviceId}-${field.key}`}
-            {...register(fieldPath as any)}
-            className="rounded"
+        <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="flex items-center space-x-2">
+          <Controller
+            name={fieldPath as any}
+            control={control}
+            render={({ field: controllerField }) => (
+              <SettingField
+                id={fieldId}
+                name={controllerField.name}
+                label={field.label}
+                type="toggle"
+                value={controllerField.value || false}
+                onChange={controllerField.onChange}
+              />
+            )}
           />
-          <label
-            htmlFor={`quickstart-${serviceId}-${field.key}`}
-            className="text-sm text-gray-700 dark:text-gray-300"
-          >
-            {field.label}
-          </label>
         </div>
       )
 

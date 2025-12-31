@@ -23,7 +23,7 @@ from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
-from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_settings_store
 
 # Configure logging
 logging.basicConfig(
@@ -79,8 +79,8 @@ async def lifespan(app: FastAPI):
     logger.info("✓ UNode manager initialized")
 
     # Initialize OmegaConf settings manager (YAML-based, no DB needed)
-    omegaconf_settings = get_omegaconf_settings()
-    await omegaconf_settings.load_config()  # Pre-load and cache
+    settings_store = get_settings_store()
+    await settings_store.load_config()  # Pre-load and cache
     logger.info("✓ OmegaConf settings initialized")
     # Initialize deployment manager
     await init_deployment_manager(db)

@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from omegaconf import OmegaConf
 
 from src.config.infra_settings import get_infra_settings
-from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import mask_dict_secrets
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,8 @@ async def get_settings_info():
 async def get_config():
     """Get merged configuration with secrets masked."""
     try:
-        omegaconf_mgr = get_omegaconf_settings()
-        merged = await omegaconf_mgr.load_config()
+        settings_store = get_settings_store()
+        merged = await settings_store.load_config()
         config = OmegaConf.to_container(merged, resolve=True)
 
         # Recursively mask all sensitive values
@@ -59,21 +59,14 @@ async def get_config():
 async def update_config(updates: Dict[str, Any]):
     """Update configuration values."""
     try:
-        # Defense-in-depth: reject masked values to prevent accidental overwrites
-        if "api_keys" in updates:
-            for key, value in list(updates["api_keys"].items()):
-                if value and str(value).startswith("***"):
-                    logger.warning(f"Rejecting masked value for {key}")
-                    del updates["api_keys"][key]
-            if not updates["api_keys"]:
-                del updates["api_keys"]
-
-        if not updates:
+        settings_store = get_settings_store()
+        
+        # Filter out masked values to prevent accidental overwrites
+        filtered = settings_store._filter_masked_values(updates)
+        if not filtered:
             return {"success": True, "message": "No updates to apply"}
 
-        omegaconf_mgr = get_omegaconf_settings()
-        await omegaconf_mgr.update(updates)
-
+        await settings_store.update(filtered)
         return {"success": True, "message": "Configuration updated"}
     except Exception as e:
         logger.error(f"Error updating config: {e}")
@@ -84,8 +77,8 @@ async def update_config(updates: Dict[str, Any]):
 async def get_all_service_configs():
     """Get all service-specific configurations."""
     try:
-        omegaconf_mgr = get_omegaconf_settings()
-        merged = await omegaconf_mgr.load_config()
+        settings_store = get_settings_store()
+        merged = await settings_store.load_config()
         return OmegaConf.to_container(merged.service_preferences, resolve=True)
     except Exception as e:
         logger.error(f"Error getting service configs: {e}")
@@ -96,8 +89,8 @@ async def get_all_service_configs():
 async def get_service_config(service_id: str):
     """Get configuration for a specific service."""
     try:
-        omegaconf_mgr = get_omegaconf_settings()
-        merged = await omegaconf_mgr.load_config()
+        settings_store = get_settings_store()
+        merged = await settings_store.load_config()
         service_prefs = getattr(merged.service_preferences, service_id, None)
         if service_prefs:
             return OmegaConf.to_container(service_prefs, resolve=True)
@@ -111,8 +104,8 @@ async def get_service_config(service_id: str):
 async def update_service_config(service_id: str, updates: Dict[str, Any]):
     """Update configuration for a specific service."""
     try:
-        omegaconf_mgr = get_omegaconf_settings()
-        await omegaconf_mgr.update({
+        settings_store = get_settings_store()
+        await settings_store.update({
             "service_preferences": {
                 service_id: updates
             }
@@ -127,8 +120,8 @@ async def update_service_config(service_id: str, updates: Dict[str, Any]):
 async def delete_service_config(service_id: str):
     """Delete configuration for a specific service."""
     try:
-        omegaconf_mgr = get_omegaconf_settings()
-        await omegaconf_mgr.update({
+        settings_store = get_settings_store()
+        await settings_store.update({
             "service_preferences": {
                 service_id: {}
             }
@@ -142,27 +135,17 @@ async def delete_service_config(service_id: str):
 @router.post("/reset")
 async def reset_config():
     """
-    Reset configuration by clearing config_settings.yaml.
+    Reset all configuration including API keys.
 
-    This removes runtime configuration preferences, reverting to
-    file-based defaults. Note: secrets.yaml (API keys) is preserved.
+    Deletes both config_settings.yaml and secrets.yaml,
+    returning to factory defaults.
     """
     try:
-        omegaconf_mgr = get_omegaconf_settings()
-
-        # Delete config_settings.yaml if it exists (preserves secrets.yaml)
-        deleted = 0
-        if omegaconf_mgr.settings_path.exists():
-            omegaconf_mgr.settings_path.unlink()
-            logger.info(f"Reset config: deleted {omegaconf_mgr.settings_path}")
-            deleted = 1
-
-        # Invalidate the cache
-        omegaconf_mgr._cache = None
-
+        settings_store = get_settings_store()
+        deleted = await settings_store.reset(include_secrets=True)
         return {
             "success": True,
-            "message": "Configuration reset to defaults (API keys preserved)",
+            "message": "All settings reset to defaults",
             "deleted": deleted
         }
     except Exception as e:

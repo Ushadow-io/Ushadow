@@ -28,7 +28,7 @@ try:
         ServiceEnvSchema,
     )
     from src.config.omegaconf_settings import (
-        get_omegaconf_settings,
+        get_settings_store,
         SettingSuggestion,
         infer_setting_type,
         env_var_matches_setting,
@@ -41,7 +41,7 @@ except ImportError:
         ServiceEnvSchema,
     )
     from config.omegaconf_settings import (
-        get_omegaconf_settings,
+        get_settings_store,
         SettingSuggestion,
         infer_setting_type,
         env_var_matches_setting,
@@ -228,7 +228,7 @@ async def list_compose_services() -> List[Dict[str, Any]]:
     Use /compose/catalog for all available services.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     # Get installed and removed service names
     installed_names, removed_names = await get_installed_service_names(settings)
@@ -252,7 +252,7 @@ async def list_catalog_services() -> List[Dict[str, Any]]:
     Each service includes an 'installed' flag.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     # Get installed and removed service names
     installed_names, removed_names = await get_installed_service_names(settings)
@@ -314,7 +314,7 @@ async def get_service_env_config(service_id: str) -> Dict[str, Any]:
     Returns the env schema with current configuration and suggested settings.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     provider_registry = get_provider_registry()
 
     service = registry.get_service(service_id)
@@ -445,7 +445,7 @@ async def update_service_env_config(
     - "default": Use the compose file's default
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     service = registry.get_service(service_id)
     if not service:
@@ -510,7 +510,7 @@ async def resolve_service_env_vars(service_id: str) -> Dict[str, Any]:
     Sensitive values are masked in the response.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     service = registry.get_service(service_id)
     if not service:
@@ -607,7 +607,7 @@ async def get_quickstart_config() -> QuickstartResponse:
     Returns a flat list of env vars to configure, deduplicated by name.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     provider_registry = get_provider_registry()
 
     # Get installed service names
@@ -685,7 +685,7 @@ async def save_quickstart_config(env_values: Dict[str, str]) -> Dict[str, Any]:
     Accepts a dict of env_var_name -> value.
     Creates settings in api_keys.{name} or security.{name} as appropriate.
     """
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     # Use centralized method to save env var values
     counts = await settings.save_env_var_values(env_values)
@@ -714,7 +714,7 @@ async def install_service(service_id: str) -> Dict[str, Any]:
     This marks the service as user-added, overriding default_services.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     service = registry.get_service(service_id)
     if not service:
@@ -752,7 +752,7 @@ async def uninstall_service(service_id: str) -> Dict[str, Any]:
     This marks the service as removed, overriding default_services.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     service = registry.get_service(service_id)
     if not service:

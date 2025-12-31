@@ -17,7 +17,7 @@ import yaml
 
 from src.services.provider_registry import get_provider_registry
 from src.models.provider import Provider, EnvMap
-from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class CapabilityResolver:
 
     def __init__(self):
         self._provider_registry = get_provider_registry()
-        self._settings = get_omegaconf_settings()
+        self._settings = get_settings_store()
         self._services_cache: Dict[str, dict] = {}
 
     async def resolve_for_service(self, service_id: str) -> Dict[str, str]:

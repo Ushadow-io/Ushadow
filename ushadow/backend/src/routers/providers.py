@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.services.provider_registry import get_provider_registry
-from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -133,7 +133,7 @@ async def list_providers() -> List[Dict[str, str]]:
 async def get_providers_by_capability(capability: str) -> List[Dict[str, Any]]:
     """Get providers for a capability with config status."""
     registry = get_provider_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     if not registry.get_capability(capability):
         raise HTTPException(status_code=404, detail=f"Capability '{capability}' not found")
@@ -158,7 +158,7 @@ async def get_providers_by_capability(capability: str) -> List[Dict[str, Any]]:
 async def list_capabilities() -> List[Dict[str, Any]]:
     """List capabilities with providers and config status."""
     registry = get_provider_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     selected = await settings.get("selected_providers", {}) or {}
 
     result = []
@@ -238,7 +238,7 @@ async def list_capabilities() -> List[Dict[str, Any]]:
 async def get_provider(provider_id: str) -> Dict[str, Any]:
     """Get full provider details."""
     registry = get_provider_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     p = registry.get_provider(provider_id)
     if not p:
@@ -263,7 +263,7 @@ async def get_provider(provider_id: str) -> Dict[str, Any]:
 async def get_provider_missing(provider_id: str) -> Dict[str, Any]:
     """Get missing required fields for a provider."""
     registry = get_provider_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     p = registry.get_provider(provider_id)
     if not p:
@@ -287,7 +287,7 @@ class ProviderQuery(BaseModel):
 async def find_providers(query: ProviderQuery) -> List[Dict[str, Any]]:
     """Find providers matching criteria."""
     registry = get_provider_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     if query.capability and not registry.get_capability(query.capability):
         raise HTTPException(status_code=404, detail=f"Capability '{query.capability}' not found")
@@ -319,7 +319,7 @@ async def find_providers(query: ProviderQuery) -> List[Dict[str, Any]]:
 @router.get("/selected")
 async def get_selected() -> Dict[str, Any]:
     """Get current provider selections."""
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     return {
         "wizard_mode": await settings.get("wizard_mode", "quickstart"),
         "selected_providers": await settings.get("selected_providers", {}) or {}
@@ -334,7 +334,7 @@ class SelectionUpdate(BaseModel):
 @router.put("/selected")
 async def update_selected(update: SelectionUpdate) -> Dict[str, Any]:
     """Update provider selections."""
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     registry = get_provider_registry()
     updates = {}
 
@@ -368,7 +368,7 @@ async def apply_defaults(mode: str) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="mode must be 'cloud' or 'local'")
 
     registry = get_provider_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     selected = {
         cap.id: registry.get_default_provider_id(cap.id, mode)

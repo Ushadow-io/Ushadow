@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useForm, FormProvider, useFormContext } from 'react-hook-form'
+import { useForm, FormProvider, useFormContext, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { MessageSquare, CheckCircle, Sparkles } from 'lucide-react'
 import { wizardApi } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
+import { SecretInput } from '../components/settings'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage, fieldConfig } from './wizard-utils'
 
@@ -186,7 +187,7 @@ export default function ChronicleWizard() {
 
 // Step 1: LLM Provider Selection
 function LLMStep() {
-  const { register, watch, formState: { errors } } = useFormContext<ChronicleFormData>()
+  const { register, watch, control, formState: { errors } } = useFormContext<ChronicleFormData>()
   const selectedProvider = watch('llmProvider')
 
   const providers = [
@@ -195,7 +196,7 @@ function LLMStep() {
   ]
 
   return (
-    <div id="chronicle-step-llm" className="space-y-6">
+    <div data-testid="chronicle-step-llm" className="space-y-6">
       <div className="flex items-center space-x-3">
         <Sparkles className="h-6 w-6 text-primary-600 dark:text-primary-400" />
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
@@ -211,7 +212,7 @@ function LLMStep() {
         {providers.map((provider) => (
           <label
             key={provider.value}
-            id={`chronicle-llm-${provider.value}-option`}
+            data-testid={`chronicle-llm-${provider.value}-option`}
             className={`block p-4 rounded-lg border-2 transition-all cursor-pointer ${
               selectedProvider === provider.value
                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -237,9 +238,9 @@ function LLMStep() {
             {selectedProvider === provider.value && (
               <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     {provider.config.label} <span className="text-red-600">*</span>
-                  </label>
+                  </span>
                   <a
                     href={provider.config.link}
                     target="_blank"
@@ -249,17 +250,20 @@ function LLMStep() {
                     {provider.config.linkText}
                   </a>
                 </div>
-                <input
-                  id={`chronicle-${provider.value}-api-key-input`}
-                  type="password"
-                  {...register('llmApiKey')}
-                  className="input"
-                  placeholder={provider.config.placeholder}
-                  onClick={(e) => e.stopPropagation()}
+                <Controller
+                  name="llmApiKey"
+                  control={control}
+                  render={({ field }) => (
+                    <SecretInput
+                      id={`chronicle-${provider.value}-api-key`}
+                      name={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder={provider.config.placeholder}
+                      error={errors.llmApiKey?.message}
+                    />
+                  )}
                 />
-                {errors.llmApiKey && (
-                  <p className="mt-1 text-sm text-red-600">{errors.llmApiKey.message}</p>
-                )}
               </div>
             )}
           </label>
@@ -271,7 +275,7 @@ function LLMStep() {
 
 // Step 2: Transcription Provider Selection
 function TranscriptionStep() {
-  const { register, watch, formState: { errors } } = useFormContext<ChronicleFormData>()
+  const { register, watch, control, formState: { errors } } = useFormContext<ChronicleFormData>()
   const selectedProvider = watch('transcriptionProvider')
 
   const providers = [
@@ -280,7 +284,7 @@ function TranscriptionStep() {
   ]
 
   return (
-    <div id="chronicle-step-transcription" className="space-y-6">
+    <div data-testid="chronicle-step-transcription" className="space-y-6">
       <div className="flex items-center space-x-3">
         <Sparkles className="h-6 w-6 text-primary-600 dark:text-primary-400" />
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
@@ -296,7 +300,7 @@ function TranscriptionStep() {
         {providers.map((provider) => (
           <label
             key={provider.value}
-            id={`chronicle-transcription-${provider.value}-option`}
+            data-testid={`chronicle-transcription-${provider.value}-option`}
             className={`block p-4 rounded-lg border-2 transition-all cursor-pointer ${
               selectedProvider === provider.value
                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -322,9 +326,9 @@ function TranscriptionStep() {
             {selectedProvider === provider.value && (
               <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     {provider.config.label} <span className="text-red-600">*</span>
-                  </label>
+                  </span>
                   <a
                     href={provider.config.link}
                     target="_blank"
@@ -334,17 +338,20 @@ function TranscriptionStep() {
                     {provider.config.linkText}
                   </a>
                 </div>
-                <input
-                  id={`chronicle-${provider.value}-api-key-input`}
-                  type="password"
-                  {...register('transcriptionApiKey')}
-                  className="input"
-                  placeholder={provider.config.placeholder}
-                  onClick={(e) => e.stopPropagation()}
+                <Controller
+                  name="transcriptionApiKey"
+                  control={control}
+                  render={({ field }) => (
+                    <SecretInput
+                      id={`chronicle-${provider.value}-api-key`}
+                      name={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder={provider.config.placeholder}
+                      error={errors.transcriptionApiKey?.message}
+                    />
+                  )}
                 />
-                {errors.transcriptionApiKey && (
-                  <p className="mt-1 text-sm text-red-600">{errors.transcriptionApiKey.message}</p>
-                )}
               </div>
             )}
           </label>
@@ -361,7 +368,7 @@ function CompleteStep() {
   const transcriptionProvider = watch('transcriptionProvider')
 
   return (
-    <div id="chronicle-step-complete" className="space-y-6 text-center">
+    <div data-testid="chronicle-step-complete" className="space-y-6 text-center">
       <div className="flex justify-center">
         <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
           <CheckCircle className="h-12 w-12 text-green-600 dark:text-green-400" />

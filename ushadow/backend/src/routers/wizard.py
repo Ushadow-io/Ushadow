@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.config.omegaconf_settings import (
-    get_omegaconf_settings,
+    get_settings_store,
     SettingSuggestion,
     infer_setting_type,
 )
@@ -19,7 +19,7 @@ from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-settings_manager = get_omegaconf_settings()
+settings_store = get_settings_store()
 
 
 # Models
@@ -84,10 +84,10 @@ async def get_wizard_status():
     """
     try:
         # Get API keys from OmegaConf
-        openai_key = await settings_manager.get("api_keys.openai_api_key")
-        anthropic_key = await settings_manager.get("api_keys.anthropic_api_key")
-        deepgram_key = await settings_manager.get("api_keys.deepgram_api_key")
-        mistral_key = await settings_manager.get("api_keys.mistral_api_key")
+        openai_key = await settings_store.get("api_keys.openai_api_key")
+        anthropic_key = await settings_store.get("api_keys.anthropic_api_key")
+        deepgram_key = await settings_store.get("api_keys.deepgram_api_key")
+        mistral_key = await settings_store.get("api_keys.mistral_api_key")
 
         # Wizard is complete if LLM and transcription are configured
         has_llm = bool(openai_key or anthropic_key)
@@ -126,10 +126,10 @@ async def get_wizard_api_keys():
     """
     try:
         return ApiKeysStep(
-            openai_api_key=mask_key(await settings_manager.get("api_keys.openai_api_key")),
-            deepgram_api_key=mask_key(await settings_manager.get("api_keys.deepgram_api_key")),
-            mistral_api_key=mask_key(await settings_manager.get("api_keys.mistral_api_key")),
-            anthropic_api_key=mask_key(await settings_manager.get("api_keys.anthropic_api_key")),
+            openai_api_key=mask_key(await settings_store.get("api_keys.openai_api_key")),
+            deepgram_api_key=mask_key(await settings_store.get("api_keys.deepgram_api_key")),
+            mistral_api_key=mask_key(await settings_store.get("api_keys.mistral_api_key")),
+            anthropic_api_key=mask_key(await settings_store.get("api_keys.anthropic_api_key")),
         )
     except Exception as e:
         logger.error(f"Error getting wizard API keys: {e}")
@@ -159,16 +159,16 @@ async def update_wizard_api_keys(api_keys: ApiKeysStep):
 
         # Save to OmegaConf (writes to secrets.yaml)
         if updates:
-            await settings_manager.update(updates)
+            await settings_store.update(updates)
             logger.info(f"Wizard: API keys updated: {list(updates.keys())}")
 
         # Return masked values
         return ApiKeysUpdateResponse(
             api_keys=ApiKeysStep(
-                openai_api_key=mask_key(await settings_manager.get("api_keys.openai_api_key")),
-                deepgram_api_key=mask_key(await settings_manager.get("api_keys.deepgram_api_key")),
-                mistral_api_key=mask_key(await settings_manager.get("api_keys.mistral_api_key")),
-                anthropic_api_key=mask_key(await settings_manager.get("api_keys.anthropic_api_key")),
+                openai_api_key=mask_key(await settings_store.get("api_keys.openai_api_key")),
+                deepgram_api_key=mask_key(await settings_store.get("api_keys.deepgram_api_key")),
+                mistral_api_key=mask_key(await settings_store.get("api_keys.mistral_api_key")),
+                anthropic_api_key=mask_key(await settings_store.get("api_keys.anthropic_api_key")),
             ),
             success=True
         )
@@ -186,10 +186,10 @@ async def detect_configured_keys():
     """
     try:
         return {
-            "openai_api_key": bool(await settings_manager.get("api_keys.openai_api_key")),
-            "deepgram_api_key": bool(await settings_manager.get("api_keys.deepgram_api_key")),
-            "mistral_api_key": bool(await settings_manager.get("api_keys.mistral_api_key")),
-            "anthropic_api_key": bool(await settings_manager.get("api_keys.anthropic_api_key")),
+            "openai_api_key": bool(await settings_store.get("api_keys.openai_api_key")),
+            "deepgram_api_key": bool(await settings_store.get("api_keys.deepgram_api_key")),
+            "mistral_api_key": bool(await settings_store.get("api_keys.mistral_api_key")),
+            "anthropic_api_key": bool(await settings_store.get("api_keys.anthropic_api_key")),
         }
     except Exception as e:
         logger.error(f"Error detecting keys: {e}")
@@ -273,7 +273,7 @@ async def get_quickstart_config() -> QuickstartResponse:
     Returns a flat list of env vars to configure, deduplicated by name.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     provider_registry = get_provider_registry()
 
     # Get installed service names
@@ -351,7 +351,7 @@ async def save_quickstart_config(env_values: Dict[str, str]) -> Dict[str, Any]:
     Accepts a dict of env_var_name -> value.
     Creates settings in api_keys.{name} or security.{name} as appropriate.
     """
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     # Use centralized method to save env var values
     counts = await settings.save_env_var_values(env_values)

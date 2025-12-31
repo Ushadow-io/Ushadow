@@ -1,6 +1,7 @@
 import { Edit2, Save, X, Loader2 } from 'lucide-react'
 import type { ConfigField, ServiceInstance } from '../../contexts/ServicesContext'
 import { shouldShowField, maskValue } from '../../hooks/useServiceStatus'
+import { SecretInput, SettingField } from '../settings'
 
 // ============================================================================
 // Types
@@ -46,53 +47,58 @@ function renderFieldValue(
 ) {
   const { key } = field
   const isSecret = key.includes('password') || key.includes('key')
-  const fieldId = `field-${serviceId}-${key}`
+  const fieldId = `${serviceId}-${key}`
   const hasError = validationErrors[key]
 
   if (isEditing) {
-    // Boolean checkbox
+    // Boolean toggle
     if (typeof value === 'boolean' || field.type === 'boolean') {
       return (
-        <input
+        <SettingField
           id={fieldId}
-          type="checkbox"
-          checked={editForm[key] === true}
-          onChange={(e) => onFieldChange(key, e.target.checked)}
-          className="rounded"
+          name={key}
+          label=""
+          type="toggle"
+          value={editForm[key] === true}
+          onChange={(v) => onFieldChange(key, v)}
         />
       )
     }
 
-    // Text/password input
-    return (
-      <div>
-        <input
+    // Secret input (API keys, passwords)
+    if (isSecret) {
+      return (
+        <SecretInput
           id={fieldId}
-          type={isSecret ? 'password' : 'text'}
+          name={key}
           value={editForm[key] || ''}
-          onChange={(e) => onFieldChange(key, e.target.value)}
-          className={`input text-xs ${hasError ? 'border-error-500 focus:ring-error-500' : ''}`}
-          placeholder={isSecret ? '●●●●●●' : ''}
-          aria-invalid={hasError ? 'true' : 'false'}
-          aria-describedby={hasError ? `error-${serviceId}-${key}` : undefined}
+          onChange={(v) => onFieldChange(key, v)}
+          placeholder="●●●●●●"
+          error={hasError}
+          showIcon={false}
+          className="text-xs"
         />
-        {hasError && (
-          <p
-            id={`error-${serviceId}-${key}`}
-            className="text-xs text-error-600 dark:text-error-400 mt-1"
-            role="alert"
-          >
-            {hasError}
-          </p>
-        )}
-      </div>
+      )
+    }
+
+    // Regular text input
+    return (
+      <SettingField
+        id={fieldId}
+        name={key}
+        label=""
+        type="text"
+        value={editForm[key] || ''}
+        onChange={(v) => onFieldChange(key, v as string)}
+        error={hasError}
+      />
     )
   }
 
   // Display mode
   if (isSecret) {
     return (
-      <span className="font-mono text-xs">
+      <span className="font-mono text-xs" data-testid={`display-${fieldId}`}>
         {value ? maskValue(String(value)) : 'Not set'}
       </span>
     )
@@ -100,14 +106,17 @@ function renderFieldValue(
 
   if (typeof value === 'boolean') {
     return (
-      <span className={`text-xs font-medium ${value ? 'text-success-600' : 'text-neutral-500'}`}>
+      <span
+        className={`text-xs font-medium ${value ? 'text-success-600' : 'text-neutral-500'}`}
+        data-testid={`display-${fieldId}`}
+      >
         {value ? 'Enabled' : 'Disabled'}
       </span>
     )
   }
 
   return (
-    <span className="font-mono text-xs">
+    <span className="font-mono text-xs" data-testid={`display-${fieldId}`}>
       {String(value).substring(0, 30)}
     </span>
   )

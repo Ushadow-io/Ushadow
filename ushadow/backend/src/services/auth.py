@@ -25,11 +25,11 @@ from fastapi_users.authentication import (
     JWTStrategy,
 )
 
-from src.config.settings import get_settings
+from src.config.infra_settings import get_infra_settings
 from src.models.user import User, UserCreate, get_user_db
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+settings = get_infra_settings()
 
 # JWT Configuration
 JWT_LIFETIME_SECONDS = 86400  # 24 hours (matches chronicle)

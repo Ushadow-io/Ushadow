@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.services.compose_registry import get_compose_registry, DiscoveredService
-from src.config.omegaconf_settings import get_omegaconf_settings
+from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,7 +72,7 @@ async def get_installed_services() -> List[Dict[str, Any]]:
     Use /api/compose/services/{id}/env for env var configuration.
     """
     registry = get_compose_registry()
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
 
     return [
         await build_compose_service_response(service, settings)
@@ -93,7 +93,7 @@ async def get_service_enabled(service_name: str) -> Dict[str, Any]:
     if not service:
         raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found")
 
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     enabled = await settings.get(f"installed_services.{service_name}.enabled")
 
     return {
@@ -112,7 +112,7 @@ async def set_service_enabled(service_name: str, request: EnabledRequest) -> Dic
     if not service:
         raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found")
 
-    settings = get_omegaconf_settings()
+    settings = get_settings_store()
     await settings.update({
         f"installed_services.{service_name}.enabled": request.enabled
     })

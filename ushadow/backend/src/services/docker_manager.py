@@ -598,9 +598,9 @@ class DockerManager:
         Returns:
             Dict of env var name -> resolved value
         """
-        from src.config.omegaconf_settings import get_omegaconf_settings
+        from src.config.omegaconf_settings import get_settings_store
 
-        settings = get_omegaconf_settings()
+        settings = get_settings_store()
         compose_registry = get_compose_registry()
 
         # Find the service in compose registry

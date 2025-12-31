@@ -1,4 +1,4 @@
-import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, XCircle, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
+import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { settingsApi } from '../services/api'
 

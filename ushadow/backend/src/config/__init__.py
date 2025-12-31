@@ -2,8 +2,13 @@
 
 from .infra_settings import get_settings, get_infra_settings, InfraSettings
 from .omegaconf_settings import (
+    # New names (preferred)
+    get_settings_store,
+    SettingsStore,
+    # Backward compatibility aliases
     get_omegaconf_settings,
     OmegaConfSettingsManager,
+    # Helpers
     SettingSuggestion,
     infer_setting_type,
     categorize_setting,
@@ -24,9 +29,13 @@ __all__ = [
     "get_settings",
     "get_infra_settings",
     "InfraSettings",
-    # OmegaConf settings (YAML files)
+    # Settings store (YAML files) - new names
+    "get_settings_store",
+    "SettingsStore",
+    # Backward compatibility aliases
     "get_omegaconf_settings",
     "OmegaConfSettingsManager",
+    # Helpers
     "SettingSuggestion",
     # Setting helpers
     "infer_setting_type",
