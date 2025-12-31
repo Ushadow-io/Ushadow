@@ -15,6 +15,7 @@ export default function Layout() {
   const { isEnabled, flags } = useFeatureFlags()
   const { setupLevel, getSetupLabel } = useWizard()
   const { isConnected: isChronicleConnected, recording } = useChronicle()
+  const { setupLevel, getSetupLabel } = useWizard()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -34,6 +35,20 @@ export default function Layout() {
   }
   // Helper to check if recording is in a processing state
   const isRecordingProcessing = ['mic', 'websocket', 'audio-start', 'streaming', 'stopping'].includes(recording.currentStep)
+  // Get dynamic wizard label based on setup level
+  const wizardLabel = getSetupLabel()
+
+  // Icon mapping for setup levels
+  const getSetupIcon = () => {
+    switch (setupLevel) {
+      case 0: return Sparkles
+      case 1: return Shield
+      case 2: return Mic
+      case 3: return CheckCircle2
+      default: return Wand2
+    }
+  }
+  const SetupIcon = getSetupIcon()
 
   // Close dropdown when clicking outside
   useEffect(() => {

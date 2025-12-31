@@ -215,10 +215,19 @@ export default function ChroniclePage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center space-x-2">
-            <MessageSquare className="h-8 w-8 text-primary-600 dark:text-primary-400" />
-            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Chronicle</h1>
+            <MessageSquare className="h-8 w-8" style={{ color: '#4ade80' }} />
+            <h1
+              id="chronicle-title"
+              className="text-3xl font-bold"
+              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+            >
+              Chronicle
+            </h1>
           </div>
-          <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+          <p
+            className="mt-2"
+            style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+          >
             AI-powered conversation and memory system
           </p>
         </div>
