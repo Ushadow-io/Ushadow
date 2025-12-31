@@ -42,9 +42,9 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
 
-      # Transcription capability (from selected provider) - REQUIRED
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-
+      # Transcription capability (from selected provider)
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
       # Memory capability (optional, from selected provider)
       - MEM0_API_KEY=${MEM0_API_KEY:-}
 

@@ -2,11 +2,18 @@ import { Wand2, Zap, Server, Settings, ArrowRight, CheckCircle, Link, FlaskConic
 import { useNavigate, Link as RouterLink } from 'react-router-dom'
 import { useWizard } from '../contexts/WizardContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
+import { getAllWizards } from '../wizards'
 
 export default function WizardStartPage() {
   const navigate = useNavigate()
   const { setMode, setCurrentPhase } = useWizard()
   const { isDark } = useTheme()
+  const { isEnabled } = useFeatureFlags()
+
+  // Get all wizards from registry dynamically
+  const availableWizards = getAllWizards()
+  const showWizardTesting = isEnabled('show_wizard_testing')
 
   const handleModeSelection = (mode: 'quickstart' | 'local' | 'custom') => {
     setMode(mode)
@@ -18,15 +25,6 @@ export default function WizardStartPage() {
       navigate('/wizard/quickstart')
     }
   }
-
-  // All available wizards for testing
-  const availableWizards = [
-    { path: '/wizard/quickstart', label: 'Quickstart', description: 'Configure API keys' },
-    { path: '/wizard/local', label: 'Local Services', description: 'Local LLM & transcription' },
-    { path: '/wizard/chronicle', label: 'Chronicle', description: 'Conversation engine setup' },
-    { path: '/wizard/memory', label: 'Memory', description: 'OpenMemory setup' },
-    { path: '/wizard/tailscale', label: 'Tailscale', description: 'Secure remote access' },
-  ]
 
   return (
     <div className="space-y-8" data-testid="wizard-start-page">
@@ -279,61 +277,63 @@ export default function WizardStartPage() {
         </p>
       </div>
 
-      {/* Wizard Links - Testing Section */}
-      <div
-        className="rounded-xl p-6"
-        style={{
-          backgroundColor: isDark ? 'rgba(168, 85, 247, 0.1)' : 'rgba(168, 85, 247, 0.05)',
-          border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.2)'}`,
-        }}
-        data-testid="wizard-testing-section"
-      >
-        <div className="flex items-center gap-2 mb-4">
-          <FlaskConical className="h-5 w-5" style={{ color: '#a855f7' }} />
-          <h3
-            className="text-lg font-semibold"
-            style={{ color: isDark ? '#c084fc' : '#7e22ce' }}
-          >
-            All Wizards (Testing)
-          </h3>
-        </div>
-        <p
-          className="text-sm mb-4"
-          style={{ color: isDark ? '#c084fc' : '#9333ea' }}
+      {/* Wizard Links - Testing Section (behind feature flag) */}
+      {showWizardTesting && (
+        <div
+          className="rounded-xl p-6"
+          style={{
+            backgroundColor: isDark ? 'rgba(168, 85, 247, 0.1)' : 'rgba(168, 85, 247, 0.05)',
+            border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.2)'}`,
+          }}
+          data-testid="wizard-testing-section"
         >
-          Direct links to all available setup wizards for testing purposes.
-        </p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {availableWizards.map((wizard) => (
-            <RouterLink
-              key={wizard.path}
-              to={wizard.path}
-              id={`wizard-link-${wizard.label.toLowerCase()}`}
-              className="p-4 rounded-lg transition-all hover:shadow-md group"
-              style={{
-                backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
-                border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.2)'}`,
-              }}
+          <div className="flex items-center gap-2 mb-4">
+            <FlaskConical className="h-5 w-5" style={{ color: '#a855f7' }} />
+            <h3
+              className="text-lg font-semibold"
+              style={{ color: isDark ? '#c084fc' : '#7e22ce' }}
             >
-              <div className="flex items-center gap-2 mb-1">
-                <Link className="h-4 w-4" style={{ color: '#a855f7' }} />
-                <span
-                  className="font-medium"
-                  style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
-                >
-                  {wizard.label}
-                </span>
-              </div>
-              <p
-                className="text-xs"
-                style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+              All Wizards (Testing)
+            </h3>
+          </div>
+          <p
+            className="text-sm mb-4"
+            style={{ color: isDark ? '#c084fc' : '#9333ea' }}
+          >
+            Direct links to all available setup wizards for testing purposes.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {availableWizards.map((wizard) => (
+              <RouterLink
+                key={wizard.path}
+                to={wizard.path}
+                data-testid={`wizard-link-${wizard.id}`}
+                className="p-4 rounded-lg transition-all hover:shadow-md group"
+                style={{
+                  backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
+                  border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.2)'}`,
+                }}
               >
-                {wizard.description}
-              </p>
-            </RouterLink>
-          ))}
+                <div className="flex items-center gap-2 mb-1">
+                  <Link className="h-4 w-4" style={{ color: '#a855f7' }} />
+                  <span
+                    className="font-medium"
+                    style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                  >
+                    {wizard.label}
+                  </span>
+                </div>
+                <p
+                  className="text-xs"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
+                  {wizard.description}
+                </p>
+              </RouterLink>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

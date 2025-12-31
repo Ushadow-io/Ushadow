@@ -49,6 +49,7 @@ export default function Layout() {
   const navigationItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
+    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users },
     { path: '/mcp', label: 'MCP Hub', icon: Plug },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow },
