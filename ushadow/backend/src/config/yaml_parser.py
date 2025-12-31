@@ -201,7 +201,9 @@ class ComposeService:
     networks: List[str] = field(default_factory=list)
 
     # From x-ushadow extension
-    requires: List[str] = field(default_factory=list)
+    requires: List[str] = field(default_factory=list)  # Capabilities this service needs
+    optional: List[str] = field(default_factory=list)  # Optional capabilities (used if available)
+    provides: Optional[str] = None  # Capability this service implements (e.g., "memory")
     display_name: Optional[str] = None
     description: Optional[str] = None
     namespace: Optional[str] = None  # Docker Compose project name / K8s namespace
@@ -353,6 +355,8 @@ class ComposeParser(BaseYAMLParser):
         # Get x-ushadow metadata for this service
         service_meta = x_ushadow.get(name, {})
         requires = service_meta.get("requires", [])
+        optional = service_meta.get("optional", [])
+        provides = service_meta.get("provides")  # Capability this service implements
         display_name = service_meta.get("display_name")
         description = service_meta.get("description")
         # namespace is at top level of x-ushadow, shared by all services in file
@@ -369,6 +373,8 @@ class ComposeParser(BaseYAMLParser):
             volumes=volumes,
             networks=networks,
             requires=requires,
+            optional=optional,
+            provides=provides,
             display_name=display_name,
             description=description,
             namespace=namespace,

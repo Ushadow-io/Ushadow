@@ -213,6 +213,15 @@ class ComposeServiceRegistry:
             f"{len(self._services)} services"
         )
 
+    def refresh(self) -> None:
+        """Refresh the registry by re-discovering compose files."""
+        logger.info("Refreshing ComposeServiceRegistry...")
+        self._services.clear()
+        self._compose_files.clear()
+        self._loaded = False
+        self._load()
+        logger.info(f"ComposeServiceRegistry refreshed: {len(self._services)} services")
+
     def _discover_compose_files(self) -> None:
         """Discover and parse compose files in the compose directory."""
         if not self.compose_dir.exists():

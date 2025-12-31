@@ -11,6 +11,7 @@ x-ushadow:
     display_name: "Chronicle"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
     requires: [llm, transcription]
+    optional: [memory]  # Uses memory if available, works without it
   chronicle-webui:
     display_name: "Chronicle Web UI"
     description: "Web interface for Chronicle voice journal"
@@ -49,7 +50,7 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
       # Memory capability (optional, from selected provider)
-      - MEM0_API_KEY=${MEM0_API_KEY:-}
+      - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
 
       # Security (from settings) - AUTH_SECRET_KEY is required for JWT auth
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}

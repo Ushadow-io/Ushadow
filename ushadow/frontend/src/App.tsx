@@ -6,20 +6,13 @@ import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
 
-// Detect runtime base path for path-based routing (e.g., /wiz/, /prod/)
+// Get router basename from Vite build config (for path-based deployments like /wiz/)
+// Runtime detection was removed because it incorrectly treated app routes (/settings, /services)
+// as base paths, causing path duplication bugs (/settings/settings, /services/wizard)
 const getBasename = () => {
-  const { pathname, port, protocol } = window.location
-  const isStandardPort = (protocol === 'https:' && (port === '' || port === '443')) ||
-                         (protocol === 'http:' && (port === '' || port === '80'))
-
-  if (!isStandardPort) return '/' // Dev mode - no base path
-
-  // Extract first path segment as base path (e.g., /wiz from /wiz/settings)
-  const segments = pathname.split('/').filter(Boolean)
-  if (segments.length > 0 && !segments[0].includes('.')) {
-    return `/${segments[0]}`
-  }
-  return '/'
+  const viteBase = import.meta.env.BASE_URL
+  // Vite's BASE_URL is '/' by default, or the configured base path
+  return viteBase === '/' ? '' : viteBase.replace(/\/$/, '')
 }
 
 import ProtectedRoute from './components/auth/ProtectedRoute'

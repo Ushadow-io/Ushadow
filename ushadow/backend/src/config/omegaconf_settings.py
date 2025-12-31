@@ -17,6 +17,8 @@ from typing import Any, Optional, List, Tuple, Dict
 
 from omegaconf import OmegaConf, DictConfig
 
+from src.services.provider_registry import get_provider_registry
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +64,6 @@ SETTING_SECTIONS = {
     'url': ['services'],
     'string': ['llm', 'transcription', 'memory', 'auth', 'security', 'admin'],
 }
-
 
 # =============================================================================
 # Helper Functions
@@ -141,6 +142,12 @@ class SettingsStore:
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
         self.cache_ttl: int = 5  # seconds
+
+    def clear_cache(self) -> None:
+        """Clear the configuration cache, forcing reload on next access."""
+        self._cache = None
+        self._cache_timestamp = 0
+        logger.info("OmegaConfSettings cache cleared")
 
     def _load_yaml_if_exists(self, path: Path) -> Optional[DictConfig]:
         """Load a YAML file if it exists, return None otherwise."""
@@ -344,9 +351,8 @@ class SettingsStore:
         """
         Find a setting path and value that matches an environment variable name.
 
-        Searches through config sections looking for keys that match the env var.
-        Uses fuzzy matching (e.g., OPENAI_API_KEY matches api_keys.openai_api_key).
-        Prefers matches with values over empty matches.
+        Uses provider-derived mapping first for consistency,
+        then falls back to fuzzy matching for unmapped env vars.
 
         Args:
             env_var_name: Environment variable name (e.g., "OPENAI_API_KEY")
@@ -354,6 +360,14 @@ class SettingsStore:
         Returns:
             Tuple of (setting_path, value) if found, None otherwise
         """
+        # First, try direct path mapping (derived from provider YAML configs)
+        env_mapping = get_provider_registry().get_env_to_settings_mapping()
+        if env_var_name in env_mapping:
+            settings_path = env_mapping[env_var_name]
+            value = await self.get(settings_path)
+            return (settings_path, value)
+
+        # Fall back to fuzzy matching for unmapped env vars
         config = await self.get_config_as_dict()
         setting_type = infer_setting_type(env_var_name)
         sections = SETTING_SECTIONS.get(setting_type, ['api_keys', 'security'])
@@ -390,12 +404,24 @@ class SettingsStore:
         """
         Check if there's an existing setting value that matches an env var.
 
+        Uses provider-derived mapping first for consistency
+        with CapabilityResolver, then falls back to fuzzy matching.
+
         Args:
             env_var_name: Environment variable name
 
         Returns:
             True if a matching setting with a non-empty value exists
         """
+        # First, try direct path mapping (derived from provider YAML configs)
+        env_mapping = get_provider_registry().get_env_to_settings_mapping()
+        if env_var_name in env_mapping:
+            settings_path = env_mapping[env_var_name]
+            value = await self.get(settings_path)
+            if value and str(value).strip():
+                return True
+
+        # Fall back to fuzzy matching for unmapped env vars
         result = await self.find_setting_for_env_var(env_var_name)
         if result is None:
             return False
