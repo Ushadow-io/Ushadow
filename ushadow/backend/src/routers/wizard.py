@@ -324,6 +324,9 @@ async def check_huggingface_models():
 
     Uses the stored HF token to check model access.
     Returns access status for each required model.
+    
+    For gated models (like PyAnnote), we verify actual access by attempting
+    to resolve a file, not just checking model metadata.
     """
     hf_token = await settings_store.get("api_keys.hf_token")
 
@@ -341,35 +344,81 @@ async def check_huggingface_models():
     async with httpx.AsyncClient(timeout=10.0) as client:
         for model_id in REQUIRED_PYANNOTE_MODELS:
             try:
-                # Try to access model info - gated models return 403 if not accepted
+                # First get model info to check if it's gated
                 response = await client.get(
                     f"https://huggingface.co/api/models/{model_id}",
                     headers={"Authorization": f"Bearer {hf_token}"}
                 )
 
-                if response.status_code == 200:
+                if response.status_code == 401:
                     model_statuses.append(ModelAccessStatus(
                         model_id=model_id,
-                        has_access=True,
-                        error=None
+                        has_access=False,
+                        error="Invalid token"
                     ))
+                    continue
                 elif response.status_code == 403:
                     model_statuses.append(ModelAccessStatus(
                         model_id=model_id,
                         has_access=False,
                         error="License terms not accepted"
                     ))
-                elif response.status_code == 401:
+                    continue
+                elif response.status_code != 200:
                     model_statuses.append(ModelAccessStatus(
                         model_id=model_id,
                         has_access=False,
-                        error="Invalid token"
+                        error=f"API error: {response.status_code}"
+                    ))
+                    continue
+
+                # Parse model info to check gating status
+                model_info = response.json()
+                gated = model_info.get("gated")
+
+                # If model is not gated, we have access
+                if not gated:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=True,
+                        error=None
+                    ))
+                    continue
+
+                # Model is gated - verify actual access by trying to resolve a file
+                # This will return 401/403 if license terms haven't been accepted
+                # or if token doesn't have proper permissions
+                resolve_response = await client.head(
+                    f"https://huggingface.co/{model_id}/resolve/main/config.yaml",
+                    headers={"Authorization": f"Bearer {hf_token}"},
+                    follow_redirects=False
+                )
+
+                # 302 redirect means we have access (redirects to CDN)
+                # 200 means direct access granted
+                if resolve_response.status_code in (200, 302):
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=True,
+                        error=None
+                    ))
+                elif resolve_response.status_code == 401:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=False,
+                        error="Token lacks read permission or license not accepted"
+                    ))
+                elif resolve_response.status_code == 403:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=False,
+                        error="License terms not accepted"
                     ))
                 else:
                     model_statuses.append(ModelAccessStatus(
                         model_id=model_id,
                         has_access=False,
-                        error=f"API error: {response.status_code}"
+                        error=f"Access check failed: {resolve_response.status_code}"
                     ))
 
             except Exception as e:
@@ -463,3 +512,27 @@ async def save_quickstart_config(key_values: Dict[str, str]) -> Dict[str, Any]:
         "saved": len(key_values),
         "message": "Configuration saved successfully"
     }
+
+
+# ============================================================================
+# Setup State - Persisted wizard progress (synced across origins)
+# ============================================================================
+
+@router.get("/setup-state")
+async def get_setup_state() -> Dict[str, Any]:
+    """Get persisted wizard/setup state."""
+    from omegaconf import OmegaConf
+    settings = get_settings_store()
+    state = await settings.get("setup_state", {})
+    # Convert OmegaConf to plain dict for JSON serialization
+    if state and hasattr(state, '_content'):
+        return OmegaConf.to_container(state, resolve=True)
+    return state if state else {}
+
+
+@router.put("/setup-state")
+async def save_setup_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Save wizard/setup state to backend."""
+    settings = get_settings_store()
+    await settings.update({"setup_state": state})
+    return {"success": True}

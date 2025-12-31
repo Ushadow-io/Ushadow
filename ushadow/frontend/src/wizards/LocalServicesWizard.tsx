@@ -396,7 +396,8 @@ export default function LocalServicesWizard() {
       markPhaseComplete('quickstart')
       wizard.next()
     } else if (wizard.currentStep.id === 'complete') {
-      navigate('/')
+      // Handled by CompleteStep buttons
+      return
     }
   }
 
@@ -416,7 +417,7 @@ export default function LocalServicesWizard() {
       currentStepId={wizard.currentStep.id}
       isFirstStep={wizard.isFirst}
       onBack={handleBack}
-      onNext={handleNext}
+      onNext={wizard.currentStep.id === 'complete' ? undefined : handleNext}
       nextLoading={isSubmitting}
       message={message}
     >
@@ -450,7 +451,12 @@ export default function LocalServicesWizard() {
         )}
 
         {/* Step 4: Complete */}
-        {wizard.currentStep.id === 'complete' && <CompleteStep />}
+        {wizard.currentStep.id === 'complete' && (
+          <CompleteStep
+            onContinue={() => navigate('/wizard/tailscale')}
+            onGoHome={() => navigate('/')}
+          />
+        )}
       </FormProvider>
     </WizardShell>
   )
@@ -761,7 +767,12 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
 }
 
 // Step 4: Complete
-function CompleteStep() {
+interface CompleteStepProps {
+  onContinue: () => void
+  onGoHome: () => void
+}
+
+function CompleteStep({ onContinue, onGoHome }: CompleteStepProps) {
   return (
     <div id="local-services-step-complete" className="text-center space-y-6">
       <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
@@ -796,10 +807,23 @@ function CompleteStep() {
         </ul>
       </div>
 
-      <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-        <p className="text-sm text-gray-700 dark:text-gray-300">
-          <strong>Next:</strong> Add mobile access with Tailscale (Level 2)
-        </p>
+      {/* Action buttons */}
+      <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
+        <button
+          onClick={onGoHome}
+          data-testid="local-services-go-home"
+          className="btn-secondary px-6 py-3"
+        >
+          Go to Dashboard
+        </button>
+        <button
+          onClick={onContinue}
+          data-testid="local-services-continue-setup"
+          className="btn-primary px-6 py-3 flex items-center justify-center gap-2"
+        >
+          Continue to Level 2
+          <span className="text-xs opacity-75">(Tailscale)</span>
+        </button>
       </div>
     </div>
   )
