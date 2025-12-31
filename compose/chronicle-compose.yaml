@@ -6,10 +6,13 @@
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
 # =============================================================================
 x-ushadow:
+  namespace: chronicle  # Docker Compose project name for this file
   chronicle-backend:
+    display_name: "Chronicle"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
     requires: [llm, transcription]
   chronicle-webui:
+    display_name: "Chronicle Web UI"
     description: "Web interface for Chronicle voice journal"
     requires: []
 

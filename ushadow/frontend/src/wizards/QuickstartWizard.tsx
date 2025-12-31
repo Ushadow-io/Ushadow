@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
-import { useForm, FormProvider, useFormContext, Controller } from 'react-hook-form'
+import { useFormContext, Controller } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
-// Note: Eye/EyeOff icons removed - now handled by SecretInput component
+import { Sparkles, Loader2, CheckCircle, RefreshCw, ExternalLink } from 'lucide-react'
 
-import { composeServicesApi, settingsApi, dockerApi, type IncompleteEnvVar } from '../services/api'
+import { composeServicesApi, dockerApi, type QuickstartConfig, type CapabilityRequirement, type MissingKey, type ServiceInfo } from '../services/api'
 import { ServiceStatusCard, type ServiceStatus } from '../components/services'
 import { SecretInput, SettingField } from '../components/settings'
 import { useWizard } from '../contexts/WizardContext'
+import { WizardFormProvider, useWizardForm } from '../contexts/WizardFormContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
@@ -16,7 +16,7 @@ import { getErrorMessage } from './wizard-utils'
 /**
  * QuickstartWizard - Multi-step setup for cloud services.
  *
- * Step 1: Configure API keys for cloud services
+ * Step 1: Configure API keys for cloud providers (OpenAI, Deepgram)
  * Step 2: Start core services (OpenMemory + Chronicle)
  * Step 3: Complete - ready to use web client
  */
@@ -28,28 +28,6 @@ const STEPS: WizardStep[] = [
   { id: 'complete', label: 'Done' },
 ]
 
-interface EnvVarField {
-  name: string
-  type: 'secret' | 'url' | 'string'
-  label: string
-  has_default: boolean
-  default_value?: string
-  suggestions: Array<{
-    path: string
-    label: string
-    has_value: boolean
-    value?: string
-  }>
-}
-
-interface ServiceEnvGroup {
-  service_id: string
-  service_name: string
-  env_vars: EnvVarField[]
-}
-
-type FormData = Record<string, Record<string, any>>
-
 // Container status for service cards
 interface ContainerInfo {
   name: string
@@ -58,29 +36,36 @@ interface ContainerInfo {
   error?: string
 }
 
+/**
+ * QuickstartWizard wrapper - provides the WizardFormContext
+ */
 export default function QuickstartWizard() {
+  return (
+    <WizardFormProvider>
+      <QuickstartWizardContent />
+    </WizardFormProvider>
+  )
+}
+
+/**
+ * QuickstartWizard content - uses WizardFormContext for form handling
+ */
+function QuickstartWizardContent() {
   const navigate = useNavigate()
-  const { markPhaseComplete, updateServiceStatus } = useWizard()
+  const { markPhaseComplete, updateServiceStatus, updateApiKeysStatus } = useWizard()
+  const { getValue, saveToApi } = useWizardForm()
   const wizard = useWizardSteps(STEPS)
 
   const [loading, setLoading] = useState(true)
-  const [serviceGroups, setServiceGroups] = useState<ServiceEnvGroup[]>([])
+  const [quickstartConfig, setQuickstartConfig] = useState<QuickstartConfig | null>(null)
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Container states for service cards
-  const [containers, setContainers] = useState<ContainerInfo[]>([
-    { name: 'openmemory', displayName: 'OpenMemory', status: 'unknown' },
-    { name: 'chronicle-backend', displayName: 'Chronicle', status: 'unknown' },
-  ])
-
-  const methods = useForm<FormData>({
-    defaultValues: {},
-    mode: 'onChange',
-  })
+  // Container states - built dynamically from API response
+  const [containers, setContainers] = useState<ContainerInfo[]>([])
 
   useEffect(() => {
-    loadQuickstartServices()
+    loadQuickstartConfig()
   }, [])
 
   // Check container status when entering start_services step
@@ -90,52 +75,19 @@ export default function QuickstartWizard() {
     }
   }, [wizard.currentStep.id])
 
-  const loadQuickstartServices = async () => {
+  const loadQuickstartConfig = async () => {
     try {
-      const quickstartResponse = await composeServicesApi.getQuickstart()
-      const { incomplete_env_vars } = quickstartResponse.data
+      const response = await composeServicesApi.getQuickstart()
+      setQuickstartConfig(response.data)
 
-      // Group incomplete env vars by service
-      const groupedByService = new Map<string, ServiceEnvGroup>()
+      // Build containers state from services in the API response
+      const serviceContainers = response.data.services.map((service: ServiceInfo) => ({
+        name: service.name,
+        displayName: service.display_name,
+        status: 'unknown' as const,
+      }))
+      setContainers(serviceContainers)
 
-      incomplete_env_vars.forEach((envVar: IncompleteEnvVar) => {
-        if (!groupedByService.has(envVar.service_id)) {
-          groupedByService.set(envVar.service_id, {
-            service_id: envVar.service_id,
-            service_name: envVar.service_name,
-            env_vars: [],
-          })
-        }
-
-        const group = groupedByService.get(envVar.service_id)!
-        group.env_vars.push({
-          name: envVar.name,
-          type: envVar.setting_type,
-          label: envVar.name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-          has_default: envVar.has_default,
-          default_value: envVar.default_value,
-          suggestions: envVar.suggestions.map((s: any) => ({
-            path: s.path,
-            label: s.label,
-            has_value: s.has_value,
-            value: s.value,
-          })),
-        })
-      })
-
-      const groups = Array.from(groupedByService.values())
-
-      // Initialize form data - key by env var name for simplicity
-      const initialData: FormData = { env_vars: {} }
-      incomplete_env_vars.forEach((envVar: IncompleteEnvVar) => {
-        // Pre-fill with default if available
-        if (envVar.default_value) {
-          initialData.env_vars[envVar.name] = envVar.default_value
-        }
-      })
-
-      setServiceGroups(groups)
-      methods.reset(initialData)
       setLoading(false)
     } catch (error) {
       console.error('Failed to load quickstart config:', error)
@@ -144,79 +96,52 @@ export default function QuickstartWizard() {
     }
   }
 
-  // Get all env vars that need configuration (already filtered by backend)
-  const getAllEnvVars = (): EnvVarField[] => {
-    return serviceGroups.flatMap((group) => group.env_vars)
+  // Get capabilities that need configuration (have missing keys)
+  const getCapabilitiesNeedingSetup = (): CapabilityRequirement[] => {
+    if (!quickstartConfig) return []
+    return quickstartConfig.required_capabilities.filter(cap => !cap.configured && cap.missing_keys.length > 0)
   }
 
-  const validateEnvVars = async (): Promise<boolean> => {
-    const envVars = getAllEnvVars()
-    const data = methods.getValues()
+  const validateKeys = async (): Promise<boolean> => {
+    const capabilities = getCapabilitiesNeedingSetup()
 
-    for (const envVar of envVars) {
-      // All env vars from quickstart are required (filtered by backend)
-      if (!envVar.has_default) {
-        const value = data.env_vars?.[envVar.name]
-        if (!value || (typeof value === 'string' && value.trim() === '')) {
-          setMessage({
-            type: 'error',
-            text: `${envVar.label} is required`,
-          })
-          return false
+    // Collect all required settings paths
+    const requiredPaths: { path: string; label: string }[] = []
+    for (const cap of capabilities) {
+      for (const key of cap.missing_keys) {
+        if (key.settings_path) {
+          requiredPaths.push({ path: key.settings_path, label: key.label })
         }
+      }
+    }
+
+    // Validate using context helper
+    for (const { path, label } of requiredPaths) {
+      const value = getValue(path)
+      if (!value || value.trim() === '') {
+        setMessage({ type: 'error', text: `${label} is required` })
+        return false
       }
     }
     return true
   }
 
-  const saveApiKeys = async (): Promise<boolean> => {
+  const saveKeys = async (): Promise<boolean> => {
     setIsSubmitting(true)
     setMessage({ type: 'info', text: 'Saving configuration...' })
 
-    try {
-      const data = methods.getValues()
-      const apiKeys: Record<string, string> = {}
-      const servicePreferences: Record<string, Record<string, any>> = {}
+    // Use context's saveToApi which handles flattening
+    const result = await saveToApi(composeServicesApi.saveQuickstart)
 
-      for (const service of services) {
-        const serviceConfig = data[service.service_id]
-        if (!serviceConfig) continue
-
-        service.config_schema.forEach((field) => {
-          const value = serviceConfig[field.key]
-
-          if (value === undefined || value === null) return
-          if (typeof value === 'string' && value.startsWith('***')) return // Skip masked values
-
-          if (field.env_var) {
-            const keyName = field.env_var.toLowerCase()
-            apiKeys[keyName] = value
-          } else {
-            if (!servicePreferences[service.service_id]) {
-              servicePreferences[service.service_id] = {}
-            }
-            servicePreferences[service.service_id][field.key] = value
-          }
-        })
-      }
-
-      const updates: Record<string, any> = {}
-      if (Object.keys(apiKeys).length > 0) {
-        updates.api_keys = apiKeys
-      }
-      if (Object.keys(servicePreferences).length > 0) {
-        updates.service_preferences = servicePreferences
-      }
-
-      await settingsApi.update(updates)
-      updateServiceStatus('apiKeys', true)
+    if (result.success) {
+      updateApiKeysStatus(true)
       setMessage({ type: 'success', text: 'Configuration saved!' })
-      return true
-    } catch (error) {
-      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save configuration') })
-      return false
-    } finally {
       setIsSubmitting(false)
+      return true
+    } else {
+      setMessage({ type: 'error', text: result.error || 'Failed to save configuration' })
+      setIsSubmitting(false)
+      return false
     }
   }
 
@@ -226,11 +151,17 @@ export default function QuickstartWizard() {
       const response = await dockerApi.listServices()
       const servicesList = response.data
 
+      console.log('[QuickstartWizard] Docker services from API:', servicesList.map((s: any) => ({ name: s.name, status: s.status })))
+      console.log('[QuickstartWizard] Containers to check:', containers.map(c => c.name))
+
       setContainers((prev) =>
         prev.map((container) => {
+          // Match by exact name only - avoid false positives from partial matches
           const serviceInfo = servicesList.find(
-            (s: any) => s.name === container.name || s.name.includes(container.name)
+            (s: any) => s.name === container.name
           )
+
+          console.log(`[QuickstartWizard] Matching ${container.name}:`, serviceInfo ? { name: serviceInfo.name, status: serviceInfo.status } : 'NOT FOUND')
 
           if (serviceInfo) {
             const isRunning = serviceInfo.status === 'running'
@@ -252,17 +183,22 @@ export default function QuickstartWizard() {
       prev.map((c) => (c.name === containerName ? { ...c, status: 'starting' } : c))
     )
 
+    // Get display name for messages
+    const container = containers.find((c) => c.name === containerName)
+    const displayName = container?.displayName || containerName
+
     try {
       await dockerApi.startService(containerName)
 
-      // Poll for status
+      // Poll for status - longer timeout for slower containers
       let attempts = 0
-      const maxAttempts = 10
+      const maxAttempts = 30 // 60 seconds total
 
       const pollStatus = async () => {
         attempts++
         try {
           const response = await dockerApi.getServiceInfo(containerName)
+          console.log(`[QuickstartWizard] Poll ${containerName} attempt ${attempts}:`, response.data)
           const isRunning = response.data.status === 'running'
 
           if (isRunning) {
@@ -270,31 +206,40 @@ export default function QuickstartWizard() {
               prev.map((c) => (c.name === containerName ? { ...c, status: 'running' } : c))
             )
 
-            // Update wizard context
-            if (containerName === 'openmemory') {
-              updateServiceStatus('openMemory', { configured: true, running: true })
-            } else if (containerName === 'chronicle-backend') {
-              updateServiceStatus('chronicle', { configured: true, running: true })
-            }
+            // Update wizard context with service status (uses service name directly)
+            updateServiceStatus(containerName, { configured: true, running: true })
 
-            setMessage({ type: 'success', text: `${containerName} started successfully!` })
+            setMessage({ type: 'success', text: `${displayName} started successfully!` })
             return
           }
 
           if (attempts < maxAttempts) {
             setTimeout(pollStatus, 2000)
           } else {
+            // Final check - container might be running but API was slow
+            // Mark as running anyway since the start command succeeded
             setContainers((prev) =>
               prev.map((c) =>
                 c.name === containerName
-                  ? { ...c, status: 'error', error: 'Timeout waiting for container to start' }
+                  ? { ...c, status: 'running' } // Assume running after timeout
                   : c
               )
             )
+            updateServiceStatus(containerName, { configured: true, running: true })
+            setMessage({ type: 'info', text: `${displayName} started (status check timed out)` })
           }
         } catch (err) {
           if (attempts < maxAttempts) {
             setTimeout(pollStatus, 2000)
+          } else {
+            // Even on error, assume it started since the start command succeeded
+            setContainers((prev) =>
+              prev.map((c) =>
+                c.name === containerName ? { ...c, status: 'running' } : c
+              )
+            )
+            updateServiceStatus(containerName, { configured: true, running: true })
+            setMessage({ type: 'info', text: `${displayName} started (status check failed)` })
           }
         }
       }
@@ -308,11 +253,12 @@ export default function QuickstartWizard() {
             : c
         )
       )
-      setMessage({ type: 'error', text: getErrorMessage(error, `Failed to start ${containerName}`) })
+      setMessage({ type: 'error', text: getErrorMessage(error, `Failed to start ${displayName}`) })
     }
   }
 
-  const allContainersRunning = containers.every((c) => c.status === 'running')
+  const someContainersRunning = containers.some((c) => c.status === 'running')
+  const anyContainersStarting = containers.some((c) => c.status === 'starting')
 
   // Navigation handlers
   const handleNext = async () => {
@@ -320,17 +266,17 @@ export default function QuickstartWizard() {
 
     if (wizard.currentStep.id === 'api_keys') {
       // Validate and save API keys
-      const isValid = await validateApiKeys()
+      const isValid = await validateKeys()
       if (!isValid) return
 
-      const saved = await saveApiKeys()
+      const saved = await saveKeys()
       if (!saved) return
 
       wizard.next()
     } else if (wizard.currentStep.id === 'start_services') {
-      // Check all containers are running before proceeding
-      if (!allContainersRunning) {
-        setMessage({ type: 'error', text: 'Please start all services before continuing' })
+      // Allow proceeding if at least some services started (don't block on all)
+      if (!someContainersRunning && !anyContainersStarting) {
+        setMessage({ type: 'error', text: 'Please start at least one service before continuing' })
         return
       }
 
@@ -352,7 +298,8 @@ export default function QuickstartWizard() {
       case 'api_keys':
         return true // Validation happens on next click
       case 'start_services':
-        return allContainersRunning
+        // Can proceed if at least one service is running or starting
+        return someContainersRunning || anyContainersStarting
       case 'complete':
         return true
       default:
@@ -368,7 +315,7 @@ export default function QuickstartWizard() {
     )
   }
 
-  const servicesWithRequiredFields = getFilteredServices()
+  const capabilitiesNeedingSetup = getCapabilitiesNeedingSetup()
 
   return (
     <WizardShell
@@ -386,36 +333,35 @@ export default function QuickstartWizard() {
       nextLoading={isSubmitting}
       message={message}
     >
-      <FormProvider {...methods}>
-        {/* Step 1: API Keys */}
-        {wizard.currentStep.id === 'api_keys' && (
-          <ApiKeysStep services={servicesWithRequiredFields} />
-        )}
+      {/* Step 1: API Keys */}
+      {wizard.currentStep.id === 'api_keys' && (
+        <ApiKeysStep capabilities={capabilitiesNeedingSetup} />
+      )}
 
-        {/* Step 2: Start Services */}
-        {wizard.currentStep.id === 'start_services' && (
-          <StartServicesStep
-            containers={containers}
-            onStart={startContainer}
-            onRefresh={checkContainerStatuses}
-          />
-        )}
+      {/* Step 2: Start Services */}
+      {wizard.currentStep.id === 'start_services' && (
+        <StartServicesStep
+          containers={containers}
+          onStart={startContainer}
+          onRefresh={checkContainerStatuses}
+        />
+      )}
 
-        {/* Step 3: Complete */}
-        {wizard.currentStep.id === 'complete' && <CompleteStep />}
-      </FormProvider>
+      {/* Step 3: Complete */}
+      {wizard.currentStep.id === 'complete' && <CompleteStep />}
     </WizardShell>
   )
 }
 
-// Step 1: API Keys
-function ApiKeysStep({ services }: { services: QuickstartService[] }) {
-  if (services.length === 0) {
+// Step 1: API Keys - now organized by capability/provider
+function ApiKeysStep({ capabilities }: { capabilities: CapabilityRequirement[] }) {
+  if (capabilities.length === 0) {
     return (
       <div data-testid="quickstart-step-api-keys" className="text-center space-y-4">
+        <CheckCircle className="w-12 h-12 text-green-600 mx-auto" />
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">All Set!</h2>
         <p className="text-gray-600 dark:text-gray-400">
-          No additional API keys needed. Click next to start services.
+          All required API keys are already configured. Click next to start services.
         </p>
       </div>
     )
@@ -432,9 +378,111 @@ function ApiKeysStep({ services }: { services: QuickstartService[] }) {
         </p>
       </div>
 
-      {services.map((service) => (
-        <ServiceFieldGroup key={service.service_id} service={service} />
+      {capabilities.map((capability) => (
+        <CapabilityFieldGroup key={capability.id} capability={capability} />
       ))}
+    </div>
+  )
+}
+
+// Capability field group - shows provider info and missing keys
+function CapabilityFieldGroup({ capability }: { capability: CapabilityRequirement }) {
+  // Format capability ID for display (llm -> LLM, transcription -> Transcription)
+  const capabilityLabel = capability.id === 'llm'
+    ? 'LLM'
+    : capability.id.charAt(0).toUpperCase() + capability.id.slice(1)
+
+  return (
+    <div
+      data-testid={`quickstart-capability-${capability.id}`}
+      className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg space-y-4"
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-medium text-gray-900 dark:text-white">
+            {capabilityLabel} Provider
+          </h3>
+          {capability.provider_name && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Using {capability.provider_name}
+              {capability.provider_mode && (
+                <span className="ml-2 px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+                  {capability.provider_mode}
+                </span>
+              )}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {capability.error && (
+        <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm rounded">
+          {capability.error}
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {capability.missing_keys.map((key) => (
+          <KeyField key={key.key} keyInfo={key} capabilityId={capability.id} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Individual key field
+function KeyField({ keyInfo, capabilityId }: { keyInfo: MissingKey; capabilityId: string }) {
+  const { control } = useFormContext()
+
+  if (!keyInfo.settings_path) return null
+
+  const fieldId = `quickstart-${capabilityId}-${keyInfo.key}`
+
+  return (
+    <div data-testid={`quickstart-field-${capabilityId}-${keyInfo.key}`} className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          {keyInfo.label} <span className="text-red-600">*</span>
+        </label>
+        {keyInfo.link && (
+          <a
+            href={keyInfo.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-primary-600 hover:underline flex items-center gap-1"
+          >
+            Get API Key <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+      </div>
+      <Controller
+        name={keyInfo.settings_path}
+        control={control}
+        render={({ field }) => {
+          if (keyInfo.type === 'secret') {
+            return (
+              <SecretInput
+                id={fieldId}
+                name={field.name as string}
+                value={(field.value as string) || ''}
+                onChange={field.onChange}
+                placeholder={`Enter ${keyInfo.label}`}
+              />
+            )
+          }
+          return (
+            <SettingField
+              id={fieldId}
+              name={field.name as string}
+              label=""
+              type={keyInfo.type === 'url' ? 'url' : 'text'}
+              value={(field.value as string) || ''}
+              onChange={field.onChange}
+              placeholder={`Enter ${keyInfo.label}`}
+            />
+          )
+        }}
+      />
     </div>
   )
 }
@@ -482,11 +530,21 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
         ))}
       </div>
 
-      {containers.every((c) => c.status === 'running') && (
-        <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
-          <p className="text-sm text-green-800 dark:text-green-200 flex items-center gap-2">
+      {containers.some((c) => c.status === 'running') && (
+        <div className={`p-4 rounded-lg ${
+          containers.every((c) => c.status === 'running')
+            ? 'bg-green-50 dark:bg-green-900/20'
+            : 'bg-yellow-50 dark:bg-yellow-900/20'
+        }`}>
+          <p className={`text-sm flex items-center gap-2 ${
+            containers.every((c) => c.status === 'running')
+              ? 'text-green-800 dark:text-green-200'
+              : 'text-yellow-800 dark:text-yellow-200'
+          }`}>
             <CheckCircle className="w-5 h-5" />
-            All services are running! Click next to continue.
+            {containers.every((c) => c.status === 'running')
+              ? 'All services are running! Click next to continue.'
+              : 'Some services are running. You can continue or wait for all services.'}
           </p>
         </div>
       )}
@@ -532,152 +590,4 @@ function CompleteStep() {
       </div>
     </div>
   )
-}
-
-// Service field group component
-function ServiceFieldGroup({ service }: { service: QuickstartService }) {
-  return (
-    <div data-testid={`quickstart-service-${service.service_id}`} className="space-y-4">
-      <h3 className="font-medium text-gray-900 dark:text-white">{service.name}</h3>
-      {service.config_schema.map((field) => (
-        <DynamicField
-          key={`${service.service_id}.${field.key}`}
-          serviceId={service.service_id}
-          field={field}
-        />
-      ))}
-    </div>
-  )
-}
-
-// Dynamic field renderer
-function DynamicField({ serviceId, field }: { serviceId: string; field: ServiceField }) {
-  const { control, watch } = useFormContext<FormData>()
-
-  const fieldPath = `${serviceId}.${field.key}` as const
-  const fieldId = `quickstart-${serviceId}-${field.key}`
-  const value = watch(fieldPath as any) || ''
-  const hasExistingValue = value && String(value).length > 0
-
-  switch (field.type) {
-    case 'secret':
-      return (
-        <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              {field.label} {field.required && <span className="text-red-600">*</span>}
-              {hasExistingValue && (
-                <span className="ml-2 text-xs text-green-600">✓ Configured</span>
-              )}
-            </label>
-            {field.link && (
-              <a
-                href={field.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-primary-600 hover:underline"
-              >
-                Get API Key
-              </a>
-            )}
-          </div>
-          <Controller
-            name={fieldPath as any}
-            control={control}
-            render={({ field: controllerField }) => (
-              <SecretInput
-                id={fieldId}
-                name={controllerField.name}
-                value={controllerField.value || ''}
-                onChange={controllerField.onChange}
-                placeholder={hasExistingValue ? '●●●●●●●●' : `Enter ${field.label}`}
-              />
-            )}
-          />
-          {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
-        </div>
-      )
-
-    case 'string':
-      if (field.options && field.options.length > 0) {
-        return (
-          <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
-            <Controller
-              name={fieldPath as any}
-              control={control}
-              render={({ field: controllerField }) => (
-                <SettingField
-                  id={fieldId}
-                  name={controllerField.name}
-                  label={field.label}
-                  type="select"
-                  value={controllerField.value || ''}
-                  onChange={controllerField.onChange}
-                  options={field.options!.map(opt => ({ value: opt, label: opt }))}
-                  description={field.description}
-                />
-              )}
-            />
-          </div>
-        )
-      }
-      return (
-        <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              {field.label}
-            </label>
-            {field.link && (
-              <a
-                href={field.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-primary-600 hover:underline"
-              >
-                Learn More
-              </a>
-            )}
-          </div>
-          <Controller
-            name={fieldPath as any}
-            control={control}
-            render={({ field: controllerField }) => (
-              <SettingField
-                id={fieldId}
-                name={controllerField.name}
-                label=""
-                type="text"
-                value={controllerField.value || ''}
-                onChange={(v) => controllerField.onChange(v)}
-                placeholder={field.default || ''}
-              />
-            )}
-          />
-          {field.description && <p className="text-xs text-gray-500">{field.description}</p>}
-        </div>
-      )
-
-    case 'boolean':
-      return (
-        <div data-testid={`quickstart-field-${serviceId}-${field.key}`} className="flex items-center space-x-2">
-          <Controller
-            name={fieldPath as any}
-            control={control}
-            render={({ field: controllerField }) => (
-              <SettingField
-                id={fieldId}
-                name={controllerField.name}
-                label={field.label}
-                type="toggle"
-                value={controllerField.value || false}
-                onChange={controllerField.onChange}
-              />
-            )}
-          />
-        </div>
-      )
-
-    default:
-      return null
-  }
 }

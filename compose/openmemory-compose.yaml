@@ -6,10 +6,13 @@
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
 # =============================================================================
 x-ushadow:
+  namespace: openmemory  # Docker Compose project name for this file
   mem0:
+    display_name: "OpenMemory"
     description: "Graph-based memory API with MCP support for persistent AI context"
     requires: [llm]
   mem0-ui:
+    display_name: "OpenMemory UI"
     description: "Web interface for browsing and managing OpenMemory graph"
     requires: []
 

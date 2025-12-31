@@ -112,7 +112,9 @@ class DiscoveredService:
     depends_on: List[str] = field(default_factory=list)
     profiles: List[str] = field(default_factory=list)
     ports: List[Dict[str, Any]] = field(default_factory=list)
+    display_name: Optional[str] = None  # From x-ushadow (e.g., "OpenMemory")
     description: Optional[str] = None  # From x-ushadow
+    namespace: Optional[str] = None  # Docker Compose project / K8s namespace
 
     # Environment variables
     required_env_vars: List[ComposeEnvVar] = field(default_factory=list)
@@ -255,13 +257,15 @@ class ComposeServiceRegistry:
                 depends_on=service.depends_on,
                 profiles=service.profiles,
                 ports=service.ports,
+                display_name=service.display_name,
                 description=service.description,
+                namespace=service.namespace,
                 required_env_vars=service.required_env_vars,
                 optional_env_vars=service.optional_env_vars,
             )
 
             self._services[service_id] = discovered
-            logger.debug(f"Discovered service: {service_id}")
+            logger.debug(f"Discovered service: {service_id} (display: {service.display_name})")
 
     def reload(self) -> None:
         """Force reload from compose files."""

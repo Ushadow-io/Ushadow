@@ -18,13 +18,19 @@ export interface ServiceStatus {
   error?: string
 }
 
+// Dynamic services state - keyed by service name (e.g., 'mem0', 'chronicle-backend')
 export interface ServicesState {
   apiKeys: boolean // API keys or local endpoints configured
-  openMemory: ServiceStatus
-  chronicle: ServiceStatus
-  tailscale: ServiceStatus
-  speakerRecognition: ServiceStatus
+  services: Record<string, ServiceStatus> // Dynamic service statuses
 }
+
+// Core services required for each setup level (mapped from service names)
+// These define which services must be running for level progression
+export const CORE_SERVICES = {
+  level1: ['mem0', 'chronicle-backend'], // Core services for web client
+  level2: ['tailscale'], // Network security
+  level3: ['speaker-recognition'], // Voice ID
+} as const
 
 export interface WizardState {
   mode: WizardMode
@@ -42,7 +48,9 @@ interface WizardContextType {
   isPhaseComplete: (phase: WizardPhase) => boolean
   // New level-based helpers
   setupLevel: SetupLevel
-  updateServiceStatus: (service: keyof ServicesState, status: Partial<ServiceStatus> | boolean) => void
+  updateServiceStatus: (service: string, status: Partial<ServiceStatus> | boolean) => void
+  updateApiKeysStatus: (configured: boolean) => void
+  getServiceStatus: (service: string) => ServiceStatus | undefined
   getSetupLabel: () => { label: string; description: string; path: string }
   isFirstTimeUser: () => boolean
 }
@@ -60,10 +68,7 @@ const initialState: WizardState = {
   currentPhase: null,
   services: {
     apiKeys: false,
-    openMemory: { ...defaultServiceStatus },
-    chronicle: { ...defaultServiceStatus },
-    tailscale: { ...defaultServiceStatus },
-    speakerRecognition: { ...defaultServiceStatus },
+    services: {}, // Dynamic - populated as services are discovered/started
   },
 }
 
@@ -73,7 +78,28 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem('ushadow-wizard-state')
     if (saved) {
       const parsed = JSON.parse(saved)
-      // Ensure services object exists (migration for older saved states)
+      // Migration: convert old hardcoded format to new dynamic format
+      if (parsed.services && !('services' in parsed.services)) {
+        // Old format had { apiKeys, openMemory, chronicle, ... }
+        // New format has { apiKeys, services: { ... } }
+        const { apiKeys, ...oldServices } = parsed.services
+        parsed.services = {
+          apiKeys: apiKeys || false,
+          services: Object.entries(oldServices).reduce((acc, [key, value]) => {
+            // Map old keys to new service names
+            const keyMap: Record<string, string> = {
+              openMemory: 'mem0',
+              chronicle: 'chronicle-backend',
+              tailscale: 'tailscale',
+              speakerRecognition: 'speaker-recognition',
+            }
+            const newKey = keyMap[key] || key
+            acc[newKey] = value as ServiceStatus
+            return acc
+          }, {} as Record<string, ServiceStatus>),
+        }
+      }
+      // Ensure services object exists
       if (!parsed.services) {
         parsed.services = initialState.services
       }
@@ -113,56 +139,77 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     return wizardState.completedPhases.includes(phase)
   }
 
-  // Update status for a specific service
+  // Update status for a specific service (by service name, e.g., 'mem0', 'chronicle-backend')
   const updateServiceStatus = (
-    service: keyof ServicesState,
+    service: string,
     status: Partial<ServiceStatus> | boolean
   ) => {
-    const newServices = { ...wizardState.services }
+    const currentStatus = wizardState.services.services[service] || defaultServiceStatus
+    const newStatus = typeof status === 'boolean'
+      ? { ...currentStatus, configured: status, running: status }
+      : { ...currentStatus, ...status }
 
-    if (service === 'apiKeys') {
-      newServices.apiKeys = typeof status === 'boolean' ? status : true
-    } else {
-      const currentStatus = newServices[service] as ServiceStatus
-      newServices[service] = typeof status === 'boolean'
-        ? { ...currentStatus, configured: status, running: status }
-        : { ...currentStatus, ...status }
-    }
+    saveState({
+      ...wizardState,
+      services: {
+        ...wizardState.services,
+        services: {
+          ...wizardState.services.services,
+          [service]: newStatus,
+        },
+      },
+    })
+  }
 
-    saveState({ ...wizardState, services: newServices })
+  // Update API keys status separately
+  const updateApiKeysStatus = (configured: boolean) => {
+    saveState({
+      ...wizardState,
+      services: {
+        ...wizardState.services,
+        apiKeys: configured,
+      },
+    })
+  }
+
+  // Get status for a specific service
+  const getServiceStatus = (service: string): ServiceStatus | undefined => {
+    return wizardState.services.services[service]
   }
 
   // Calculate current setup level based on service states
   const setupLevel = useMemo((): SetupLevel => {
-    const { services } = wizardState
+    const { apiKeys, services: serviceStates } = wizardState.services
+
+    // Helper to check if all services in a list are running
+    const checkRunning = (names: readonly string[]) =>
+      names.every((name) => serviceStates[name]?.running === true)
+
+    // Helper to check if all services in a list are configured
+    const checkConfigured = (names: readonly string[]) =>
+      names.every((name) => serviceStates[name]?.configured === true)
 
     // Level 3: Everything including speaker recognition
     if (
-      services.apiKeys &&
-      services.openMemory.running &&
-      services.chronicle.running &&
-      services.tailscale.configured &&
-      services.speakerRecognition.configured
+      apiKeys &&
+      checkRunning(CORE_SERVICES.level1) &&
+      checkConfigured(CORE_SERVICES.level2) &&
+      checkConfigured(CORE_SERVICES.level3)
     ) {
       return 3
     }
 
     // Level 2: Core services + Tailscale
     if (
-      services.apiKeys &&
-      services.openMemory.running &&
-      services.chronicle.running &&
-      services.tailscale.configured
+      apiKeys &&
+      checkRunning(CORE_SERVICES.level1) &&
+      checkConfigured(CORE_SERVICES.level2)
     ) {
       return 2
     }
 
     // Level 1: Core services running (web client usable)
-    if (
-      services.apiKeys &&
-      services.openMemory.running &&
-      services.chronicle.running
-    ) {
+    if (apiKeys && checkRunning(CORE_SERVICES.level1)) {
       return 1
     }
 
@@ -220,6 +267,8 @@ export function WizardProvider({ children }: { children: ReactNode }) {
         isPhaseComplete,
         setupLevel,
         updateServiceStatus,
+        updateApiKeysStatus,
+        getServiceStatus,
         getSetupLabel,
         isFirstTimeUser,
       }}

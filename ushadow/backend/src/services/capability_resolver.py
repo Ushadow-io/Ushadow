@@ -10,20 +10,14 @@ the resolver:
 """
 
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-import yaml
-
 from src.services.provider_registry import get_provider_registry
+from src.services.compose_registry import get_compose_registry
 from src.models.provider import Provider, EnvMap
 from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
-
-# Config paths
-CONFIG_DIR = Path("/config") if Path("/config").exists() else Path("config")
-SERVICES_DIR = CONFIG_DIR / "services"
 
 
 class CapabilityResolver:
@@ -36,6 +30,7 @@ class CapabilityResolver:
 
     def __init__(self):
         self._provider_registry = get_provider_registry()
+        self._compose_registry = get_compose_registry()
         self._settings = get_settings_store()
         self._services_cache: Dict[str, dict] = {}
 
@@ -215,27 +210,56 @@ class CapabilityResolver:
         return config.get('default')
 
     def _load_service_config(self, service_id: str) -> Optional[dict]:
-        """Load service configuration from YAML."""
+        """
+        Load service configuration from ComposeServiceRegistry.
+
+        Converts the DiscoveredService.requires list to the expected format:
+        {'uses': [{'capability': 'llm', 'required': True}, ...]}
+
+        Matching logic:
+        1. Exact service name match (e.g., 'chronicle-backend')
+        2. Compose file base name match (e.g., 'chronicle' matches chronicle-compose.yaml)
+        """
         if service_id in self._services_cache:
             return self._services_cache[service_id]
 
-        service_file = SERVICES_DIR / f"{service_id}.yaml"
-        if not service_file.exists():
+        # Try exact service name match first
+        service = self._compose_registry.get_service_by_name(service_id)
+
+        # If not found, try matching by compose file base name
+        # e.g., 'chronicle' matches services in 'chronicle-compose.yaml'
+        if not service:
+            for s in self._compose_registry.get_services():
+                compose_base = s.compose_file.stem.replace('-compose', '')
+                if compose_base == service_id:
+                    service = s
+                    break
+
+        if not service:
+            logger.debug(f"Service '{service_id}' not found in compose registry")
             return None
 
-        try:
-            with open(service_file, 'r') as f:
-                config = yaml.safe_load(f)
-                self._services_cache[service_id] = config
-                return config
-        except Exception as e:
-            logger.error(f"Failed to load service config {service_file}: {e}")
-            return None
+        # Convert requires list to uses format
+        uses = [
+            {'capability': cap, 'required': True}
+            for cap in service.requires
+        ]
+
+        config = {
+            'uses': uses,
+            'service_name': service.service_name,
+            'compose_file': str(service.compose_file),
+        }
+
+        self._services_cache[service_id] = config
+        logger.debug(f"Loaded service config for '{service_id}': requires {service.requires}")
+        return config
 
     def reload(self) -> None:
         """Clear caches and reload."""
         self._services_cache = {}
         self._provider_registry.reload()
+        self._compose_registry.reload()
 
     # =========================================================================
     # Validation Methods
@@ -248,7 +272,7 @@ class CapabilityResolver:
         Returns dict with:
         - can_start: bool
         - missing_capabilities: List of missing required capabilities
-        - missing_credentials: List of missing required credentials
+        - missing_keys: List of missing required keys (API keys, secrets, etc.)
         - warnings: List of optional issues
         """
         service_config = self._load_service_config(service_id)
@@ -257,12 +281,12 @@ class CapabilityResolver:
                 "can_start": False,
                 "error": f"Service '{service_id}' not found",
                 "missing_capabilities": [],
-                "missing_credentials": [],
+                "missing_keys": [],
                 "warnings": []
             }
 
         missing_caps = []
-        missing_creds = []
+        missing_keys = []
         warnings = []
 
         for use in service_config.get('uses', []):
@@ -280,7 +304,7 @@ class CapabilityResolver:
                     warnings.append(f"Optional capability {capability} not configured")
                 continue
 
-            # Check env mappings
+            # Check provider keys (API keys, secrets, etc.)
             for env_map in provider.env_maps:
                 if not env_map.required:
                     continue
@@ -288,10 +312,10 @@ class CapabilityResolver:
                 value = await self._resolve_env_map(env_map)
                 if not value:
                     if required:
-                        missing_creds.append({
+                        missing_keys.append({
                             "capability": capability,
                             "provider": provider.id,
-                            "credential": env_map.key,
+                            "key": env_map.key,
                             "settings_path": env_map.settings_path,
                             "link": env_map.link,
                             "label": env_map.label or env_map.key
@@ -302,10 +326,95 @@ class CapabilityResolver:
                         )
 
         return {
-            "can_start": len(missing_caps) == 0 and len(missing_creds) == 0,
+            "can_start": len(missing_caps) == 0 and len(missing_keys) == 0,
             "missing_capabilities": missing_caps,
-            "missing_credentials": missing_creds,
+            "missing_keys": missing_keys,
             "warnings": warnings
+        }
+
+    async def get_setup_requirements(self, service_ids: List[str]) -> Dict[str, Any]:
+        """
+        Get setup requirements for multiple services.
+
+        Aggregates capabilities and missing keys across all services,
+        deduplicating by capability (e.g., if both chronicle and openmemory
+        need 'llm', we only ask for the OpenAI key once).
+
+        Args:
+            service_ids: List of service identifiers
+
+        Returns:
+            Dict with:
+            - required_capabilities: List of capabilities with provider info and missing keys
+            - services: List of service IDs being configured
+            - all_configured: True if all services can start
+        """
+        # Track capabilities we've seen (to deduplicate)
+        seen_capabilities: Dict[str, Dict[str, Any]] = {}
+        all_can_start = True
+
+        for service_id in service_ids:
+            service_config = self._load_service_config(service_id)
+            if not service_config:
+                logger.warning(f"Service '{service_id}' not found, skipping")
+                continue
+
+            for use in service_config.get('uses', []):
+                capability = use['capability']
+                required = use.get('required', True)
+
+                # Skip if we've already processed this capability
+                if capability in seen_capabilities:
+                    continue
+
+                provider = await self._get_selected_provider(capability)
+                if not provider:
+                    if required:
+                        seen_capabilities[capability] = {
+                            "id": capability,
+                            "selected_provider": None,
+                            "provider_name": None,
+                            "provider_mode": None,
+                            "configured": False,
+                            "missing_keys": [],
+                            "error": f"No provider selected for {capability}"
+                        }
+                        all_can_start = False
+                    continue
+
+                # Check which keys are missing for this provider
+                missing_keys = []
+                for env_map in provider.env_maps:
+                    if not env_map.required:
+                        continue
+
+                    value = await self._resolve_env_map(env_map)
+                    if not value:
+                        missing_keys.append({
+                            "key": env_map.key,
+                            "label": env_map.label or env_map.key,
+                            "settings_path": env_map.settings_path,
+                            "link": env_map.link,
+                            "type": env_map.type or "secret"
+                        })
+
+                is_configured = len(missing_keys) == 0
+                if not is_configured and required:
+                    all_can_start = False
+
+                seen_capabilities[capability] = {
+                    "id": capability,
+                    "selected_provider": provider.id,
+                    "provider_name": provider.name,
+                    "provider_mode": provider.mode,
+                    "configured": is_configured,
+                    "missing_keys": missing_keys
+                }
+
+        return {
+            "required_capabilities": list(seen_capabilities.values()),
+            "services": service_ids,
+            "all_configured": all_can_start
         }
 
 

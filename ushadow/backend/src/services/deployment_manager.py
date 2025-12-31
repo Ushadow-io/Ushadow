@@ -194,47 +194,14 @@ class DeploymentManager:
     # Deployment Operations
     # =========================================================================
 
-    async def _get_service_from_registry(self, service_id: str) -> Optional[ServiceDefinition]:
-        """Get service from the service registry and convert to ServiceDefinition."""
-        try:
-            from src.services.service_registry import get_service_registry
-            registry = get_service_registry()
-
-            service_instance = registry.get_instance(service_id)
-            if not service_instance:
-                # Log available services for debugging
-                all_services = registry.get_instances()
-                available_ids = [s.service_id for s in all_services]
-                logger.warning(f"Service '{service_id}' not in registry. Available: {available_ids}")
-                return None
-
-            logger.info(f"Found service in registry: {service_id} -> {service_instance.docker_image}")
-
-            # Convert to ServiceDefinition format
-            return ServiceDefinition(
-                service_id=service_instance.service_id,
-                name=service_instance.name,
-                image=service_instance.docker_image or f"{service_instance.service_id}:latest",
-                ports={},  # Will be configured per service
-                environment={},
-                volumes=[],  # List, not dict
-                restart_policy="unless-stopped",
-            )
-        except Exception as e:
-            logger.error(f"Could not get service from registry: {e}", exc_info=True)
-            return None
-
     async def deploy_service(
         self,
         service_id: str,
         unode_hostname: str
     ) -> Deployment:
         """Deploy a service to a u-node."""
-        # Get service definition (try deployment definitions first, then service registry)
+        # Get service definition from deployment definitions
         service = await self.get_service(service_id)
-        if not service:
-            # Fall back to service registry
-            service = await self._get_service_from_registry(service_id)
         if not service:
             raise ValueError(f"Service not found: {service_id}")
 

@@ -187,6 +187,7 @@ class ComposeService:
         profiles: Compose profiles this service belongs to
         healthcheck: Health check configuration
         requires: Capability requirements from x-ushadow (e.g., ["llm"])
+        display_name: Human-readable display name from x-ushadow (e.g., "OpenMemory")
         description: Human-readable description from x-ushadow
     """
     name: str
@@ -201,7 +202,9 @@ class ComposeService:
 
     # From x-ushadow extension
     requires: List[str] = field(default_factory=list)
+    display_name: Optional[str] = None
     description: Optional[str] = None
+    namespace: Optional[str] = None  # Docker Compose project name / K8s namespace
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -350,7 +353,10 @@ class ComposeParser(BaseYAMLParser):
         # Get x-ushadow metadata for this service
         service_meta = x_ushadow.get(name, {})
         requires = service_meta.get("requires", [])
+        display_name = service_meta.get("display_name")
         description = service_meta.get("description")
+        # namespace is at top level of x-ushadow, shared by all services in file
+        namespace = x_ushadow.get("namespace")
 
         return ComposeService(
             name=name,
@@ -363,7 +369,9 @@ class ComposeParser(BaseYAMLParser):
             volumes=volumes,
             networks=networks,
             requires=requires,
+            display_name=display_name,
             description=description,
+            namespace=namespace,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:
