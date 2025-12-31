@@ -1,0 +1,655 @@
+import { useState, useEffect } from 'react'
+import { useForm, FormProvider, useFormContext, Controller } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { useNavigate } from 'react-router-dom'
+import { Users, CheckCircle, Cpu, Zap, ExternalLink, AlertTriangle, Loader2, Key, ShieldCheck, XCircle } from 'lucide-react'
+
+import { wizardApi, composeServicesApi, settingsApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
+import { useWizardSteps } from '../hooks/useWizardSteps'
+import { WizardShell, WizardMessage } from '../components/wizard'
+import { SecretInput } from '../components/settings'
+import type { WizardStep } from '../types/wizard'
+import { getErrorMessage } from './wizard-utils'
+
+// Field configuration for HuggingFace
+const huggingfaceConfig = {
+  label: 'HuggingFace Access Token',
+  placeholder: 'hf_...',
+  tokenLink: 'https://huggingface.co/settings/tokens',
+}
+
+// Schema
+const speakerRecSchema = z.object({
+  hfToken: z.string().min(1, 'HuggingFace token is required'),
+  computeMode: z.enum(['cpu', 'gpu']),
+  deepgramApiKey: z.string().optional(),
+  similarityThreshold: z.string(),
+})
+
+type SpeakerRecFormData = z.infer<typeof speakerRecSchema>
+
+// Steps - New order: Token → Model Access → Compute → Complete
+const STEPS: WizardStep[] = [
+  { id: 'token', label: 'HuggingFace Token' },
+  { id: 'models', label: 'Model Access' },
+  { id: 'compute', label: 'Compute Mode' },
+  { id: 'complete', label: 'Complete' },
+] as const
+
+export default function SpeakerRecognitionWizard() {
+  const navigate = useNavigate()
+  const wizard = useWizardSteps(STEPS)
+  const [message, setMessage] = useState<WizardMessage | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [modelAccess, setModelAccess] = useState<HuggingFaceModelsResponse | null>(null)
+  const [isCheckingModels, setIsCheckingModels] = useState(false)
+  const [tokenSaved, setTokenSaved] = useState(false)
+
+  const methods = useForm<SpeakerRecFormData>({
+    resolver: zodResolver(speakerRecSchema),
+    defaultValues: {
+      hfToken: '',
+      computeMode: 'cpu',
+      deepgramApiKey: '',
+      similarityThreshold: '0.15',
+    },
+    mode: 'onChange',
+  })
+
+  // Load existing configuration
+  useEffect(() => {
+    loadExistingConfig()
+  }, [])
+
+  // Check model access when entering model access step
+  useEffect(() => {
+    if (wizard.currentStep.id === 'models' && tokenSaved) {
+      checkModelAccess()
+    }
+  }, [wizard.currentStep.id, tokenSaved])
+
+  const loadExistingConfig = async () => {
+    try {
+      const response = await wizardApi.getApiKeys()
+      const keys = response.data
+
+      if (keys.hf_token) {
+        methods.setValue('hfToken', keys.hf_token)
+        setTokenSaved(true)
+      }
+      if (keys.deepgram_api_key) {
+        methods.setValue('deepgramApiKey', keys.deepgram_api_key)
+      }
+    } catch (err) {
+      console.error('Failed to load existing config:', err)
+    }
+  }
+
+  const checkModelAccess = async () => {
+    setIsCheckingModels(true)
+    try {
+      const response = await wizardApi.checkHuggingFaceModels()
+      setModelAccess(response.data)
+    } catch (err) {
+      console.error('Failed to check model access:', err)
+      setModelAccess(null)
+      setMessage({ type: 'error', text: 'Failed to check model access. Please verify your token.' })
+    } finally {
+      setIsCheckingModels(false)
+    }
+  }
+
+  // Map steps to form fields for validation
+  const getFieldsForStep = (stepId: string): (keyof SpeakerRecFormData)[] => {
+    switch (stepId) {
+      case 'token': return ['hfToken']
+      case 'compute': return ['computeMode']
+      default: return []
+    }
+  }
+
+  // Check if step can proceed
+  const canProceed = (stepId: string): boolean => {
+    if (stepId === 'models') {
+      // Must have all models accessible to proceed
+      return modelAccess?.all_accessible ?? false
+    }
+    return true
+  }
+
+  // Save step data to backend
+  const saveStepData = async (stepId: string): Promise<boolean> => {
+    const data = methods.getValues()
+
+    try {
+      if (stepId === 'token') {
+        // Save HuggingFace token
+        await wizardApi.updateApiKeys({
+          hf_token: data.hfToken,
+        })
+        setTokenSaved(true)
+      } else if (stepId === 'compute') {
+        // Save Deepgram API key if provided
+        if (data.deepgramApiKey) {
+          await wizardApi.updateApiKeys({
+            deepgram_api_key: data.deepgramApiKey,
+          })
+        }
+        // Save service-specific config (compute mode, threshold)
+        await settingsApi.updateServiceConfig('speaker-recognition', {
+          compute_mode: data.computeMode,
+          similarity_threshold: data.similarityThreshold,
+        })
+      }
+      return true
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save configuration') })
+      return false
+    }
+  }
+
+  // Final submission - install the service
+  const handleComplete = async () => {
+    setIsSubmitting(true)
+    try {
+      // Mark the service as installed in settings
+      await composeServicesApi.install('speaker-recognition')
+      setMessage({ type: 'success', text: 'Speaker Recognition installed! Redirecting...' })
+      setTimeout(() => navigate('/speaker-recognition'), 1500)
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to install speaker recognition') })
+      setIsSubmitting(false)
+    }
+  }
+
+  // Next button handler
+  const handleNext = async () => {
+    setMessage(null)
+
+    // Check custom requirements
+    if (!canProceed(wizard.currentStep.id)) {
+      if (wizard.currentStep.id === 'models') {
+        setMessage({ type: 'error', text: 'Please accept the license terms for all models before proceeding' })
+      } else {
+        setMessage({ type: 'error', text: 'Please complete all requirements before proceeding' })
+      }
+      return
+    }
+
+    if (wizard.isLast) {
+      handleComplete()
+      return
+    }
+
+    // Validate current step fields
+    const fields = getFieldsForStep(wizard.currentStep.id)
+    if (fields.length > 0) {
+      const isValid = await methods.trigger(fields)
+      if (!isValid) return
+    }
+
+    // Save step data if needed
+    if (wizard.currentStep.id === 'token' || wizard.currentStep.id === 'compute') {
+      setIsSubmitting(true)
+      const saved = await saveStepData(wizard.currentStep.id)
+      setIsSubmitting(false)
+
+      if (!saved) return
+
+      setMessage({ type: 'success', text: 'Configuration saved!' })
+      setTimeout(() => {
+        setMessage(null)
+        wizard.next()
+      }, 500)
+    } else {
+      wizard.next()
+    }
+  }
+
+  const handleBack = () => {
+    setMessage(null)
+    wizard.back()
+  }
+
+  // Compute next button disabled state
+  const isNextDisabled = () => {
+    if (wizard.currentStep.id === 'models') {
+      return isCheckingModels || !(modelAccess?.all_accessible ?? false)
+    }
+    return false
+  }
+
+  return (
+    <WizardShell
+      wizardId="speaker-recognition"
+      title="Speaker Recognition Setup"
+      subtitle="Configure GPU-accelerated speaker diarization and identification"
+      icon={Users}
+      progress={wizard.progress}
+      steps={STEPS}
+      currentStepId={wizard.currentStep.id}
+      isFirstStep={wizard.isFirst}
+      onBack={handleBack}
+      onNext={handleNext}
+      nextLoading={isSubmitting}
+      nextDisabled={isNextDisabled()}
+      message={message}
+    >
+      <FormProvider {...methods}>
+        {wizard.currentStep.id === 'token' && <TokenStep />}
+        {wizard.currentStep.id === 'models' && (
+          <ModelAccessStep
+            modelAccess={modelAccess}
+            isChecking={isCheckingModels}
+            onRefresh={checkModelAccess}
+          />
+        )}
+        {wizard.currentStep.id === 'compute' && <ComputeStep />}
+        {wizard.currentStep.id === 'complete' && <CompleteStep />}
+      </FormProvider>
+    </WizardShell>
+  )
+}
+
+// Step 1: HuggingFace Token
+function TokenStep() {
+  const { control, formState: { errors } } = useFormContext<SpeakerRecFormData>()
+
+  return (
+    <div data-testid="speaker-rec-step-token" className="space-y-6">
+      <div className="flex items-center space-x-3">
+        <Key className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+          Get Your HuggingFace Token
+        </h2>
+      </div>
+
+      <p className="text-gray-600 dark:text-gray-400">
+        Speaker Recognition uses PyAnnote models from HuggingFace. You'll need an access token to download
+        the models. The token needs <strong>read</strong> access to gated repositories.
+      </p>
+
+      {/* Token Instructions */}
+      <div className="p-4 rounded-lg border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20">
+        <h3 className="font-medium text-primary-900 dark:text-primary-100 mb-2">How to get your token:</h3>
+        <ol className="list-decimal list-inside space-y-1 text-sm text-primary-800 dark:text-primary-200">
+          <li>Create a free HuggingFace account if you don't have one</li>
+          <li>Go to your <a href={huggingfaceConfig.tokenLink} target="_blank" rel="noopener noreferrer" className="underline font-medium">Access Tokens page</a></li>
+          <li>Create a new token with <strong>Read</strong> access</li>
+          <li>Copy and paste it below</li>
+        </ol>
+      </div>
+
+      {/* Token Input */}
+      <div className="space-y-4">
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              {huggingfaceConfig.label} <span className="text-red-600">*</span>
+            </span>
+            <a
+              href={huggingfaceConfig.tokenLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary-600 hover:underline flex items-center space-x-1"
+              data-testid="hf-token-link"
+            >
+              <span>Get Token</span>
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+          <Controller
+            name="hfToken"
+            control={control}
+            render={({ field }) => (
+              <SecretInput
+                id="speaker-rec-hf-token"
+                name={field.name}
+                value={field.value}
+                onChange={field.onChange}
+                placeholder={huggingfaceConfig.placeholder}
+                error={errors.hfToken?.message}
+              />
+            )}
+          />
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            Your token is stored securely and only used to download models.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Step 2: Model Access Check
+interface ModelAccessStepProps {
+  modelAccess: HuggingFaceModelsResponse | null
+  isChecking: boolean
+  onRefresh: () => void
+}
+
+function ModelAccessStep({ modelAccess, isChecking, onRefresh }: ModelAccessStepProps) {
+  if (isChecking) {
+    return (
+      <div data-testid="speaker-rec-step-models" className="space-y-6">
+        <div className="flex items-center space-x-3">
+          <ShieldCheck className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+            Checking Model Access
+          </h2>
+        </div>
+
+        <div className="flex flex-col items-center justify-center py-12 space-y-4">
+          <Loader2 className="h-12 w-12 text-primary-600 dark:text-primary-400 animate-spin" />
+          <p className="text-gray-600 dark:text-gray-400">Verifying access to required models...</p>
+        </div>
+      </div>
+    )
+  }
+
+  const allAccessible = modelAccess?.all_accessible ?? false
+
+  return (
+    <div data-testid="speaker-rec-step-models" className="space-y-6">
+      <div className="flex items-center space-x-3">
+        <ShieldCheck className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+          Model License Terms
+        </h2>
+      </div>
+
+      {allAccessible ? (
+        <>
+          <div className="p-4 rounded-lg border-2 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20">
+            <div className="flex items-center space-x-3">
+              <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
+              <div>
+                <p className="font-medium text-green-800 dark:text-green-200">
+                  All model licenses accepted!
+                </p>
+                <p className="text-sm text-green-600 dark:text-green-400">
+                  You have access to all required PyAnnote models.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-gray-600 dark:text-gray-400">
+            Your HuggingFace account has access to the required speaker recognition models.
+            Click Next to continue.
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="p-4 rounded-lg border-2 border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20">
+            <div className="flex items-center space-x-3">
+              <AlertTriangle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+              <div>
+                <p className="font-medium text-amber-800 dark:text-amber-200">
+                  License acceptance required
+                </p>
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  Some models require you to accept their license terms on HuggingFace.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-gray-600 dark:text-gray-400">
+            The PyAnnote models are gated and require you to accept their license terms.
+            Click each model link below to accept the terms, then refresh this page.
+          </p>
+        </>
+      )}
+
+      {/* Model Status List */}
+      <div className="space-y-3">
+        <h3 className="font-medium text-gray-900 dark:text-white">Required Models:</h3>
+        {modelAccess?.models.map((model: ModelAccessStatus) => (
+          <ModelAccessItem key={model.model_id} model={model} />
+        ))}
+      </div>
+
+      {/* Refresh Button */}
+      {!allAccessible && (
+        <div className="flex justify-center pt-4">
+          <button
+            onClick={onRefresh}
+            className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-primary-600 dark:text-primary-400 border border-primary-300 dark:border-primary-700 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+            data-testid="speaker-rec-refresh-models"
+          >
+            <Loader2 className="h-4 w-4" />
+            <span>Refresh Model Access</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Individual model access item
+function ModelAccessItem({ model }: { model: ModelAccessStatus }) {
+  const modelName = model.model_id.split('/').pop() || model.model_id
+  const modelUrl = `https://huggingface.co/${model.model_id}`
+
+  if (model.has_access) {
+    return (
+      <div
+        className="flex items-center justify-between p-4 rounded-lg border border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-900/10"
+        data-testid={`model-access-${modelName}`}
+      >
+        <div className="flex items-center space-x-3">
+          <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
+          <div>
+            <span className="font-medium text-gray-900 dark:text-white">{model.model_id}</span>
+            <p className="text-sm text-green-600 dark:text-green-400">Access granted</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <a
+      href={modelUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center justify-between p-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10 hover:border-amber-300 dark:hover:border-amber-700 transition-colors group"
+      data-testid={`model-access-${modelName}`}
+    >
+      <div className="flex items-center space-x-3">
+        <XCircle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+        <div>
+          <span className="font-medium text-gray-900 dark:text-white">{model.model_id}</span>
+          <p className="text-sm text-amber-600 dark:text-amber-400">
+            {model.error || 'Click to accept license terms'}
+          </p>
+        </div>
+      </div>
+      <ExternalLink className="h-5 w-5 text-gray-400 group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors" />
+    </a>
+  )
+}
+
+// Step 3: Compute Mode
+function ComputeStep() {
+  const { register, watch, control, formState: { errors } } = useFormContext<SpeakerRecFormData>()
+  const selectedMode = watch('computeMode')
+
+  const modes = [
+    {
+      value: 'cpu' as const,
+      label: 'CPU Mode',
+      icon: Cpu,
+      description: 'Works on any machine. Slower inference (~10-30s for enrollment).',
+      recommended: false,
+    },
+    {
+      value: 'gpu' as const,
+      label: 'GPU Mode',
+      icon: Zap,
+      description: 'Requires NVIDIA GPU with CUDA. Fast inference (~2-5s for enrollment).',
+      recommended: true,
+    },
+  ]
+
+  return (
+    <div data-testid="speaker-rec-step-compute" className="space-y-6">
+      <div className="flex items-center space-x-3">
+        <Cpu className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+          Choose Compute Mode
+        </h2>
+      </div>
+
+      <p className="text-gray-600 dark:text-gray-400">
+        Select how the speaker recognition models will run.
+        GPU mode is significantly faster but requires an NVIDIA GPU.
+      </p>
+
+      <div className="space-y-3">
+        {modes.map((mode) => (
+          <label
+            key={mode.value}
+            data-testid={`speaker-rec-compute-${mode.value}-option`}
+            className={`block p-4 rounded-lg border-2 transition-all cursor-pointer ${
+              selectedMode === mode.value
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-700'
+            }`}
+          >
+            <input
+              type="radio"
+              value={mode.value}
+              {...register('computeMode')}
+              className="sr-only"
+            />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <mode.icon className={`h-6 w-6 ${
+                  selectedMode === mode.value
+                    ? 'text-primary-600 dark:text-primary-400'
+                    : 'text-gray-400'
+                }`} />
+                <div>
+                  <h3 className="font-semibold text-gray-900 dark:text-white flex items-center space-x-2">
+                    <span>{mode.label}</span>
+                    {mode.recommended && (
+                      <span className="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full">
+                        Recommended
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{mode.description}</p>
+                </div>
+              </div>
+              {selectedMode === mode.value && (
+                <CheckCircle className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+              )}
+            </div>
+          </label>
+        ))}
+      </div>
+
+      {/* Optional: Deepgram API Key */}
+      <div className="pt-6 border-t border-gray-200 dark:border-gray-700">
+        <h3 className="font-medium text-gray-900 dark:text-white mb-2">
+          Optional: Enhanced Transcription
+        </h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Add a Deepgram API key to enable real-time transcription alongside speaker identification.
+        </p>
+
+        <div className="flex items-center justify-between mb-2">
+          <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Deepgram API Key
+          </span>
+          <a
+            href="https://console.deepgram.com/project/default/keys"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-primary-600 hover:underline flex items-center space-x-1"
+          >
+            <span>Get API Key</span>
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+        <Controller
+          name="deepgramApiKey"
+          control={control}
+          render={({ field }) => (
+            <SecretInput
+              id="speaker-rec-deepgram-key"
+              name={field.name}
+              value={field.value || ''}
+              onChange={field.onChange}
+              placeholder="Enter Deepgram API key (optional)"
+              error={errors.deepgramApiKey?.message}
+            />
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Step 4: Complete
+function CompleteStep() {
+  const { watch } = useFormContext<SpeakerRecFormData>()
+  const computeMode = watch('computeMode')
+  const hasDeepgram = !!watch('deepgramApiKey')
+
+  return (
+    <div data-testid="speaker-rec-step-complete" className="space-y-6 text-center">
+      <div className="flex justify-center">
+        <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
+          <CheckCircle className="h-12 w-12 text-green-600 dark:text-green-400" />
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
+          Speaker Recognition is Ready!
+        </h2>
+        <p className="text-gray-600 dark:text-gray-400">
+          Your speaker recognition service is configured and ready to start.
+        </p>
+      </div>
+
+      <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-6 text-left">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-3">
+          Configuration Summary:
+        </h3>
+        <div className="space-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-600 dark:text-gray-400">Compute Mode:</span>
+            <span className="font-medium text-gray-900 dark:text-white flex items-center space-x-2">
+              {computeMode === 'gpu' ? (
+                <>
+                  <Zap className="h-4 w-4 text-amber-500" />
+                  <span>GPU Accelerated</span>
+                </>
+              ) : (
+                <>
+                  <Cpu className="h-4 w-4 text-gray-500" />
+                  <span>CPU</span>
+                </>
+              )}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-gray-600 dark:text-gray-400">Transcription:</span>
+            <span className="font-medium text-gray-900 dark:text-white">
+              {hasDeepgram ? 'Deepgram Enhanced' : 'Speaker Labels Only'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="text-sm text-gray-500 dark:text-gray-400">
+        <p>Click "Complete" to install the service and start using speaker recognition.</p>
+      </div>
+    </div>
+  )
+}

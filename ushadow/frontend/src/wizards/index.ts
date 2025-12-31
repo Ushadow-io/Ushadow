@@ -12,3 +12,8 @@ export { default as ChronicleWizard } from './ChronicleWizard'
 export { default as MemoryWizard } from './MemoryWizard'
 export { default as QuickstartWizard } from './QuickstartWizard'
 export { default as LocalServicesWizard } from './LocalServicesWizard'
+export { default as SpeakerRecognitionWizard } from './SpeakerRecognitionWizard'
+
+// Export wizard registry for dynamic discovery
+export { wizardRegistry, getAllWizards, getWizardById } from './registry'
+export type { WizardMetadata } from './registry'
