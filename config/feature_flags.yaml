@@ -8,6 +8,12 @@ flags:
     description: "Example feature flag for testing"
     type: experiment
 
+  # Show the "All Wizards (Testing)" section on the wizard start page
+  show_wizard_testing:
+    enabled: true
+    description: "Show direct links to all wizards on the setup page for testing"
+    type: ops
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false

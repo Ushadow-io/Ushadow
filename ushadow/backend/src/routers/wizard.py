@@ -6,6 +6,7 @@ Uses OmegaConf for configuration management.
 import logging
 from typing import Optional, List, Dict, Any
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,7 @@ class ApiKeysStep(BaseModel):
     deepgram_api_key: Optional[str] = None
     mistral_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
+    hf_token: Optional[str] = None  # HuggingFace token for speaker-recognition
 
 
 class ApiKeysUpdateResponse(BaseModel):
@@ -73,6 +75,27 @@ class QuickstartResponse(BaseModel):
     required_capabilities: List[CapabilityRequirement]
     services: List[ServiceInfo]  # Full service info, not just names
     all_configured: bool
+
+
+class HuggingFaceStatusResponse(BaseModel):
+    """Response for HuggingFace connection status."""
+    connected: bool = Field(..., description="Whether HF token is valid and connected")
+    username: Optional[str] = Field(None, description="HuggingFace username if connected")
+    has_token: bool = Field(..., description="Whether an HF token is configured")
+    error: Optional[str] = Field(None, description="Error message if connection failed")
+
+
+class ModelAccessStatus(BaseModel):
+    """Access status for a single model."""
+    model_id: str
+    has_access: bool
+    error: Optional[str] = None
+
+
+class HuggingFaceModelsResponse(BaseModel):
+    """Response for HuggingFace model access check."""
+    models: List[ModelAccessStatus]
+    all_accessible: bool = Field(..., description="Whether all required models are accessible")
 
 
 # Helper functions
@@ -141,6 +164,7 @@ async def get_wizard_api_keys():
             deepgram_api_key=mask_key(await settings_store.get("api_keys.deepgram_api_key")),
             mistral_api_key=mask_key(await settings_store.get("api_keys.mistral_api_key")),
             anthropic_api_key=mask_key(await settings_store.get("api_keys.anthropic_api_key")),
+            hf_token=mask_key(await settings_store.get("api_keys.hf_token")),
         )
     except Exception as e:
         logger.error(f"Error getting wizard API keys: {e}")
@@ -167,6 +191,8 @@ async def update_wizard_api_keys(api_keys: ApiKeysStep):
             updates["api_keys.mistral_api_key"] = api_keys.mistral_api_key
         if api_keys.anthropic_api_key is not None and not api_keys.anthropic_api_key.startswith("***"):
             updates["api_keys.anthropic_api_key"] = api_keys.anthropic_api_key
+        if api_keys.hf_token is not None and not api_keys.hf_token.startswith("***"):
+            updates["api_keys.hf_token"] = api_keys.hf_token
 
         # Save to OmegaConf (writes to secrets.yaml)
         if updates:
@@ -180,6 +206,7 @@ async def update_wizard_api_keys(api_keys: ApiKeysStep):
                 deepgram_api_key=mask_key(await settings_store.get("api_keys.deepgram_api_key")),
                 mistral_api_key=mask_key(await settings_store.get("api_keys.mistral_api_key")),
                 anthropic_api_key=mask_key(await settings_store.get("api_keys.anthropic_api_key")),
+                hf_token=mask_key(await settings_store.get("api_keys.hf_token")),
             ),
             success=True
         )
@@ -215,6 +242,150 @@ async def complete_wizard():
     The wizard is automatically marked as complete when API keys are configured.
     """
     return {"status": "success", "message": "Wizard marked as complete"}
+
+
+@router.get("/huggingface/status", response_model=HuggingFaceStatusResponse)
+async def get_huggingface_status():
+    """
+    Check HuggingFace connection status.
+
+    Validates the stored HF token by calling the HuggingFace API.
+    Returns connection status and username if connected.
+    """
+    try:
+        hf_token = await settings_store.get("api_keys.hf_token")
+
+        if not hf_token:
+            return HuggingFaceStatusResponse(
+                connected=False,
+                has_token=False,
+                username=None,
+                error=None
+            )
+
+        # Validate token with HuggingFace API
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                "https://huggingface.co/api/whoami-v2",
+                headers={"Authorization": f"Bearer {hf_token}"}
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return HuggingFaceStatusResponse(
+                    connected=True,
+                    has_token=True,
+                    username=data.get("name") or data.get("fullname"),
+                    error=None
+                )
+            elif response.status_code == 401:
+                return HuggingFaceStatusResponse(
+                    connected=False,
+                    has_token=True,
+                    username=None,
+                    error="Invalid or expired token"
+                )
+            else:
+                return HuggingFaceStatusResponse(
+                    connected=False,
+                    has_token=True,
+                    username=None,
+                    error=f"HuggingFace API error: {response.status_code}"
+                )
+
+    except httpx.TimeoutException:
+        return HuggingFaceStatusResponse(
+            connected=False,
+            has_token=bool(await settings_store.get("api_keys.hf_token")),
+            username=None,
+            error="Connection timeout - check your internet connection"
+        )
+    except Exception as e:
+        logger.error(f"Error checking HuggingFace status: {e}")
+        return HuggingFaceStatusResponse(
+            connected=False,
+            has_token=bool(await settings_store.get("api_keys.hf_token")),
+            username=None,
+            error=str(e)
+        )
+
+
+# Required PyAnnote models for speaker recognition
+REQUIRED_PYANNOTE_MODELS = [
+    "pyannote/speaker-diarization-3.1",
+    "pyannote/segmentation-3.0",
+]
+
+
+@router.get("/huggingface/models", response_model=HuggingFaceModelsResponse)
+async def check_huggingface_models():
+    """
+    Check if user has access to required PyAnnote models.
+
+    Uses the stored HF token to check model access.
+    Returns access status for each required model.
+    """
+    hf_token = await settings_store.get("api_keys.hf_token")
+
+    if not hf_token:
+        return HuggingFaceModelsResponse(
+            models=[
+                ModelAccessStatus(model_id=m, has_access=False, error="No token configured")
+                for m in REQUIRED_PYANNOTE_MODELS
+            ],
+            all_accessible=False
+        )
+
+    model_statuses = []
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for model_id in REQUIRED_PYANNOTE_MODELS:
+            try:
+                # Try to access model info - gated models return 403 if not accepted
+                response = await client.get(
+                    f"https://huggingface.co/api/models/{model_id}",
+                    headers={"Authorization": f"Bearer {hf_token}"}
+                )
+
+                if response.status_code == 200:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=True,
+                        error=None
+                    ))
+                elif response.status_code == 403:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=False,
+                        error="License terms not accepted"
+                    ))
+                elif response.status_code == 401:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=False,
+                        error="Invalid token"
+                    ))
+                else:
+                    model_statuses.append(ModelAccessStatus(
+                        model_id=model_id,
+                        has_access=False,
+                        error=f"API error: {response.status_code}"
+                    ))
+
+            except Exception as e:
+                logger.error(f"Error checking model {model_id}: {e}")
+                model_statuses.append(ModelAccessStatus(
+                    model_id=model_id,
+                    has_access=False,
+                    error=str(e)
+                ))
+
+    all_accessible = all(m.has_access for m in model_statuses)
+
+    return HuggingFaceModelsResponse(
+        models=model_statuses,
+        all_accessible=all_accessible
+    )
 
 
 # =============================================================================
