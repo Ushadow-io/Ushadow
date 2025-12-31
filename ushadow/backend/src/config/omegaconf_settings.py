@@ -23,6 +23,38 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Custom OmegaConf Resolvers
+# =============================================================================
+
+def _env_resolver(env_var_name: str, _root_: DictConfig) -> Optional[str]:
+    """
+    Search config tree for a key matching an env var name.
+
+    Converts ENV_VAR_NAME -> env_var_name and searches all sections.
+    Example: MEMORY_SERVER_URL finds infrastructure.memory_server_url
+
+    Usage in YAML: ${env:MEMORY_SERVER_URL}
+    Usage in code: settings.get_by_env_var("MEMORY_SERVER_URL")
+    """
+    key = env_var_name.lower()
+
+    # Search all top-level sections
+    for section_name in _root_:
+        section = _root_.get(section_name)
+        if isinstance(section, (dict, DictConfig)) and key in section:
+            value = section.get(key)
+            if value is not None:
+                return str(value)
+
+    return None
+
+
+# Register the resolver (only once)
+if not OmegaConf.has_resolver("env"):
+    OmegaConf.register_new_resolver("env", _env_resolver)
+
+
+# =============================================================================
 # Setting Suggestion Model
 # =============================================================================
 
@@ -215,6 +247,55 @@ class SettingsStore:
         value = OmegaConf.select(config, key_path, default=default)
         return value
 
+    def get_sync(self, key_path: str, default: Any = None) -> Any:
+        """
+        Sync version of get() for module-level initialization.
+
+        Use this when you need config values at import time (e.g., SECRET_KEY).
+        For async contexts, prefer the async get() method.
+        """
+        if self._cache is None:
+            # Force sync load - _load_yaml_if_exists is already sync
+            configs = []
+            for path in [self.defaults_path, self.service_defaults_path,
+                         self.secrets_path, self.settings_path]:
+                if cfg := self._load_yaml_if_exists(path):
+                    configs.append(cfg)
+            self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
+            self._cache_timestamp = time.time()
+        return OmegaConf.select(self._cache, key_path, default=default)
+
+    async def get_by_env_var(self, env_var_name: str, default: Any = None) -> Any:
+        """
+        Get a value by env var name, searching the config tree.
+
+        Converts ENV_VAR_NAME -> env_var_name and searches all sections.
+        Example: get_by_env_var("MEMORY_SERVER_URL") finds infrastructure.memory_server_url
+
+        Args:
+            env_var_name: Environment variable name (e.g., "MEMORY_SERVER_URL")
+            default: Default value if not found
+
+        Returns:
+            Resolved value or default
+        """
+        config = await self.load_config()
+        value = _env_resolver(env_var_name, config)
+        return value if value is not None else default
+
+    def get_by_env_var_sync(self, env_var_name: str, default: Any = None) -> Any:
+        """Sync version of get_by_env_var for module-level initialization."""
+        if self._cache is None:
+            configs = []
+            for path in [self.defaults_path, self.service_defaults_path,
+                         self.secrets_path, self.settings_path]:
+                if cfg := self._load_yaml_if_exists(path):
+                    configs.append(cfg)
+            self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
+            self._cache_timestamp = time.time()
+        value = _env_resolver(env_var_name, self._cache)
+        return value if value is not None else default
+
     def _save_to_file(self, file_path: Path, updates: dict) -> None:
         """Internal helper to save updates to a specific file."""
         current = self._load_yaml_if_exists(file_path) or OmegaConf.create({})
@@ -404,8 +485,8 @@ class SettingsStore:
         """
         Check if there's an existing setting value that matches an env var.
 
-        Uses provider-derived mapping first for consistency
-        with CapabilityResolver, then falls back to fuzzy matching.
+        Uses OmegaConf tree search (resolver) first, then provider mapping,
+        then falls back to fuzzy matching.
 
         Args:
             env_var_name: Environment variable name
@@ -413,7 +494,12 @@ class SettingsStore:
         Returns:
             True if a matching setting with a non-empty value exists
         """
-        # First, try direct path mapping (derived from provider YAML configs)
+        # First, try OmegaConf tree search (e.g., MEMORY_SERVER_URL -> infrastructure.memory_server_url)
+        value = await self.get_by_env_var(env_var_name)
+        if value and str(value).strip():
+            return True
+
+        # Try provider-derived mapping
         env_mapping = get_provider_registry().get_env_to_settings_mapping()
         if env_var_name in env_mapping:
             settings_path = env_mapping[env_var_name]

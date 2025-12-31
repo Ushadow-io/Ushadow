@@ -632,14 +632,6 @@ class DockerManager:
 
         resolved = {}
 
-        # Load settings for auto-mapping fallback
-        omega_config = await settings.load_config()
-        from omegaconf import OmegaConf
-        all_settings = OmegaConf.to_container(omega_config, resolve=True)
-        api_keys = all_settings.get('api_keys', {})
-        security_keys = all_settings.get('security', {})
-        admin_keys = all_settings.get('admin', {})
-
         for env_var in service.all_env_vars:
             config = saved_config.get(env_var.name, {})
             source = config.get("source", "default")
@@ -667,35 +659,11 @@ class DockerManager:
                     )
 
             elif source == "default":
-                # Try auto-mapping from settings before using compose default
-                env_lower = env_var.name.lower()
-                found_value = None
-
-                # Check api_keys
-                for key, value in api_keys.items():
-                    if value and (key in env_lower or env_lower.replace('_', '') in key.replace('_', '')):
-                        found_value = str(value)
-                        logger.debug(f"Auto-mapped {env_var.name} from api_keys.{key}")
-                        break
-
-                # Check security keys
-                if not found_value:
-                    for key, value in security_keys.items():
-                        if value and (key in env_lower or env_lower.replace('_', '') in key.replace('_', '')):
-                            found_value = str(value)
-                            logger.debug(f"Auto-mapped {env_var.name} from security.{key}")
-                            break
-
-                # Check admin keys (for ADMIN_PASSWORD, etc.)
-                if not found_value:
-                    for key, value in admin_keys.items():
-                        if value and (key in env_lower or env_lower.replace('_', '') in key.replace('_', '')):
-                            found_value = str(value)
-                            logger.debug(f"Auto-mapped {env_var.name} from admin.{key}")
-                            break
-
-                if found_value:
-                    resolved[env_var.name] = found_value
+                # Use OmegaConf resolver to search config tree by env var name
+                value = await settings.get_by_env_var(env_var.name)
+                if value:
+                    resolved[env_var.name] = value
+                    logger.debug(f"Resolved {env_var.name} from settings")
 
         logger.info(
             f"Resolved {len(resolved)} env vars for {service_name} from compose config"
