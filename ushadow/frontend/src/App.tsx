@@ -39,6 +39,7 @@ import SettingsPage from './pages/SettingsPage'
 import FeatureFlags from './pages/FeatureFlags'
 import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
+import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
 
 // Wizards (all use WizardShell pattern)
 import {
@@ -47,6 +48,7 @@ import {
   MemoryWizard,
   QuickstartWizard,
   LocalServicesWizard,
+  SpeakerRecognitionWizard,
 } from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
 import ColorSystemPreview from './components/ColorSystemPreview'
@@ -87,7 +89,9 @@ function App() {
                 <Route path="wizard/memory" element={<MemoryWizard />} />
                 <Route path="wizard/chronicle" element={<ChronicleWizard />} />
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />
+                <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
                 <Route path="mcp" element={<MCPPage />} />
                 <Route path="agent-zero" element={<AgentZeroPage />} />
                 <Route path="n8n" element={<N8NPage />} />

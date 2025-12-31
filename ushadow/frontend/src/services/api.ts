@@ -324,6 +324,26 @@ export const usersApi = {
   delete: (id: string) => api.delete(`/api/users/${id}`),
 }
 
+// HuggingFace status response type
+export interface HuggingFaceStatus {
+  connected: boolean
+  username: string | null
+  has_token: boolean
+  error: string | null
+}
+
+// HuggingFace model access types
+export interface ModelAccessStatus {
+  model_id: string
+  has_access: boolean
+  error: string | null
+}
+
+export interface HuggingFaceModelsResponse {
+  models: ModelAccessStatus[]
+  all_accessible: boolean
+}
+
 // Wizard endpoints
 export const wizardApi = {
   getStatus: () => api.get('/api/wizard/status'),
@@ -333,11 +353,15 @@ export const wizardApi = {
     deepgram_api_key?: string
     mistral_api_key?: string
     anthropic_api_key?: string
+    hf_token?: string  // HuggingFace token for speaker-recognition
   }) => api.put('/api/wizard/api-keys', apiKeys),
   updateProviders: (providers: any) => settingsApi.update(providers),
   detectEnvKeys: () => api.get('/api/wizard/detect-env-keys'),
   importEnvKeys: () => api.post('/api/wizard/import-env-keys'),
   complete: () => api.post('/api/wizard/complete'),
+  // HuggingFace validation
+  getHuggingFaceStatus: () => api.get<HuggingFaceStatus>('/api/wizard/huggingface/status'),
+  checkHuggingFaceModels: () => api.get<HuggingFaceModelsResponse>('/api/wizard/huggingface/models'),
 }
 
 // Cluster/UNode endpoints
