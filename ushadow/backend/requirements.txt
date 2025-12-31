@@ -24,6 +24,7 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart>=0.0.20  # Required by fastapi-users
 bcrypt==4.2.1
+pyjwt==2.10.1  # For custom JWT generation
 
 # CORS & Middleware
 fastapi-cors==0.0.6
