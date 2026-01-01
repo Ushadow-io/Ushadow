@@ -37,8 +37,8 @@ class MemoryCreate(BaseModel):
         }
 
 
-class Memory(MemoryCreate):
-    """Complete memory model with ID."""
+class Memory_not_used(MemoryCreate):
+    """Complete memory model with ID. NOT IN USE - only MemoryCreate is used."""
     id: str
     synced_at: datetime
     
