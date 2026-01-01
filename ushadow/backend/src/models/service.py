@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
 
-class ServiceCategory(str, Enum):
-    """High-level service category (user-facing grouping)."""
+class ServiceCategory_not_used(str, Enum):
+    """High-level service category (user-facing grouping). NOT IN USE - see docker_manager.py"""
     MEMORY = "memory"                          # Memory/knowledge storage
     LLM = "llm"                                # Language models
     TRANSCRIPTION = "transcription"            # Speech-to-text
@@ -20,8 +20,8 @@ class ServiceCategory(str, Enum):
     AGENT = "agent"                            # Autonomous agents
 
 
-class ServiceType(str, Enum):
-    """Type of service being integrated (technical classification)."""
+class ServiceType_not_used(str, Enum):
+    """Type of service being integrated. NOT IN USE - duplicate exists in docker_manager.py"""
     INFRASTRUCTURE = "infrastructure"  # Docker containers managed by docker_manager
     MEMORY_SOURCE = "memory_source"    # External memory/knowledge sources
     MCP_SERVER = "mcp_server"          # Model Context Protocol servers
@@ -136,8 +136,8 @@ class ServiceTemplateModeConfig(BaseModel):
     dependencies: Optional[List[str]] = None  # Required other services
 
 
-class ServiceTemplate(BaseModel):
-    """Service type template from service-templates.yaml."""
+class ServiceTemplate_not_used(BaseModel):
+    """Service type template from service-templates.yaml. NOT IN USE."""
     description: str
     cloud: Optional[ServiceTemplateModeConfig] = None
     local: Optional[ServiceTemplateModeConfig] = None

@@ -131,15 +131,15 @@ class UNodeHeartbeat(BaseModel):
     metrics: Dict[str, Any] = Field(default_factory=dict)
 
 
-class UNodeCommand(BaseModel):
-    """Command to send to a u-node."""
+class UNodeCommand_not_used(BaseModel):
+    """Command to send to a u-node. NOT IN USE - for future distributed cluster commands."""
     command: str  # "start_service", "stop_service", "update", etc.
     target_unode: str  # hostname
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
-class UNodeCommandResponse(BaseModel):
-    """Response from a u-node command."""
+class UNodeCommandResponse_not_used(BaseModel):
+    """Response from a u-node command. NOT IN USE - for future distributed cluster commands."""
     success: bool
     message: str
     data: Optional[Dict[str, Any]] = None
