@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle } from 'lucide-react'
 import { clusterApi, deploymentsApi, servicesApi, Deployment } from '../services/api'
 
-// Installed service from the service registry
-interface InstalledService {
+// Service from the catalog API
+interface CatalogService {
   service_id: string
-  name: string
-  description: string
-  docker_image: string
+  service_name: string
+  description: string | null
+  image: string
   enabled: boolean
+  installed: boolean
 }
 
 interface UNode {
@@ -45,6 +47,8 @@ interface JoinToken {
   expires_at: string
   join_command: string
   join_command_powershell: string
+  bootstrap_command: string
+  bootstrap_command_powershell: string
 }
 
 // Discovered peer from Tailscale network
@@ -88,7 +92,7 @@ export default function ClusterPage() {
   const [copied, setCopied] = useState<string | null>(null)
 
   // Deployment state
-  const [services, setServices] = useState<InstalledService[]>([])
+  const [services, setServices] = useState<CatalogService[]>([])
   const [deployments, setDeployments] = useState<Deployment[]>([])
   const [showDeployModal, setShowDeployModal] = useState(false)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
@@ -139,7 +143,7 @@ export default function ClusterPage() {
 
   const loadServices = async () => {
     try {
-      const response = await servicesApi.getInstalled()
+      const response = await servicesApi.getCatalog()
       setServices(response.data)
     } catch (err: any) {
       console.error('Error loading services:', err)
@@ -229,6 +233,7 @@ export default function ClusterPage() {
   const openDeployModal = (hostname: string) => {
     setSelectedNode(hostname)
     setShowDeployModal(true)
+    loadServices() // Refresh catalog when modal opens
   }
 
   const handleDeploy = async (serviceId: string) => {
@@ -350,7 +355,7 @@ export default function ClusterPage() {
 
   const getServiceName = (serviceId: string) => {
     const service = services.find(s => s.service_id === serviceId)
-    return service?.name || serviceId
+    return service?.service_name || serviceId
   }
 
   const getDeploymentStatusColor = (status: string) => {
@@ -389,15 +394,6 @@ export default function ClusterPage() {
   const formatBytes = (mb: number) => {
     if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
     return `${mb} MB`
-  }
-
-  const getJoinCommand = () => {
-    if (!newToken) return ''
-    // Extract leader IP from the join command or use current backend
-    const leaderMatch = newToken.join_command.match(/http:\/\/([^:]+):(\d+)/)
-    const leader = leaderMatch ? leaderMatch[1] : window.location.hostname
-    const port = leaderMatch ? leaderMatch[2] : '8000'
-    return `irm http://${leader}:${port}/api/unodes/bootstrap/${newToken.token}/ps1 | iex`
   }
 
   const onlineCount = unodes.filter(n => n.status === 'online').length
@@ -868,42 +864,81 @@ export default function ClusterPage() {
             </h2>
 
             <p className="text-neutral-600 dark:text-neutral-400 mb-6">
-              Run this command on the new machine to join the cluster:
+              Run this command on the new machine to install Docker, Tailscale, and join the cluster:
             </p>
 
-            {/* Windows Command */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Windows (PowerShell)</span>
-                <button
-                  onClick={() => copyToClipboard(getJoinCommand(), 'windows')}
-                  className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center space-x-1"
-                >
-                  {copied === 'windows' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  <span>{copied === 'windows' ? 'Copied!' : 'Copy'}</span>
-                </button>
-              </div>
-              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap">
-                {getJoinCommand()}
-              </div>
-            </div>
-
-            {/* Linux/macOS Command */}
+            {/* Linux/macOS Bootstrap Command */}
             <div className="mb-6">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Linux / macOS</span>
                 <button
-                  onClick={() => copyToClipboard(newToken.join_command, 'linux')}
+                  onClick={() => copyToClipboard(newToken.bootstrap_command, 'linux')}
                   className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center space-x-1"
+                  data-testid="copy-linux-command"
                 >
                   {copied === 'linux' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   <span>{copied === 'linux' ? 'Copied!' : 'Copy'}</span>
                 </button>
               </div>
-              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap">
-                {newToken.join_command}
+              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap" data-testid="linux-command">
+                {newToken.bootstrap_command}
               </div>
             </div>
+
+            {/* Windows Bootstrap Command */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Windows (PowerShell)</span>
+                <button
+                  onClick={() => copyToClipboard(newToken.bootstrap_command_powershell, 'windows')}
+                  className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center space-x-1"
+                  data-testid="copy-windows-command"
+                >
+                  {copied === 'windows' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  <span>{copied === 'windows' ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
+              <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap" data-testid="windows-command">
+                {newToken.bootstrap_command_powershell}
+              </div>
+            </div>
+
+            {/* Advanced: Join-only commands for machines that already have Docker + Tailscale */}
+            <details className="mb-6">
+              <summary className="text-sm text-neutral-500 dark:text-neutral-400 cursor-pointer hover:text-neutral-700 dark:hover:text-neutral-300">
+                Already have Docker & Tailscale? Use join-only command
+              </summary>
+              <div className="mt-3 space-y-3 pl-4 border-l-2 border-neutral-200 dark:border-neutral-700">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">Linux / macOS</span>
+                    <button
+                      onClick={() => copyToClipboard(newToken.join_command, 'join-linux')}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copied === 'join-linux' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <div className="bg-neutral-800 rounded p-2 font-mono text-xs text-green-400 break-all">
+                    {newToken.join_command}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">Windows (PowerShell)</span>
+                    <button
+                      onClick={() => copyToClipboard(newToken.join_command_powershell, 'join-windows')}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copied === 'join-windows' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <div className="bg-neutral-800 rounded p-2 font-mono text-xs text-green-400 break-all">
+                    {newToken.join_command_powershell}
+                  </div>
+                </div>
+              </div>
+            </details>
 
             <div className="text-sm text-neutral-500 dark:text-neutral-400 mb-6">
               Token expires: {new Date(newToken.expires_at).toLocaleString()}
@@ -922,74 +957,97 @@ export default function ClusterPage() {
       )}
 
       {/* Deploy Service Modal */}
-      {showDeployModal && selectedNode && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-md w-full p-6 shadow-xl relative">
-            <button
-              onClick={() => { setShowDeployModal(false); setSelectedNode(null); }}
-              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
-            >
-              <XCircle className="h-5 w-5" />
-            </button>
+      {showDeployModal && selectedNode && createPortal(
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowDeployModal(false); setSelectedNode(null); }}}
+        >
+          <div
+            className="bg-white dark:bg-neutral-800 rounded-lg max-w-lg w-full shadow-2xl relative max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-neutral-200 dark:border-neutral-700">
+              <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
+                Deploy to {selectedNode}
+              </h2>
+              <button
+                onClick={() => { setShowDeployModal(false); setSelectedNode(null); }}
+                className="p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
-            <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100 mb-4">
-              Deploy to {selectedNode}
-            </h2>
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {services.length === 0 ? (
+                <div className="text-center py-8">
+                  <Package className="h-12 w-12 text-neutral-400 mx-auto mb-4" />
+                  <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                    No service definitions found
+                  </p>
+                  <p className="text-sm text-neutral-500">
+                    Create a service definition first to deploy containers
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {services.map((service) => {
+                    const existingDeployment = deployments.find(
+                      d => d.service_id === service.service_id && d.unode_hostname === selectedNode
+                    )
+                    const isDeployed = existingDeployment && ['running', 'deploying'].includes(existingDeployment.status)
 
-            {services.length === 0 ? (
-              <div className="text-center py-8">
-                <Package className="h-12 w-12 text-neutral-400 mx-auto mb-4" />
-                <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                  No service definitions found
-                </p>
-                <p className="text-sm text-neutral-500">
-                  Create a service definition first to deploy containers
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                  Select a service to deploy:
-                </p>
-                {services.map((service) => {
-                  const existingDeployment = deployments.find(
-                    d => d.service_id === service.service_id && d.unode_hostname === selectedNode
-                  )
-                  const isDeployed = existingDeployment && ['running', 'deploying'].includes(existingDeployment.status)
-
-                  return (
-                    <button
-                      key={service.service_id}
-                      onClick={() => !isDeployed && handleDeploy(service.service_id)}
-                      disabled={deploying || isDeployed}
-                      className={`w-full text-left p-4 rounded-lg border transition-colors ${
-                        isDeployed
-                          ? 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 opacity-50 cursor-not-allowed'
-                          : 'border-neutral-200 dark:border-neutral-700 hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium text-neutral-900 dark:text-neutral-100">
-                            {service.name}
+                    return (
+                      <div
+                        key={service.service_id}
+                        className={`rounded-lg border transition-colors ${
+                          isDeployed
+                            ? 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 opacity-60'
+                            : 'border-neutral-200 dark:border-neutral-700 hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20'
+                        }`}
+                      >
+                        <button
+                          onClick={() => !isDeployed && handleDeploy(service.service_id)}
+                          disabled={deploying || isDeployed}
+                          className="w-full text-left p-3 flex items-center justify-between"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                              {service.service_name}
+                            </div>
+                            {service.description && (
+                              <div className="text-sm text-neutral-500 dark:text-neutral-400 truncate">
+                                {service.description}
+                              </div>
+                            )}
                           </div>
-                          <div className="text-sm text-neutral-500 dark:text-neutral-400">
-                            {service.docker_image}
-                          </div>
-                        </div>
-                        {isDeployed && (
-                          <span className="text-xs px-2 py-1 rounded bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400">
-                            Deployed
-                          </span>
-                        )}
+                          {isDeployed ? (
+                            <span className="ml-2 text-xs px-2 py-1 rounded bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400 whitespace-nowrap">
+                              Deployed
+                            </span>
+                          ) : (
+                            <Play className="ml-2 h-4 w-4 text-neutral-400" />
+                          )}
+                        </button>
+                        <details className="px-3 pb-2">
+                          <summary className="text-xs text-neutral-400 cursor-pointer hover:text-neutral-600 dark:hover:text-neutral-300">
+                            Image details
+                          </summary>
+                          <code className="block mt-1 text-xs text-neutral-500 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-900 px-2 py-1 rounded break-all">
+                            {service.image}
+                          </code>
+                        </details>
                       </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
+                    )
+                  })}
+                </div>
+              )}
+            </div>
 
-            <div className="flex justify-end mt-6">
+            {/* Footer */}
+            <div className="flex justify-end p-6 border-t border-neutral-200 dark:border-neutral-700">
               <button
                 onClick={() => { setShowDeployModal(false); setSelectedNode(null); }}
                 className="btn-secondary"
@@ -998,11 +1056,12 @@ export default function ClusterPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Logs Modal */}
-      {showLogsModal && logsDeploymentId && (
+      {showLogsModal && logsDeploymentId && createPortal(
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-4xl w-full max-h-[80vh] flex flex-col shadow-xl relative">
             <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
@@ -1046,11 +1105,12 @@ export default function ClusterPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Upgrade Modal */}
-      {showUpgradeModal && upgradeTarget && (
+      {showUpgradeModal && upgradeTarget && createPortal(
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-neutral-800 rounded-lg max-w-md w-full p-6 shadow-xl relative" data-testid="upgrade-modal">
             <button
@@ -1159,7 +1219,8 @@ export default function ClusterPage() {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
