@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Native build folders
+ios/
+android/
+
+# Environment files
+.env*.local
+
+# Editor
+.vscode/
+
+# Misc
+*.log
+.DS_Store

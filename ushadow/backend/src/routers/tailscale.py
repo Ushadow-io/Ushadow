@@ -18,8 +18,11 @@ from typing import Dict, List, Optional, Literal, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from src.services.auth import get_current_user
+from src.services.auth import get_current_user, generate_jwt_for_service
 from src.models.user import User
+from src.config.omegaconf_settings import get_settings_store
+
+# UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
 
 logger = logging.getLogger(__name__)
@@ -126,6 +129,21 @@ class AuthUrlResponse(BaseModel):
     auth_url: str  # Deep link for mobile app
     web_url: str  # Web URL as fallback
     qr_code_data: str  # Data URL for QR code image
+
+
+class MobileConnectionQR(BaseModel):
+    """QR code for mobile app connection.
+
+    Contains minimal data for the QR code - just enough to connect.
+    After connecting, mobile app fetches full details from /api/unodes/leader/info
+    """
+    qr_code_data: str  # Data URL for QR code image (PNG base64)
+    connection_data: dict  # Raw connection data that's encoded in QR
+    hostname: str
+    tailscale_ip: str
+    api_port: int
+    api_url: str  # Full URL to leader info endpoint
+    auth_token: str  # JWT token for authenticating with ushadow and chronicle  # Full URL to leader info endpoint
 
 
 # ============================================================================
@@ -332,6 +350,7 @@ async def save_config(
 # ============================================================================
 
 CERTS_DIR = Path("/config/certs")
+PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "/app"))
 
 
 # ============================================================================
@@ -635,6 +654,136 @@ async def get_container_status(
         raise HTTPException(status_code=500, detail=f"Failed to check container status: {str(e)}")
 
 
+# ============================================================================
+# Mobile App Connection
+# ============================================================================
+
+@router.get("/mobile/connect-qr", response_model=MobileConnectionQR)
+async def get_mobile_connection_qr(
+    current_user: User = Depends(get_current_user)
+) -> MobileConnectionQR:
+    """Generate QR code for mobile app to connect to this leader.
+
+    The QR code contains minimal connection details (hostname, Tailscale IP, port)
+    plus an auth token for automatic authentication with ushadow and chronicle.
+    After scanning, the mobile app fetches full details from /api/unodes/leader/info
+    """
+    try:
+        container_name = get_tailscale_container_name()
+
+        try:
+            container = docker_client.containers.get(container_name)
+            if container.status != 'running':
+                raise HTTPException(
+                    status_code=400,
+                    detail="Tailscale is not running. Complete Tailscale setup first."
+                )
+        except docker.errors.NotFound:
+            raise HTTPException(
+                status_code=400,
+                detail="Tailscale is not configured. Complete Tailscale setup first."
+            )
+
+        # Get Tailscale status to get IP
+        exit_code, stdout, _ = await exec_in_container("tailscale status --json")
+
+        if exit_code != 0 or not stdout.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Tailscale is not authenticated. Complete authentication first."
+            )
+
+        status_data = json.loads(stdout)
+        self_node = status_data.get('Self')
+
+        if not self_node:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not get Tailscale status. Please try again."
+            )
+
+        hostname = self_node.get('DNSName', '').rstrip('.')
+        tailscale_ips = self_node.get('TailscaleIPs', [])
+
+        if not tailscale_ips:
+            raise HTTPException(
+                status_code=400,
+                detail="No Tailscale IP found. Please ensure Tailscale is connected."
+            )
+
+        # Use the IPv4 address (first one that starts with 100.)
+        tailscale_ip = None
+        for ip in tailscale_ips:
+            if ip.startswith('100.'):
+                tailscale_ip = ip
+                break
+
+        if not tailscale_ip:
+            tailscale_ip = tailscale_ips[0]  # Fallback to first IP
+
+        config = get_settings_store()
+        api_port = config.get_sync("network.backend_public_port") or 8000
+        final_hostname = hostname or get_tailscale_hostname()
+        
+        # Build full API URL for leader info endpoint
+        api_url = f"https://{final_hostname}/api/unodes/leader/info"
+
+        # Generate auth token for mobile app (valid for ushadow and chronicle)
+        # Both services now share the same database (ushadow-blue) so user IDs match
+        auth_token = generate_jwt_for_service(
+            user_id=str(current_user.id),
+            user_email=current_user.email,
+            audiences=["ushadow", "chronicle"]
+        )
+
+        # Minimal connection data for QR code
+        connection_data = {
+            "type": "ushadow-connect",
+            "v": 3,  # Version 3 includes auth token
+            "hostname": final_hostname,
+            "ip": tailscale_ip,
+            "port": api_port,
+            "api_url": api_url,
+            "auth_token": auth_token,
+        }
+
+        # Generate QR code
+        import io
+        import base64
+        import qrcode
+
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data(json.dumps(connection_data))
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        # Convert to data URL
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        qr_code_data = f"data:image/png;base64,{img_str}"
+
+        return MobileConnectionQR(
+            qr_code_data=qr_code_data,
+            connection_data=connection_data,
+            hostname=final_hostname,
+            tailscale_ip=tailscale_ip,
+            api_port=api_port,
+            api_url=api_url,
+            auth_token=auth_token,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating mobile connection QR: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate connection QR: {str(e)}"
+        )
+
+
 @router.post("/container/start")
 async def start_tailscale_container(
     current_user: User = Depends(get_current_user)
@@ -746,6 +895,189 @@ async def start_tailscale_container(
     except Exception as e:
         logger.error(f"Error starting container: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to start container: {str(e)}")
+
+
+@router.post("/container/start-with-caddy")
+async def start_tailscale_with_caddy(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Start both Tailscale and Caddy containers, then configure routing.
+
+    This sets up the full reverse proxy architecture:
+    - Tailscale handles secure HTTPS access via MagicDNS
+    - Caddy handles path-based routing to services
+
+    Route configuration:
+    - /chronicle/* -> Chronicle backend (strips prefix)
+    - /api/* -> Ushadow backend
+    - /auth/* -> Ushadow backend
+    - /ws_pcm -> Ushadow WebSocket
+    - /* -> Ushadow frontend
+    """
+    results = {
+        "tailscale": {"status": "pending"},
+        "caddy": {"status": "pending"},
+        "routing": {"status": "pending"}
+    }
+
+    try:
+        # 1. Start Caddy first (Tailscale depends on it)
+        caddy_result = await start_caddy_container()
+        results["caddy"] = caddy_result
+
+        if caddy_result.get("status") not in ["running", "started", "created"]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to start Caddy: {caddy_result}"
+            )
+
+        # 2. Start Tailscale
+        ts_result = await start_tailscale_container(current_user)
+        results["tailscale"] = ts_result
+
+        return {
+            "status": "started",
+            "message": "Tailscale and Caddy started successfully",
+            "details": results
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting Tailscale with Caddy: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/container/start-caddy")
+async def start_caddy_container() -> Dict[str, str]:
+    """Start or create Caddy reverse proxy container.
+
+    Creates the Caddy container for path-based routing to services.
+    Must be called before configuring Tailscale Serve routes.
+    """
+    try:
+        container_name = "ushadow-caddy"
+
+        try:
+            container = docker_client.containers.get(container_name)
+            container.reload()
+
+            if container.status == "running":
+                return {"status": "running", "message": "Caddy is already running"}
+            else:
+                container.start()
+                await asyncio.sleep(2)
+                return {"status": "started", "message": "Caddy container started"}
+
+        except docker.errors.NotFound:
+            # Create Caddy container
+            logger.info("Creating Caddy container...")
+
+            # Ensure infra network exists
+            try:
+                infra_network = docker_client.networks.get("infra-network")
+            except docker.errors.NotFound:
+                raise HTTPException(
+                    status_code=400,
+                    detail="infra-network not found. Please start infrastructure first."
+                )
+
+            # Create volumes
+            for vol_name in ["ushadow-caddy-data", "ushadow-caddy-config"]:
+                try:
+                    docker_client.volumes.get(vol_name)
+                except docker.errors.NotFound:
+                    docker_client.volumes.create(vol_name)
+
+            # Caddyfile path
+            caddyfile_path = PROJECT_ROOT / "config" / "Caddyfile"
+            if not caddyfile_path.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Caddyfile not found at config/Caddyfile"
+                )
+
+            container = docker_client.containers.run(
+                image="caddy:2-alpine",
+                name=container_name,
+                detach=True,
+                ports={"80/tcp": 8880},
+                volumes={
+                    str(caddyfile_path.absolute()): {"bind": "/etc/caddy/Caddyfile", "mode": "ro"},
+                    "ushadow-caddy-data": {"bind": "/data", "mode": "rw"},
+                    "ushadow-caddy-config": {"bind": "/config", "mode": "rw"},
+                },
+                network="infra-network",
+                restart_policy={"Name": "unless-stopped"},
+            )
+
+            logger.info(f"Caddy container created: {container.id}")
+            await asyncio.sleep(2)
+            return {"status": "created", "message": "Caddy container created and started"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting Caddy: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/caddy/status")
+async def get_caddy_status(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get Caddy container status."""
+    try:
+        container = docker_client.containers.get("ushadow-caddy")
+        container.reload()
+
+        return {
+            "exists": True,
+            "running": container.status == "running",
+            "status": container.status,
+            "id": container.short_id
+        }
+    except docker.errors.NotFound:
+        return {"exists": False, "running": False}
+    except Exception as e:
+        logger.error(f"Error checking Caddy status: {e}")
+        return {"exists": False, "running": False, "error": str(e)}
+
+
+@router.post("/configure-caddy-routing")
+async def configure_caddy_routing(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
+    """Configure Tailscale Serve to route all traffic through Caddy.
+
+    This replaces direct service routes with a single route to Caddy,
+    which then handles path-based routing to individual services.
+    """
+    try:
+        from src.services.tailscale_serve import configure_caddy_proxy_route, is_caddy_running
+
+        if not is_caddy_running():
+            return {
+                "status": "error",
+                "message": "Caddy is not running. Start it first with /container/start-caddy"
+            }
+
+        success = configure_caddy_proxy_route()
+
+        if success:
+            return {
+                "status": "configured",
+                "message": "Tailscale Serve configured to route through Caddy"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to configure Tailscale Serve routing"
+            }
+
+    except Exception as e:
+        logger.error(f"Error configuring Caddy routing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/container/auth-url", response_model=AuthUrlResponse)

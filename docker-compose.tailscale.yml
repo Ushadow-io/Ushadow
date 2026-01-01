@@ -1,7 +1,15 @@
-# Tailscale Container Service
+# Tailscale Container Service with Caddy Reverse Proxy
 #
-# This container runs Tailscale daemon for seamless HTTPS access
-# to ushadow without port forwarding or firewall configuration.
+# This setup provides:
+#   - Tailscale daemon for secure HTTPS access via MagicDNS
+#   - Caddy reverse proxy for multi-service routing
+#
+# Route paths:
+#   /chronicle/* -> Chronicle backend (ws_pcm, api, etc.)
+#   /api/*       -> Ushadow backend API
+#   /auth/*      -> Ushadow backend auth
+#   /ws_pcm      -> Ushadow WebSocket
+#   /*           -> Ushadow frontend
 #
 # Usage:
 #   docker compose -f docker-compose.tailscale.yml up -d
@@ -33,10 +41,37 @@ services:
     restart: unless-stopped
     # Keep container running even if Tailscale isn't authenticated yet
     command: sh -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity"
+    depends_on:
+      caddy:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ushadow-caddy
+    ports:
+      # Internal port - Tailscale Serve forwards HTTPS here
+      - "8880:80"
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/proxy-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 volumes:
   tailscale-state:
     name: ushadow-tailscale-state
+  caddy_data:
+    name: ushadow-caddy-data
+  caddy_config:
+    name: ushadow-caddy-config
 
 networks:
   infra-network:

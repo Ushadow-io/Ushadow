@@ -43,6 +43,7 @@ import {
   MemoryWizard,
   QuickstartWizard,
   LocalServicesWizard,
+  MobileAppWizard,
   SpeakerRecognitionWizard,
 } from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
@@ -82,6 +83,7 @@ function AppContent() {
                 <Route path="wizard/memory" element={<MemoryWizard />} />
                 <Route path="wizard/chronicle" element={<ChronicleWizard />} />
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />
+                <Route path="wizard/mobile-app" element={<MobileAppWizard />} />
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />

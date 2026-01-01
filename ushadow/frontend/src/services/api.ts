@@ -441,6 +441,47 @@ export const clusterApi = {
     registry: string
     image: string
   }>('/api/unodes/versions'),
+  // Leader info for mobile app / cluster display
+  getLeaderInfo: () => api.get<{
+    hostname: string
+    tailscale_ip: string
+    capabilities: {
+      can_run_docker: boolean
+      can_run_gpu: boolean
+      can_become_leader: boolean
+      available_memory_mb: number
+      available_cpu_cores: number
+      available_disk_gb: number
+    }
+    api_port: number
+    ws_pcm_url: string
+    ws_omi_url: string
+    unodes: Array<{
+      id: string
+      hostname: string
+      tailscale_ip: string
+      status: string
+      role: string
+      platform: string
+      last_seen?: string
+      capabilities?: {
+        can_run_docker: boolean
+        can_run_gpu: boolean
+        can_become_leader: boolean
+        available_memory_mb: number
+        available_cpu_cores: number
+        available_disk_gb: number
+      }
+      services?: string[]
+      manager_version?: string
+    }>
+    services: Array<{
+      name: string
+      display_name: string
+      status: string
+      unode_hostname: string
+    }>
+  }>('/api/unodes/leader/info'),
 }
 
 // Kubernetes cluster endpoints
@@ -916,11 +957,40 @@ export const tailscaleApi = {
   // Container management
   getContainerStatus: () => api.get<ContainerStatus>('/api/tailscale/container/status'),
   startContainer: () => api.post<{ status: string; message: string }>('/api/tailscale/container/start'),
+  startContainerWithCaddy: () =>
+    api.post<{
+      status: string
+      message: string
+      details?: { tailscale: { status: string }; caddy: { status: string }; routing: { status: string } }
+    }>('/api/tailscale/container/start-with-caddy'),
   getAuthUrl: () => api.get<AuthUrlResponse>('/api/tailscale/container/auth-url'),
   provisionCertInContainer: (hostname: string) =>
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; results?: string }>('/api/tailscale/configure-serve', config),
+  configureCaddyRouting: () =>
+    api.post<{ status: string; message: string }>('/api/tailscale/configure-caddy-routing'),
+
+  // Caddy management
+  getCaddyStatus: () =>
+    api.get<{ exists: boolean; running: boolean; status?: string; id?: string }>('/api/tailscale/caddy/status'),
+  startCaddy: () => api.post<{ status: string; message: string }>('/api/tailscale/container/start-caddy'),
+
+  // Mobile app connection - minimal data, app fetches details from /api/unodes/leader/info
+  getMobileConnectionQR: () =>
+    api.get<{
+      qr_code_data: string
+      connection_data: {
+        type: string
+        v: number
+        hostname: string
+        ip: string
+        port: number
+      }
+      hostname: string
+      tailscale_ip: string
+      api_port: number
+    }>('/api/tailscale/mobile/connect-qr'),
 
   // Configuration
   getConfig: () => api.get<TailscaleConfig | null>('/api/tailscale/config'),
