@@ -72,7 +72,7 @@ export default function Layout() {
 
   return (
     <div
-      className="min-h-screen flex flex-col relative overflow-hidden"
+      className="flex-1 flex flex-col relative overflow-hidden"
       style={{
         backgroundColor: isDark ? 'var(--surface-900)' : '#fafafa',
       }}
@@ -507,27 +507,6 @@ export default function Layout() {
         </div>
       </div>
 
-      {/* Footer */}
-      <footer
-        className="mt-auto"
-        style={{
-          backgroundColor: isDark ? 'var(--surface-800)' : 'white',
-          borderTop: isDark ? '1px solid var(--surface-500)' : '1px solid #e5e5e5',
-        }}
-        data-testid="footer"
-      >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div
-            className="flex items-center justify-center space-x-2 text-sm"
-            style={{ color: isDark ? 'var(--text-muted)' : '#737373' }}
-          >
-            <Layers className="h-4 w-4" />
-            <span>Ushadow v0.1.0</span>
-            <span style={{ color: isDark ? 'var(--surface-500)' : '#d4d4d4' }}>•</span>
-            <span>AI Orchestration Platform</span>
-          </div>
-        </div>
-      </footer>
     </div>
   )
 }
