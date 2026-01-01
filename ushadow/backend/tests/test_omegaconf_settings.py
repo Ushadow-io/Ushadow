@@ -52,9 +52,8 @@ class TestSettingsStore:
 
         assert manager.config_dir == temp_config_dir
         assert manager.defaults_path == temp_config_dir / "config.defaults.yaml"
-        assert manager.service_defaults_path == temp_config_dir / "default-services.yaml"
         assert manager.secrets_path == temp_config_dir / "secrets.yaml"
-        assert manager.settings_path == temp_config_dir / "config_settings.yaml"
+        assert manager.overrides_path == temp_config_dir / "config.overrides.yaml"
 
     @pytest.mark.asyncio
     async def test_load_empty_config(self, settings_manager):
@@ -125,9 +124,9 @@ api_keys:
   openai: "secret-key"
 """)
 
-        # Create config_settings (should override secrets)
-        settings = temp_config_dir / "config_settings.yaml"
-        settings.write_text("""
+        # Create config.overrides (should override secrets)
+        overrides = temp_config_dir / "config.overrides.yaml"
+        overrides.write_text("""
 app:
   environment: production
 feature:
@@ -138,9 +137,9 @@ feature:
 
         # app.name from defaults (not overridden)
         assert OmegaConf.select(config, "app.name") == "ushadow"
-        # app.environment from config_settings (overrides secrets and defaults)
+        # app.environment from overrides (overrides secrets and defaults)
         assert OmegaConf.select(config, "app.environment") == "production"
-        # feature.enabled from config_settings
+        # feature.enabled from overrides
         assert OmegaConf.select(config, "feature.enabled") is True
         # api_keys from secrets
         assert OmegaConf.select(config, "api_keys.openai") == "secret-key"
@@ -176,12 +175,12 @@ database:
     @pytest.mark.asyncio
     async def test_update_creates_settings_file(self, temp_config_dir, settings_manager):
         """Test that update creates appropriate config files."""
-        assert not settings_manager.settings_path.exists()
+        assert not settings_manager.overrides_path.exists()
         assert not settings_manager.secrets_path.exists()
 
-        # Non-secret goes to config_settings.yaml
+        # Non-secret goes to config.overrides.yaml
         await settings_manager.update({"database.host": "localhost"})
-        assert settings_manager.settings_path.exists()
+        assert settings_manager.overrides_path.exists()
 
         # Secret goes to secrets.yaml
         await settings_manager.update({"api_keys.openai": "new-key"})
@@ -281,17 +280,17 @@ invalid: yaml: content:
 
     @pytest.mark.asyncio
     async def test_reset_deletes_all_files(self, temp_config_dir, settings_manager):
-        """Test that reset() deletes both settings and secrets files."""
+        """Test that reset() deletes both overrides and secrets files."""
         # Create both files
         await settings_manager.update({"some_setting": "value"})
         await settings_manager.update({"api_keys.test": "secret-key"})
-        assert settings_manager.settings_path.exists()
+        assert settings_manager.overrides_path.exists()
         assert settings_manager.secrets_path.exists()
 
         # Reset should delete both
         deleted = await settings_manager.reset(include_secrets=True)
         assert deleted == 2
-        assert not settings_manager.settings_path.exists()
+        assert not settings_manager.overrides_path.exists()
         assert not settings_manager.secrets_path.exists()
 
     @pytest.mark.asyncio
@@ -299,16 +298,16 @@ invalid: yaml: content:
         """Test that reset(include_secrets=False) preserves secrets."""
         await settings_manager.update({"some_setting": "value"})
         await settings_manager.update({"api_keys.test": "secret-key"})
-        
+
         deleted = await settings_manager.reset(include_secrets=False)
         assert deleted == 1
-        assert not settings_manager.settings_path.exists()
+        assert not settings_manager.overrides_path.exists()
         assert settings_manager.secrets_path.exists()  # Preserved
 
     @pytest.mark.asyncio
     async def test_reset_returns_zero_when_no_files(self, settings_manager):
         """Test that reset() returns 0 when no files exist."""
-        assert not settings_manager.settings_path.exists()
+        assert not settings_manager.overrides_path.exists()
         deleted = await settings_manager.reset()
         assert deleted == 0
 
@@ -417,18 +416,21 @@ class TestGetSettingsStore:
 
 
 class TestServiceDefaults:
-    """Tests for service defaults file handling."""
+    """Tests for service defaults in config.defaults.yaml."""
 
     @pytest.mark.asyncio
-    async def test_loads_service_defaults(self, temp_config_dir):
-        """Test loading service defaults file."""
+    async def test_loads_service_defaults_from_config(self, temp_config_dir):
+        """Test loading service defaults from config.defaults.yaml."""
         manager = SettingsStore(config_dir=temp_config_dir)
 
-        service_defaults = temp_config_dir / "default-services.yaml"
-        service_defaults.write_text("""
-installed_services:
+        # Service defaults are now in config.defaults.yaml (not a separate file)
+        defaults = temp_config_dir / "config.defaults.yaml"
+        defaults.write_text("""
+default_services:
   - chronicle
   - openmemory
+selected_providers:
+  llm: openai
 service_preferences:
   chronicle:
     provider: openai
@@ -436,11 +438,11 @@ service_preferences:
 
         config = await manager.load_config(use_cache=False)
 
-        services = OmegaConf.select(config, "installed_services")
+        services = OmegaConf.select(config, "default_services")
         assert "chronicle" in services
         assert "openmemory" in services
 
-        provider = OmegaConf.select(config, "service_preferences.chronicle.provider")
+        provider = OmegaConf.select(config, "selected_providers.llm")
         assert provider == "openai"
 
 

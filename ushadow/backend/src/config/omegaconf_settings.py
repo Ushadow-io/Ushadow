@@ -178,15 +178,14 @@ class SettingsStore:
 
         self.config_dir = Path(config_dir)
 
-        # File paths
+        # File paths (merge order: defaults → secrets → overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
-        self.service_defaults_path = self.config_dir / "default-services.yaml"
         self.secrets_path = self.config_dir / "secrets.yaml"
-        self.settings_path = self.config_dir / "config_settings.yaml"
+        self.overrides_path = self.config_dir / "config.overrides.yaml"
 
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
-        self.cache_ttl: int = 5  # seconds
+        self.cache_ttl: int = 5  # seconds  # seconds
 
     def clear_cache(self) -> None:
         """Clear the configuration cache, forcing reload on next access."""
@@ -207,6 +206,11 @@ class SettingsStore:
         """
         Load merged configuration from all sources.
 
+        Merge order (later overrides earlier):
+        1. config.defaults.yaml - All default values
+        2. secrets.yaml - API keys, passwords (gitignored)
+        3. config.overrides.yaml - User modifications (gitignored)
+
         Returns:
             OmegaConf DictConfig with all values merged
         """
@@ -224,17 +228,13 @@ class SettingsStore:
             configs.append(cfg)
             logger.debug(f"Loaded defaults from {self.defaults_path}")
 
-        if cfg := self._load_yaml_if_exists(self.service_defaults_path):
-            configs.append(cfg)
-            logger.debug(f"Loaded service defaults from {self.service_defaults_path}")
-
         if cfg := self._load_yaml_if_exists(self.secrets_path):
             configs.append(cfg)
             logger.debug(f"Loaded secrets from {self.secrets_path}")
 
-        if cfg := self._load_yaml_if_exists(self.settings_path):
+        if cfg := self._load_yaml_if_exists(self.overrides_path):
             configs.append(cfg)
-            logger.debug(f"Loaded settings from {self.settings_path}")
+            logger.debug(f"Loaded overrides from {self.overrides_path}")
 
         # Merge all configs
         merged = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -270,8 +270,7 @@ class SettingsStore:
         if self._cache is None:
             # Force sync load - _load_yaml_if_exists is already sync
             configs = []
-            for path in [self.defaults_path, self.service_defaults_path,
-                         self.secrets_path, self.settings_path]:
+            for path in [self.defaults_path, self.secrets_path, self.overrides_path]:
                 if cfg := self._load_yaml_if_exists(path):
                     configs.append(cfg)
             self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -307,8 +306,7 @@ class SettingsStore:
         """Sync version of get_by_env_var for module-level initialization."""
         if self._cache is None:
             configs = []
-            for path in [self.defaults_path, self.service_defaults_path,
-                         self.secrets_path, self.settings_path]:
+            for path in [self.defaults_path, self.secrets_path, self.overrides_path]:
                 if cfg := self._load_yaml_if_exists(path):
                     configs.append(cfg)
             self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -338,13 +336,13 @@ class SettingsStore:
         self._save_to_file(self.secrets_path, updates)
         self._cache = None
 
-    async def save_to_settings(self, updates: dict) -> None:
+    async def save_to_overrides(self, updates: dict) -> None:
         """
-        Save non-sensitive values to config_settings.yaml.
+        Save non-sensitive values to config.overrides.yaml.
 
         Use for: preferences, selected_providers, feature flags.
         """
-        self._save_to_file(self.settings_path, updates)
+        self._save_to_file(self.overrides_path, updates)
         self._cache = None
 
     def _is_secret_key(self, key: str) -> bool:
@@ -376,10 +374,10 @@ class SettingsStore:
 
     async def update(self, updates: dict) -> None:
         """
-        Update settings, auto-routing to secrets.yaml or config_settings.yaml.
+        Update settings, auto-routing to secrets.yaml or config.overrides.yaml.
 
         Secrets (api_keys, passwords, tokens) go to secrets.yaml.
-        Everything else goes to config_settings.yaml.
+        Everything else goes to config.overrides.yaml.
 
         Args:
             updates: Dict with updates - supports both formats:
@@ -387,7 +385,7 @@ class SettingsStore:
                      - Nested: {"api_keys": {"openai": "sk-..."}}
         """
         secrets_updates = {}
-        settings_updates = {}
+        overrides_updates = {}
 
         for key, value in updates.items():
             if isinstance(value, dict):
@@ -395,18 +393,18 @@ class SettingsStore:
                 if key in ('api_keys', 'admin', 'security'):
                     secrets_updates[key] = value
                 else:
-                    settings_updates[key] = value
+                    overrides_updates[key] = value
             else:
                 # Dot notation or simple key
                 if self._is_secret_key(key):
                     secrets_updates[key] = value
                 else:
-                    settings_updates[key] = value
+                    overrides_updates[key] = value
 
         if secrets_updates:
             await self.save_to_secrets(secrets_updates)
-        if settings_updates:
-            await self.save_to_settings(settings_updates)
+        if overrides_updates:
+            await self.save_to_overrides(overrides_updates)
 
         self._cache = None
 
@@ -441,9 +439,9 @@ class SettingsStore:
         """
         deleted = 0
         
-        if self.settings_path.exists():
-            self.settings_path.unlink()
-            logger.info(f"Reset: deleted {self.settings_path}")
+        if self.overrides_path.exists():
+            self.overrides_path.unlink()
+            logger.info(f"Reset: deleted {self.overrides_path}")
             deleted += 1
         
         if include_secrets and self.secrets_path.exists():

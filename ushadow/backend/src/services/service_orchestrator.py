@@ -144,6 +144,49 @@ class ServiceOrchestrator:
 
     Combines compose registry, docker manager, and settings into
     a cohesive API for service management.
+
+    State Model
+    ===========
+    Service state is derived at runtime from multiple sources, NOT stored in a database.
+    This is intentional: Docker is the authoritative source for container state.
+
+    DISCOVERY STATE (from compose/*.yaml files)
+    ├── discovered  → Service definition found in compose/ directory
+    └── not_found   → No compose file defines this service
+
+    INSTALLATION STATE (from config files)
+    ├── installed   → In default_services (config.defaults.yaml)
+    │                 OR installed_services.{name}.added=true (config.overrides.yaml)
+    ├── uninstalled → In installed_services.{name}.removed=true
+    └── enabled     → installed_services.{name}.enabled (default: true)
+
+    CONFIGURATION STATE (computed at runtime)
+    ├── needs_setup → Has required env vars without values or defaults
+    └── configured  → All required env vars are satisfied
+
+    DOCKER STATE (from Docker API - container.status)
+    ├── not_found   → No container exists
+    ├── created     → Container exists but never started
+    ├── running     → Container is running
+    ├── stopped     → Container was stopped (exited)
+    ├── restarting  → Container is restarting
+    └── error/dead  → Container in error state
+
+    HEALTH STATE (from Docker healthcheck)
+    └── healthy | unhealthy | starting | none
+
+    Config File Structure
+    =====================
+    config.defaults.yaml    → All defaults (services, providers, settings)
+    secrets.yaml            → API keys, passwords (gitignored)
+    config.overrides.yaml   → User modifications (gitignored)
+
+    Why No Database?
+    ================
+    - Docker IS the authoritative state - no sync issues
+    - Config files are version-controllable
+    - No DB dependency for core service operations
+    - State never drifts from reality (Docker API never lies)
     """
 
     def __init__(self):
