@@ -13,7 +13,12 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
-  Radio
+  Radio,
+  Brain,
+  FileText,
+  FileAudio,
+  Eye,
+  AlertTriangle
 } from 'lucide-react'
 import {
   chronicleQueueApi,
@@ -62,10 +67,97 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
+  const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set())
   const [selectedJob, setSelectedJob] = useState<any | null>(null)
+  const [sessionJobs, setSessionJobs] = useState<{[sessionId: string]: Job[]}>({})
 
   const expandedSessionsRef = useRef<Set<string>>(new Set())
   const refreshingRef = useRef(false)
+
+  // Job type color coding
+  const getJobTypeColor = (type: string, status: string) => {
+    if (!type || !status) {
+      return { bgColor: 'bg-neutral-400', borderColor: 'border-neutral-500' }
+    }
+
+    let bgColor = 'bg-neutral-400'
+    let borderColor = 'border-neutral-500'
+
+    // Transcription jobs - blue
+    if (type.includes('transcribe') || type === 'transcribe_full_audio_job') {
+      bgColor = 'bg-blue-500'
+      borderColor = 'border-blue-600'
+    }
+    // Speaker recognition - purple
+    else if (type.includes('speaker') || type.includes('recognise')) {
+      bgColor = 'bg-purple-500'
+      borderColor = 'border-purple-600'
+    }
+    // Memory jobs - pink
+    else if (type.includes('memory') || type === 'process_memory_job') {
+      bgColor = 'bg-pink-500'
+      borderColor = 'border-pink-600'
+    }
+    // Conversation/open jobs - cyan
+    else if (type.includes('conversation') || type.includes('open_conversation')) {
+      bgColor = 'bg-cyan-500'
+      borderColor = 'border-cyan-600'
+    }
+    // Speech detection - green
+    else if (type.includes('speech') || type.includes('detect')) {
+      bgColor = 'bg-green-500'
+      borderColor = 'border-green-600'
+    }
+    // Audio processing - orange
+    else if (type.includes('audio') || type.includes('persist') || type.includes('cropping')) {
+      bgColor = 'bg-orange-500'
+      borderColor = 'border-orange-600'
+    }
+
+    // Failed jobs - red
+    if (status === 'failed') {
+      bgColor = 'bg-red-500'
+      borderColor = 'border-red-600'
+    }
+    // Processing - add pulse
+    else if (status === 'processing' || status === 'started') {
+      bgColor = bgColor + ' animate-pulse'
+    }
+
+    return { bgColor, borderColor }
+  }
+
+  // Job display names
+  const getJobDisplayName = (jobType: string) => {
+    const nameMap: { [key: string]: string } = {
+      'stream_speech_detection_job': 'Speech',
+      'open_conversation_job': 'Open',
+      'transcribe_full_audio_job': 'Transcript',
+      'recognise_speakers_job': 'Speakers',
+      'process_memory_job': 'Memory',
+      'audio_persistence_job': 'Audio',
+      'crop_audio_job': 'Crop'
+    }
+    return nameMap[jobType] || jobType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  }
+
+  // Job type icons
+  const getJobTypeIcon = (type: string) => {
+    if (type.includes('transcribe')) return FileText
+    if (type.includes('audio')) return FileAudio
+    if (type.includes('memory') || type.includes('speech') || type.includes('speaker') || type.includes('conversation')) return Brain
+    return Brain
+  }
+
+  const toggleJobExpansion = (jobId: string) => {
+    const newExpanded = new Set(expandedJobs)
+    if (newExpanded.has(jobId)) {
+      newExpanded.delete(jobId)
+    } else {
+      newExpanded.add(jobId)
+    }
+    setExpandedJobs(newExpanded)
+  }
 
   useEffect(() => {
     expandedSessionsRef.current = expandedSessions
@@ -89,6 +181,56 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
       setJobs(dashboardData.jobs)
       setLastUpdate(Date.now())
       setError(null)
+
+      // Group jobs by conversation_id for timeline view
+      const allJobs = [
+        ...(dashboardData.jobs?.queued || []),
+        ...(dashboardData.jobs?.processing || []),
+        ...(dashboardData.jobs?.completed || [])
+      ]
+
+      // Build conversation grouping
+      const jobsByConversation: {[convId: string]: Job[]} = {}
+      const audioUuidToConvId = new Map<string, string>()
+
+      // First pass: map audio_uuid to conversation_id
+      allJobs.forEach((job: Job) => {
+        const convId = job.meta?.conversation_id
+        const audioUuid = job.meta?.audio_uuid
+        if (convId && audioUuid) {
+          audioUuidToConvId.set(audioUuid, convId)
+        }
+      })
+
+      // Second pass: group jobs
+      allJobs.forEach((job: Job) => {
+        if (job.meta?.session_level === true) return // Skip session-level jobs
+
+        let groupKey = job.meta?.conversation_id
+        if (!groupKey && job.meta?.audio_uuid) {
+          groupKey = audioUuidToConvId.get(job.meta.audio_uuid)
+        }
+
+        if (groupKey) {
+          if (!jobsByConversation[groupKey]) {
+            jobsByConversation[groupKey] = []
+          }
+          jobsByConversation[groupKey].push(job)
+        }
+      })
+
+      // Merge with session_jobs from dashboard if present
+      const sessionJobsData = (dashboardData as any).session_jobs
+      if (sessionJobsData) {
+        Object.entries(sessionJobsData).forEach(([sessionId, jobs]: [string, any]) => {
+          const existing = jobsByConversation[sessionId] || []
+          const existingIds = new Set(existing.map((j: Job) => j.job_id))
+          const newJobs = jobs.filter((j: Job) => !existingIds.has(j.job_id))
+          jobsByConversation[sessionId] = [...existing, ...newJobs]
+        })
+      }
+
+      setSessionJobs(jobsByConversation)
     } catch (err: any) {
       if (err.response?.status === 401) {
         onAuthRequired?.()
@@ -173,6 +315,27 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
     const hours = Math.floor(seconds / 3600)
     const mins = Math.floor((seconds % 3600) / 60)
     return `${hours}h${mins}m`
+  }
+
+  const formatDuration = (job: Job) => {
+    if (!job.started_at) return '-'
+    const start = new Date(job.started_at).getTime()
+    const end = job.ended_at
+      ? new Date(job.ended_at).getTime()
+      : (job.status === 'processing' || job.status === 'started' ? Date.now() : start)
+    const durationMs = end - start
+    if (durationMs < 1000) return `${durationMs}ms`
+    if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`
+    if (durationMs < 3600000) return `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`
+    return `${Math.floor(durationMs / 3600000)}h ${Math.floor((durationMs % 3600000) / 60000)}m`
+  }
+
+  const formatDurationSeconds = (seconds: number) => {
+    if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`
+    if (seconds < 60) return `${seconds.toFixed(1)}s`
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}m ${secs}s`
   }
 
   if (loading) {
@@ -477,9 +640,9 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
                       <div className="flex items-center space-x-2">
                         <CheckCircle className="h-4 w-4 text-green-500" />
                         <span className="font-medium">{session.client_id}</span>
-                        {session.conversation_count > 0 && (
+                        {session.has_conversation && (
                           <span className="px-1.5 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded">
-                            {session.conversation_count} conv
+                            conv
                           </span>
                         )}
                       </div>
@@ -501,6 +664,313 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
                 <p>No active streams or sessions</p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Active & Completed Conversations */}
+      {Object.keys(sessionJobs).length > 0 && (
+        <div className="card" data-testid="conversations-section">
+          <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-700">
+            <h3 className="font-medium text-neutral-900 dark:text-neutral-100">Conversations</h3>
+          </div>
+
+          <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Active Conversations */}
+            <div>
+              <h4 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">Active Conversations</h4>
+              {(() => {
+                // Filter to only show conversations with at least one active job
+                const activeConversations = Object.entries(sessionJobs).filter(([_, convJobs]) =>
+                  convJobs.some(j => j.status !== 'completed' && j.status !== 'failed')
+                )
+
+                if (activeConversations.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-neutral-500 text-sm bg-neutral-50 dark:bg-neutral-800 rounded border">
+                      No active conversations
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="space-y-2">
+                    {activeConversations.map(([conversationId, convJobs]) => {
+                      const isExpanded = expandedSessions.has(conversationId)
+                      const openConvJob = convJobs.find(j => j.job_type === 'open_conversation_job')
+                      const meta = openConvJob?.meta || convJobs.find(j => j.meta)?.meta || {}
+                      const clientId = meta.client_id || 'Unknown'
+                      const transcript = meta.transcript || ''
+                      const speakers = meta.speakers || []
+                      const wordCount = meta.word_count || 0
+                      const hasFailedJob = convJobs.some(j => j.status === 'failed')
+                      const failedCount = convJobs.filter(j => j.status === 'failed').length
+
+                      return (
+                        <div
+                          key={conversationId}
+                          data-testid={`conversation-${conversationId}`}
+                          className={`rounded-lg border overflow-hidden ${hasFailedJob ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-800' : 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200 dark:border-cyan-800'}`}
+                        >
+                          {/* Conversation Header */}
+                          <div
+                            className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${hasFailedJob ? 'hover:bg-red-100 dark:hover:bg-red-900/30' : 'hover:bg-cyan-100 dark:hover:bg-cyan-900/30'}`}
+                            onClick={() => toggleSession(conversationId)}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center space-x-2">
+                                {isExpanded ? (
+                                  <ChevronDown className={`w-4 h-4 ${hasFailedJob ? 'text-red-600' : 'text-cyan-600'}`} />
+                                ) : (
+                                  <ChevronRight className={`w-4 h-4 ${hasFailedJob ? 'text-red-600' : 'text-cyan-600'}`} />
+                                )}
+                                {hasFailedJob ? (
+                                  <AlertTriangle className="w-4 h-4 text-red-600" />
+                                ) : (
+                                  <Brain className="w-4 h-4 text-cyan-600 animate-pulse" />
+                                )}
+                                <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">{clientId}</span>
+                                {hasFailedJob ? (
+                                  <span className="text-xs px-2 py-0.5 bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200 rounded font-medium">
+                                    {failedCount} Error{failedCount > 1 ? 's' : ''}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs px-2 py-0.5 bg-cyan-100 dark:bg-cyan-800 text-cyan-700 dark:text-cyan-200 rounded">Active</span>
+                                )}
+                                {speakers.length > 0 && (
+                                  <span className="text-xs px-2 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded">
+                                    {speakers.length} speaker{speakers.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                                Conversation: {conversationId.substring(0, 8)}... • Words: {wordCount}
+                              </div>
+                              {/* Transcript Preview */}
+                              {transcript && (
+                                <div className="mt-1 text-xs text-neutral-700 dark:text-neutral-300 italic truncate">
+                                  "{transcript.substring(0, 100)}{transcript.length > 100 ? '...' : ''}"
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Expanded: Pipeline Timeline & Jobs */}
+                          {isExpanded && (
+                            <div className="border-t border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-900 p-3">
+                              {/* Pipeline Timeline */}
+                              <div className="mb-4">
+                                <h5 className="text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-3">Pipeline Timeline:</h5>
+                                {(() => {
+                                  const jobsWithTiming = convJobs
+                                    .filter(j => j.started_at)
+                                    .map(job => {
+                                      const startTime = new Date(job.started_at!).getTime()
+                                      const endTime = job.ended_at
+                                        ? new Date(job.ended_at).getTime()
+                                        : (job.status === 'processing' || job.status === 'started' ? Date.now() : startTime)
+                                      return {
+                                        job,
+                                        startTime,
+                                        endTime,
+                                        duration: (endTime - startTime) / 1000,
+                                        name: getJobDisplayName(job.job_type),
+                                        Icon: getJobTypeIcon(job.job_type)
+                                      }
+                                    })
+                                    .sort((a, b) => a.startTime - b.startTime)
+
+                                  if (jobsWithTiming.length === 0) {
+                                    return <div className="text-xs text-neutral-500 italic">No job timing data available</div>
+                                  }
+
+                                  const earliestStart = Math.min(...jobsWithTiming.map(t => t.startTime))
+                                  const latestEnd = Math.max(...jobsWithTiming.map(t => t.endTime))
+                                  const totalDuration = (latestEnd - earliestStart) / 1000
+
+                                  const timeMarkers = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
+                                    percent: pct * 100,
+                                    time: formatDurationSeconds(totalDuration * pct)
+                                  }))
+
+                                  return (
+                                    <div className="space-y-2">
+                                      {/* Time axis */}
+                                      <div className="relative h-4 border-b border-neutral-300 dark:border-neutral-600">
+                                        {timeMarkers.map((marker, idx) => (
+                                          <div
+                                            key={idx}
+                                            className="absolute"
+                                            style={{ left: `${marker.percent}%`, transform: 'translateX(-50%)' }}
+                                          >
+                                            <div className="w-px h-2 bg-neutral-400"></div>
+                                            <div className="text-xs text-neutral-500 mt-0.5 whitespace-nowrap">{marker.time}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      {/* Job timeline bars */}
+                                      <div className="space-y-2 mt-6">
+                                        {jobsWithTiming.map(({ job, startTime, endTime, duration, name, Icon }) => {
+                                          const startPercent = ((startTime - earliestStart) / (latestEnd - earliestStart)) * 100
+                                          const widthPercent = Math.max(2, ((endTime - startTime) / (latestEnd - earliestStart)) * 100)
+                                          const { bgColor, borderColor } = getJobTypeColor(job.job_type, job.status)
+
+                                          return (
+                                            <div key={job.job_id} className="flex items-center space-x-2 h-8">
+                                              <div className={`w-8 h-8 rounded-full border-2 ${borderColor} ${bgColor} flex items-center justify-center flex-shrink-0`}>
+                                                <Icon className="w-4 h-4 text-white" />
+                                              </div>
+                                              <span className="text-xs text-neutral-700 dark:text-neutral-300 w-20 flex-shrink-0">{name}</span>
+                                              <div className="flex-1 relative h-6 bg-neutral-100 dark:bg-neutral-700 rounded">
+                                                <div
+                                                  className={`absolute h-6 rounded ${bgColor} flex items-center justify-center`}
+                                                  style={{ left: `${startPercent}%`, width: `${widthPercent}%` }}
+                                                  title={`Started: ${new Date(startTime).toLocaleTimeString()}\nDuration: ${formatDurationSeconds(duration)}`}
+                                                >
+                                                  <span className="text-xs text-white font-medium px-2 truncate">
+                                                    {formatDurationSeconds(duration)}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+
+                                      <div className="text-xs text-neutral-600 dark:text-neutral-400 text-right mt-2">
+                                        Total: {formatDurationSeconds(totalDuration)}
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
+                              </div>
+
+                              {/* Conversation Jobs List */}
+                              <h5 className="text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-2">Conversation Jobs:</h5>
+                              <div className="space-y-1">
+                                {convJobs
+                                  .filter(j => j.job_id)
+                                  .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                                  .map((job, index) => {
+                                    const { borderColor } = getJobTypeColor(job.job_type, job.status)
+                                    const JobIcon = getJobTypeIcon(job.job_type)
+
+                                    return (
+                                      <div key={job.job_id} className={`p-2 bg-neutral-50 dark:bg-neutral-800 rounded border ${borderColor}`} style={{ borderLeftWidth: '4px' }}>
+                                        <div
+                                          className="flex items-center justify-between cursor-pointer hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors rounded px-1 py-0.5"
+                                          onClick={() => toggleJobExpansion(job.job_id)}
+                                        >
+                                          <div className="flex items-center space-x-2 min-w-0">
+                                            <span className="text-xs font-mono text-neutral-500">#{index + 1}</span>
+                                            <JobIcon className="w-3 h-3" />
+                                            <span className="text-xs font-medium text-neutral-900 dark:text-neutral-100 truncate">{job.job_type}</span>
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getStatusColor(job.status)}`}>
+                                              {job.status}
+                                            </span>
+                                          </div>
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); setSelectedJob(job) }}
+                                            className="text-primary-600 hover:text-primary-800"
+                                          >
+                                            <Eye className="w-3 h-3" />
+                                          </button>
+                                        </div>
+
+                                        {expandedJobs.has(job.job_id) && (
+                                          <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400 space-y-0.5 pl-6">
+                                            {job.started_at && <div>Started: {new Date(job.started_at).toLocaleTimeString()} • Duration: {formatDuration(job)}</div>}
+                                            {job.meta?.transcript && (
+                                              <div className="italic text-neutral-500 truncate max-w-md">"{job.meta.transcript.substring(0, 80)}..."</div>
+                                            )}
+                                            {job.meta?.memories_created !== undefined && (
+                                              <div>Memories: <span className="font-medium">{job.meta.memories_created} created</span></div>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
+
+            {/* Completed Conversations */}
+            <div>
+              <h4 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">Completed Conversations</h4>
+              {(() => {
+                const completedConversations = Object.entries(sessionJobs).filter(([_, convJobs]) =>
+                  convJobs.every(j => j.status === 'completed' || j.status === 'failed')
+                )
+
+                if (completedConversations.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-neutral-500 text-sm bg-neutral-50 dark:bg-neutral-800 rounded border">
+                      No completed conversations
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {completedConversations.slice(0, 20).map(([conversationId, convJobs]) => {
+                      const isExpanded = expandedSessions.has(conversationId)
+                      const meta = convJobs.find(j => j.meta)?.meta || {}
+                      const clientId = meta.client_id || 'Unknown'
+                      const transcript = meta.transcript || meta.title || ''
+                      const hasFailedJob = convJobs.some(j => j.status === 'failed')
+                      const memoriesCreated = convJobs.find(j => j.job_type === 'process_memory_job')?.meta?.memories_created
+
+                      return (
+                        <div
+                          key={conversationId}
+                          data-testid={`completed-conversation-${conversationId}`}
+                          className={`rounded-lg border overflow-hidden ${hasFailedJob ? 'bg-red-50 dark:bg-red-900/20 border-red-200' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'}`}
+                        >
+                          <div
+                            className="flex items-center justify-between p-3 cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30"
+                            onClick={() => toggleSession(conversationId)}
+                          >
+                            <div className="flex items-center space-x-2 min-w-0 flex-1">
+                              {isExpanded ? <ChevronDown className="w-4 h-4 text-green-600" /> : <ChevronRight className="w-4 h-4 text-green-600" />}
+                              <CheckCircle className="w-4 h-4 text-green-600" />
+                              <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">{clientId}</span>
+                              {memoriesCreated !== undefined && (
+                                <span className="text-xs px-2 py-0.5 bg-pink-100 dark:bg-pink-800 text-pink-700 dark:text-pink-200 rounded">
+                                  {memoriesCreated} memories
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-neutral-500">{conversationId.substring(0, 8)}...</span>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="border-t border-green-200 dark:border-green-800 bg-white dark:bg-neutral-900 p-3">
+                              {transcript && (
+                                <div className="text-xs text-neutral-700 dark:text-neutral-300 italic mb-2">
+                                  "{transcript.substring(0, 200)}{transcript.length > 200 ? '...' : ''}"
+                                </div>
+                              )}
+                              <div className="text-xs text-neutral-500">
+                                {convJobs.length} jobs completed
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         </div>
       )}
