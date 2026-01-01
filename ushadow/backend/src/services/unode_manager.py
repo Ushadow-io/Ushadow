@@ -208,14 +208,54 @@ class UNodeManager:
             return "linux"
         return "unknown"
 
+    def _get_tailscale_dns_name(self) -> str | None:
+        """Get the Tailscale DNS name for this machine.
+
+        Returns the MagicDNS name (e.g., 'machine-name.tailnet.ts.net') that can be
+        used by other Tailscale nodes to reach this machine.
+
+        In containerized deployments, runs via docker exec in the tailscale sidecar.
+        """
+        import json
+        import os
+        import subprocess
+
+        # Allow explicit override via env var
+        dns_name = os.environ.get("TAILSCALE_DNS_NAME")
+        if dns_name:
+            return dns_name
+
+        # Build the command - use docker exec if running in container with tailscale sidecar
+        tailscale_container = os.environ.get("TAILSCALE_CONTAINER")
+        if tailscale_container:
+            # Running in container - exec into tailscale sidecar
+            project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+            container_name = f"{project}-tailscale"
+            cmd = ["docker", "exec", container_name, "tailscale", "status", "--self", "--json"]
+        else:
+            # Running directly on host
+            cmd = ["tailscale", "status", "--self", "--json"]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                status = json.loads(result.stdout)
+                # DNSName includes trailing dot, strip it
+                dns_name = status.get("Self", {}).get("DNSName", "").rstrip(".")
+                if dns_name:
+                    logger.info(f"Got Tailscale DNS name: {dns_name}")
+                    return dns_name
+        except Exception as e:
+            logger.warning(f"Could not get Tailscale DNS name: {e}")
+
+        return None
+
     async def create_join_token(
         self,
         user_id: str,
         request: JoinTokenCreate
     ) -> JoinTokenResponse:
         """Create a join token for new u-nodes."""
-        import os
-
         token = secrets.token_urlsafe(32)
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=request.expires_in_hours)
@@ -233,23 +273,22 @@ class UNodeManager:
 
         await self.tokens_collection.insert_one(token_doc)
 
-        # Get leader's Tailscale IP - prefer environment variable for current runtime
-        leader_host = os.environ.get("TAILSCALE_IP")
-        if not leader_host:
-            leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
-            leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        # Use BACKEND_PORT (external mapped port) for join URLs, not PORT (internal)
-        leader_port = BACKEND_PORT
+        # Get Tailscale DNS name for HTTPS URLs (tailscale serve proxies to backend)
+        tailscale_dns = self._get_tailscale_dns_name()
+        if tailscale_dns:
+            base_url = f"https://{tailscale_dns}"
+        else:
+            base_url = f"http://localhost:{BACKEND_PORT}"
 
         # Standard join commands (require Tailscale already connected)
-        join_command = f'curl -sL "http://{leader_host}:{leader_port}/api/unodes/join/{token}" | sh'
-        join_command_ps = f'iex (iwr "http://{leader_host}:{leader_port}/api/unodes/join/{token}/ps1").Content'
-        join_script_url = f"http://{leader_host}:{leader_port}/api/unodes/join/{token}"
-        join_script_url_ps = f"http://{leader_host}:{leader_port}/api/unodes/join/{token}/ps1"
+        join_command = f'curl -sL "{base_url}/api/unodes/join/{token}" | sh'
+        join_command_ps = f'iex (iwr "{base_url}/api/unodes/join/{token}/ps1").Content'
+        join_script_url = f"{base_url}/api/unodes/join/{token}"
+        join_script_url_ps = f"{base_url}/api/unodes/join/{token}/ps1"
 
         # Bootstrap commands - self-contained, install Tailscale first, then join
-        bootstrap_bash = self._generate_bootstrap_bash(token, leader_host, leader_port)
-        bootstrap_ps = self._generate_bootstrap_powershell(token, leader_host, leader_port)
+        bootstrap_bash = self._generate_bootstrap_bash(token, base_url)
+        bootstrap_ps = self._generate_bootstrap_powershell(token, base_url)
 
         logger.info(f"Created join token (expires: {expires_at})")
 
@@ -264,16 +303,14 @@ class UNodeManager:
             bootstrap_command_powershell=bootstrap_ps,
         )
 
-    def _generate_bootstrap_bash(self, token: str, leader_host: str, leader_port: int) -> str:
+    def _generate_bootstrap_bash(self, token: str, base_url: str) -> str:
         """Generate a self-contained bash bootstrap one-liner."""
-        # This script installs Tailscale, prompts for login, then fetches and runs the join script
-        script = f'''curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up && curl -sL "http://{leader_host}:{leader_port}/api/unodes/join/{token}" | sh'''
+        script = f'''curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up && curl -sL "{base_url}/api/unodes/join/{token}" | sh'''
         return script
 
-    def _generate_bootstrap_powershell(self, token: str, leader_host: str, leader_port: int) -> str:
+    def _generate_bootstrap_powershell(self, token: str, base_url: str) -> str:
         """Generate a self-contained PowerShell bootstrap one-liner."""
-        # Full bootstrap script that installs Docker, Tailscale, waits for login, then joins
-        script = f'''$ErrorActionPreference="Continue";$T="{token}";$L="{leader_host}";$P={leader_port};Write-Host "`n=== Ushadow UNode Bootstrap ===" -FG Cyan;$tsPath="$env:ProgramFiles\\Tailscale\\tailscale.exe";$needRestart=$false;if(!(Get-Command docker -EA 0)){{Write-Host "[1/4] Installing Docker Desktop..." -FG Yellow;if(Get-Command winget -EA 0){{winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements|Out-Null;$needRestart=$true}}else{{Write-Host "Please install Docker Desktop manually: https://docker.com/desktop" -FG Red;exit 1}}}};if(!(Test-Path $tsPath)){{Write-Host "[2/4] Installing Tailscale..." -FG Yellow;if(Get-Command winget -EA 0){{winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements|Out-Null;$needRestart=$true}}else{{Write-Host "Please install Tailscale manually: https://tailscale.com/download" -FG Red;exit 1}}}};if($needRestart){{Write-Host "`n*** Please restart PowerShell and run this command again ***" -FG Yellow;Write-Host "*** Also start Docker Desktop and log in to Tailscale ***" -FG Yellow;exit 0}};Write-Host "[3/4] Checking Tailscale..." -FG Yellow;$connected=$false;for($i=0;$i -lt 30;$i++){{try{{$s=&$tsPath status 2>&1;if($LASTEXITCODE -eq 0){{$connected=$true;break}}}}catch{{}};Write-Host "  Waiting for Tailscale login... ($i/30)" -FG Gray;Start-Sleep 2}};if(!$connected){{Write-Host "Please log in to Tailscale, then re-run." -FG Yellow;exit 0}};Write-Host "[4/4] Joining cluster..." -FG Yellow;iex (iwr "http://$L`:$P/api/unodes/join/$T/ps1").Content'''
+        script = f'''$ErrorActionPreference="Continue";Write-Host "`n=== Ushadow UNode Bootstrap ===" -FG Cyan;$tsPath="$env:ProgramFiles\\Tailscale\\tailscale.exe";$needRestart=$false;if(!(Get-Command docker -EA 0)){{Write-Host "[1/4] Installing Docker Desktop..." -FG Yellow;if(Get-Command winget -EA 0){{winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements|Out-Null;$needRestart=$true}}else{{Write-Host "Please install Docker Desktop manually: https://docker.com/desktop" -FG Red;exit 1}}}};if(!(Test-Path $tsPath)){{Write-Host "[2/4] Installing Tailscale..." -FG Yellow;if(Get-Command winget -EA 0){{winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements|Out-Null;$needRestart=$true}}else{{Write-Host "Please install Tailscale manually: https://tailscale.com/download" -FG Red;exit 1}}}};if($needRestart){{Write-Host "`n*** Please restart PowerShell and run this command again ***" -FG Yellow;Write-Host "*** Also start Docker Desktop and log in to Tailscale ***" -FG Yellow;exit 0}};Write-Host "[3/4] Checking Tailscale..." -FG Yellow;$connected=$false;for($i=0;$i -lt 30;$i++){{try{{$s=&$tsPath status 2>&1;if($LASTEXITCODE -eq 0){{$connected=$true;break}}}}catch{{}};Write-Host "  Waiting for Tailscale login... ($i/30)" -FG Gray;Start-Sleep 2}};if(!$connected){{Write-Host "Please log in to Tailscale, then re-run." -FG Yellow;exit 0}};Write-Host "[4/4] Joining cluster..." -FG Yellow;iex (iwr "{base_url}/api/unodes/join/{token}/ps1").Content'''
         return script
 
     async def get_bootstrap_script_bash(self, token: str) -> str:
@@ -472,6 +509,12 @@ Write-Host ""
 
         if token_doc.get("uses", 0) >= token_doc.get("max_uses", 1):
             return False, None, "Token has been used maximum times"
+
+        # Convert ObjectId fields to strings for Pydantic
+        if "_id" in token_doc:
+            del token_doc["_id"]
+        if "created_by" in token_doc and hasattr(token_doc["created_by"], "__str__"):
+            token_doc["created_by"] = str(token_doc["created_by"])
 
         return True, JoinToken(**token_doc), ""
 
@@ -1105,19 +1148,16 @@ Write-Host ""
 
     async def get_join_script(self, token: str) -> str:
         """Generate the join script for a token."""
-        import os
-
         valid, token_doc, error = await self.validate_token(token)
         if not valid:
             return f"#!/bin/sh\necho 'Error: {error}'\nexit 1"
 
-        # Get leader's Tailscale IP - prefer environment variable for current runtime
-        leader_host = os.environ.get("TAILSCALE_IP")
-        if not leader_host:
-            leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
-            leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        # Use BACKEND_PORT (external mapped port) for join URLs
-        leader_port = BACKEND_PORT
+        # Get Tailscale DNS name for HTTPS URLs (tailscale serve proxies to backend)
+        tailscale_dns = self._get_tailscale_dns_name()
+        if tailscale_dns:
+            leader_url = f"https://{tailscale_dns}"
+        else:
+            leader_url = f"http://localhost:{BACKEND_PORT}"
 
         script = f'''#!/bin/sh
 # Ushadow UNode Join Script
@@ -1125,7 +1165,7 @@ Write-Host ""
 # Auto-installs Docker and Tailscale if missing
 
 TOKEN="{token}"
-LEADER_URL="http://{leader_host}:{leader_port}"
+LEADER_URL="{leader_url}"
 
 echo ""
 echo "=============================================="
@@ -1368,19 +1408,16 @@ echo ""
 
     async def get_join_script_powershell(self, token: str) -> str:
         """Generate the PowerShell join script for a token."""
-        import os
-
         valid, token_doc, error = await self.validate_token(token)
         if not valid:
             return f"Write-Error 'Error: {error}'; exit 1"
 
-        # Get leader's Tailscale IP - prefer environment variable for current runtime
-        leader_host = os.environ.get("TAILSCALE_IP")
-        if not leader_host:
-            leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
-            leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        # Use BACKEND_PORT (external mapped port) for join URLs
-        leader_port = BACKEND_PORT
+        # Get Tailscale DNS name for HTTPS URLs (tailscale serve proxies to backend)
+        tailscale_dns = self._get_tailscale_dns_name()
+        if tailscale_dns:
+            leader_url = f"https://{tailscale_dns}"
+        else:
+            leader_url = f"http://localhost:{BACKEND_PORT}"
 
         script = f'''# Ushadow UNode Join Script (PowerShell)
 # Generated: {datetime.now(timezone.utc).isoformat()}
@@ -1388,13 +1425,13 @@ echo ""
 
 $ErrorActionPreference = "Stop"
 $TOKEN = "{token}"
-$LEADER_URL = "http://{leader_host}:{leader_port}"
+$LEADER_URL = "{leader_url}"
 
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "  Ushadow UNode Join" -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "  Leader: {leader_host}"
+Write-Host "  Leader: {tailscale_dns or 'localhost'}"
 Write-Host ""
 
 # Check if running as admin for installations
@@ -1508,11 +1545,11 @@ try {{
 # Start the manager container
 Write-Host ""
 Write-Host "Starting ushadow-manager..." -ForegroundColor Yellow
-docker pull ghcr.io/ushadow-io/ushadow-manager:latest
-
-# Stop existing if running
+$ErrorActionPreference = "Continue"
+docker pull ghcr.io/ushadow-io/ushadow-manager:latest 2>$null | Out-Null
 docker stop ushadow-manager 2>$null | Out-Null
 docker rm ushadow-manager 2>$null | Out-Null
+$ErrorActionPreference = "Stop"
 
 docker run -d `
     --name ushadow-manager `
