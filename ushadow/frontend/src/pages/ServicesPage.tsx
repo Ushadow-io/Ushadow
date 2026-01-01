@@ -21,9 +21,8 @@ import {
 } from 'lucide-react'
 import {
   settingsApi,
-  dockerApi,
+  servicesApi,
   providersApi,
-  composeServicesApi,
   Capability,
   ProviderWithStatus,
   ComposeService,
@@ -85,7 +84,7 @@ export default function ServicesPage() {
     const pollInterval = setInterval(async () => {
       pollCount++
       try {
-        const response = await dockerApi.getServicesStatus()
+        const response = await servicesApi.getAllStatuses()
         const status = response.data[serviceName]
 
         setServiceStatuses(prev => ({
@@ -132,7 +131,7 @@ export default function ServicesPage() {
     try {
       setLoading(true)
       const [servicesResponse, capsResponse] = await Promise.all([
-        composeServicesApi.list(),
+        servicesApi.getInstalled(),
         providersApi.getCapabilities()
       ])
 
@@ -151,7 +150,7 @@ export default function ServicesPage() {
 
   const loadServiceStatuses = async (serviceList: ComposeService[]) => {
     try {
-      const response = await dockerApi.getServicesStatus()
+      const response = await servicesApi.getAllStatuses()
       const statuses: Record<string, any> = {}
 
       console.log('Docker status response:', response.data)
@@ -187,7 +186,7 @@ export default function ServicesPage() {
       return next
     })
     try {
-      const response = await dockerApi.startService(serviceName)
+      const response = await servicesApi.startService(serviceName)
       // Check for success: false in response body (API returns 200 even on failure)
       if (response.data && response.data.success === false) {
         const errorMsg = response.data.message || 'Failed to start service'
@@ -213,7 +212,7 @@ export default function ServicesPage() {
     setConfirmDialog({ isOpen: false, serviceName: null })
 
     try {
-      await dockerApi.stopService(serviceName)
+      await servicesApi.stopService(serviceName)
       setMessage({ type: 'success', text: 'Service stopped' })
       setServiceStatuses(prev => ({
         ...prev,
@@ -232,7 +231,7 @@ export default function ServicesPage() {
     setShowCatalog(true)
     setCatalogLoading(true)
     try {
-      const response = await composeServicesApi.catalog()
+      const response = await servicesApi.getCatalog()
       setCatalogServices(response.data)
     } catch (error: any) {
       setMessage({ type: 'error', text: 'Failed to load service catalog' })
@@ -244,11 +243,11 @@ export default function ServicesPage() {
   const handleInstallService = async (serviceId: string) => {
     setInstallingService(serviceId)
     try {
-      await composeServicesApi.install(serviceId)
+      await servicesApi.install(serviceId)
       // Reload both catalog and services
       const [catalogRes, servicesRes] = await Promise.all([
-        composeServicesApi.catalog(),
-        composeServicesApi.list()
+        servicesApi.getCatalog(),
+        servicesApi.getInstalled()
       ])
       setCatalogServices(catalogRes.data)
       setServices(servicesRes.data)
@@ -264,11 +263,11 @@ export default function ServicesPage() {
   const handleUninstallService = async (serviceId: string) => {
     setInstallingService(serviceId)
     try {
-      await composeServicesApi.uninstall(serviceId)
+      await servicesApi.uninstall(serviceId)
       // Reload both catalog and services
       const [catalogRes, servicesRes] = await Promise.all([
-        composeServicesApi.catalog(),
-        composeServicesApi.list()
+        servicesApi.getCatalog(),
+        servicesApi.getInstalled()
       ])
       setCatalogServices(catalogRes.data)
       setServices(servicesRes.data)
@@ -290,7 +289,7 @@ export default function ServicesPage() {
     try {
       const envVars = Object.values(envEditForm)
       console.log('Saving env vars:', envVars)
-      const result = await composeServicesApi.updateEnvConfig(serviceId, envVars)
+      const result = await servicesApi.updateEnvConfig(serviceId, envVars)
       console.log('Save result:', result)
       const newSettingsCount = (result.data as any)?.new_settings_created || 0
       const msg = newSettingsCount > 0
@@ -301,7 +300,7 @@ export default function ServicesPage() {
       setEnvConfig(null)
       setEnvEditForm({})
       // Reload services to update needs_setup status
-      const servicesRes = await composeServicesApi.list()
+      const servicesRes = await servicesApi.getInstalled()
       setServices(servicesRes.data)
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to save configuration' })
@@ -319,7 +318,7 @@ export default function ServicesPage() {
   const handleExpandService = async (serviceId: string) => {
     // Load env config when expanding
     try {
-      const response = await composeServicesApi.getEnvConfig(serviceId)
+      const response = await servicesApi.getEnvConfig(serviceId)
       const data = response.data
 
       // Initialize edit form with current config

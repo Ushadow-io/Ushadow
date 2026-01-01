@@ -2,52 +2,22 @@
 Secret detection and masking utilities.
 
 Single source of truth for identifying sensitive values and masking them in API responses.
+
+This module provides:
+- SENSITIVE_PATTERNS: Canonical list of patterns indicating sensitive data
+- is_secret_key(): Check if a key name indicates sensitive data
+- mask_value(): Mask a sensitive value, showing only last 4 chars
+- mask_if_secret(): Conditionally mask based on key name
+- mask_dict_secrets(): Recursively mask sensitive values in a dictionary
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
-
-from omegaconf import OmegaConf
 
 logger = logging.getLogger(__name__)
 
 # Patterns that indicate a key contains sensitive data
+# This is the single source of truth - other modules should import from here
 SENSITIVE_PATTERNS = ['key', 'secret', 'password', 'token', 'credential', 'auth', 'pass']
-
-# Cache for loaded secrets
-_secrets_cache: Optional[dict] = None
-
-
-def _get_secrets_path() -> Optional[Path]:
-    """Find secrets.yaml in common locations."""
-    candidates = [
-        Path("/config/secrets.yaml"),
-        Path("config/secrets.yaml"),
-        Path(__file__).parent.parent.parent.parent / "config" / "secrets.yaml",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path
-    return None
-
-
-def _load_secrets() -> dict:
-    """Load secrets.yaml (cached)."""
-    global _secrets_cache
-    if _secrets_cache is not None:
-        return _secrets_cache
-
-    path = _get_secrets_path()
-    if path:
-        try:
-            _secrets_cache = OmegaConf.to_container(OmegaConf.load(path))
-            return _secrets_cache
-        except Exception as e:
-            logger.warning(f"Error loading secrets from {path}: {e}")
-
-    _secrets_cache = {}
-    return _secrets_cache
 
 
 def get_auth_secret_key() -> str:

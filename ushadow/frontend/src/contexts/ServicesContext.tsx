@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
-import { servicesApi, settingsApi, dockerApi } from '../services/api'
+import { servicesApi, settingsApi } from '../services/api'
 
 // ============================================================================
 // Types
@@ -130,7 +130,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     for (const service of services) {
       if (service.mode === 'local') {
         try {
-          const response = await dockerApi.getServiceInfo(service.service_id)
+          const response = await servicesApi.getDockerDetails(service.service_id)
           statuses[service.service_id] = {
             status: response.data.status,
             container_id: response.data.container_id,
@@ -200,7 +200,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   const startService = useCallback(async (serviceId: string) => {
     setStartingService(serviceId)
     try {
-      await dockerApi.startService(serviceId)
+      await servicesApi.startService(serviceId)
       setMessage({ type: 'success', text: 'Service starting...' })
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to start service' })
@@ -224,7 +224,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     setConfirmDialog({ isOpen: false, serviceId: null, serviceName: null })
 
     try {
-      await dockerApi.stopService(serviceId)
+      await servicesApi.stopService(serviceId)
       setMessage({ type: 'success', text: 'Service stopped' })
       await loadData()
     } catch (error: any) {

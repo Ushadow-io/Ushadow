@@ -8,6 +8,12 @@
 version: 1.0.0
 wizard_completed: false
 
+# Environment Settings
+environment:
+  name: ushadow
+  mode: development  # development | production
+  debug: false
+
 # Authentication Configuration (non-sensitive)
 auth:
   admin_email: admin@example.com

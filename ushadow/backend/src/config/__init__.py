@@ -1,8 +1,11 @@
-"""Configuration module"""
+"""Configuration module
 
-from .infra_settings import get_settings, get_infra_settings, InfraSettings
+All settings are managed through OmegaConf (get_settings_store).
+Environment variables are read from YAML config files, not from a separate InfraSettings class.
+"""
+
 from .omegaconf_settings import (
-    # New names (preferred)
+    # Main API
     get_settings_store,
     SettingsStore,
     # Backward compatibility aliases
@@ -25,11 +28,7 @@ from .secrets import (
 )
 
 __all__ = [
-    # Infrastructure settings (env vars)
-    "get_settings",
-    "get_infra_settings",
-    "InfraSettings",
-    # Settings store (YAML files) - new names
+    # Settings store (YAML files)
     "get_settings_store",
     "SettingsStore",
     # Backward compatibility aliases

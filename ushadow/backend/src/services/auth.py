@@ -25,12 +25,10 @@ from fastapi_users.authentication import (
     JWTStrategy,
 )
 
-from src.config.infra_settings import get_infra_settings
 from src.config.omegaconf_settings import get_settings_store
 from src.models.user import User, UserCreate, get_user_db
 
 logger = logging.getLogger(__name__)
-settings = get_infra_settings()
 config = get_settings_store()
 
 # JWT Configuration
@@ -44,11 +42,15 @@ if not SECRET_KEY:
         "AUTH_SECRET_KEY not found in config/secrets.yaml. "
         "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
     )
-COOKIE_SECURE = settings.NODE_ENV == "production"
 
-# Admin configuration (still from infra_settings for backward compat)
-ADMIN_EMAIL = settings.ADMIN_EMAIL
-ADMIN_PASSWORD = settings.ADMIN_PASSWORD
+# Environment mode determines cookie security
+ENV_MODE = config.get_sync("environment.mode") or "development"
+COOKIE_SECURE = ENV_MODE == "production"
+
+# Admin configuration from OmegaConf (secrets.yaml -> admin.*)
+ADMIN_EMAIL = config.get_sync("admin.email") or config.get_sync("auth.admin_email") or "admin@example.com"
+ADMIN_PASSWORD = config.get_sync("admin.password")
+ADMIN_NAME = config.get_sync("admin.name") or config.get_sync("auth.admin_name") or "admin"
 
 # Accepted token issuers - comma-separated list of services whose tokens we accept
 ACCEPTED_ISSUERS = [
@@ -325,7 +327,7 @@ async def create_admin_user_if_needed():
             password=ADMIN_PASSWORD,
             is_superuser=True,
             is_verified=True,
-            display_name=settings.ADMIN_NAME or "Administrator",
+            display_name=ADMIN_NAME or "Administrator",
         )
 
         admin_user = await user_manager.create(admin_create)

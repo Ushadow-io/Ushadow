@@ -15,7 +15,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 
-import { settingsApi, dockerApi } from '../services/api'
+import { settingsApi, servicesApi } from '../services/api'
 import { useWizard } from '../contexts/WizardContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
@@ -123,7 +123,7 @@ export default function LocalServicesWizard() {
 
   const checkContainerStatuses = async () => {
     try {
-      const response = await dockerApi.listServices()
+      const response = await servicesApi.getInstalled()
       const services = response.data
 
       // Check Ollama
@@ -153,7 +153,7 @@ export default function LocalServicesWizard() {
 
   const checkCoreContainerStatuses = async () => {
     try {
-      const response = await dockerApi.listServices()
+      const response = await servicesApi.getInstalled()
       const services = response.data
 
       setCoreContainers((prev) =>
@@ -201,7 +201,7 @@ export default function LocalServicesWizard() {
     setStatus((prev) => ({ ...prev, status: 'starting' }))
 
     try {
-      await dockerApi.startService(containerName)
+      await servicesApi.startService(containerName)
 
       // Poll for status
       let attempts = 0
@@ -210,7 +210,7 @@ export default function LocalServicesWizard() {
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await dockerApi.getServiceInfo(containerName)
+          const response = await servicesApi.getDockerDetails(containerName)
           const isRunning = response.data.status === 'running'
 
           if (isRunning) {
@@ -258,7 +258,7 @@ export default function LocalServicesWizard() {
     )
 
     try {
-      await dockerApi.startService(containerName)
+      await servicesApi.startService(containerName)
 
       let attempts = 0
       const maxAttempts = 10
@@ -266,7 +266,7 @@ export default function LocalServicesWizard() {
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await dockerApi.getServiceInfo(containerName)
+          const response = await servicesApi.getDockerDetails(containerName)
           const isRunning = response.data.status === 'running'
 
           if (isRunning) {

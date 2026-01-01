@@ -3,7 +3,7 @@ import { useFormContext, Controller } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import { Sparkles, Loader2, CheckCircle, RefreshCw, ExternalLink } from 'lucide-react'
 
-import { composeServicesApi, dockerApi, type QuickstartConfig, type CapabilityRequirement, type MissingKey, type ServiceInfo } from '../services/api'
+import { servicesApi, quickstartApi, type QuickstartConfig, type CapabilityRequirement, type MissingKey, type ServiceInfo } from '../services/api'
 import { ServiceStatusCard, type ServiceStatus } from '../components/services'
 import { SecretInput, SettingField } from '../components/settings'
 import { useWizard } from '../contexts/WizardContext'
@@ -77,7 +77,7 @@ function QuickstartWizardContent() {
 
   const loadQuickstartConfig = async () => {
     try {
-      const response = await composeServicesApi.getQuickstart()
+      const response = await quickstartApi.getConfig()
       setQuickstartConfig(response.data)
 
       // Build containers state from services in the API response
@@ -131,7 +131,7 @@ function QuickstartWizardContent() {
     setMessage({ type: 'info', text: 'Saving configuration...' })
 
     // Use context's saveToApi which handles flattening
-    const result = await saveToApi(composeServicesApi.saveQuickstart)
+    const result = await saveToApi(quickstartApi.saveConfig)
 
     if (result.success) {
       updateApiKeysStatus(true)
@@ -148,7 +148,7 @@ function QuickstartWizardContent() {
   // Container management
   const checkContainerStatuses = async () => {
     try {
-      const response = await dockerApi.listServices()
+      const response = await servicesApi.getInstalled()
       const servicesList = response.data
 
       console.log('[QuickstartWizard] Docker services from API:', servicesList.map((s: any) => ({ name: s.name, status: s.status })))
@@ -188,7 +188,7 @@ function QuickstartWizardContent() {
     const displayName = container?.displayName || containerName
 
     try {
-      await dockerApi.startService(containerName)
+      await servicesApi.startService(containerName)
 
       // Poll for status - longer timeout for slower containers
       let attempts = 0
@@ -197,7 +197,7 @@ function QuickstartWizardContent() {
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await dockerApi.getServiceInfo(containerName)
+          const response = await servicesApi.getDockerDetails(containerName)
           console.log(`[QuickstartWizard] Poll ${containerName} attempt ${attempts}:`, response.data)
           const isRunning = response.data.status === 'running'
 

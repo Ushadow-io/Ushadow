@@ -1,23 +1,32 @@
 """
-Services API - Compose-first service discovery.
+Unified Services API - Single entry point for all service operations.
 
-Services are discovered from Docker Compose files with x-ushadow extensions.
-Environment variables are extracted from compose and mapped to settings by users.
+This router consolidates:
+- Service discovery (from compose files)
+- Docker container lifecycle (start/stop/restart)
+- Configuration management (env vars, enabled state)
+- Installation management
 
-Endpoints:
-- GET /services/installed - Compose-discovered services (flat list)
-- GET /services/{id}/enabled - Get enabled state
-- PUT /services/{id}/enabled - Set enabled state
+All operations go through the ServiceOrchestrator facade.
+
+Endpoint Groups:
+- Discovery:    GET /, /catalog, /{name}, /by-capability/{cap}
+- Status:       GET /docker-status, /status, /{name}/status, /{name}/docker
+- Lifecycle:    POST /{name}/start, /stop, /restart; GET /{name}/logs
+- Config:       GET/PUT /{name}/enabled, /{name}/config, /{name}/env, /{name}/resolve
+- Installation: POST /{name}/install, /uninstall, /register
 """
 
 import logging
 from typing import List, Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
 
-from src.services.compose_registry import get_compose_registry, DiscoveredService
-from src.config.omegaconf_settings import get_settings_store
+from src.services.service_orchestrator import get_service_orchestrator, ServiceOrchestrator
+from src.services.auth import get_current_user
+from src.models.user import User
+from src.services.docker_manager import ServiceType, IntegrationType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -28,101 +37,416 @@ router = APIRouter()
 # =============================================================================
 
 class EnabledRequest(BaseModel):
+    """Request to enable/disable a service."""
     enabled: bool
 
 
+class EnvVarConfigRequest(BaseModel):
+    """Request to configure an environment variable."""
+    name: str
+    source: str  # "setting", "new_setting", "literal", "default"
+    setting_path: Optional[str] = None
+    new_setting_path: Optional[str] = None
+    value: Optional[str] = None
+
+
+class EnvConfigUpdateRequest(BaseModel):
+    """Request to update all env var configs for a service."""
+    env_vars: List[EnvVarConfigRequest]
+
+
+class ServiceEndpointRequest(BaseModel):
+    """Service endpoint information."""
+    url: str
+    integration_type: str = "rest"
+    health_check_path: Optional[str] = None
+    requires_auth: bool = False
+    auth_type: Optional[str] = None
+
+
+class RegisterServiceRequest(BaseModel):
+    """Request to register a dynamic service."""
+    service_name: str = Field(..., description="Unique service name")
+    description: str = ""
+    service_type: str = "application"
+    endpoints: List[ServiceEndpointRequest] = []
+    user_controllable: bool = True
+    compose_file: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class ActionResponse(BaseModel):
+    """Standard action response."""
+    success: bool
+    message: str
+
+
+class LogsResponse(BaseModel):
+    """Service logs response."""
+    success: bool
+    logs: str
+
+
 # =============================================================================
-# Helper - Build response for compose-discovered service
+# Dependencies
 # =============================================================================
 
-async def build_compose_service_response(
-    service: DiscoveredService,
-    settings
+def get_orchestrator() -> ServiceOrchestrator:
+    """Dependency to get the service orchestrator."""
+    return get_service_orchestrator()
+
+
+# =============================================================================
+# Discovery Endpoints
+# =============================================================================
+
+@router.get("/")
+async def list_services(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> List[Dict[str, Any]]:
+    """
+    List all installed services.
+
+    Returns services that are in default_services or user-added,
+    with their current docker status.
+    """
+    return await orchestrator.list_installed_services()
+
+
+@router.get("/catalog")
+async def list_catalog(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> List[Dict[str, Any]]:
+    """
+    List all available services (catalog).
+
+    Returns all discovered services regardless of installation status.
+    Each service includes an 'installed' flag.
+    """
+    return await orchestrator.list_catalog()
+
+
+@router.get("/by-capability/{capability}")
+async def get_services_by_capability(
+    capability: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> List[Dict[str, Any]]:
+    """
+    Get all services that require a specific capability.
+
+    Args:
+        capability: Capability name (e.g., 'llm', 'transcription')
+    """
+    return await orchestrator.get_services_by_capability(capability)
+
+
+@router.get("/{name}")
+async def get_service(
+    name: str,
+    include_env: bool = False,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
 ) -> Dict[str, Any]:
-    """Build response dict for a compose-discovered service."""
-    # Get enabled state from settings (default True for all services)
-    enabled = await settings.get(f"installed_services.{service.service_name}.enabled")
-    if enabled is None:
-        enabled = True
-
-    return {
-        "service_id": service.service_id,
-        "service_name": service.service_name,
-        "compose_file": str(service.compose_file),
-        "image": service.image,
-        "requires": service.requires,
-        "depends_on": service.depends_on,
-        "ports": service.ports,
-        "enabled": enabled,
-        "required_env_count": len(service.required_env_vars),
-        "optional_env_count": len(service.optional_env_vars),
-    }
-
-
-# =============================================================================
-# List Endpoints
-# =============================================================================
-
-@router.get("/installed")
-async def get_installed_services() -> List[Dict[str, Any]]:
     """
-    Get all compose-discovered services.
+    Get details for a specific service.
 
-    Returns a flat list of services found in compose/*-compose.yaml files.
-    Use /api/compose/services/{id}/env for env var configuration.
+    Args:
+        name: Service name (e.g., 'chronicle')
+        include_env: Include environment variable definitions
     """
-    registry = get_compose_registry()
-    settings = get_settings_store()
-
-    return [
-        await build_compose_service_response(service, settings)
-        for service in registry.get_services()
-    ]
+    service = await orchestrator.get_service(name, include_env=include_env)
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return service
 
 
 # =============================================================================
-# Enable/Disable
+# Status Endpoints
 # =============================================================================
 
-@router.get("/{service_name}/enabled")
-async def get_service_enabled(service_name: str) -> Dict[str, Any]:
+@router.get("/docker-status")
+async def get_docker_status(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Check if Docker daemon is available."""
+    return orchestrator.get_docker_status()
+
+
+@router.get("/status")
+async def get_all_statuses(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Get lightweight status for all services.
+
+    Returns only name, status, and health - optimized for polling.
+    """
+    return await orchestrator.get_all_statuses()
+
+
+@router.get("/{name}/status")
+async def get_service_status(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get status for a single service."""
+    status = await orchestrator.get_service_status(name)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return status
+
+
+@router.get("/{name}/docker")
+async def get_docker_details(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get Docker container details for a service.
+
+    Returns container_id, status, image, ports, health, endpoints, etc.
+    """
+    details = await orchestrator.get_docker_details(name)
+    if details is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return details.to_dict()
+
+
+# =============================================================================
+# Lifecycle Endpoints
+# =============================================================================
+
+@router.post("/{name}/start", response_model=ActionResponse)
+async def start_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> ActionResponse:
+    """Start a service container."""
+    logger.info(f"POST /services/{name}/start - starting service")
+    result = await orchestrator.start_service(name)
+
+    if not result.success and result.message in ["Service not found", "Operation not permitted"]:
+        raise HTTPException(status_code=403, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)
+
+
+@router.post("/{name}/stop", response_model=ActionResponse)
+async def stop_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> ActionResponse:
+    """Stop a service container."""
+    result = orchestrator.stop_service(name)
+
+    if not result.success and result.message in ["Service not found", "Operation not permitted"]:
+        raise HTTPException(status_code=403, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)
+
+
+@router.post("/{name}/restart", response_model=ActionResponse)
+async def restart_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> ActionResponse:
+    """Restart a service container."""
+    result = orchestrator.restart_service(name)
+
+    if not result.success and result.message in ["Service not found", "Operation not permitted"]:
+        raise HTTPException(status_code=403, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)
+
+
+@router.get("/{name}/logs", response_model=LogsResponse)
+async def get_service_logs(
+    name: str,
+    tail: int = 100,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> LogsResponse:
+    """
+    Get logs from a service container.
+
+    Args:
+        name: Service name
+        tail: Number of lines to retrieve (default 100)
+    """
+    result = orchestrator.get_service_logs(name, tail=tail)
+
+    if not result.success:
+        raise HTTPException(status_code=404, detail="Service not found or logs unavailable")
+
+    return LogsResponse(success=result.success, logs=result.logs)
+
+
+# =============================================================================
+# Configuration Endpoints
+# =============================================================================
+
+@router.get("/{name}/enabled")
+async def get_enabled_state(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
     """Get enabled state for a service."""
-    registry = get_compose_registry()
-    service = registry.get_service_by_name(service_name)
-
-    if not service:
-        raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found")
-
-    settings = get_settings_store()
-    enabled = await settings.get(f"installed_services.{service_name}.enabled")
-
-    return {
-        "service_id": service.service_id,
-        "service_name": service_name,
-        "enabled": enabled if enabled is not None else True,
-    }
+    result = await orchestrator.get_enabled_state(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
 
 
-@router.put("/{service_name}/enabled")
-async def set_service_enabled(service_name: str, request: EnabledRequest) -> Dict[str, Any]:
+@router.put("/{name}/enabled")
+async def set_enabled_state(
+    name: str,
+    request: EnabledRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
     """Enable or disable a service."""
-    registry = get_compose_registry()
-    service = registry.get_service_by_name(service_name)
+    result = await orchestrator.set_enabled_state(name, request.enabled)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
 
-    if not service:
-        raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found")
 
-    settings = get_settings_store()
-    await settings.update({
-        f"installed_services.{service_name}.enabled": request.enabled
-    })
+@router.get("/{name}/config")
+async def get_service_config(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get full service configuration.
 
-    action = "enabled" if request.enabled else "disabled"
-    logger.info(f"Service {service_name} {action}")
+    Returns enabled state, env config, and preferences.
+    """
+    result = await orchestrator.get_service_config(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
 
-    return {
-        "service_id": service.service_id,
-        "service_name": service_name,
-        "enabled": request.enabled,
-        "message": f"Service '{service_name}' {action}"
+
+@router.get("/{name}/env")
+async def get_env_config(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get environment variable configuration for a service.
+
+    Returns the env schema with current configuration and suggested settings.
+    """
+    result = await orchestrator.get_env_config(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.put("/{name}/env")
+async def update_env_config(
+    name: str,
+    request: EnvConfigUpdateRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Save environment variable configuration for a service.
+
+    Source types:
+    - "setting": Use value from an existing settings path
+    - "new_setting": Create a new setting and map to it
+    - "literal": Use a directly entered value
+    - "default": Use the compose file's default
+    """
+    env_vars = [ev.model_dump() for ev in request.env_vars]
+    result = await orchestrator.update_env_config(name, env_vars)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.get("/{name}/resolve")
+async def resolve_env_vars(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Resolve environment variables for runtime injection.
+
+    Returns the actual values that would be passed to docker compose.
+    Sensitive values are masked in the response.
+    """
+    result = await orchestrator.resolve_env_vars(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+# =============================================================================
+# Installation Endpoints
+# =============================================================================
+
+@router.post("/{name}/install")
+async def install_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Install a service (add to installed services list).
+
+    This marks the service as user-added, overriding default_services.
+    """
+    result = await orchestrator.install_service(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.post("/{name}/uninstall")
+async def uninstall_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Uninstall a service (remove from installed services list).
+
+    This marks the service as removed, overriding default_services.
+    """
+    result = await orchestrator.uninstall_service(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.post("/register", response_model=ActionResponse)
+async def register_dynamic_service(
+    request: RegisterServiceRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> ActionResponse:
+    """
+    Register a dynamic service (e.g., Pieces app, custom integration).
+
+    This allows runtime registration of new services.
+    """
+    config = {
+        "service_name": request.service_name,
+        "description": request.description,
+        "service_type": request.service_type,
+        "endpoints": [ep.model_dump() for ep in request.endpoints],
+        "user_controllable": request.user_controllable,
+        "compose_file": request.compose_file,
+        "metadata": request.metadata,
     }
+
+    result = await orchestrator.register_dynamic_service(config)
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)

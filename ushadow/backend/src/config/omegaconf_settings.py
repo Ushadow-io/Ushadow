@@ -17,6 +17,7 @@ from typing import Any, Optional, List, Tuple, Dict
 
 from omegaconf import OmegaConf, DictConfig
 
+from src.config.secrets import SENSITIVE_PATTERNS, is_secret_key, mask_value
 from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
@@ -84,8 +85,9 @@ class SettingSuggestion:
 # Constants
 # =============================================================================
 
-# Patterns that indicate a secret value
-SECRET_PATTERNS = ['key', 'secret', 'password', 'token', 'credential', 'auth']
+# Use SENSITIVE_PATTERNS from secrets.py as the single source of truth
+# Alias for backward compatibility within this module
+SECRET_PATTERNS = SENSITIVE_PATTERNS
 
 # Patterns that indicate a URL value
 URL_PATTERNS = ['url', 'endpoint', 'host', 'uri']
@@ -122,12 +124,23 @@ def categorize_setting(name: str) -> str:
 
 
 def mask_secret_value(value: str, path: str) -> str:
-    """Mask a secret value, showing only last 4 chars."""
+    """
+    Mask a secret value if the path indicates sensitive data.
+
+    Uses is_secret_key() from secrets.py to determine if masking is needed,
+    then mask_value() to perform the masking.
+
+    Args:
+        value: The value to potentially mask
+        path: The setting path (e.g., "api_keys.openai_api_key")
+
+    Returns:
+        Masked value if path indicates sensitive data, original value otherwise
+    """
     if not value:
         return ""
-    is_secret = any(s in path.lower() for s in SECRET_PATTERNS)
-    if is_secret and len(value) > 4:
-        return "••••" + value[-4:]
+    if is_secret_key(path):
+        return mask_value(value).replace("****", "••••")  # Use bullet style
     return value
 
 
@@ -267,10 +280,17 @@ class SettingsStore:
 
     async def get_by_env_var(self, env_var_name: str, default: Any = None) -> Any:
         """
-        Get a value by env var name, searching the config tree.
+        Get a VALUE by env var name - simple value lookup.
+
+        Use this when you just need the value and don't care about the path.
+        This is the simpler, faster method for runtime value resolution.
 
         Converts ENV_VAR_NAME -> env_var_name and searches all sections.
-        Example: get_by_env_var("MEMORY_SERVER_URL") finds infrastructure.memory_server_url
+        Example: get_by_env_var("MEMORY_SERVER_URL") → "http://localhost:8765"
+
+        Compare to find_setting_for_env_var():
+        - get_by_env_var(): Returns just the value (for runtime use)
+        - find_setting_for_env_var(): Returns (path, value) tuple (for UI/config)
 
         Args:
             env_var_name: Environment variable name (e.g., "MEMORY_SERVER_URL")
@@ -328,16 +348,31 @@ class SettingsStore:
         self._cache = None
 
     def _is_secret_key(self, key: str) -> bool:
-        """Check if a key path should be stored in secrets."""
+        """
+        Check if a key path should be stored in secrets.yaml.
+
+        This extends secrets.is_secret_key() with path-aware logic:
+        - Anything under api_keys.* goes to secrets
+        - security.* paths containing secret/key/password go to secrets
+        - admin.* paths containing password go to secrets
+        - Otherwise, falls back to is_secret_key() pattern matching
+
+        Args:
+            key: Full setting path (e.g., "api_keys.openai_api_key")
+
+        Returns:
+            True if this should be stored in secrets.yaml
+        """
         key_lower = key.lower()
-        # Check if it's in api_keys section or contains secret patterns
+        # Section-based rules (take precedence)
         if key_lower.startswith('api_keys.'):
             return True
         if key_lower.startswith('security.') and any(p in key_lower for p in ['secret', 'key', 'password']):
             return True
         if key_lower.startswith('admin.') and 'password' in key_lower:
             return True
-        return any(p in key_lower for p in SECRET_PATTERNS)
+        # Fall back to pattern matching from secrets.py
+        return is_secret_key(key)
 
     async def update(self, updates: dict) -> None:
         """
@@ -430,10 +465,20 @@ class SettingsStore:
 
     async def find_setting_for_env_var(self, env_var_name: str) -> Optional[Tuple[str, Any]]:
         """
-        Find a setting path and value that matches an environment variable name.
+        Find a setting PATH and value for an env var - for UI/config purposes.
+
+        Use this when you need to know WHERE a setting is stored, not just its value.
+        This is the more sophisticated method for configuration UIs and suggestions.
 
         Uses provider-derived mapping first for consistency,
         then falls back to fuzzy matching for unmapped env vars.
+
+        Example: find_setting_for_env_var("OPENAI_API_KEY")
+                 → ("api_keys.openai_api_key", "sk-...")
+
+        Compare to get_by_env_var():
+        - get_by_env_var(): Returns just the value (for runtime use)
+        - find_setting_for_env_var(): Returns (path, value) tuple (for UI/config)
 
         Args:
             env_var_name: Environment variable name (e.g., "OPENAI_API_KEY")
@@ -608,18 +653,18 @@ class SettingsStore:
         """
         Save environment variable values to appropriate config sections.
 
-        Automatically categorizes values into api_keys, security, or admin
-        sections based on the env var name.
+        Automatically categorizes values using categorize_setting() which
+        determines the section (api_keys, security, or admin) based on
+        the env var name patterns.
 
         Args:
             env_values: Dict of env_var_name -> value
 
         Returns:
-            Dict with counts: {"api_keys": n, "security": n, "admin": n}
+            Dict with counts per category: {"api_keys": n, "security": n, "admin": n}
         """
-        api_keys_updates = {}
-        security_updates = {}
-        admin_updates = {}
+        # Group values by category (uses categorize_setting directly)
+        by_category: Dict[str, Dict[str, str]] = {}
 
         for name, value in env_values.items():
             if not value or value.startswith('***'):
@@ -628,29 +673,18 @@ class SettingsStore:
             category = categorize_setting(name)
             key = name.lower()
 
-            if category == 'admin':
-                admin_updates[key] = value
-            elif category == 'api_keys':
-                api_keys_updates[key] = value
-            else:
-                security_updates[key] = value
+            if category not in by_category:
+                by_category[category] = {}
+            by_category[category][key] = value
 
         # Build and apply updates
-        updates = {}
-        if api_keys_updates:
-            updates['api_keys'] = api_keys_updates
-        if security_updates:
-            updates['security'] = security_updates
-        if admin_updates:
-            updates['admin'] = admin_updates
+        if by_category:
+            await self.update(by_category)
 
-        if updates:
-            await self.update(updates)
-
+        # Return counts per category (ensure all expected keys present)
         return {
-            "api_keys": len(api_keys_updates),
-            "security": len(security_updates),
-            "admin": len(admin_updates),
+            category: len(values)
+            for category, values in by_category.items()
         }
 
 

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
 import { Users, CheckCircle, Cpu, Zap, ExternalLink, AlertTriangle, Loader2, Key, ShieldCheck, XCircle, Play, RefreshCw } from 'lucide-react'
 
-import { wizardApi, composeServicesApi, settingsApi, dockerApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
+import { wizardApi, servicesApi, settingsApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
 import { WizardShell, WizardMessage } from '../components/wizard'
@@ -128,7 +128,7 @@ export default function SpeakerRecognitionWizard() {
   // Check container status
   const checkContainerStatus = async () => {
     try {
-      const response = await dockerApi.getServiceInfo('speaker-recognition')
+      const response = await servicesApi.getDockerDetails('speaker-recognition')
       const isRunning = response.data.status === 'running'
       setContainerStatus((prev) => ({
         ...prev,
@@ -151,10 +151,10 @@ export default function SpeakerRecognitionWizard() {
 
     try {
       // First install the service (this creates the container if needed)
-      await composeServicesApi.install('speaker-recognition')
+      await servicesApi.install('speaker-recognition')
 
       // Then start it
-      await dockerApi.startService('speaker-recognition')
+      await servicesApi.startService('speaker-recognition')
 
       // Poll for running status
       let attempts = 0
@@ -163,7 +163,7 @@ export default function SpeakerRecognitionWizard() {
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await dockerApi.getServiceInfo('speaker-recognition')
+          const response = await servicesApi.getDockerDetails('speaker-recognition')
           const isRunning = response.data.status === 'running'
 
           if (isRunning) {
