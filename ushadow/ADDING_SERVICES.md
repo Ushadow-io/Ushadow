@@ -89,7 +89,7 @@ import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
 import { YourIcon, CheckCircle } from 'lucide-react'
 
-import { wizardApi, composeServicesApi } from '../services/api'
+import { wizardApi, servicesApi } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import { SecretInput } from '../components/settings'
@@ -133,7 +133,7 @@ export default function MyServiceWizard() {
   const handleComplete = async () => {
     setIsSubmitting(true)
     try {
-      await composeServicesApi.install('my-service')
+      await servicesApi.install('my-service')
       setMessage({ type: 'success', text: 'Service installed! Redirecting...' })
       setTimeout(() => navigate('/my-service'), 1500)
     } catch (error) {

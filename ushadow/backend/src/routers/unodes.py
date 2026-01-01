@@ -1,6 +1,7 @@
 """UNode management API endpoints."""
 
 import logging
+import os
 from typing import List, Optional
 
 import httpx
@@ -345,6 +346,120 @@ async def get_manager_versions(
             status_code=502,
             detail="Failed to connect to container registry. Please try again later."
         )
+
+
+class ServiceDeployment(BaseModel):
+    """A service deployed on a unode."""
+    name: str
+    display_name: str
+    status: str  # running, stopped, etc.
+    unode_hostname: str
+
+
+class LeaderInfoResponse(BaseModel):
+    """Full leader information for mobile app connection.
+
+    This endpoint returns everything the mobile app needs after connecting:
+    - Leader node details and capabilities
+    - WebSocket streaming URLs for audio
+    - All unodes in the cluster
+    - Services deployed across the cluster
+    """
+    # Leader info
+    hostname: str
+    tailscale_ip: str
+    capabilities: UNodeCapabilities
+    api_port: int = 8000
+
+    # Streaming URLs
+    ws_pcm_url: str  # WebSocket for PCM audio streaming
+    ws_omi_url: str  # WebSocket for OMI format streaming
+
+    # Cluster info
+    unodes: List[UNode]
+    services: List[ServiceDeployment]
+
+
+@router.get("/leader/info", response_model=LeaderInfoResponse)
+async def get_leader_info():
+    """
+    Get full leader information for mobile app connection.
+
+    This is an unauthenticated endpoint that returns leader details
+    for mobile apps that have just connected via QR code.
+    The mobile app uses this to display cluster status and capabilities.
+    """
+    unode_manager = await get_unode_manager()
+
+    # Get the leader unode
+    leader = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
+    if not leader:
+        raise HTTPException(
+            status_code=404,
+            detail="Leader node not found. Cluster may not be initialized."
+        )
+
+    # Get all unodes
+    unodes = await unode_manager.list_unodes()
+
+    # Build streaming URLs using Tailscale hostname (through Tailscale serve)
+    # Format: wss://{tailscale-host}/ws_pcm - routes through Tailscale serve to backend
+    api_port = 8000
+    
+    # Get the full Tailscale hostname from config (e.g., "blue.spangled-kettle.ts.net")
+    tailscale_hostname = None
+    try:
+        import yaml
+        config_path = "/config/tailscale.yaml"
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                tailscale_hostname = config.get('hostname', '')
+    except Exception as e:
+        logger.warning(f"Could not read Tailscale hostname from config: {e}")
+    
+    # Fall back to constructing from environment if config not available
+    if not tailscale_hostname:
+        # Use TAILSCALE_HOSTNAME env var if set, otherwise try to construct it
+        tailscale_hostname = os.environ.get("TAILSCALE_HOSTNAME", "")
+        if not tailscale_hostname and leader.tailscale_ip:
+            # Last resort: use the raw IP (won't work through Tailscale serve)
+            logger.warning("Using raw Tailscale IP - streaming may not work correctly")
+            tailscale_hostname = leader.tailscale_ip
+    
+    # Build secure WebSocket URLs through Tailscale serve
+    # These go through HTTPS port 443 via Tailscale serve, no port needed
+    if tailscale_hostname:
+        ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
+        ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
+    else:
+        # Fallback to old format if we can't determine hostname
+        chronicle_port = int(os.environ.get("CHRONICLE_PORT", "8080"))
+        ws_pcm_url = f"ws://{leader.tailscale_ip}:{chronicle_port}/ws_pcm"
+        ws_omi_url = f"ws://{leader.tailscale_ip}:{chronicle_port}/ws_omi"
+
+    # TODO: Fetch actual service deployments from docker/compose
+    # For now, return services from unode metadata
+    services: List[ServiceDeployment] = []
+    for unode in unodes:
+        for service_name in unode.services:
+            services.append(ServiceDeployment(
+                name=service_name,
+                display_name=service_name.replace("_", " ").title(),
+                status="running",  # TODO: Get actual status
+                unode_hostname=unode.hostname
+            ))
+
+    return LeaderInfoResponse(
+        hostname=leader.hostname,
+        tailscale_ip=leader.tailscale_ip,
+        capabilities=leader.capabilities,
+        api_port=api_port,
+        ws_pcm_url=ws_pcm_url,
+        ws_omi_url=ws_omi_url,
+        unodes=unodes,
+        services=services,
+    )
 
 
 @router.get("/{hostname}", response_model=UNode)

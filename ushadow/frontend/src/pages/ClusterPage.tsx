@@ -64,6 +64,48 @@ interface DiscoveredPeer {
   }
 }
 
+// Leader info from /api/unodes/leader/info
+interface LeaderInfo {
+  hostname: string
+  tailscale_ip: string
+  capabilities: {
+    can_run_docker: boolean
+    can_run_gpu: boolean
+    can_become_leader: boolean
+    available_memory_mb: number
+    available_cpu_cores: number
+    available_disk_gb: number
+  }
+  api_port: number
+  ws_pcm_url: string
+  ws_omi_url: string
+  unodes: Array<{
+    id: string
+    hostname: string
+    tailscale_ip: string
+    status: string
+    role: string
+    platform: string
+    last_seen?: string
+    capabilities?: {
+      can_run_docker: boolean
+      can_run_gpu: boolean
+      can_become_leader: boolean
+      available_memory_mb: number
+      available_cpu_cores: number
+      available_disk_gb: number
+    }
+    services?: string[]
+    manager_version?: string
+  }>
+  services: Array<{
+    name: string
+    display_name: string
+    status: string
+    unode_hostname: string
+  }>
+}
+
 // Response structure from discover peers API
 interface DiscoveredPeersResponse {
   peers: {
@@ -110,6 +152,11 @@ export default function ClusterPage() {
   const [upgradeResult, setUpgradeResult] = useState<{ success: boolean; message: string } | null>(null)
   const [availableVersions, setAvailableVersions] = useState<string[]>(['latest'])
   const [loadingVersions, setLoadingVersions] = useState(false)
+
+  // Leader info modal state
+  const [showLeaderInfoModal, setShowLeaderInfoModal] = useState(false)
+  const [leaderInfo, setLeaderInfo] = useState<LeaderInfo | null>(null)
+  const [loadingLeaderInfo, setLoadingLeaderInfo] = useState(false)
 
   useEffect(() => {
     loadUnodes()
@@ -349,6 +396,22 @@ export default function ClusterPage() {
     }
   }
 
+  // Leader info handler
+  const fetchLeaderInfo = async () => {
+    setLoadingLeaderInfo(true)
+    setShowLeaderInfoModal(true)
+    try {
+      const response = await clusterApi.getLeaderInfo()
+      setLeaderInfo(response.data)
+    } catch (err: any) {
+      console.error('Error fetching leader info:', err)
+      alert(`Failed to fetch leader info: ${err.response?.data?.detail || err.message}`)
+      setShowLeaderInfoModal(false)
+    } finally {
+      setLoadingLeaderInfo(false)
+    }
+  }
+
   const getNodeDeployments = (hostname: string) => {
     return deployments.filter(d => d.unode_hostname === hostname)
   }
@@ -520,7 +583,12 @@ export default function ClusterPage() {
           {unodes.map((node) => {
             const isNodeOffline = node.status !== 'online' && node.status !== 'connecting'
             return (
-            <div key={node.id} className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''}`}>
+            <div 
+              key={node.id} 
+              className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''} ${node.role === 'leader' ? 'cursor-pointer hover:ring-2 hover:ring-warning-400' : ''}`}
+              onClick={node.role === 'leader' ? fetchLeaderInfo : undefined}
+              data-testid={`node-card-${node.hostname}`}
+            >
               {/* Node Header */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center space-x-3">
@@ -1222,6 +1290,166 @@ export default function ClusterPage() {
         </div>,
         document.body
       )}
+
+      {/* Leader Info Modal */}
+      <Modal
+        isOpen={showLeaderInfoModal}
+        onClose={() => { setShowLeaderInfoModal(false); setLeaderInfo(null); }}
+        title="Leader Node Info"
+        titleIcon={
+          <div className="p-2 rounded-lg bg-warning-100 dark:bg-warning-900/30">
+            <Server className="h-6 w-6 text-warning-600 dark:text-warning-400" />
+          </div>
+        }
+        maxWidth="2xl"
+        testId="leader-info-modal"
+      >
+        {loadingLeaderInfo ? (
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw className="h-8 w-8 animate-spin text-primary-500" />
+          </div>
+        ) : leaderInfo ? (
+          <div className="space-y-6">
+            {/* Basic Info */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">Hostname</p>
+                <p className="font-medium text-neutral-900 dark:text-neutral-100">{leaderInfo.hostname}</p>
+              </div>
+              <div>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">Tailscale IP</p>
+                <p className="font-mono text-neutral-900 dark:text-neutral-100">{leaderInfo.tailscale_ip}</p>
+              </div>
+              <div>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">API Port</p>
+                <p className="font-mono text-neutral-900 dark:text-neutral-100">{leaderInfo.api_port}</p>
+              </div>
+            </div>
+
+            {/* Capabilities */}
+            <div>
+              <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-3">Capabilities</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">CPU Cores</p>
+                  <p className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">{leaderInfo.capabilities.available_cpu_cores}</p>
+                </div>
+                <div className="bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">Memory</p>
+                  <p className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">{formatBytes(leaderInfo.capabilities.available_memory_mb)}</p>
+                </div>
+                <div className="bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">Disk</p>
+                  <p className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">{leaderInfo.capabilities.available_disk_gb.toFixed(0)} GB</p>
+                </div>
+                <div className="flex items-center space-x-2 bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  {leaderInfo.capabilities.can_run_docker ? (
+                    <CheckCircle className="h-5 w-5 text-success-500" />
+                  ) : (
+                    <XCircle className="h-5 w-5 text-neutral-400" />
+                  )}
+                  <span className="text-sm text-neutral-700 dark:text-neutral-300">Docker</span>
+                </div>
+                <div className="flex items-center space-x-2 bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  {leaderInfo.capabilities.can_run_gpu ? (
+                    <CheckCircle className="h-5 w-5 text-success-500" />
+                  ) : (
+                    <XCircle className="h-5 w-5 text-neutral-400" />
+                  )}
+                  <span className="text-sm text-neutral-700 dark:text-neutral-300">GPU</span>
+                </div>
+              </div>
+            </div>
+
+            {/* WebSocket URLs */}
+            <div>
+              <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-3">Streaming URLs</h3>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  <div>
+                    <p className="text-xs text-neutral-500 dark:text-neutral-400">PCM Audio Stream</p>
+                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 break-all">{leaderInfo.ws_pcm_url}</p>
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(leaderInfo.ws_pcm_url, 'ws_pcm')}
+                    className="p-2 text-neutral-500 hover:text-primary-600 rounded"
+                  >
+                    {copied === 'ws_pcm' ? <Check className="h-4 w-4 text-success-500" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                  <div>
+                    <p className="text-xs text-neutral-500 dark:text-neutral-400">OMI Format Stream</p>
+                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 break-all">{leaderInfo.ws_omi_url}</p>
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(leaderInfo.ws_omi_url, 'ws_omi')}
+                    className="p-2 text-neutral-500 hover:text-primary-600 rounded"
+                  >
+                    {copied === 'ws_omi' ? <Check className="h-4 w-4 text-success-500" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Cluster Nodes */}
+            <div>
+              <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-3">
+                Cluster Nodes ({leaderInfo.unodes.length})
+              </h3>
+              <div className="space-y-2">
+                {leaderInfo.unodes.map((unode) => (
+                  <div key={unode.id} className="flex items-center justify-between bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-2 h-2 rounded-full ${unode.status === 'online' ? 'bg-success-500' : 'bg-neutral-400'}`} />
+                      <div>
+                        <p className="font-medium text-neutral-900 dark:text-neutral-100">{unode.hostname}</p>
+                        <p className="text-xs text-neutral-500 dark:text-neutral-400">{unode.tailscale_ip} • {unode.role}</p>
+                      </div>
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded ${unode.status === 'online' ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400' : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-600 dark:text-neutral-300'}`}>
+                      {unode.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Services */}
+            {leaderInfo.services.length > 0 && (
+              <div>
+                <h3 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-3">
+                  Deployed Services ({leaderInfo.services.length})
+                </h3>
+                <div className="space-y-2">
+                  {leaderInfo.services.map((service, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
+                      <div>
+                        <p className="font-medium text-neutral-900 dark:text-neutral-100">{service.display_name}</p>
+                        <p className="text-xs text-neutral-500 dark:text-neutral-400">on {service.unode_hostname}</p>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded ${service.status === 'running' ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400' : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-600 dark:text-neutral-300'}`}>
+                        {service.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end mt-6">
+              <button
+                onClick={() => { setShowLeaderInfoModal(false); setLeaderInfo(null); }}
+                className="btn-secondary"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-neutral-500 dark:text-neutral-400 text-center py-8">No leader info available</p>
+        )}
+      </Modal>
     </div>
   )
 }

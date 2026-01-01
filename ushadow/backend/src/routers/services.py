@@ -392,6 +392,29 @@ async def resolve_env_vars(
     return result
 
 
+@router.get("/{name}/env-export")
+async def export_env_vars(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Export environment variables for local development.
+
+    Returns unmasked values suitable for running services locally.
+    Use env_content for .env file format or env_vars for dict.
+
+    Example usage:
+        curl -H "Authorization: Bearer $TOKEN" \\
+            http://localhost:8050/api/services/chronicle-backend/env-export \\
+            | jq -r '.env_content' > .env.chronicle
+    """
+    result = await orchestrator.export_env_vars(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
 # =============================================================================
 # Installation Endpoints
 # =============================================================================

@@ -98,7 +98,7 @@ function QuickstartWizardContent() {
 
   // Get capabilities that need configuration (have missing keys)
   const getCapabilitiesNeedingSetup = (): CapabilityRequirement[] => {
-    if (!quickstartConfig) return []
+    if (!quickstartConfig || !quickstartConfig.required_capabilities) return []
     return quickstartConfig.required_capabilities.filter(cap => !cap.configured && cap.missing_keys.length > 0)
   }
 

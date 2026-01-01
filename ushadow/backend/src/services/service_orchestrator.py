@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Well-known env var to settings path mappings
+# =============================================================================
+# These env vars are automatically resolved from settings if not configured
+WELL_KNOWN_ENV_MAPPINGS = {
+    "AUTH_SECRET_KEY": "security.auth_secret_key",
+    "ADMIN_PASSWORD": "security.admin_password",
+}
+
+
+# =============================================================================
 # Response Models (dataclasses for internal use, converted to dict for API)
 # =============================================================================
 
@@ -553,6 +563,14 @@ class ServiceOrchestrator:
             elif source == "default":
                 if ev.has_default:
                     resolved[ev.name] = f"(default: {ev.default_value})"
+                elif ev.name in WELL_KNOWN_ENV_MAPPINGS:
+                    # Auto-resolve well-known env vars from settings
+                    settings_path = WELL_KNOWN_ENV_MAPPINGS[ev.name]
+                    value = await self.settings.get(settings_path)
+                    if value:
+                        resolved[ev.name] = self._mask_sensitive(ev.name, str(value))
+                    elif ev.is_required:
+                        missing.append(f"{ev.name} (setting '{settings_path}' is empty)")
                 elif ev.is_required:
                     missing.append(f"{ev.name} (no default, not configured)")
 
@@ -561,6 +579,67 @@ class ServiceOrchestrator:
             "ready": len(missing) == 0,
             "resolved": resolved,
             "missing": missing,
+            "compose_file": str(service.compose_file),
+        }
+
+    async def export_env_vars(self, name: str, format: str = "env") -> Optional[Dict[str, Any]]:
+        """Export env vars with actual unmasked values for local development.
+
+        Args:
+            name: Service name
+            format: Output format - "env" for .env file format, "dict" for raw dict
+
+        Returns:
+            Dict with env_content (formatted string) and env_vars (dict)
+        """
+        service = self._find_service(name)
+        if not service:
+            return None
+
+        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
+        saved_config = await self.settings.get(config_key) or {}
+
+        env_vars = {}
+        missing = []
+
+        for ev in service.all_env_vars:
+            config = saved_config.get(ev.name, {})
+            if hasattr(config, 'items'):
+                config = dict(config)
+            source = config.get("source", "default")
+
+            value = None
+
+            if source == "setting":
+                setting_path = config.get("setting_path")
+                if setting_path:
+                    value = await self.settings.get(setting_path)
+
+            elif source == "literal":
+                value = config.get("value")
+
+            elif source == "default":
+                if ev.has_default:
+                    value = ev.default_value
+                elif ev.name in WELL_KNOWN_ENV_MAPPINGS:
+                    settings_path = WELL_KNOWN_ENV_MAPPINGS[ev.name]
+                    value = await self.settings.get(settings_path)
+
+            if value is not None:
+                env_vars[ev.name] = str(value)
+            elif ev.is_required:
+                missing.append(ev.name)
+
+        # Format as .env file content
+        env_lines = [f"{k}={v}" for k, v in sorted(env_vars.items())]
+        env_content = "\n".join(env_lines)
+
+        return {
+            "service_id": service.service_id,
+            "ready": len(missing) == 0,
+            "missing": missing,
+            "env_vars": env_vars,
+            "env_content": env_content,
             "compose_file": str(service.compose_file),
         }
 

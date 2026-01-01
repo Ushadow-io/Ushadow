@@ -2,7 +2,9 @@
 # Quick commands for development and deployment
 # should use a function in a python file in scripts folder for anything complex
 
-.PHONY: help up down restart logs build clean test go install status health dev prod
+.PHONY: help up down restart logs build clean test go install status health dev prod \
+        svc-list svc-restart svc-start svc-stop svc-status \
+        chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev
 
 # Default target
 help:
@@ -28,6 +30,19 @@ help:
 	@echo "  make infra-down   - Stop infrastructure"
 	@echo "  make chronicle-up - Start Chronicle backend"
 	@echo "  make chronicle-down - Stop Chronicle backend"
+	@echo ""
+	@echo "Chronicle local development:"
+	@echo "  make chronicle-env-export   - Export env vars to .env.chronicle"
+	@echo "  make chronicle-build-local  - Build Chronicle from local source"
+	@echo "  make chronicle-up-local     - Run Chronicle with local build"
+	@echo "  make chronicle-down-local   - Stop local Chronicle"
+	@echo "  make chronicle-dev          - Build + run (full dev cycle)"
+	@echo ""
+	@echo "Service management (via ushadow API):"
+	@echo "  make svc-list           - List all services and their status"
+	@echo "  make restart-<service>  - Restart a service (e.g., make restart-chronicle)"
+	@echo "  make svc-start SVC=x    - Start a service"
+	@echo "  make svc-stop SVC=x     - Stop a service"
 	@echo ""
 	@echo "Development commands:"
 	@echo "  make install      - Install Python dependencies"
@@ -118,6 +133,75 @@ chronicle-down:
 
 chronicle-logs:
 	docker compose -f deployment/docker-compose.chronicle.yml logs -f
+
+# Chronicle local development
+# Export env vars from ushadow's config for local Chronicle builds
+chronicle-env-export:
+	@echo "📦 Exporting Chronicle env vars..."
+	@python3 scripts/ushadow_client.py service env-export chronicle-backend -o .env.chronicle
+	@echo "✅ Env vars exported to .env.chronicle"
+
+# Build Chronicle from local source
+chronicle-build-local:
+	@echo "🔨 Building Chronicle from local source..."
+	@docker build -t chronicle-backend-local:latest chronicle/backends/advanced
+	@docker tag chronicle-backend-local:latest ghcr.io/ushadow-io/chronicle-backend:local
+	@echo "✅ Built and tagged as ghcr.io/ushadow-io/chronicle-backend:local"
+
+# Run Chronicle with local build using exported env vars
+chronicle-up-local: chronicle-env-export
+	@echo "🚀 Starting Chronicle with local build..."
+	@docker network create infra-network 2>/dev/null || true
+	@export $$(grep -v '^#' .env.chronicle | xargs) && \
+		docker run -d --rm \
+			--name ushadow-chronicle-backend-local \
+			--network infra-network \
+			-p $${CHRONICLE_PORT:-8080}:8000 \
+			--env-file .env.chronicle \
+			-e PROJECT_ROOT=$(PWD) \
+			-v $(PWD)/config/config.yml:/app/config.yml:ro \
+			ghcr.io/ushadow-io/chronicle-backend:local
+	@echo "✅ Chronicle running locally on port $${CHRONICLE_PORT:-8080}"
+
+# Stop local Chronicle
+chronicle-down-local:
+	@echo "🛑 Stopping local Chronicle..."
+	@docker stop ushadow-chronicle-backend-local 2>/dev/null || true
+	@echo "✅ Chronicle stopped"
+
+# Full local development cycle: build and run
+chronicle-dev: chronicle-build-local chronicle-up-local
+	@echo "🎉 Chronicle dev environment ready"
+
+# =============================================================================
+# Service Management (via ushadow API)
+# =============================================================================
+# These commands use the ushadow API to manage services, ensuring env vars
+# are properly resolved and injected by the ushadow backend.
+
+svc-list:
+	@python3 scripts/ushadow_client.py service list
+
+svc-restart:
+	@if [ -z "$(SVC)" ]; then echo "Usage: make svc-restart SVC=<service-name>"; exit 1; fi
+	@python3 scripts/ushadow_client.py service restart $(SVC)
+
+svc-start:
+	@if [ -z "$(SVC)" ]; then echo "Usage: make svc-start SVC=<service-name>"; exit 1; fi
+	@python3 scripts/ushadow_client.py service start $(SVC)
+
+svc-stop:
+	@if [ -z "$(SVC)" ]; then echo "Usage: make svc-stop SVC=<service-name>"; exit 1; fi
+	@python3 scripts/ushadow_client.py service stop $(SVC)
+
+svc-status:
+	@if [ -z "$(SVC)" ]; then echo "Usage: make svc-status SVC=<service-name>"; exit 1; fi
+	@python3 scripts/ushadow_client.py service status $(SVC)
+
+# Generic service restart pattern: make restart-<service>
+# e.g., make restart-chronicle, make restart-speaker
+restart-%:
+	@python3 scripts/ushadow_client.py service restart $*
 
 # Status and health
 status:

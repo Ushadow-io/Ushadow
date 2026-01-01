@@ -57,6 +57,7 @@ export default function TailscaleWizard() {
 
   // Container state
   const [containerStatus, setContainerStatus] = useState<ContainerStatus | null>(null)
+  const [caddyRunning, setCaddyRunning] = useState(false)
   const [authData, setAuthData] = useState<AuthUrlResponse | null>(null)
   const [pollingAuth, setPollingAuth] = useState(false)
 
@@ -108,6 +109,17 @@ export default function TailscaleWizard() {
       const response = await tailscaleApi.getContainerStatus()
       setContainerStatus(response.data)
 
+      // Also check Caddy status
+      try {
+        const caddyResponse = await tailscaleApi.getCaddyStatus()
+        setCaddyRunning(caddyResponse.data.running)
+        if (caddyResponse.data.running) {
+          setConfig(prev => ({ ...prev, use_caddy_proxy: true }))
+        }
+      } catch {
+        setCaddyRunning(false)
+      }
+
       if (response.data.running) {
         setMessage({ type: 'success', text: 'Tailscale container is running!' })
       }
@@ -122,11 +134,30 @@ export default function TailscaleWizard() {
     setLoading(true)
     setMessage(null)
     try {
-      await tailscaleApi.startContainer()
+      // Start both Tailscale and Caddy for full reverse proxy support
+      const response = await tailscaleApi.startContainerWithCaddy()
       await checkContainerStatus()
-      setMessage({ type: 'success', text: 'Tailscale container started successfully!' })
+
+      // Check if Caddy started successfully
+      if (response.data.details?.caddy?.status === 'running' ||
+          response.data.details?.caddy?.status === 'started' ||
+          response.data.details?.caddy?.status === 'created') {
+        setCaddyRunning(true)
+        setConfig(prev => ({ ...prev, use_caddy_proxy: true }))
+        setMessage({ type: 'success', text: 'Tailscale and Caddy started successfully!' })
+      } else {
+        setMessage({ type: 'success', text: 'Tailscale started (Caddy status: ' + response.data.details?.caddy?.status + ')' })
+      }
     } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to start container') })
+      // Fallback to just Tailscale if Caddy fails
+      try {
+        await tailscaleApi.startContainer()
+        await checkContainerStatus()
+        setCaddyRunning(false)
+        setMessage({ type: 'success', text: 'Tailscale container started (Caddy not available)' })
+      } catch (fallbackErr) {
+        setMessage({ type: 'error', text: getErrorMessage(fallbackErr, 'Failed to start container') })
+      }
     } finally {
       setLoading(false)
     }
@@ -274,8 +305,23 @@ export default function TailscaleWizard() {
         return false
       }
 
-      setMessage({ type: 'info', text: 'Configuring routing...' })
+      setMessage({ type: 'info', text: 'Configuring routing through Caddy...' })
 
+      // Try Caddy routing first (supports /chronicle/* path routing)
+      try {
+        const caddyResponse = await tailscaleApi.configureCaddyRouting()
+        if (caddyResponse.data.status === 'configured') {
+          setCertificateProvisioned(true)
+          updateServiceStatus('tailscale', { configured: true, running: true })
+          markPhaseComplete('tailscale')
+          setMessage({ type: 'success', text: 'HTTPS access configured with Caddy reverse proxy!' })
+          return true
+        }
+      } catch (caddyErr) {
+        console.log('Caddy routing not available, falling back to direct Tailscale Serve')
+      }
+
+      // Fallback to direct Tailscale Serve routes
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
@@ -468,28 +514,55 @@ export default function TailscaleWizard() {
 
           {containerStatus && (
             <div className="space-y-2">
-              <StatusItem label="Container Exists" status={containerStatus.exists} />
-              <StatusItem label="Container Running" status={containerStatus.running} />
+              <StatusItem label="Tailscale Container" status={containerStatus.running} />
+              <StatusItem label="Caddy Reverse Proxy" status={caddyRunning} />
             </div>
           )}
 
           {!containerStatus?.running && (
             <button
               id="start-tailscale-container"
+              data-testid="start-tailscale-container"
               onClick={startContainer}
               disabled={loading}
               className="btn-primary flex items-center gap-2"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Server className="w-4 h-4" />}
-              Start Tailscale Container
+              Start Tailscale & Caddy
             </button>
           )}
 
           {containerStatus?.running && (
-            <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
+            <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg space-y-2">
               <p className="text-sm text-green-800 dark:text-green-200">
                 Tailscale container is running and ready for authentication
               </p>
+              {caddyRunning && (
+                <p className="text-sm text-green-700 dark:text-green-300">
+                  Caddy reverse proxy is active for multi-service routing
+                </p>
+              )}
+              {!caddyRunning && (
+                <button
+                  data-testid="start-caddy-only"
+                  onClick={async () => {
+                    setLoading(true)
+                    try {
+                      await tailscaleApi.startCaddy()
+                      await checkContainerStatus()
+                      setMessage({ type: 'success', text: 'Caddy started!' })
+                    } catch (err) {
+                      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to start Caddy') })
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  disabled={loading}
+                  className="mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  {loading ? 'Starting...' : 'Start Caddy reverse proxy'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -750,15 +823,15 @@ export default function TailscaleWizard() {
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                Caddy reverse proxy for multi-service routing
+              </li>
+              <li className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
                 HTTPS certificate provisioned
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                Tailscale Serve routing configured
-              </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                Secure access enabled
+                Service routes: /chronicle/*, /api/*, /*
               </li>
             </ul>
           </div>
