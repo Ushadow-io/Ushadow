@@ -30,8 +30,6 @@ from src.services.docker_manager import (
 from src.config.omegaconf_settings import (
     get_settings_store,
     SettingsStore,
-    SettingSuggestion,
-    env_var_matches_setting,
 )
 from src.services.provider_registry import get_provider_registry
 
@@ -452,10 +450,11 @@ class ServiceOrchestrator:
         config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
         saved_config = await self.settings.get(config_key) or {}
 
-        required_vars = await self._build_env_var_list(
+        # Delegate to settings store for env var resolution
+        required_vars = await self.settings.build_env_var_config(
             schema.required_env_vars, saved_config, schema.requires, provider_registry, is_required=True
         )
-        optional_vars = await self._build_env_var_list(
+        optional_vars = await self.settings.build_env_var_config(
             schema.optional_env_vars, saved_config, schema.requires, provider_registry, is_required=False
         )
 
@@ -767,85 +766,6 @@ class ServiceOrchestrator:
                     return True
 
         return False
-
-    async def _build_env_var_list(
-        self,
-        env_vars: List[EnvVarConfig],
-        saved_config: Dict,
-        requires: List[str],
-        provider_registry,
-        is_required: bool
-    ) -> List[Dict[str, Any]]:
-        """Build env var list with suggestions and resolved values."""
-        result = []
-
-        for ev in env_vars:
-            saved = saved_config.get(ev.name, {})
-            if hasattr(saved, 'items'):
-                saved = dict(saved)
-
-            suggestions = await self.settings.get_suggestions_for_env_var(
-                ev.name, provider_registry, requires
-            )
-
-            source = saved.get("source", "default")
-            setting_path = saved.get("setting_path")
-            value = saved.get("value")
-
-            # Auto-map if no saved config and a matching suggestion with value exists
-            if source == "default" and not setting_path:
-                auto_match = self._find_auto_match(ev.name, suggestions)
-                if auto_match:
-                    source = "setting"
-                    setting_path = auto_match.path
-
-            resolved = await self._resolve_env_value(source, setting_path, value, ev.default_value, ev.name)
-
-            result.append({
-                "name": ev.name,
-                "is_required": is_required,
-                "has_default": ev.has_default,
-                "default_value": ev.default_value,
-                "source": source,
-                "setting_path": setting_path,
-                "value": value,
-                "resolved_value": resolved,
-                "suggestions": [s.to_dict() for s in suggestions],
-            })
-
-        return result
-
-    def _find_auto_match(self, env_name: str, suggestions: List[SettingSuggestion]) -> Optional[SettingSuggestion]:
-        """Find a suggestion that matches the env var name and has a value."""
-        for s in suggestions:
-            if not s.has_value:
-                continue
-            path_parts = s.path.split('.')
-            key_part = path_parts[-1]
-            if env_var_matches_setting(env_name, key_part):
-                return s
-        return None
-
-    async def _resolve_env_value(
-        self,
-        source: str,
-        setting_path: Optional[str],
-        value: Optional[str],
-        default_value: Optional[str],
-        env_name: str = ""
-    ) -> Optional[str]:
-        """Resolve env var value based on source."""
-        if source == "setting" and setting_path:
-            return await self.settings.get(setting_path)
-        elif source == "literal" and value:
-            return value
-        elif source == "default":
-            if env_name:
-                resolved = await self.settings.get_by_env_var(env_name)
-                if resolved:
-                    return resolved
-            return default_value
-        return None
 
     def _mask_sensitive(self, name: str, value: str) -> str:
         """Mask sensitive values in output."""
