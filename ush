@@ -1,0 +1,20 @@
+#!/bin/bash
+# ushadow CLI - short wrapper for ushadow_client.py
+# Usage:
+#   ./ush get /api/services/          # API call (default)
+#   ./ush post /api/services/x/start  # API call
+#   ./ush svc list                    # Service commands
+#   ./ush health                      # Health check
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# If first arg looks like an HTTP method, treat as API call
+arg1=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+case "$arg1" in
+  get|post|put|delete|patch)
+    exec python3 "$SCRIPT_DIR/scripts/ushadow_client.py" api "$@"
+    ;;
+  *)
+    exec python3 "$SCRIPT_DIR/scripts/ushadow_client.py" "$@"
+    ;;
+esac
