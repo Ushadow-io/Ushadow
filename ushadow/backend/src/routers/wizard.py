@@ -452,10 +452,13 @@ async def save_quickstart_config(key_values: Dict[str, str]) -> Dict[str, Any]:
 
 @router.get("/setup-state")
 async def get_setup_state() -> Dict[str, Any]:
-    """Get persisted wizard/setup state."""
+    """Get persisted wizard state.
+    
+    Returns wizard progress from config.overrides.yaml → wizard section.
+    """
     from omegaconf import OmegaConf
     settings = get_settings_store()
-    state = await settings.get("setup_state", {})
+    state = await settings.get("wizard", {})
     # Convert OmegaConf to plain dict for JSON serialization
     if state and hasattr(state, '_content'):
         return OmegaConf.to_container(state, resolve=True)
@@ -464,7 +467,7 @@ async def get_setup_state() -> Dict[str, Any]:
 
 @router.put("/setup-state")
 async def save_setup_state(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Save wizard/setup state to backend."""
+    """Save wizard state to config.overrides.yaml → wizard section."""
     settings = get_settings_store()
-    await settings.update({"setup_state": state})
+    await settings.update({"wizard": state})
     return {"success": True}

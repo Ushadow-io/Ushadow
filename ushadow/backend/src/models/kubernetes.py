@@ -101,8 +101,8 @@ class KubernetesDeploymentSpec(BaseModel):
     )
 
 
-class DeploymentTarget(BaseModel):
-    """Represents where a service should be deployed."""
+class DeploymentTarget_not_used(BaseModel):
+    """Represents where a service should be deployed. NOT IN USE - for future hybrid deployments."""
 
     type: str = Field(..., description="Target type: 'docker' or 'kubernetes'")
     id: str = Field(..., description="Target identifier (hostname or cluster_id)")

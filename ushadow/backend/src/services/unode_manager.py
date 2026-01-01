@@ -16,7 +16,7 @@ from aiohttp import UnixConnector
 from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
-from src.config.infra_settings import get_infra_settings
+from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import get_auth_secret_key
 from src.models.unode import (
     UNode,
@@ -32,7 +32,10 @@ from src.models.unode import (
 )
 
 logger = logging.getLogger(__name__)
-infra = get_infra_settings()
+config = get_settings_store()
+
+# Get backend port from OmegaConf (sync for module-level access)
+BACKEND_PORT = config.get_sync("network.backend_public_port") or 8000
 
 # =============================================================================
 # Constants
@@ -236,7 +239,7 @@ class UNodeManager:
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
         # Use BACKEND_PORT (external mapped port) for join URLs, not PORT (internal)
-        leader_port = infra.BACKEND_PORT
+        leader_port = BACKEND_PORT
 
         # Standard join commands (require Tailscale already connected)
         join_command = f'curl -sL "http://{leader_host}:{leader_port}/api/unodes/join/{token}" | sh'
@@ -285,7 +288,7 @@ class UNodeManager:
         if not leader_host:
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        leader_port = infra.BACKEND_PORT
+        leader_port = BACKEND_PORT
 
         script = f'''#!/bin/sh
 # Ushadow UNode Bootstrap Script
@@ -337,7 +340,7 @@ curl -sL "$LEADER_URL/api/unodes/join/$TOKEN" | sh
         if not leader_host:
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        leader_port = infra.BACKEND_PORT
+        leader_port = BACKEND_PORT
 
         script = f'''# Ushadow UNode Bootstrap - All-in-one installer
 # Just run: iex (iwr "http://LEADER:8000/api/unodes/bootstrap/TOKEN/ps1").Content
@@ -1114,7 +1117,7 @@ Write-Host ""
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
         # Use BACKEND_PORT (external mapped port) for join URLs
-        leader_port = infra.BACKEND_PORT
+        leader_port = BACKEND_PORT
 
         script = f'''#!/bin/sh
 # Ushadow UNode Join Script
@@ -1377,7 +1380,7 @@ echo ""
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
         # Use BACKEND_PORT (external mapped port) for join URLs
-        leader_port = infra.BACKEND_PORT
+        leader_port = BACKEND_PORT
 
         script = f'''# Ushadow UNode Join Script (PowerShell)
 # Generated: {datetime.now(timezone.utc).isoformat()}

@@ -14,7 +14,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from omegaconf import OmegaConf
 
-from src.config.infra_settings import get_infra_settings
 from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import mask_dict_secrets
 from src.services.compose_registry import get_compose_registry
@@ -22,7 +21,7 @@ from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-infra = get_infra_settings()
+config = get_settings_store()
 
 
 class SettingsResponse(BaseModel):
@@ -34,9 +33,11 @@ class SettingsResponse(BaseModel):
 @router.get("", response_model=SettingsResponse)
 async def get_settings_info():
     """Get current infrastructure settings."""
+    env_name = await config.get("environment.name") or "ushadow"
+    mongodb_database = await config.get("infrastructure.mongodb_database") or "ushadow"
     return SettingsResponse(
-        env_name=infra.ENV_NAME,
-        mongodb_database=infra.MONGODB_DATABASE,
+        env_name=env_name,
+        mongodb_database=mongodb_database,
     )
 
 

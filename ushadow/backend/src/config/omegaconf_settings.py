@@ -17,6 +17,7 @@ from typing import Any, Optional, List, Tuple, Dict
 
 from omegaconf import OmegaConf, DictConfig
 
+from src.config.secrets import SENSITIVE_PATTERNS, is_secret_key, mask_value
 from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
@@ -84,8 +85,9 @@ class SettingSuggestion:
 # Constants
 # =============================================================================
 
-# Patterns that indicate a secret value
-SECRET_PATTERNS = ['key', 'secret', 'password', 'token', 'credential', 'auth']
+# Use SENSITIVE_PATTERNS from secrets.py as the single source of truth
+# Alias for backward compatibility within this module
+SECRET_PATTERNS = SENSITIVE_PATTERNS
 
 # Patterns that indicate a URL value
 URL_PATTERNS = ['url', 'endpoint', 'host', 'uri']
@@ -122,12 +124,23 @@ def categorize_setting(name: str) -> str:
 
 
 def mask_secret_value(value: str, path: str) -> str:
-    """Mask a secret value, showing only last 4 chars."""
+    """
+    Mask a secret value if the path indicates sensitive data.
+
+    Uses is_secret_key() from secrets.py to determine if masking is needed,
+    then mask_value() to perform the masking.
+
+    Args:
+        value: The value to potentially mask
+        path: The setting path (e.g., "api_keys.openai_api_key")
+
+    Returns:
+        Masked value if path indicates sensitive data, original value otherwise
+    """
     if not value:
         return ""
-    is_secret = any(s in path.lower() for s in SECRET_PATTERNS)
-    if is_secret and len(value) > 4:
-        return "••••" + value[-4:]
+    if is_secret_key(path):
+        return mask_value(value).replace("****", "••••")  # Use bullet style
     return value
 
 
@@ -165,15 +178,14 @@ class SettingsStore:
 
         self.config_dir = Path(config_dir)
 
-        # File paths
+        # File paths (merge order: defaults → secrets → overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
-        self.service_defaults_path = self.config_dir / "default-services.yaml"
         self.secrets_path = self.config_dir / "secrets.yaml"
-        self.settings_path = self.config_dir / "config_settings.yaml"
+        self.overrides_path = self.config_dir / "config.overrides.yaml"
 
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
-        self.cache_ttl: int = 5  # seconds
+        self.cache_ttl: int = 5  # seconds  # seconds
 
     def clear_cache(self) -> None:
         """Clear the configuration cache, forcing reload on next access."""
@@ -194,6 +206,11 @@ class SettingsStore:
         """
         Load merged configuration from all sources.
 
+        Merge order (later overrides earlier):
+        1. config.defaults.yaml - All default values
+        2. secrets.yaml - API keys, passwords (gitignored)
+        3. config.overrides.yaml - User modifications (gitignored)
+
         Returns:
             OmegaConf DictConfig with all values merged
         """
@@ -211,17 +228,13 @@ class SettingsStore:
             configs.append(cfg)
             logger.debug(f"Loaded defaults from {self.defaults_path}")
 
-        if cfg := self._load_yaml_if_exists(self.service_defaults_path):
-            configs.append(cfg)
-            logger.debug(f"Loaded service defaults from {self.service_defaults_path}")
-
         if cfg := self._load_yaml_if_exists(self.secrets_path):
             configs.append(cfg)
             logger.debug(f"Loaded secrets from {self.secrets_path}")
 
-        if cfg := self._load_yaml_if_exists(self.settings_path):
+        if cfg := self._load_yaml_if_exists(self.overrides_path):
             configs.append(cfg)
-            logger.debug(f"Loaded settings from {self.settings_path}")
+            logger.debug(f"Loaded overrides from {self.overrides_path}")
 
         # Merge all configs
         merged = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -257,8 +270,7 @@ class SettingsStore:
         if self._cache is None:
             # Force sync load - _load_yaml_if_exists is already sync
             configs = []
-            for path in [self.defaults_path, self.service_defaults_path,
-                         self.secrets_path, self.settings_path]:
+            for path in [self.defaults_path, self.secrets_path, self.overrides_path]:
                 if cfg := self._load_yaml_if_exists(path):
                     configs.append(cfg)
             self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -267,10 +279,17 @@ class SettingsStore:
 
     async def get_by_env_var(self, env_var_name: str, default: Any = None) -> Any:
         """
-        Get a value by env var name, searching the config tree.
+        Get a VALUE by env var name - simple value lookup.
+
+        Use this when you just need the value and don't care about the path.
+        This is the simpler, faster method for runtime value resolution.
 
         Converts ENV_VAR_NAME -> env_var_name and searches all sections.
-        Example: get_by_env_var("MEMORY_SERVER_URL") finds infrastructure.memory_server_url
+        Example: get_by_env_var("MEMORY_SERVER_URL") → "http://localhost:8765"
+
+        Compare to find_setting_for_env_var():
+        - get_by_env_var(): Returns just the value (for runtime use)
+        - find_setting_for_env_var(): Returns (path, value) tuple (for UI/config)
 
         Args:
             env_var_name: Environment variable name (e.g., "MEMORY_SERVER_URL")
@@ -287,8 +306,7 @@ class SettingsStore:
         """Sync version of get_by_env_var for module-level initialization."""
         if self._cache is None:
             configs = []
-            for path in [self.defaults_path, self.service_defaults_path,
-                         self.secrets_path, self.settings_path]:
+            for path in [self.defaults_path, self.secrets_path, self.overrides_path]:
                 if cfg := self._load_yaml_if_exists(path):
                     configs.append(cfg)
             self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -318,33 +336,48 @@ class SettingsStore:
         self._save_to_file(self.secrets_path, updates)
         self._cache = None
 
-    async def save_to_settings(self, updates: dict) -> None:
+    async def save_to_overrides(self, updates: dict) -> None:
         """
-        Save non-sensitive values to config_settings.yaml.
+        Save non-sensitive values to config.overrides.yaml.
 
         Use for: preferences, selected_providers, feature flags.
         """
-        self._save_to_file(self.settings_path, updates)
+        self._save_to_file(self.overrides_path, updates)
         self._cache = None
 
     def _is_secret_key(self, key: str) -> bool:
-        """Check if a key path should be stored in secrets."""
+        """
+        Check if a key path should be stored in secrets.yaml.
+
+        This extends secrets.is_secret_key() with path-aware logic:
+        - Anything under api_keys.* goes to secrets
+        - security.* paths containing secret/key/password go to secrets
+        - admin.* paths containing password go to secrets
+        - Otherwise, falls back to is_secret_key() pattern matching
+
+        Args:
+            key: Full setting path (e.g., "api_keys.openai_api_key")
+
+        Returns:
+            True if this should be stored in secrets.yaml
+        """
         key_lower = key.lower()
-        # Check if it's in api_keys section or contains secret patterns
+        # Section-based rules (take precedence)
         if key_lower.startswith('api_keys.'):
             return True
         if key_lower.startswith('security.') and any(p in key_lower for p in ['secret', 'key', 'password']):
             return True
         if key_lower.startswith('admin.') and 'password' in key_lower:
             return True
-        return any(p in key_lower for p in SECRET_PATTERNS)
+        # Fall back to pattern matching from secrets.py
+        return is_secret_key(key)
 
     async def update(self, updates: dict) -> None:
         """
-        Update settings, auto-routing to secrets.yaml or config_settings.yaml.
+        Update settings, auto-routing to secrets.yaml or config.overrides.yaml.
 
         Secrets (api_keys, passwords, tokens) go to secrets.yaml.
-        Everything else goes to config_settings.yaml.
+        Everything else goes to config.overrides.yaml.
 
         Args:
             updates: Dict with updates - supports both formats:
@@ -352,7 +385,7 @@ class SettingsStore:
                      - Nested: {"api_keys": {"openai": "sk-..."}}
         """
         secrets_updates = {}
-        settings_updates = {}
+        overrides_updates = {}
 
         for key, value in updates.items():
             if isinstance(value, dict):
@@ -360,18 +393,18 @@ class SettingsStore:
                 if key in ('api_keys', 'admin', 'security'):
                     secrets_updates[key] = value
                 else:
-                    settings_updates[key] = value
+                    overrides_updates[key] = value
             else:
                 # Dot notation or simple key
                 if self._is_secret_key(key):
                     secrets_updates[key] = value
                 else:
-                    settings_updates[key] = value
+                    overrides_updates[key] = value
 
         if secrets_updates:
             await self.save_to_secrets(secrets_updates)
-        if settings_updates:
-            await self.save_to_settings(settings_updates)
+        if overrides_updates:
+            await self.save_to_overrides(overrides_updates)
 
         self._cache = None
 
@@ -406,9 +439,9 @@ class SettingsStore:
         """
         deleted = 0
         
-        if self.settings_path.exists():
-            self.settings_path.unlink()
-            logger.info(f"Reset: deleted {self.settings_path}")
+        if self.overrides_path.exists():
+            self.overrides_path.unlink()
+            logger.info(f"Reset: deleted {self.overrides_path}")
             deleted += 1
         
         if include_secrets and self.secrets_path.exists():
@@ -430,10 +463,20 @@ class SettingsStore:
 
     async def find_setting_for_env_var(self, env_var_name: str) -> Optional[Tuple[str, Any]]:
         """
-        Find a setting path and value that matches an environment variable name.
+        Find a setting PATH and value for an env var - for UI/config purposes.
+
+        Use this when you need to know WHERE a setting is stored, not just its value.
+        This is the more sophisticated method for configuration UIs and suggestions.
 
         Uses provider-derived mapping first for consistency,
         then falls back to fuzzy matching for unmapped env vars.
+
+        Example: find_setting_for_env_var("OPENAI_API_KEY")
+                 → ("api_keys.openai_api_key", "sk-...")
+
+        Compare to get_by_env_var():
+        - get_by_env_var(): Returns just the value (for runtime use)
+        - find_setting_for_env_var(): Returns (path, value) tuple (for UI/config)
 
         Args:
             env_var_name: Environment variable name (e.g., "OPENAI_API_KEY")
@@ -608,18 +651,18 @@ class SettingsStore:
         """
         Save environment variable values to appropriate config sections.
 
-        Automatically categorizes values into api_keys, security, or admin
-        sections based on the env var name.
+        Automatically categorizes values using categorize_setting() which
+        determines the section (api_keys, security, or admin) based on
+        the env var name patterns.
 
         Args:
             env_values: Dict of env_var_name -> value
 
         Returns:
-            Dict with counts: {"api_keys": n, "security": n, "admin": n}
+            Dict with counts per category: {"api_keys": n, "security": n, "admin": n}
         """
-        api_keys_updates = {}
-        security_updates = {}
-        admin_updates = {}
+        # Group values by category (uses categorize_setting directly)
+        by_category: Dict[str, Dict[str, str]] = {}
 
         for name, value in env_values.items():
             if not value or value.startswith('***'):
@@ -628,29 +671,18 @@ class SettingsStore:
             category = categorize_setting(name)
             key = name.lower()
 
-            if category == 'admin':
-                admin_updates[key] = value
-            elif category == 'api_keys':
-                api_keys_updates[key] = value
-            else:
-                security_updates[key] = value
+            if category not in by_category:
+                by_category[category] = {}
+            by_category[category][key] = value
 
         # Build and apply updates
-        updates = {}
-        if api_keys_updates:
-            updates['api_keys'] = api_keys_updates
-        if security_updates:
-            updates['security'] = security_updates
-        if admin_updates:
-            updates['admin'] = admin_updates
+        if by_category:
+            await self.update(by_category)
 
-        if updates:
-            await self.update(updates)
-
+        # Return counts per category (ensure all expected keys present)
         return {
-            "api_keys": len(api_keys_updates),
-            "security": len(security_updates),
-            "admin": len(admin_updates),
+            category: len(values)
+            for category, values in by_category.items()
         }
 
 

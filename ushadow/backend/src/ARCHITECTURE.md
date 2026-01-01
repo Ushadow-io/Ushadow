@@ -71,13 +71,13 @@ This document defines the layer responsibilities for the `src/` directory.
 | Suffix | Use When | Example |
 |--------|----------|---------|
 | `Store` | Read/write to persistent storage (files, DB) | `SettingsStore` |
-| `Settings` | Pydantic settings from environment variables | `InfraSettings` |
 
 **Contains**:
-- Settings classes that load from env vars (`InfraSettings`)
 - Config stores that load/save YAML files (`SettingsStore`)
-- Secret handling utilities
-- YAML parsing utilities
+- Secret handling utilities (`secrets.py`)
+- YAML parsing utilities (`yaml_parser.py`)
+
+**Key Pattern**: All settings come from OmegaConf via `get_settings_store()`. No separate Pydantic Settings class.
 
 ---
 

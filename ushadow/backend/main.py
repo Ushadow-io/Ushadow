@@ -11,12 +11,11 @@ from beanie import init_beanie
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from src.config.infra_settings import get_infra_settings
 from src.models.user import User  # Beanie document model
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
-from src.routers import services, deployments, providers, compose_services
-from src.routers import kubernetes, tailscale, docker_events, unodes, docker
+from src.routers import services, deployments, providers
+from src.routers import kubernetes, tailscale, unodes, docker
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -32,7 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-settings = get_infra_settings()
+# Get settings from OmegaConf (sync access at module level)
+config = get_settings_store()
 
 
 async def check_stale_unodes_task():
@@ -49,9 +49,14 @@ async def check_stale_unodes_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
+    # Get settings from OmegaConf
+    env_name = await config.get("environment.name") or "ushadow"
+    mongodb_uri = await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
+    mongodb_database = await config.get("infrastructure.mongodb_database") or "ushadow"
+
     logger.info("🚀 ushadow starting up...")
-    logger.info(f"Environment: {settings.ENV_NAME}")
-    logger.info(f"MongoDB: {settings.MONGODB_URI}/{settings.MONGODB_DATABASE}")
+    logger.info(f"Environment: {env_name}")
+    logger.info(f"MongoDB: {mongodb_uri}/{mongodb_database}")
 
     # Initialize feature flags
     feature_flag_service = create_feature_flag_service(
@@ -63,8 +68,8 @@ async def lifespan(app: FastAPI):
     logger.info("✓ Feature flags initialized")
 
     # Initialize MongoDB connection
-    client = AsyncIOMotorClient(settings.MONGODB_URI)
-    db = client[settings.MONGODB_DATABASE]
+    client = AsyncIOMotorClient(mongodb_uri)
+    db = client[mongodb_database]
     
     # Initialize Beanie ODM with document models
     await init_beanie(database=db, document_models=[User])
@@ -120,12 +125,10 @@ app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(chronicle.router, prefix="/api/chronicle", tags=["chronicle"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(docker.router, prefix="/api/docker", tags=["docker"])
-app.include_router(docker_events.router, prefix="/api/docker", tags=["docker"])
 app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
-app.include_router(compose_services.router, prefix="/api/compose", tags=["compose"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])

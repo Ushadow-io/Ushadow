@@ -148,18 +148,125 @@ export const settingsApi = {
   deleteServiceConfig: (serviceId: string) => api.delete(`/api/settings/service-configs/${serviceId}`),
 }
 
-// Services endpoints - compose-first service discovery
+// =============================================================================
+// Unified Services API - All service operations go through /api/services
+// =============================================================================
+
 export const servicesApi = {
-  getInstalled: () => api.get('/api/services/installed'),
-  setEnabled: (serviceName: string, enabled: boolean) =>
-    api.put(`/api/services/${serviceName}/enabled`, { enabled }),
-  getEnabledState: (serviceName: string) =>
-    api.get(`/api/services/${serviceName}/enabled`),
-  // Legacy stubs - these features were removed in compose-first migration
-  // TODO: Re-implement catalog and quickstart with compose-first approach
-  getCatalog: () => Promise.resolve({ data: [] }),
-  getQuickstart: () => Promise.resolve({ data: [] }),
-  installService: (_serviceId: string) => Promise.resolve({ data: { success: false, message: 'Service catalog removed - use compose files' } }),
+  // -------------------------------------------------------------------------
+  // Discovery
+  // -------------------------------------------------------------------------
+
+  /** List installed services */
+  getInstalled: () => api.get<ComposeService[]>('/api/services/'),
+
+  /** List all available services (catalog) */
+  getCatalog: () => api.get<ComposeService[]>('/api/services/catalog'),
+
+  /** Get service details */
+  getService: (name: string, includeEnv: boolean = false) =>
+    api.get(`/api/services/${name}`, { params: { include_env: includeEnv } }),
+
+  /** Get services by capability */
+  getByCapability: (capability: string) =>
+    api.get<ComposeService[]>(`/api/services/by-capability/${capability}`),
+
+  // -------------------------------------------------------------------------
+  // Status
+  // -------------------------------------------------------------------------
+
+  /** Check Docker daemon availability */
+  getDockerStatus: () => api.get<{ available: boolean; message: string }>('/api/services/docker-status'),
+
+  /** Get lightweight status for all services (optimized for polling) */
+  getAllStatuses: () => api.get<Record<string, { name: string; status: string; health?: string }>>('/api/services/status'),
+
+  /** Get status for a single service */
+  getServiceStatus: (name: string) => api.get(`/api/services/${name}/status`),
+
+  /** Get Docker container details for a service */
+  getDockerDetails: (name: string) => api.get(`/api/services/${name}/docker`),
+
+  // -------------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------------
+
+  /** Start a service container */
+  startService: (name: string) => api.post<{ success: boolean; message: string }>(`/api/services/${name}/start`),
+
+  /** Stop a service container */
+  stopService: (name: string) => api.post<{ success: boolean; message: string }>(`/api/services/${name}/stop`),
+
+  /** Restart a service container */
+  restartService: (name: string) => api.post<{ success: boolean; message: string }>(`/api/services/${name}/restart`),
+
+  /** Get logs from a service container */
+  getLogs: (name: string, tail: number = 100) =>
+    api.get<{ success: boolean; logs: string }>(`/api/services/${name}/logs`, { params: { tail } }),
+
+  // -------------------------------------------------------------------------
+  // Configuration
+  // -------------------------------------------------------------------------
+
+  /** Get enabled state for a service */
+  getEnabledState: (name: string) => api.get(`/api/services/${name}/enabled`),
+
+  /** Enable or disable a service */
+  setEnabled: (name: string, enabled: boolean) =>
+    api.put(`/api/services/${name}/enabled`, { enabled }),
+
+  /** Get full service configuration */
+  getConfig: (name: string) => api.get(`/api/services/${name}/config`),
+
+  /** Get environment variable configuration with suggestions */
+  getEnvConfig: (name: string) => api.get<{
+    service_id: string
+    service_name: string
+    compose_file: string
+    requires: string[]
+    required_env_vars: EnvVarInfo[]
+    optional_env_vars: EnvVarInfo[]
+  }>(`/api/services/${name}/env`),
+
+  /** Save environment variable configuration */
+  updateEnvConfig: (name: string, envVars: EnvVarConfig[]) =>
+    api.put(`/api/services/${name}/env`, { env_vars: envVars }),
+
+  /** Resolve environment variables for runtime injection */
+  resolveEnv: (name: string) => api.get<{
+    service_id: string
+    ready: boolean
+    resolved: Record<string, string>
+    missing: string[]
+    compose_file: string
+  }>(`/api/services/${name}/resolve`),
+
+  // -------------------------------------------------------------------------
+  // Installation
+  // -------------------------------------------------------------------------
+
+  /** Install a service from the catalog */
+  install: (name: string) =>
+    api.post<{ service_id: string; service_name: string; installed: boolean; message: string }>(
+      `/api/services/${name}/install`
+    ),
+
+  /** Uninstall a service */
+  uninstall: (name: string) =>
+    api.post<{ service_id: string; service_name: string; installed: boolean; message: string }>(
+      `/api/services/${name}/uninstall`
+    ),
+
+  /** Register a dynamic service */
+  register: (config: {
+    service_name: string
+    description?: string
+    service_type?: string
+    endpoints?: Array<{ url: string; integration_type?: string }>
+    user_controllable?: boolean
+    compose_file?: string
+    metadata?: Record<string, any>
+  }) => api.post<{ success: boolean; message: string }>('/api/services/register', config),
 }
 
 // Compose service configuration endpoints
@@ -247,69 +354,20 @@ export interface ComposeService {
   installed?: boolean  // For catalog view - whether service is installed
 }
 
-export const composeServicesApi = {
-  /** List installed compose services */
-  list: () => api.get<ComposeService[]>('/api/compose/services'),
-
-  /** List all available services (catalog) */
-  catalog: () => api.get<ComposeService[]>('/api/compose/catalog'),
-
-  /** Get service details with env vars */
-  get: (serviceId: string) => api.get(`/api/compose/services/${encodeURIComponent(serviceId)}`),
-
-  /** Get env var configuration with suggestions */
-  getEnvConfig: (serviceId: string) => api.get<{
-    service_id: string
-    service_name: string
-    compose_file: string
-    requires: string[]
-    required_env_vars: EnvVarInfo[]
-    optional_env_vars: EnvVarInfo[]
-  }>(`/api/compose/services/${encodeURIComponent(serviceId)}/env`),
-
-  /** Save env var configuration */
-  updateEnvConfig: (serviceId: string, envVars: EnvVarConfig[]) =>
-    api.put(`/api/compose/services/${encodeURIComponent(serviceId)}/env`, { env_vars: envVars }),
-
-  /** Check if service is ready (all required vars resolved) */
-  resolve: (serviceId: string) => api.get<{
-    service_id: string
-    ready: boolean
-    resolved: Record<string, string>
-    missing: string[]
-    compose_file: string
-  }>(`/api/compose/services/${encodeURIComponent(serviceId)}/resolve`),
-
-  /** Install a service from the catalog */
-  install: (serviceId: string) =>
-    api.post<{ service_id: string; service_name: string; installed: boolean; message: string }>(
-      `/api/compose/services/${encodeURIComponent(serviceId)}/install`
-    ),
-
-  /** Uninstall a service */
-  uninstall: (serviceId: string) =>
-    api.post<{ service_id: string; service_name: string; installed: boolean; message: string }>(
-      `/api/compose/services/${encodeURIComponent(serviceId)}/uninstall`
-    ),
-
+// Quickstart wizard endpoints (kept separate from services)
+export const quickstartApi = {
   /** Get quickstart config - capability requirements for default services */
-  getQuickstart: () => api.get<QuickstartConfig>('/api/wizard/quickstart'),
+  getConfig: () => api.get<QuickstartConfig>('/api/wizard/quickstart'),
 
   /** Save quickstart config - save key values (settings_path -> value) */
-  saveQuickstart: (keyValues: Record<string, string>) =>
+  saveConfig: (keyValues: Record<string, string>) =>
     api.post<{ success: boolean; saved: number; message: string }>('/api/wizard/quickstart', keyValues),
 }
 
-// Docker service management endpoints (infrastructure containers)
+// Docker daemon status (minimal - only checks if Docker is available)
 export const dockerApi = {
-  listServices: () => api.get('/api/docker/services'),
-  getServicesStatus: () => api.get('/api/docker/services/status'),
-  getServiceInfo: (serviceName: string) => api.get(`/api/docker/services/${serviceName}`),
-  startService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/start`),
-  stopService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/stop`),
-  restartService: (serviceName: string) => api.post(`/api/docker/services/${serviceName}/restart`),
-  getServiceLogs: (serviceName: string, tail: number = 100) =>
-    api.get(`/api/docker/services/${serviceName}/logs`, { params: { tail } }),
+  /** Check if Docker daemon is available */
+  getStatus: () => api.get<{ available: boolean; message: string }>('/api/docker/status'),
 }
 
 // Users endpoints

@@ -4,8 +4,6 @@ Tests for the secrets module - secret detection and masking utilities.
 
 import pytest
 from pathlib import Path
-import tempfile
-import os
 
 # Add src to path for imports
 import sys
@@ -17,8 +15,6 @@ from config.secrets import (
     mask_if_secret,
     mask_dict_secrets,
     get_auth_secret_key,
-    _load_secrets,
-    _get_secrets_path,
     SENSITIVE_PATTERNS,
 )
 
@@ -241,63 +237,45 @@ class TestMaskDictSecrets:
 
 
 class TestGetAuthSecretKey:
-    """Tests for get_auth_secret_key() function."""
+    """Tests for get_auth_secret_key() function.
 
-    def test_loads_from_valid_secrets_file(self, tmp_path):
-        """Loads auth secret key from valid secrets.yaml."""
-        # Create a temporary secrets.yaml
-        secrets_file = tmp_path / "secrets.yaml"
-        secrets_file.write_text("""
-security:
-  auth_secret_key: "test-secret-key-12345"
-  session_secret: "session-secret"
-""")
+    Note: get_auth_secret_key() now uses OmegaConf settings store,
+    so we mock get_settings_store() instead of file paths.
+    """
 
-        # Temporarily patch the secrets path
-        import config.secrets as secrets_module
-        original_cache = secrets_module._secrets_cache
-        secrets_module._secrets_cache = None
+    def test_loads_from_settings_store(self):
+        """Loads auth secret key from settings store."""
+        from unittest.mock import MagicMock, patch
 
-        # Monkey-patch _get_secrets_path to return our test file
-        original_get_path = secrets_module._get_secrets_path
+        mock_store = MagicMock()
+        mock_store.get_sync.return_value = "test-secret-key-12345"
 
-        def mock_get_path():
-            return secrets_file
-
-        secrets_module._get_secrets_path = mock_get_path
-
-        try:
+        with patch("src.config.omegaconf_settings.get_settings_store", return_value=mock_store):
             key = get_auth_secret_key()
             assert key == "test-secret-key-12345"
-        finally:
-            # Restore
-            secrets_module._get_secrets_path = original_get_path
-            secrets_module._secrets_cache = original_cache
+            mock_store.get_sync.assert_called_once_with("security.auth_secret_key")
 
-    def test_raises_when_key_missing(self, tmp_path):
+    def test_raises_when_key_missing(self):
         """Raises ValueError when auth_secret_key is missing."""
-        secrets_file = tmp_path / "secrets.yaml"
-        secrets_file.write_text("""
-security:
-  session_secret: "session-secret"
-""")
+        from unittest.mock import MagicMock, patch
 
-        import config.secrets as secrets_module
-        original_cache = secrets_module._secrets_cache
-        secrets_module._secrets_cache = None
-        original_get_path = secrets_module._get_secrets_path
+        mock_store = MagicMock()
+        mock_store.get_sync.return_value = None
 
-        def mock_get_path():
-            return secrets_file
-
-        secrets_module._get_secrets_path = mock_get_path
-
-        try:
+        with patch("src.config.omegaconf_settings.get_settings_store", return_value=mock_store):
             with pytest.raises(ValueError, match="AUTH_SECRET_KEY not found"):
                 get_auth_secret_key()
-        finally:
-            secrets_module._get_secrets_path = original_get_path
-            secrets_module._secrets_cache = original_cache
+
+    def test_raises_when_key_empty(self):
+        """Raises ValueError when auth_secret_key is empty string."""
+        from unittest.mock import MagicMock, patch
+
+        mock_store = MagicMock()
+        mock_store.get_sync.return_value = ""
+
+        with patch("src.config.omegaconf_settings.get_settings_store", return_value=mock_store):
+            with pytest.raises(ValueError, match="AUTH_SECRET_KEY not found"):
+                get_auth_secret_key()
 
 
 class TestSensitivePatterns:

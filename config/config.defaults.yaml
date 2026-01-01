@@ -1,12 +1,16 @@
 # Default Configuration
-# Contains general application settings.
+# All application defaults in one place. User overrides go in config.overrides.yaml.
 #
-# DO NOT store secrets in this file - it is committed to git.
-# Sensitive data (API keys, passwords) goes in secrets.yaml.
-# Provider/service selection is in service-defaults.yaml.
+# DO NOT store secrets here - use secrets.yaml for API keys and passwords.
 
 version: 1.0.0
 wizard_completed: false
+
+# Environment Settings
+environment:
+  name: ushadow
+  mode: development  # development | production
+  debug: false
 
 # Authentication Configuration (non-sensitive)
 auth:
@@ -90,3 +94,25 @@ infrastructure:
 misc:
   debug_dir: ./data/debug_dir
   langfuse_enable_telemetry: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Service & Provider Defaults
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Wizard Configuration
+wizard:
+  mode: quickstart  # quickstart | local | custom
+
+# Selected Providers per Capability
+# Services declare `uses: [{capability: llm}]` and get the selected provider's env vars.
+selected_providers:
+  llm: openai              # openai | anthropic | ollama | openai-compatible
+  transcription: deepgram  # deepgram | mistral-voxtral | whisper-local | parakeet
+  memory: openmemory       # openmemory | cognee | mem0-cloud
+
+# Default Services to Install
+# These are installed by default in quickstart mode. User modifications
+# (adds/removes) are tracked in config.overrides.yaml → installed_services.
+default_services:
+  - chronicle-backend
+  - mem0
