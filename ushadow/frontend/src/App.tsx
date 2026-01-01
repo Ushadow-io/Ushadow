@@ -5,6 +5,8 @@ import { AuthProvider } from './contexts/AuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
+import EnvironmentFooter from './components/layout/EnvironmentFooter'
+import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
 
 // Get router basename from Vite build config (for path-based deployments like /wiz/)
 // Runtime detection was removed because it incorrectly treated app routes (/settings, /services)
@@ -46,16 +48,14 @@ import {
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
 import ColorSystemPreview from './components/ColorSystemPreview'
 
-function App() {
+function AppContent() {
+  // Set dynamic favicon based on environment
+  useEnvironmentFavicon()
+
   return (
-    <ErrorBoundary>
-      <ThemeProvider>
-        <AuthProvider>
-          <FeatureFlagsProvider>
-          <WizardProvider>
-          <ChronicleProvider>
-            <BrowserRouter basename={getBasename()}>
-              <Routes>
+    <div className="min-h-screen flex flex-col">
+      <div className="flex-1">
+        <Routes>
      
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
@@ -98,10 +98,26 @@ function App() {
                 {/* Catch-all redirect to dashboard */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
-              </Routes>
-            </BrowserRouter>
-          </ChronicleProvider>
-          </WizardProvider>
+        </Routes>
+      </div>
+      <EnvironmentFooter />
+    </div>
+  )
+}
+
+function App() {
+  return (
+    <ErrorBoundary>
+      <ThemeProvider>
+        <AuthProvider>
+          <FeatureFlagsProvider>
+            <WizardProvider>
+              <ChronicleProvider>
+                <BrowserRouter basename={getBasename()}>
+                  <AppContent />
+                </BrowserRouter>
+              </ChronicleProvider>
+            </WizardProvider>
           </FeatureFlagsProvider>
         </AuthProvider>
       </ThemeProvider>

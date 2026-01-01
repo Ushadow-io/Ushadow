@@ -753,6 +753,10 @@ class DockerManager:
                     except Exception as e:
                         logger.debug(f"CapabilityResolver fallback for {service_name}: {e}")
 
+                # Apply PORT_OFFSET for compose-discovered services in same namespace
+                subprocess_env, container_env = self._apply_port_offset(
+                    service_name, service_config, subprocess_env, container_env
+                )
                 return subprocess_env, container_env
 
             except Exception as e:
