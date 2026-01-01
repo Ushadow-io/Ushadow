@@ -5,6 +5,7 @@ FastAPI application entry point
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from beanie import init_beanie
@@ -49,10 +50,10 @@ async def check_stale_unodes_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
-    # Get settings from OmegaConf
-    env_name = await config.get("environment.name") or "ushadow"
-    mongodb_uri = await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
-    mongodb_database = await config.get("infrastructure.mongodb_database") or "ushadow"
+    # Get settings: OS env vars take priority over OmegaConf YAML
+    env_name = os.environ.get("ENV_NAME") or await config.get("environment.name") or "ushadow"
+    mongodb_uri = os.environ.get("MONGODB_URI") or await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
+    mongodb_database = os.environ.get("MONGODB_DATABASE") or await config.get("infrastructure.mongodb_database") or "ushadow"
 
     logger.info("🚀 ushadow starting up...")
     logger.info(f"Environment: {env_name}")

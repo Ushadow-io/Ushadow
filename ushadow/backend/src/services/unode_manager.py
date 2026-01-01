@@ -304,13 +304,17 @@ class UNodeManager:
         )
 
     def _generate_bootstrap_bash(self, token: str, base_url: str) -> str:
-        """Generate a self-contained bash bootstrap one-liner."""
-        script = f'''curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up && curl -sL "{base_url}/api/unodes/join/{token}" | sh'''
+        """Generate a bash bootstrap command using public bootstrap script."""
+        # Public bootstrap script installs Docker + Tailscale and authenticates
+        # Then we run the join command to register with this cluster
+        script = f'''curl -fsSL https://ushadow.io/bootstrap.sh | bash && curl -sL "{base_url}/api/unodes/join/{token}" | sh'''
         return script
 
     def _generate_bootstrap_powershell(self, token: str, base_url: str) -> str:
-        """Generate a self-contained PowerShell bootstrap one-liner."""
-        script = f'''$ErrorActionPreference="Continue";Write-Host "`n=== Ushadow UNode Bootstrap ===" -FG Cyan;$tsPath="$env:ProgramFiles\\Tailscale\\tailscale.exe";$needRestart=$false;if(!(Get-Command docker -EA 0)){{Write-Host "[1/4] Installing Docker Desktop..." -FG Yellow;if(Get-Command winget -EA 0){{winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements|Out-Null;$needRestart=$true}}else{{Write-Host "Please install Docker Desktop manually: https://docker.com/desktop" -FG Red;exit 1}}}};if(!(Test-Path $tsPath)){{Write-Host "[2/4] Installing Tailscale..." -FG Yellow;if(Get-Command winget -EA 0){{winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements|Out-Null;$needRestart=$true}}else{{Write-Host "Please install Tailscale manually: https://tailscale.com/download" -FG Red;exit 1}}}};if($needRestart){{Write-Host "`n*** Please restart PowerShell and run this command again ***" -FG Yellow;Write-Host "*** Also start Docker Desktop and log in to Tailscale ***" -FG Yellow;exit 0}};Write-Host "[3/4] Checking Tailscale..." -FG Yellow;$connected=$false;for($i=0;$i -lt 30;$i++){{try{{$s=&$tsPath status 2>&1;if($LASTEXITCODE -eq 0){{$connected=$true;break}}}}catch{{}};Write-Host "  Waiting for Tailscale login... ($i/30)" -FG Gray;Start-Sleep 2}};if(!$connected){{Write-Host "Please log in to Tailscale, then re-run." -FG Yellow;exit 0}};Write-Host "[4/4] Joining cluster..." -FG Yellow;iex (iwr "{base_url}/api/unodes/join/{token}/ps1").Content'''
+        """Generate a PowerShell bootstrap command using public bootstrap script."""
+        # Public bootstrap script installs Docker + Tailscale and authenticates
+        # Then we run the join command to register with this cluster
+        script = f'''iex (iwr https://ushadow.io/bootstrap.ps1).Content; iex (iwr "{base_url}/api/unodes/join/{token}/ps1").Content'''
         return script
 
     async def get_bootstrap_script_bash(self, token: str) -> str:

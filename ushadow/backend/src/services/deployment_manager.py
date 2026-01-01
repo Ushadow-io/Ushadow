@@ -17,6 +17,7 @@ from src.models.deployment import (
     Deployment,
     DeploymentStatus,
 )
+from src.services.compose_registry import get_compose_registry
 
 logger = logging.getLogger(__name__)
 
@@ -200,10 +201,26 @@ class DeploymentManager:
         unode_hostname: str
     ) -> Deployment:
         """Deploy a service to a u-node."""
-        # Get service definition from deployment definitions
+        # Get service definition from deployment definitions (MongoDB)
         service = await self.get_service(service_id)
+
+        # If not in MongoDB, try compose registry and create ServiceDefinition
         if not service:
-            raise ValueError(f"Service not found: {service_id}")
+            compose_registry = get_compose_registry()
+            discovered = compose_registry.get_service(service_id)
+            if discovered:
+                # Convert DiscoveredService to ServiceDefinition
+                service = ServiceDefinition(
+                    service_id=discovered.service_id,
+                    name=discovered.service_name,
+                    description=discovered.description or "",
+                    image=discovered.image or "",
+                    ports={},  # Ports are handled by compose file
+                    environment={},  # Environment is handled by compose file
+                )
+                logger.info(f"Using compose registry service: {service_id}")
+            else:
+                raise ValueError(f"Service not found: {service_id}")
 
         # Get u-node
         unode = await self.unodes_collection.find_one({"hostname": unode_hostname})
