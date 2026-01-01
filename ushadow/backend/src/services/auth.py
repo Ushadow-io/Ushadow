@@ -146,7 +146,7 @@ def get_jwt_strategy() -> JWTStrategy:
                 user_id = data.get("sub")
                 if user_id is None:
                     return None
-            except (jwt.JWTError, jwt.ExpiredSignatureError, jwt.JWTClaimsError):
+            except (jwt.exceptions.PyJWTError, jwt.exceptions.ExpiredSignatureError, jwt.exceptions.InvalidAudienceError):
                 # Try again without audience validation for backward compat
                 try:
                     data = jwt.decode(
@@ -158,7 +158,7 @@ def get_jwt_strategy() -> JWTStrategy:
                     user_id = data.get("sub")
                     if user_id is None:
                         return None
-                except jwt.JWTError:
+                except jwt.exceptions.PyJWTError:
                     return None
 
             try:

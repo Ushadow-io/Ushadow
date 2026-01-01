@@ -224,3 +224,4 @@ config/certs
 .playwright-mcp
 config/Caddyfile
 config/tailscale.yaml
+node_modules

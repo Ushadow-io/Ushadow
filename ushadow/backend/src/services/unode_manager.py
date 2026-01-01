@@ -132,31 +132,108 @@ class UNodeManager:
     async def _register_self_as_leader(self):
         """Register the current u-node as the cluster leader."""
         import os
-        import subprocess
 
-        # Use LEADER_HOSTNAME env var, or default to "leader"
-        # This ensures consistent hostname across container restarts
-        hostname = os.environ.get("LEADER_HOSTNAME", "leader")
+        hostname = None
+        tailscale_ip = None
+        status_data = None
 
-        # Try to get Tailscale IP from environment first (for containerized deployments)
-        tailscale_ip = os.environ.get("TAILSCALE_IP")
-
-        if not tailscale_ip:
-            # Fall back to running tailscale command
+        # Method 1: Try Tailscale LocalAPI via Unix socket
+        ts_socket = os.environ.get("TS_SOCKET", "/var/run/tailscale/tailscaled.sock")
+        if os.path.exists(ts_socket):
             try:
-                result = subprocess.run(
-                    ["tailscale", "ip", "-4"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if result.returncode == 0:
-                    tailscale_ip = result.stdout.strip()
+                connector = UnixConnector(path=ts_socket)
+                async with aiohttp.ClientSession(connector=connector) as session:
+                    async with session.get("http://local-tailscaled.sock/localapi/v0/status") as resp:
+                        if resp.status == 200:
+                            status_data = await resp.json()
+                            logger.info("Got Tailscale status via LocalAPI socket for leader registration")
             except Exception as e:
-                logger.warning(f"Could not get Tailscale IP: {e}")
+                logger.debug(f"LocalAPI socket method failed: {e}")
 
-        if tailscale_ip:
-            logger.info(f"Using Tailscale IP: {tailscale_ip}")
+        # Method 2: Try Docker API to exec into tailscale container
+        if not status_data:
+            tailscale_container = os.environ.get("TAILSCALE_CONTAINER", "")
+            docker_socket = "/var/run/docker.sock"
+            if tailscale_container and os.path.exists(docker_socket):
+                try:
+                    connector = UnixConnector(path=docker_socket)
+                    async with aiohttp.ClientSession(connector=connector) as session:
+                        exec_create_url = f"http://localhost/containers/{tailscale_container}/exec"
+                        exec_payload = {
+                            "AttachStdout": True,
+                            "AttachStderr": True,
+                            "Cmd": ["tailscale", "status", "--json"]
+                        }
+                        async with session.post(exec_create_url, json=exec_payload) as resp:
+                            if resp.status == 201:
+                                exec_data = await resp.json()
+                                exec_id = exec_data.get("Id")
+                                exec_start_url = f"http://localhost/exec/{exec_id}/start"
+                                async with session.post(exec_start_url, json={"Detach": False}) as start_resp:
+                                    if start_resp.status == 200:
+                                        raw_output = await start_resp.read()
+                                        json_start = raw_output.find(b'{')
+                                        if json_start >= 0:
+                                            json_data = raw_output[json_start:].decode('utf-8', errors='ignore')
+                                            brace_count = 0
+                                            json_end = 0
+                                            for i, char in enumerate(json_data):
+                                                if char == '{':
+                                                    brace_count += 1
+                                                elif char == '}':
+                                                    brace_count -= 1
+                                                    if brace_count == 0:
+                                                        json_end = i + 1
+                                                        break
+                                            if json_end > 0:
+                                                status_data = json.loads(json_data[:json_end])
+                                                logger.info("Got Tailscale status via Docker API for leader registration")
+                except Exception as e:
+                    logger.warning(f"Docker API exec method failed for leader registration: {e}")
+
+        # Method 3: Try local tailscale CLI
+        if not status_data:
+            try:
+                result = await asyncio.create_subprocess_exec(
+                    "tailscale", "status", "--json",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await result.communicate()
+                if result.returncode == 0:
+                    status_data = json.loads(stdout.decode())
+                    logger.info("Got Tailscale status via local CLI for leader registration")
+            except Exception as e:
+                logger.debug(f"Local CLI method failed for leader registration: {e}")
+
+        # Extract IP from Tailscale status
+        if status_data:
+            self_info = status_data.get("Self", {})
+            tailscale_ips = self_info.get("TailscaleIPs", [])
+            for ip in tailscale_ips:
+                if "." in ip:  # IPv4
+                    tailscale_ip = ip
+                    break
+
+        # Fall back to env var for Tailscale IP
+        if not tailscale_ip:
+            tailscale_ip = os.environ.get("TAILSCALE_IP")
+
+        # Use ENV_NAME as hostname (matches the deployment identity)
+        hostname = os.environ.get("ENV_NAME")
+        if not hostname:
+            # Fall back to Tailscale DNSName
+            if status_data:
+                self_info = status_data.get("Self", {})
+                dns_name = self_info.get("DNSName", "")
+                if dns_name:
+                    hostname = dns_name.split(".")[0]
+        if not hostname:
+            import socket
+            hostname = socket.gethostname()
+            logger.warning(f"Could not determine hostname, using socket hostname: {hostname}")
+
+        logger.info(f"Leader registration: hostname={hostname}, tailscale_ip={tailscale_ip}")
 
         # Remove any old leader entries and keep only one
         await self.unodes_collection.delete_many({
@@ -178,7 +255,7 @@ class UNodeManager:
             "capabilities": UNodeCapabilities(can_become_leader=True).model_dump(),
             "last_seen": now,
             "manager_version": "0.1.0",
-            "services": ["backend", "frontend", "mongodb", "redis", "qdrant"],
+            "services": self._detect_running_services(),
             "labels": {"type": "leader"},
             "metadata": {"is_origin": True},
         }
@@ -208,47 +285,28 @@ class UNodeManager:
             return "linux"
         return "unknown"
 
-    def _get_tailscale_dns_name(self) -> str | None:
-        """Get the Tailscale DNS name for this machine.
+    def _detect_running_services(self) -> list[str]:
+        """Detect running services from DockerManager (compose registry + core services)."""
+        from src.services.docker_manager import get_docker_manager, ServiceStatus
 
-        Returns the MagicDNS name (e.g., 'machine-name.tailnet.ts.net') that can be
-        used by other Tailscale nodes to reach this machine.
-
-        In containerized deployments, runs via docker exec in the tailscale sidecar.
-        """
-        import json
-        import os
-        import subprocess
-
-        # Allow explicit override via env var
-        dns_name = os.environ.get("TAILSCALE_DNS_NAME")
-        if dns_name:
-            return dns_name
-
-        # Build the command - use docker exec if running in container with tailscale sidecar
-        tailscale_container = os.environ.get("TAILSCALE_CONTAINER")
-        if tailscale_container:
-            # Running in container - exec into tailscale sidecar
-            project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
-            container_name = f"{project}-tailscale"
-            cmd = ["docker", "exec", container_name, "tailscale", "status", "--self", "--json"]
-        else:
-            # Running directly on host
-            cmd = ["tailscale", "status", "--self", "--json"]
-
+        services = []
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                status = json.loads(result.stdout)
-                # DNSName includes trailing dot, strip it
-                dns_name = status.get("Self", {}).get("DNSName", "").rstrip(".")
-                if dns_name:
-                    logger.info(f"Got Tailscale DNS name: {dns_name}")
-                    return dns_name
-        except Exception as e:
-            logger.warning(f"Could not get Tailscale DNS name: {e}")
+            docker_manager = get_docker_manager()
+            # Get all services (not just user-controllable)
+            all_services = docker_manager.list_services(user_controllable_only=False)
 
-        return None
+            for service in all_services:
+                # Only include running services
+                if service.status == ServiceStatus.RUNNING:
+                    services.append(service.name)
+
+            logger.info(f"Detected running services from DockerManager: {services}")
+        except Exception as e:
+            logger.warning(f"Failed to detect running services: {e}")
+            # Fallback to core services
+            services = ["backend", "frontend", "mongodb", "redis", "qdrant"]
+
+        return sorted(services)
 
     async def create_join_token(
         self,
@@ -662,6 +720,13 @@ Write-Host ""
     async def get_unode(self, hostname: str) -> Optional[UNode]:
         """Get a u-node by hostname."""
         doc = await self.unodes_collection.find_one({"hostname": hostname})
+        if doc:
+            return UNode(**{k: v for k, v in doc.items() if k != "unode_secret_hash"})
+        return None
+
+    async def get_unode_by_role(self, role: UNodeRole) -> Optional[UNode]:
+        """Get the first u-node with the specified role (e.g., leader)."""
+        doc = await self.unodes_collection.find_one({"role": role.value})
         if doc:
             return UNode(**{k: v for k, v in doc.items() if k != "unode_secret_hash"})
         return None

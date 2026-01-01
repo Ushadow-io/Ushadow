@@ -48,6 +48,12 @@ export const wizardRegistry: WizardMetadata[] = [
     description: 'Secure remote access',
   },
   {
+    id: 'mobile-app',
+    path: '/wizard/mobile-app',
+    label: 'Mobile App',
+    description: 'Connect via QR code',
+  },
+  {
     id: 'speaker-recognition',
     path: '/wizard/speaker-recognition',
     label: 'Speaker ID',
