@@ -27,6 +27,36 @@ logger = logging.getLogger(__name__)
 # Service name validation pattern (alphanumeric, hyphens, underscores only)
 SERVICE_NAME_PATTERN = re.compile(r'^[a-z0-9_-]+$')
 
+# Pattern to extract env var and default from port strings like "${CHRONICLE_PORT:-8080}"
+PORT_ENV_VAR_PATTERN = re.compile(r'\$\{([A-Z_][A-Z0-9_]*):-?(\d+)\}')
+
+
+def _extract_port_env_vars(ports: List[Dict[str, Any]]) -> Dict[str, int]:
+    """
+    Extract port environment variables and their default values from compose port mappings.
+
+    Args:
+        ports: List of port dicts with 'host' and 'container' keys
+               e.g., [{'host': '${CHRONICLE_PORT:-8080}', 'container': '8000'}]
+
+    Returns:
+        Dict mapping env var name to default port number
+        e.g., {'CHRONICLE_PORT': 8080}
+    """
+    result = {}
+    for port in ports:
+        host_port = port.get('host', '')
+        if not host_port:
+            continue
+
+        match = PORT_ENV_VAR_PATTERN.search(host_port)
+        if match:
+            env_var_name = match.group(1)
+            default_port = int(match.group(2))
+            result[env_var_name] = default_port
+
+    return result
+
 
 class ServiceStatus(str, Enum):
     """Service status enum."""
@@ -785,6 +815,103 @@ class DockerManager:
             logger.error(f"Failed to resolve env vars for {service_name}: {e}")
             raise ValueError(f"Failed to configure service: {e}")
 
+        # Apply PORT_OFFSET for services in the same namespace
+        subprocess_env, container_env = self._apply_port_offset(
+            service_name, service_config, subprocess_env, container_env
+        )
+
+        return subprocess_env, container_env
+
+    def _apply_port_offset(
+        self,
+        service_name: str,
+        service_config: Dict[str, Any],
+        subprocess_env: Dict[str, str],
+        container_env: Dict[str, str],
+    ) -> tuple[Dict[str, str], Dict[str, str]]:
+        """
+        Apply PORT_OFFSET to service port env vars when in the same namespace.
+
+        This allows multiple environments (purple, green, etc.) to run the same
+        services without port conflicts. Only applies when:
+        1. PORT_OFFSET is set and non-zero
+        2. The service namespace matches COMPOSE_PROJECT_NAME (same environment)
+        3. The port env var isn't already explicitly set
+
+        Args:
+            service_name: Name of the service
+            service_config: Service configuration from MANAGEABLE_SERVICES
+            subprocess_env: Environment for subprocess (will be modified)
+            container_env: Environment for container (will be modified)
+
+        Returns:
+            Modified (subprocess_env, container_env) tuple
+        """
+        # Get PORT_OFFSET from environment
+        port_offset_str = os.environ.get('PORT_OFFSET', '0')
+        try:
+            port_offset = int(port_offset_str)
+        except ValueError:
+            port_offset = 0
+
+        if port_offset == 0:
+            return subprocess_env, container_env
+
+        # Get current project name
+        current_project = os.environ.get('COMPOSE_PROJECT_NAME', 'ushadow')
+
+        # Get service namespace (from x-ushadow or defaults to current project)
+        service_namespace = service_config.get('namespace')
+        if not service_namespace:
+            # If no namespace declared, service runs in current project namespace
+            service_namespace = current_project
+
+        # Only apply offset if service is in the same namespace as current environment
+        if service_namespace != current_project:
+            logger.debug(
+                f"Skipping port offset for {service_name}: "
+                f"namespace '{service_namespace}' != project '{current_project}'"
+            )
+            return subprocess_env, container_env
+
+        # Get ports from service config (parsed from compose file)
+        ports = service_config.get('ports', [])
+        if not ports:
+            # Try to get from metadata if compose-discovered
+            metadata = service_config.get('metadata', {})
+            ports = metadata.get('ports', [])
+
+        if not ports:
+            return subprocess_env, container_env
+
+        # Extract port env vars and their defaults
+        port_env_vars = _extract_port_env_vars(ports)
+
+        for env_var, default_port in port_env_vars.items():
+            # Skip if already explicitly set in environment
+            if env_var in os.environ:
+                logger.debug(
+                    f"Port var {env_var} already set to {os.environ[env_var]}, skipping offset"
+                )
+                continue
+
+            # Skip if already in subprocess_env with a non-default value
+            if env_var in subprocess_env:
+                existing = subprocess_env[env_var]
+                if existing != str(default_port):
+                    logger.debug(
+                        f"Port var {env_var} already configured to {existing}, skipping offset"
+                    )
+                    continue
+
+            # Apply offset
+            new_port = default_port + port_offset
+            subprocess_env[env_var] = str(new_port)
+            container_env[env_var] = str(new_port)
+            logger.info(
+                f"Applied PORT_OFFSET to {env_var}: {default_port} + {port_offset} = {new_port}"
+            )
+
         return subprocess_env, container_env
 
     async def _start_service_via_compose(self, service_name: str, compose_file: str) -> tuple[bool, str]:
@@ -845,6 +972,10 @@ class DockerManager:
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution
             subprocess_env, container_env = await self._build_env_vars_for_service(service_name)
+
+            # Suppress orphan warnings when running services from different compose files
+            # in the same project namespace (e.g., chronicle + main backend share auth)
+            subprocess_env["COMPOSE_IGNORE_ORPHANS"] = "true"
 
             logger.info(f"Resolved {len(container_env)} env vars for {service_name} (passing directly)")
 
