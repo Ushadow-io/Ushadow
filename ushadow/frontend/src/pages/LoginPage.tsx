@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate, Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { Layers, Eye, EyeOff } from 'lucide-react'
-import EnvironmentBanner from '../components/layout/EnvironmentBanner'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -26,10 +25,9 @@ export default function LoginPage() {
   if (setupRequired === null || authLoading) {
     return (
       <div
-        className="min-h-screen flex flex-col"
+        className="flex-1 flex flex-col"
         style={{ backgroundColor: 'var(--surface-900)' }}
       >
-        <EnvironmentBanner />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center space-x-3">
             <div
@@ -70,11 +68,10 @@ export default function LoginPage() {
 
   return (
     <div
-      className="min-h-screen flex flex-col relative overflow-hidden"
+      className="flex-1 flex flex-col relative overflow-hidden"
       style={{ backgroundColor: 'var(--surface-900)' }}
       data-testid="login-page"
     >
-      <EnvironmentBanner />
       <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
         {/* Decorative background blur circles - brand green and purple */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
