@@ -31,15 +31,28 @@ def _env_resolver(env_var_name: str, _root_: DictConfig) -> Optional[str]:
     """
     Search config tree for a key matching an env var name.
 
-    Converts ENV_VAR_NAME -> env_var_name and searches all sections.
-    Example: MEMORY_SERVER_URL finds infrastructure.memory_server_url
+    Strategies (in order):
+    1. Path-based: TRANSCRIPTION_PROVIDER -> transcription.provider
+    2. Key search: OPENAI_API_KEY -> api_keys.openai_api_key
 
     Usage in YAML: ${env:MEMORY_SERVER_URL}
     Usage in code: settings.get_by_env_var("MEMORY_SERVER_URL")
     """
     key = env_var_name.lower()
 
-    # Search all top-level sections
+    # Strategy 1: Treat underscores as path separators (e.g., TRANSCRIPTION_PROVIDER -> transcription.provider)
+    parts = key.split('_')
+    if len(parts) >= 2:
+        # Try section.key pattern (e.g., transcription.provider)
+        section_name = parts[0]
+        key_name = '_'.join(parts[1:])
+        section = _root_.get(section_name)
+        if isinstance(section, (dict, DictConfig)) and key_name in section:
+            value = section.get(key_name)
+            if value is not None:
+                return str(value)
+
+    # Strategy 2: Search all top-level sections for exact key match
     for section_name in _root_:
         section = _root_.get(section_name)
         if isinstance(section, (dict, DictConfig)) and key in section:
@@ -144,11 +157,19 @@ def mask_secret_value(value: str, path: str) -> str:
     return value
 
 
-def env_var_matches_setting(env_name: str, setting_key: str) -> bool:
-    """Check if an env var name matches a setting key."""
-    env_lower = env_name.lower().replace('_', '')
-    key_lower = setting_key.lower().replace('_', '')
-    return key_lower in env_lower or env_lower in key_lower
+def env_var_matches_setting(env_name: str, setting_path: str) -> bool:
+    """Check if an env var name matches a setting path.
+
+    Treats underscores in env var as equivalent to dots in setting path.
+    TRANSCRIPTION_PROVIDER matches transcription.provider (not llm.provider).
+    OPENAI_API_KEY matches api_keys.openai_api_key.
+    """
+    # Normalize: convert underscores to dots, lowercase
+    env_normalized = env_name.lower().replace('_', '.')
+    path_normalized = setting_path.lower().replace('_', '.')
+
+    # Exact match or suffix match (for nested paths like api_keys.openai_api_key)
+    return path_normalized == env_normalized or path_normalized.endswith('.' + env_normalized)
 
 
 class SettingsStore:
@@ -509,8 +530,8 @@ class SettingsStore:
                 if value is None or isinstance(value, dict):
                     continue
 
-                if env_var_matches_setting(env_var_name, key):
-                    path = f"{section}.{key}"
+                path = f"{section}.{key}"
+                if env_var_matches_setting(env_var_name, path):
                     str_value = str(value) if value is not None else ""
                     if str_value.strip():
                         matches_with_value.append((path, value))
@@ -646,6 +667,121 @@ class SettingsStore:
                         ))
 
         return suggestions
+
+    def find_matching_suggestion(
+        self,
+        env_name: str,
+        suggestions: List[SettingSuggestion]
+    ) -> Optional[SettingSuggestion]:
+        """
+        Find a suggestion that matches the env var name and has a value.
+
+        Uses full path matching to avoid false positives.
+        TRANSCRIPTION_PROVIDER matches transcription.provider, not llm.provider.
+        """
+        for s in suggestions:
+            if not s.has_value:
+                continue
+            if env_var_matches_setting(env_name, s.path):
+                return s
+        return None
+
+    async def resolve_env_value(
+        self,
+        source: str,
+        setting_path: Optional[str],
+        literal_value: Optional[str],
+        default_value: Optional[str],
+        env_name: str = ""
+    ) -> Optional[str]:
+        """
+        Resolve env var value based on source type.
+
+        Args:
+            source: One of "setting", "literal", "default"
+            setting_path: Path to setting if source is "setting"
+            literal_value: Direct value if source is "literal"
+            default_value: Fallback if source is "default"
+            env_name: Env var name for auto-resolution
+
+        Returns:
+            Resolved value or None
+        """
+        if source == "setting" and setting_path:
+            return await self.get(setting_path)
+        elif source == "literal" and literal_value:
+            return literal_value
+        elif source == "default":
+            if env_name:
+                resolved = await self.get_by_env_var(env_name)
+                if resolved:
+                    return resolved
+            return default_value
+        return None
+
+    async def build_env_var_config(
+        self,
+        env_vars: List,  # List[EnvVarConfig] - avoid circular import
+        saved_config: Dict[str, Any],
+        requires: List[str],
+        provider_registry=None,
+        is_required: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Build environment variable configuration with suggestions and resolved values.
+
+        This is the main method for preparing env var config for UI display
+        or container injection.
+
+        Args:
+            env_vars: List of EnvVarConfig from compose schema
+            saved_config: Previously saved user configuration
+            requires: List of required capabilities
+            provider_registry: Optional provider registry for capability suggestions
+            is_required: Whether these are required or optional env vars
+
+        Returns:
+            List of env var config dicts with suggestions and resolved values
+        """
+        result = []
+
+        for ev in env_vars:
+            saved = saved_config.get(ev.name, {})
+            if hasattr(saved, 'items'):
+                saved = dict(saved)
+
+            suggestions = await self.get_suggestions_for_env_var(
+                ev.name, provider_registry, requires
+            )
+
+            source = saved.get("source", "default")
+            setting_path = saved.get("setting_path")
+            value = saved.get("value")
+
+            # Auto-map if no saved config and a matching suggestion with value exists
+            if source == "default" and not setting_path:
+                auto_match = self.find_matching_suggestion(ev.name, suggestions)
+                if auto_match:
+                    source = "setting"
+                    setting_path = auto_match.path
+
+            resolved = await self.resolve_env_value(
+                source, setting_path, value, ev.default_value, ev.name
+            )
+
+            result.append({
+                "name": ev.name,
+                "is_required": is_required,
+                "has_default": ev.has_default,
+                "default_value": ev.default_value,
+                "source": source,
+                "setting_path": setting_path,
+                "value": value,
+                "resolved_value": resolved,
+                "suggestions": [s.to_dict() for s in suggestions],
+            })
+
+        return result
 
     async def save_env_var_values(self, env_values: Dict[str, str]) -> Dict[str, int]:
         """

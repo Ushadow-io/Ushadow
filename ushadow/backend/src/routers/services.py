@@ -10,8 +10,9 @@ This router consolidates:
 All operations go through the ServiceOrchestrator facade.
 
 Endpoint Groups:
-- Discovery:    GET /, /catalog, /{name}, /by-capability/{cap}
-- Status:       GET /docker-status, /status, /{name}/status, /{name}/docker
+- Discovery:    GET /, /catalog, /by-capability/{cap}
+- Status:       GET /docker-status, /status (BEFORE /{name} to avoid shadowing)
+- Single:       GET /{name}, /{name}/status, /{name}/docker
 - Lifecycle:    POST /{name}/start, /stop, /restart; GET /{name}/logs
 - Config:       GET/PUT /{name}/enabled, /{name}/config, /{name}/env, /{name}/resolve
 - Installation: POST /{name}/install, /uninstall, /register
@@ -140,27 +141,8 @@ async def get_services_by_capability(
     return await orchestrator.get_services_by_capability(capability)
 
 
-@router.get("/{name}")
-async def get_service(
-    name: str,
-    include_env: bool = False,
-    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
-) -> Dict[str, Any]:
-    """
-    Get details for a specific service.
-
-    Args:
-        name: Service name (e.g., 'chronicle')
-        include_env: Include environment variable definitions
-    """
-    service = await orchestrator.get_service(name, include_env=include_env)
-    if not service:
-        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
-    return service
-
-
 # =============================================================================
-# Status Endpoints
+# Status Endpoints (MUST come before /{name} to avoid route shadowing)
 # =============================================================================
 
 @router.get("/docker-status")
@@ -183,6 +165,29 @@ async def get_all_statuses(
     Returns only name, status, and health - optimized for polling.
     """
     return await orchestrator.get_all_statuses()
+
+
+# =============================================================================
+# Single Service Endpoints
+# =============================================================================
+
+@router.get("/{name}")
+async def get_service(
+    name: str,
+    include_env: bool = False,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get details for a specific service.
+
+    Args:
+        name: Service name (e.g., 'chronicle')
+        include_env: Include environment variable definitions
+    """
+    service = await orchestrator.get_service(name, include_env=include_env)
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return service
 
 
 @router.get("/{name}/status")

@@ -6,7 +6,7 @@
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
 # =============================================================================
 x-ushadow:
-  namespace: chronicle  # Docker Compose project name for this file
+  # Services share namespace with main ushadow for unified auth (AUTH_SECRET_KEY)
   chronicle-backend:
     display_name: "Chronicle"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"

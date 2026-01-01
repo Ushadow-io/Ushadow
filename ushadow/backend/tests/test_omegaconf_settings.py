@@ -506,19 +506,23 @@ class TestHelperFunctions:
         result = mask_secret_value("sk-12345678", "services.url")
         assert result == "sk-12345678"
 
-    def test_env_var_matches_setting_exact(self):
-        """Test exact env var matching."""
-        assert env_var_matches_setting("openai_api_key", "openai_api_key")
-        assert env_var_matches_setting("OPENAI_API_KEY", "openai_api_key")
+    def test_env_var_matches_setting_exact_path(self):
+        """Test exact path matching (underscore as dot)."""
+        # TRANSCRIPTION_PROVIDER -> transcription.provider
+        assert env_var_matches_setting("TRANSCRIPTION_PROVIDER", "transcription.provider")
+        assert env_var_matches_setting("LLM_PROVIDER", "llm.provider")
 
-    def test_env_var_matches_setting_partial(self):
-        """Test partial matching (ignoring underscores)."""
-        assert env_var_matches_setting("OPENAI_KEY", "openaikey")
-        assert env_var_matches_setting("api_key", "apikey")
+    def test_env_var_matches_setting_suffix_path(self):
+        """Test suffix matching for nested paths."""
+        # OPENAI_API_KEY matches api_keys.openai_api_key (suffix match)
+        assert env_var_matches_setting("OPENAI_API_KEY", "api_keys.openai_api_key")
+        assert env_var_matches_setting("DEEPGRAM_API_KEY", "api_keys.deepgram_api_key")
 
     def test_env_var_matches_setting_no_match(self):
-        """Test non-matching pairs."""
-        assert not env_var_matches_setting("OPENAI_KEY", "anthropic_key")
+        """Test non-matching pairs - prevents false positives."""
+        # TRANSCRIPTION_PROVIDER should NOT match llm.provider
+        assert not env_var_matches_setting("TRANSCRIPTION_PROVIDER", "llm.provider")
+        assert not env_var_matches_setting("OPENAI_API_KEY", "anthropic.api_key")
 
 
 class TestSettingSuggestion:
