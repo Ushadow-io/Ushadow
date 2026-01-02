@@ -1,0 +1,76 @@
+# MetaMCP - MCP Server Hub
+# Aggregates and manages multiple MCP servers through a unified interface
+#
+# Usage:
+#   docker compose -f compose/metamcp-compose.yaml up -d
+#
+# Access:
+#   - Web UI: http://localhost:${METAMCP_PORT:-12008}
+#   - SSE endpoint: http://localhost:${METAMCP_PORT:-12008}/metamcp/<endpoint>/sse
+#   - HTTP endpoint: http://localhost:${METAMCP_PORT:-12008}/metamcp/<endpoint>/mcp
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  namespace: metamcp
+  # Infra services to start before this compose (from docker-compose.infra.yml)
+  infra_services: ["postgres"]
+  metamcp:
+    display_name: "MetaMCP"
+    description: "MCP Server Hub - aggregates multiple MCP servers through unified interface"
+    requires: []
+    provides: mcp_hub
+
+services:
+  metamcp:
+    image: ghcr.io/metatool-ai/metamcp:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-metamcp
+    pull_policy: always
+    # Requires postgres from infra (started via infra_services in x-ushadow)
+    ports:
+      - "${METAMCP_PORT:-12008}:12008"
+    environment:
+      # Database - uses shared postgres from infra
+      - DATABASE_URL=postgresql://ushadow:ushadow@postgres:5432/metamcp
+
+      # Application URL (for CORS)
+      - APP_URL=${METAMCP_APP_URL:-http://localhost:12008}
+
+      # Node environment
+      - NODE_ENV=${NODE_ENV:-production}
+
+      # Session secret (generate with: openssl rand -hex 32)
+      - SESSION_SECRET=${METAMCP_SESSION_SECRET:-change-me-in-production}
+
+      # Server configuration file (auto-registers MCP servers on startup)
+      - SERVERS_CONFIG=/app/config/servers.json
+
+      # Optional: OIDC authentication
+      # - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      # - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      # - OIDC_DISCOVERY_URL=${OIDC_DISCOVERY_URL:-}
+      # - OIDC_SCOPES=${OIDC_SCOPES:-openid email profile}
+    volumes:
+      # Persist any local data
+      - metamcp_data:/app/data
+      # Server configuration for auto-registration
+      - ../config/metamcp:/app/config:ro
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:12008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true
+
+volumes:
+  metamcp_data:
+    driver: local

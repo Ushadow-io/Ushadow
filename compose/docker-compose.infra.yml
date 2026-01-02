@@ -2,9 +2,9 @@
 # Persistent database layer that stays running across app restarts
 #
 # Usage:
-#   docker compose -f deployment/docker-compose.infra.yml up -d     # Start infrastructure
-#   docker compose -f deployment/docker-compose.infra.yml down      # Stop (keeps data)
-#   docker compose -f deployment/docker-compose.infra.yml down -v   # Stop and remove data
+#   docker compose -f compose/docker-compose.infra.yml --profile core up -d   # Start core (mongo, redis)
+#   docker compose -f compose/docker-compose.infra.yml down                   # Stop (keeps data)
+#   docker compose -f compose/docker-compose.infra.yml down -v                # Stop and remove data
 
 name: ushadow-infra
 
@@ -12,6 +12,7 @@ services:
   mongo:
     image: mongo:8.0
     container_name: mongo
+    profiles: ["core"]
     ports:
       - "27017:27017"
     volumes:
@@ -29,6 +30,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis
+    profiles: ["core"]
     ports:
       - "6379:6379"
     volumes:
@@ -61,6 +63,51 @@ services:
       retries: 5
       start_period: 10s
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=ushadow
+      - POSTGRES_PASSWORD=ushadow
+      - POSTGRES_DB=ushadow
+      # Additional databases created on startup (comma-separated)
+      - POSTGRES_MULTIPLE_DATABASES=metamcp,openmemory
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../config/postgres-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ushadow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: neo4j
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/ushadow123
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   # tailscale:
   #   image: tailscale/tailscale:latest
   #   container_name: ushadow-tailscale
@@ -92,6 +139,10 @@ volumes:
   redis_data:
     driver: local
   qdrant_data:
+    driver: local
+  postgres_data:
+    driver: local
+  neo4j_data:
     driver: local
   tailscale_state:
     driver: local

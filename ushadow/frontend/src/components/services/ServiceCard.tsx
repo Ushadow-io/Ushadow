@@ -54,6 +54,8 @@ interface ServiceCardProps {
   onCancelEdit: () => void
   /** Callback when a form field changes */
   onFieldChange: (key: string, value: any) => void
+  /** Callback to remove a custom field */
+  onRemoveField: (key: string) => void
 }
 
 // ============================================================================
@@ -128,6 +130,7 @@ export function ServiceCard({
   onSave,
   onCancelEdit,
   onFieldChange,
+  onRemoveField,
 }: ServiceCardProps) {
   const status = useServiceStatus(service, config, containerStatus)
   const isConfigured = config && Object.keys(config).length > 0
@@ -244,6 +247,7 @@ export function ServiceCard({
               isSaving={isSaving}
               canConfigure={status.canConfigure || false}
               onFieldChange={onFieldChange}
+              onRemoveField={onRemoveField}
               onStartEdit={onStartEdit}
               onSave={onSave}
               onCancel={onCancelEdit}
