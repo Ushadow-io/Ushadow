@@ -377,13 +377,17 @@ class LeaderInfoResponse(BaseModel):
     capabilities: UNodeCapabilities
     api_port: int = 8000
 
-    # Streaming URLs (derived from Chronicle service route_path)
-    ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
-    ws_omi_url: Optional[str] = None  # WebSocket for OMI format streaming
+    # API URLs for specific services
+    ushadow_api_url: str  # Main ushadow backend API
+    chronicle_api_url: Optional[str] = None  # Chronicle/OMI backend API (if running)
+
+    # Streaming URLs
+    ws_pcm_url: str  # WebSocket for PCM audio streaming
+    ws_omi_url: str  # WebSocket for OMI format streaming
 
     # Cluster info
-    unodes: List[UNode]
-    services: List[ServiceDeployment]
+    unodes: List[UNode]  # Physical/virtual nodes in the cluster
+    services: List[ServiceDeployment]  # Actually deployed services (from docker)
 
 
 @router.get("/leader/info", response_model=LeaderInfoResponse)
@@ -395,7 +399,10 @@ async def get_leader_info():
     for mobile apps that have just connected via QR code.
     The mobile app uses this to display cluster status and capabilities.
     """
+    from src.services.docker_manager import get_docker_manager
+
     unode_manager = await get_unode_manager()
+    docker_mgr = get_docker_manager()
 
     # Get the leader unode
     leader = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
@@ -405,7 +412,7 @@ async def get_leader_info():
             detail="Leader node not found. Cluster may not be initialized."
         )
 
-    # Get all unodes
+    # Get all unodes for cluster topology info
     unodes = await unode_manager.list_unodes()
 
     # Get Tailscale status (single source of truth)
@@ -483,6 +490,8 @@ async def get_leader_info():
         tailscale_hostname=tailscale_hostname,
         capabilities=leader.capabilities,
         api_port=api_port,
+        ushadow_api_url=ushadow_api_url,
+        chronicle_api_url=chronicle_api_url,
         ws_pcm_url=ws_pcm_url,
         ws_omi_url=ws_omi_url,
         unodes=unodes,
