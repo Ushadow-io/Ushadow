@@ -75,6 +75,7 @@ interface ServicesContextType {
   saveConfig: (serviceId: string) => Promise<void>
   cancelEditing: () => void
   setEditFormField: (key: string, value: any) => void
+  removeEditFormField: (key: string) => void
   toggleConfigExpanded: (serviceId: string) => void
   setShowAllConfigs: (show: boolean) => void
   setMessage: (msg: ServiceMessage | null) => void
@@ -316,6 +317,14 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     setEditForm(prev => ({ ...prev, [key]: value }))
   }, [])
 
+  const removeEditFormField = useCallback((key: string) => {
+    setEditForm(prev => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }, [])
+
   // --------------------------------------------------------------------------
   // UI Actions
   // --------------------------------------------------------------------------
@@ -368,6 +377,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     saveConfig,
     cancelEditing,
     setEditFormField,
+    removeEditFormField,
     toggleConfigExpanded,
     setShowAllConfigs,
     setMessage,

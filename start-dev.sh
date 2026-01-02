@@ -15,7 +15,7 @@ SETUP_DIR="setup"                      # Setup utilities directory
 COMPOSE_OVERRIDES_DIR="compose/overrides"  # Docker Compose overrides
 
 # Docker Compose files
-INFRA_COMPOSE_FILE="docker-compose.infra.yml"  # Infrastructure services
+INFRA_COMPOSE_FILE="compose/docker-compose.infra.yml"  # Infrastructure services
 APP_COMPOSE_FILE="docker-compose.yml"                   # Application services (in APP_DIR)
 INFRA_PROJECT_NAME="infra"                              # Infrastructure compose project name
 
