@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getStorageKey } from '../utils/storage'
+import type { GraphData, GraphStats } from '../types/graph'
 
 // Get backend URL from environment or auto-detect based on current location
 const getBackendUrl = () => {
@@ -943,6 +944,54 @@ export const memoriesApi = {
     } catch {
       return false
     }
+  },
+}
+
+export const graphApi = {
+  /** Fetch graph data for visualization */
+  fetchGraphData: async (
+    userId?: string,
+    limit: number = 100
+  ): Promise<GraphData> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const params: Record<string, string | number> = { limit }
+    if (userId) params.user_id = userId
+
+    const response = await axios.get<GraphData>(
+      `${serverUrl}/api/v1/graph/data`,
+      { params }
+    )
+    return response.data
+  },
+
+  /** Fetch graph statistics */
+  fetchGraphStats: async (userId?: string): Promise<GraphStats> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const params: Record<string, string> = {}
+    if (userId) params.user_id = userId
+
+    const response = await axios.get<GraphStats>(
+      `${serverUrl}/api/v1/graph/stats`,
+      { params }
+    )
+    return response.data
+  },
+
+  /** Search within the graph */
+  searchGraph: async (
+    query: string,
+    userId?: string,
+    limit: number = 50
+  ): Promise<GraphData> => {
+    const serverUrl = await memoriesApi.getServerUrl()
+    const params: Record<string, string | number> = { query, limit }
+    if (userId) params.user_id = userId
+
+    const response = await axios.get<GraphData>(
+      `${serverUrl}/api/v1/graph/search`,
+      { params }
+    )
+    return response.data
   },
 }
 

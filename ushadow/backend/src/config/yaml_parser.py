@@ -207,6 +207,7 @@ class ComposeService:
     display_name: Optional[str] = None
     description: Optional[str] = None
     namespace: Optional[str] = None  # Docker Compose project name / K8s namespace
+    infra_services: List[str] = field(default_factory=list)  # Infra services to start first
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -359,8 +360,9 @@ class ComposeParser(BaseYAMLParser):
         provides = service_meta.get("provides")  # Capability this service implements
         display_name = service_meta.get("display_name")
         description = service_meta.get("description")
-        # namespace is at top level of x-ushadow, shared by all services in file
+        # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
+        infra_services = x_ushadow.get("infra_services", [])
 
         return ComposeService(
             name=name,
@@ -378,6 +380,7 @@ class ComposeParser(BaseYAMLParser):
             display_name=display_name,
             description=description,
             namespace=namespace,
+            infra_services=infra_services,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:

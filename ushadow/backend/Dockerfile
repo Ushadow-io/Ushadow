@@ -1,15 +1,21 @@
 # ushadow Backend Dockerfile
 # FastAPI-based orchestration API
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies, Docker CLI, and Tailscale
+# Install uv for fast Python package management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# Install system dependencies, build tools, Docker CLI, and Tailscale
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     gnupg \
+    gcc \
+    python3-dev \
+    libyaml-dev \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && chmod a+r /etc/apt/keyrings/docker.gpg \
@@ -19,9 +25,11 @@ RUN apt-get update && apt-get install -y \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency files first for better layer caching
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies with uv (frozen from lockfile)
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
 COPY . .
@@ -34,4 +42,5 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # Run the application (port from env var)
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --reload
+# Use uv run to execute within the virtual environment
+CMD uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --reload

@@ -42,6 +42,7 @@ export default function ServicesPage() {
     optional_env_vars: EnvVarInfo[]
   } | null>(null)
   const [envEditForm, setEnvEditForm] = useState<Record<string, EnvVarConfig>>({})
+  const [customEnvVars, setCustomEnvVars] = useState<Array<{ name: string; value: string }>>([])
 
   // Provider state
   const [capabilities, setCapabilities] = useState<Capability[]>([])
@@ -287,18 +288,34 @@ export default function ServicesPage() {
   const handleSaveEnvVars = async (serviceId: string) => {
     setSaving(true)
     try {
-      const envVars = Object.values(envEditForm)
+      // Combine standard env vars with custom ones
+      const envVars: EnvVarConfig[] = [
+        ...Object.values(envEditForm),
+        // Add custom env vars as new settings
+        ...customEnvVars
+          .filter(ev => ev.name.trim() && ev.value.trim())
+          .map(ev => ({
+            name: ev.name.trim().toUpperCase(),
+            source: 'new_setting' as const,
+            new_setting_path: `custom_env.${ev.name.trim().toLowerCase()}`,
+            value: ev.value.trim()
+          }))
+      ]
       console.log('Saving env vars:', envVars)
       const result = await servicesApi.updateEnvConfig(serviceId, envVars)
       console.log('Save result:', result)
       const newSettingsCount = (result.data as any)?.new_settings_created || 0
-      const msg = newSettingsCount > 0
-        ? `Configuration saved (${newSettingsCount} new setting${newSettingsCount > 1 ? 's' : ''} created)`
-        : 'Environment configuration saved'
+      const customCount = customEnvVars.filter(ev => ev.name.trim() && ev.value.trim()).length
+      let msg = 'Environment configuration saved'
+      if (newSettingsCount > 0 || customCount > 0) {
+        const total = newSettingsCount + customCount
+        msg = `Configuration saved (${total} new setting${total > 1 ? 's' : ''} created)`
+      }
       setMessage({ type: 'success', text: msg })
       setEditingServiceId(null)
       setEnvConfig(null)
       setEnvEditForm({})
+      setCustomEnvVars([])
       // Reload services to update needs_setup status
       const servicesRes = await servicesApi.getInstalled()
       setServices(servicesRes.data)
@@ -313,6 +330,7 @@ export default function ServicesPage() {
     setEditingServiceId(null)
     setEnvConfig(null)
     setEnvEditForm({})
+    setCustomEnvVars([])
   }
 
   const handleExpandService = async (serviceId: string) => {
@@ -991,6 +1009,66 @@ export default function ServicesPage() {
                               onChange={(updates) => updateEnvVar(ev.name, updates)}
                             />
                           ))}
+
+                          {/* Custom Env Vars Section */}
+                          {customEnvVars.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-dashed border-neutral-200 dark:border-neutral-700">
+                              <p className="text-[10px] uppercase tracking-wider text-neutral-400 mb-2">
+                                Custom Environment Variables
+                              </p>
+                              {customEnvVars.map((ev, idx) => (
+                                <div key={idx} className="flex items-center gap-2 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0">
+                                  <input
+                                    type="text"
+                                    value={ev.name}
+                                    onChange={(e) => {
+                                      const updated = [...customEnvVars]
+                                      updated[idx] = { ...ev, name: e.target.value.toUpperCase() }
+                                      setCustomEnvVars(updated)
+                                    }}
+                                    placeholder="VAR_NAME"
+                                    className="w-40 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
+                                    data-testid={`custom-env-name-${idx}`}
+                                  />
+                                  <span className="text-neutral-500">=</span>
+                                  <input
+                                    type="text"
+                                    value={ev.value}
+                                    onChange={(e) => {
+                                      const updated = [...customEnvVars]
+                                      updated[idx] = { ...ev, value: e.target.value }
+                                      setCustomEnvVars(updated)
+                                    }}
+                                    placeholder="value"
+                                    className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
+                                    data-testid={`custom-env-value-${idx}`}
+                                  />
+                                  <button
+                                    onClick={() => {
+                                      setCustomEnvVars(prev => prev.filter((_, i) => i !== idx))
+                                    }}
+                                    className="p-1 text-neutral-400 hover:text-error-500 transition-colors"
+                                    title="Remove"
+                                    data-testid={`custom-env-remove-${idx}`}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Add Custom Env Var Button */}
+                          <div className="mt-3">
+                            <button
+                              onClick={() => setCustomEnvVars(prev => [...prev, { name: '', value: '' }])}
+                              className="flex items-center gap-1.5 text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                              data-testid="add-custom-env-btn"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Add Custom Env Var
+                            </button>
+                          </div>
 
                           {/* Actions */}
                           <div className="pt-2 mt-2 flex items-center gap-2">

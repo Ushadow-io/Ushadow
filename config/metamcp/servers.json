@@ -1,0 +1,51 @@
+{
+  "servers": {
+    "ushadow-orchestrator": {
+      "name": "ushadow Orchestrator",
+      "description": "Service orchestration, provider management, and Chronicle conversations",
+      "type": "sse",
+      "url": "http://backend:8000/mcp/sse",
+      "enabled": true,
+      "tools": [
+        "list_services",
+        "get_service",
+        "start_service",
+        "stop_service",
+        "restart_service",
+        "get_service_logs",
+        "list_capabilities",
+        "list_providers",
+        "get_provider",
+        "list_conversations",
+        "get_conversation",
+        "get_segments_from_conversation",
+        "search_memories"
+      ]
+    },
+    "openmemory": {
+      "name": "OpenMemory",
+      "description": "Graph-based memory with semantic search and memory management",
+      "type": "sse",
+      "url": "http://mem0:8765/mcp/sse",
+      "enabled": true,
+      "tools": [
+        "add_memory",
+        "search_memory",
+        "list_memories",
+        "delete_memory",
+        "get_memory"
+      ]
+    }
+  },
+  "endpoints": {
+    "default": {
+      "name": "ushadow",
+      "description": "Unified endpoint for ushadow services",
+      "servers": ["ushadow-orchestrator", "openmemory"],
+      "auth": {
+        "type": "bearer",
+        "required": false
+      }
+    }
+  }
+}
