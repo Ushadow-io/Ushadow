@@ -39,6 +39,7 @@
     "react-native": "0.81.5",
     "react-native-base64": "^0.2.2",
     "react-native-ble-plx": "^3.1.2",
+    "friend-lite-react-native": "^1.0.2",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-network-info": "^5.2.2",
     "react-native-reanimated": "~4.1.1",
