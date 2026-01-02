@@ -27,6 +27,7 @@ import {
   ConnectionLogViewer,
   LeaderDiscovery,
   LoginScreen,
+  OmiDeviceSection,
 } from '../components';
 import { useStreaming, useConnectionLog } from '../hooks';
 import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../theme';
@@ -297,6 +298,15 @@ export default function HomeScreen() {
     }
   }, [isStreaming, isRecording, getEffectiveStreamUrl, startStreaming, stopStreaming]);
 
+  // Memoized callback for OMI streaming state changes
+  const handleOmiStreamingChange = useCallback((streaming: boolean, deviceId: string | null) => {
+    if (streaming) {
+      logEvent('bluetooth', 'connected', `OMI streaming started from ${deviceId}`);
+    } else {
+      logEvent('bluetooth', 'disconnected', 'OMI streaming stopped');
+    }
+  }, [logEvent]);
+
   const canStream = editableStreamUrl.trim().length > 0;
 
   return (
@@ -374,6 +384,14 @@ export default function HomeScreen() {
             )}
           </View>
         )}
+
+        {/* OMI Device Section */}
+        <OmiDeviceSection
+          webSocketUrl={editableStreamUrl.replace('/ws_pcm', '/ws_omi').replace(/\/$/, '')}
+          authToken={authToken}
+          onStreamingChange={handleOmiStreamingChange}
+          testID="omi-device-section"
+        />
 
         {/* UNode List */}
         <UNodeList

@@ -8,19 +8,22 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { theme } from './theme';
+import { BluetoothProvider, OmiConnectionProvider } from './contexts';
 
 export default function RootLayout() {
   return (
-    <>
-      <StatusBar style="light" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: theme.background },
-        }}
-      >
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      </Stack>
-    </>
+    <BluetoothProvider>
+      <OmiConnectionProvider>
+        <StatusBar style="light" />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: theme.background },
+          }}
+        >
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        </Stack>
+      </OmiConnectionProvider>
+    </BluetoothProvider>
   );
 }
