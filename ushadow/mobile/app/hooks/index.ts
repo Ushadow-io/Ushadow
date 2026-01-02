@@ -20,3 +20,12 @@ export { useTailscaleDiscovery } from './useTailscaleDiscovery';
 // Bluetooth and connection hooks
 export { useBluetoothManager } from './useBluetoothManager';
 export { useConnectionLog } from './useConnectionLog';
+
+// OMI Device hooks (from chronicle)
+export { useDeviceConnection } from './useDeviceConnection';
+export { useDeviceScanning } from './useDeviceScanning';
+export { useAudioListener } from './useAudioListener';
+export { useAudioManager } from './useAudioManager';
+
+// Auth hooks
+export { useTokenMonitor } from './useTokenMonitor';
