@@ -22,7 +22,7 @@ export default function RegistrationPage() {
   useEffect(() => {
     if (user) {
       console.log('Registration successful, redirecting to dashboard...')
-      navigate('/', { replace: true })
+      navigate('/', { replace: true, state: { fromAuth: true } })
     }
   }, [user, navigate])
 
@@ -82,6 +82,10 @@ export default function RegistrationPage() {
       // Store the token and reload auth context
       const { access_token } = response.data
       localStorage.setItem(getStorageKey('token'), access_token)
+
+      // Set flag so ProtectedRoute knows user just came from registration
+      // This survives the hard reload that follows
+      sessionStorage.setItem('fromAuth', 'true')
 
       // Reload the page to refresh auth context
       window.location.href = '/'

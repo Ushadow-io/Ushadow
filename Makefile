@@ -6,6 +6,18 @@
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev
 
+# Read DEV_MODE from .env if it exists
+-include .env
+
+# Set compose files based on DEV_MODE (set by start-dev.sh)
+ifeq ($(DEV_MODE),true)
+  COMPOSE_FILES := -f docker-compose.yml -f compose/overrides/dev-webui.yml
+  MODE_LABEL := (dev mode)
+else
+  COMPOSE_FILES := -f docker-compose.yml -f compose/overrides/prod-webui.yml
+  MODE_LABEL := (prod mode)
+endif
+
 # Default target
 help:
 	@echo "ushadow - AI Orchestration Platform"
@@ -19,7 +31,7 @@ help:
 	@echo "  make restart      - Restart ushadow application"
 	@echo "  make logs         - View application logs"
 	@echo "  make logs-f       - Follow application logs"
-	@echo "  make build        - Rebuild containers"
+	@echo "  make build        - Rebuild containers (auto-detects dev/prod)"
 	@echo "  make build-with-tailscale - Build with Tailscale socket (Linux only)"
 	@echo "  make clean        - Stop everything and remove volumes"
 	@echo "  make status       - Show running containers"
@@ -62,7 +74,7 @@ go:
 
 # Development mode - Vite dev server + backend in Docker
 dev:
-	@./dev.sh
+	@./start-dev.sh --quick --dev --no-admin
 
 # Production mode - Optimized build with nginx
 prod:
@@ -73,16 +85,16 @@ prod:
 	@echo ""
 	@echo "Access at: http://localhost:$${WEBUI_PORT:-3000}"
 
-# Application commands
+# Application commands (auto-detect dev/prod mode from .env)
 up:
-	@echo "🚀 Starting with dev server..."
-	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d
+	@echo "🚀 Starting ushadow $(MODE_LABEL)..."
+	docker compose $(COMPOSE_FILES) up -d
 
 down:
-	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml down
+	docker compose $(COMPOSE_FILES) down
 
 restart:
-	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml restart
+	docker compose $(COMPOSE_FILES) restart
 
 logs:
 	docker compose -f docker-compose.yml logs --tail=100
@@ -93,9 +105,9 @@ logs-f:
 build:
 	@echo "🔐 Ensuring secrets are configured..."
 	@python3 setup/setup_utils.py ensure-secrets config/secrets.yaml > /dev/null
-	@echo "🔨 Building with dev server (hot-reload enabled)..."
-	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml up -d --build
-	@echo "✅ Build complete - frontend running on port $${WEBUI_PORT} with hot-reload"
+	@echo "🔨 Building ushadow $(MODE_LABEL)..."
+	docker compose $(COMPOSE_FILES) up -d --build
+	@echo "✅ Build complete"
 
 build-with-tailscale:
 	@echo "🔐 Ensuring secrets are configured..."
@@ -112,14 +124,14 @@ reset-tailscale:
 infra-up:
 	@echo "🏗️  Starting infrastructure..."
 	@docker network create ushadow-network 2>/dev/null || true
-	@docker compose -f docker-compose.infra.yml up -d
+	@docker compose -f docker-compose.infra.yml -p infra up -d
 	@echo "✅ Infrastructure started"
 
 infra-down:
-	docker compose -f docker-compose.infra.yml down
+	docker compose -f docker-compose.infra.yml -p infra down
 
 infra-logs:
-	docker compose -f docker-compose.infra.yml logs -f
+	docker compose -f docker-compose.infra.yml -p infra logs -f
 
 # Chronicle commands
 chronicle-up:

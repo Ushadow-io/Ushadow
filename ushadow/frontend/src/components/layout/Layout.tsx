@@ -7,31 +7,32 @@ import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
+import FeatureFlagsDrawer from './FeatureFlagsDrawer'
+import type { LucideIcon } from 'lucide-react'
+
+interface NavigationItem {
+  path: string
+  label: string
+  icon: LucideIcon
+  separator?: boolean
+  featureFlag?: string
+  badge?: string
+}
 
 export default function Layout() {
   const location = useLocation()
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
-  const { setupLevel, getSetupLabel } = useWizard()
+  const { getSetupLabel } = useWizard()
   const { isConnected: isChronicleConnected, recording } = useChronicle()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
-  // Get dynamic wizard label based on setup level
+  // Get dynamic wizard label (includes path, label, level, and icon)
   const wizardLabel = getSetupLabel()
-
-  // Icon mapping for setup levels
-  const getSetupIcon = () => {
-    switch (setupLevel) {
-      case 0: return Sparkles
-      case 1: return Shield
-      case 2: return Mic
-      case 3: return CheckCircle2
-      default: return Wand2
-    }
-  }
   // Helper to check if recording is in a processing state
   const isRecordingProcessing = ['mic', 'websocket', 'audio-start', 'streaming', 'stopping'].includes(recording.currentStep)
 
@@ -46,13 +47,15 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const navigationItems = [
-    { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+  // Define navigation items with optional feature flag requirements
+  const allNavigationItems: NavigationItem[] = [
+    // Separator after wizard section
+    { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users },
-    { path: '/mcp', label: 'MCP Hub', icon: Plug },
-    { path: '/agent-zero', label: 'Agent Zero', icon: Bot },
-    { path: '/n8n', label: 'n8n Workflows', icon: Workflow },
+    { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
+    { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
+    { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
     { path: '/services', label: 'Services', icon: Server },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
@@ -63,15 +66,13 @@ export default function Layout() {
     ...(isAdmin ? [
       { path: '/users', label: 'User Management', icon: Users },
     ] : []),
-    // Dynamic wizard button based on setup level
-    {
-      path: wizardLabel.path,
-      label: wizardLabel.label,
-      icon: getSetupIcon(),
-      separator: true,
-      badge: setupLevel < 3 ? `Level ${setupLevel}` : undefined,
-    },
   ]
+
+  // Filter navigation items based on feature flags
+  const navigationItems = allNavigationItems.filter(item => {
+    if (!item.featureFlag) return true
+    return isEnabled(item.featureFlag)
+  })
 
   return (
     <div
@@ -251,19 +252,19 @@ export default function Layout() {
               </button>
 
               {/* Feature Flags */}
-              <Link
-                to="/feature-flags"
+              <button
+                onClick={() => setFeatureFlagsDrawerOpen(prev => !prev)}
                 className="p-2.5 rounded-lg transition-all relative"
                 style={{
-                  backgroundColor: location.pathname === '/feature-flags'
+                  backgroundColor: featureFlagsDrawerOpen
                     ? (isDark ? 'rgba(168, 85, 247, 0.15)' : 'rgba(168, 85, 247, 0.1)')
                     : 'transparent',
-                  color: location.pathname === '/feature-flags'
+                  color: featureFlagsDrawerOpen
                     ? 'var(--accent-400)'
                     : (isDark ? 'var(--text-secondary)' : '#525252'),
                 }}
                 aria-label="Feature Flags"
-                data-testid="feature-flags-link"
+                data-testid="feature-flags-btn"
               >
                 <FlaskConical className="h-5 w-5" />
                 {(() => {
@@ -284,7 +285,7 @@ export default function Layout() {
                   }
                   return null
                 })()}
-              </Link>
+              </button>
 
               {/* Theme Toggle */}
               <button
@@ -425,6 +426,70 @@ export default function Layout() {
                 border: isDark ? '1px solid var(--surface-500)' : '1px solid #e5e5e5',
               }}
             >
+              {/* Setup Wizard Section */}
+              <div>
+                <Link
+                  to="/wizard/start"
+                  className="group relative flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ease-out overflow-hidden"
+                  style={{
+                    backgroundColor: location.pathname.startsWith('/wizard')
+                      ? (isDark ? 'rgba(74, 222, 128, 0.1)' : 'rgba(74, 222, 128, 0.1)')
+                      : 'transparent',
+                    color: location.pathname.startsWith('/wizard')
+                      ? 'var(--primary-400)'
+                      : (isDark ? 'var(--text-secondary)' : '#525252'),
+                  }}
+                  data-testid="nav-wizard"
+                >
+                  {location.pathname.startsWith('/wizard') && (
+                    <div
+                      className="absolute left-0 top-0 bottom-0 w-1 rounded-r-full"
+                      style={{ backgroundColor: 'var(--primary-400)' }}
+                    />
+                  )}
+                  <div
+                    className="flex-shrink-0 transition-all duration-200"
+                    style={{
+                      color: location.pathname.startsWith('/wizard') ? 'var(--primary-400)' : 'inherit',
+                      transform: location.pathname.startsWith('/wizard') ? 'scale(1.1)' : 'scale(1)',
+                    }}
+                  >
+                    <Home className="h-5 w-5" />
+                  </div>
+                  <span className={`ml-3 transition-all duration-200 ${location.pathname.startsWith('/wizard') ? 'font-semibold' : ''}`}>
+                    Setup Wizard
+                  </span>
+                </Link>
+
+                {/* Current Level - indented below */}
+                {wizardLabel.level <= 4 && (
+                  <Link
+                    to={wizardLabel.path}
+                    className="group relative flex items-center pl-8 pr-3 py-2 rounded-lg text-sm transition-all duration-200 ease-out overflow-hidden"
+                    style={{
+                      backgroundColor: location.pathname === wizardLabel.path
+                        ? (isDark ? 'rgba(74, 222, 128, 0.05)' : 'rgba(74, 222, 128, 0.05)')
+                        : 'transparent',
+                      color: isDark ? 'var(--text-muted)' : '#71717a',
+                    }}
+                    data-testid="nav-wizard-level"
+                  >
+                    <span className="opacity-40 mr-2">└</span>
+                    <wizardLabel.icon className="h-4 w-4 mr-2 opacity-60" />
+                    <span className="truncate">{wizardLabel.label}</span>
+                    <span
+                      className="ml-auto px-1.5 py-0.5 text-[10px] font-medium rounded-full"
+                      style={{
+                        backgroundColor: isDark ? 'rgba(74, 222, 128, 0.15)' : 'rgba(74, 222, 128, 0.15)',
+                        color: 'var(--primary-400)',
+                      }}
+                    >
+                      L{wizardLabel.level}
+                    </span>
+                  </Link>
+                )}
+              </div>
+
               {navigationItems.map(({ path, label, icon: Icon, separator, badge }) => {
                 const isActive = location.pathname === path ||
                   (path !== '/' && location.pathname.startsWith(path))
@@ -510,6 +575,11 @@ export default function Layout() {
         </div>
       </div>
 
+      {/* Feature Flags Drawer */}
+      <FeatureFlagsDrawer
+        isOpen={featureFlagsDrawerOpen}
+        onClose={() => setFeatureFlagsDrawerOpen(false)}
+      />
     </div>
   )
 }

@@ -17,7 +17,7 @@ COMPOSE_OVERRIDES_DIR="compose/overrides"  # Docker Compose overrides
 # Docker Compose files
 INFRA_COMPOSE_FILE="compose/docker-compose.infra.yml"  # Infrastructure services
 APP_COMPOSE_FILE="docker-compose.yml"                   # Application services (in APP_DIR)
-INFRA_PROJECT_NAME="infra"                              # Infrastructure compose project name
+INFRA_PROJECT_NAME="infra"                              # Must match 'name:' in docker-compose.infra.yml
 
 # Default ports
 DEFAULT_BACKEND_PORT="8000"            # Backend API port
@@ -43,9 +43,39 @@ SECRETS_FILE="${CONFIG_DIR}/secrets.yaml"
 
 # Parse arguments
 RESET_CONFIG=false
-if [[ "$1" == "--reset" ]]; then
-    RESET_CONFIG=true
-fi
+QUICK_MODE=false
+DEV_MODE=true
+CREATE_ADMIN=true
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --reset)
+            RESET_CONFIG=true
+            shift
+            ;;
+        --quick)
+            QUICK_MODE=true
+            shift
+            ;;
+        --dev)
+            DEV_MODE=true
+            shift
+            ;;
+        --prod)
+            DEV_MODE=false
+            shift
+            ;;
+        --no-admin)
+            CREATE_ADMIN=false
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--quick] [--dev|--prod] [--no-admin] [--reset]"
+            exit 1
+            ;;
+    esac
+done
 
 # Path to setup utilities (needed by all code paths)
 SETUP_UTILS="${SETUP_DIR}/setup_utils.py"
@@ -62,9 +92,11 @@ echo ""
 if [[ -f "$ENV_FILE" ]] && [[ "$RESET_CONFIG" == false ]]; then
     echo -e "${GREEN}✅ Existing configuration found${NC}"
     echo ""
-    read -p "Use existing configuration? (Y/n): " use_existing
-    if [[ "$use_existing" == "n" ]] || [[ "$use_existing" == "N" ]]; then
-        RESET_CONFIG=true
+    if [[ "$QUICK_MODE" == false ]]; then
+        read -p "Use existing configuration? (Y/n): " use_existing
+        if [[ "$use_existing" == "n" ]] || [[ "$use_existing" == "N" ]]; then
+            RESET_CONFIG=true
+        fi
     fi
 fi
 
@@ -74,54 +106,64 @@ if [[ ! -f "$ENV_FILE" ]] || [[ "$RESET_CONFIG" == true ]]; then
     echo ""
 
     # Prompt for environment name (for multi-worktree setups)
-    echo ""
-    echo -e "${BOLD}Environment Name${NC}"
-    echo -e "${YELLOW}For multi-worktree setups, give each environment a unique name${NC}"
-    echo -e "${YELLOW}Examples: ${APP_NAME}, blue, gold, green, dev, staging${NC}"
-    echo ""
+    if [[ "$QUICK_MODE" == true ]]; then
+        ENV_NAME="${APP_NAME}"
+    else
+        echo ""
+        echo -e "${BOLD}Environment Name${NC}"
+        echo -e "${YELLOW}For multi-worktree setups, give each environment a unique name${NC}"
+        echo -e "${YELLOW}Examples: ${APP_NAME}, blue, gold, green, dev, staging${NC}"
+        echo ""
 
-    read -p "Environment name [${APP_NAME}]: " INPUT_ENV_NAME
-    ENV_NAME="${INPUT_ENV_NAME:-${APP_NAME}}"
+        read -p "Environment name [${APP_NAME}]: " INPUT_ENV_NAME
+        ENV_NAME="${INPUT_ENV_NAME:-${APP_NAME}}"
 
-    # Convert to lowercase and replace spaces/special chars with hyphens
-    ENV_NAME=$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/-$//')
+        # Convert to lowercase and replace spaces/special chars with hyphens
+        ENV_NAME=$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/-$//')
+    fi
 
     # Prompt for port offset (for multi-worktree environments)
-    echo ""
-    echo -e "${BOLD}Port Configuration${NC}"
-    echo -e "${YELLOW}For multi-worktree setups, use different offsets for each environment${NC}"
-    echo -e "${YELLOW}Suggested: blue=0, gold=10, green=20, red=30${NC}"
-    echo ""
-
-    # Loop until we find available ports
-    PORTS_AVAILABLE=false
-    while [ "$PORTS_AVAILABLE" = false ]; do
-        read -p "Port offset [0]: " INPUT_PORT_OFFSET
-        PORT_OFFSET="${INPUT_PORT_OFFSET:-0}"
-
-        # Calculate application ports from offset (backend and frontend only)
+    if [[ "$QUICK_MODE" == true ]]; then
+        PORT_OFFSET=0
         BACKEND_PORT=$((DEFAULT_BACKEND_PORT + PORT_OFFSET))
         WEBUI_PORT=$((DEFAULT_WEBUI_PORT + PORT_OFFSET))
+    else
+        echo ""
+        echo -e "${BOLD}Port Configuration${NC}"
+        echo -e "${YELLOW}For multi-worktree setups, use different offsets for each environment${NC}"
+        echo -e "${YELLOW}Suggested: blue=0, gold=10, green=20, red=30${NC}"
+        echo ""
 
-        # Use Python utility for port validation
-        set +e
-        PORT_CHECK=$(python3 "$SETUP_UTILS" validate-ports "$BACKEND_PORT" "$WEBUI_PORT" 2>/dev/null)
-        PORT_EXIT_CODE=$?
-        set -e
+        # Loop until we find available ports
+        PORTS_AVAILABLE=false
+        while [ "$PORTS_AVAILABLE" = false ]; do
+            read -p "Port offset [0]: " INPUT_PORT_OFFSET
+            PORT_OFFSET="${INPUT_PORT_OFFSET:-0}"
 
-        if [ $PORT_EXIT_CODE -eq 0 ]; then
-            PORTS_AVAILABLE=true
-        else
-            # Parse conflicts from JSON
-            CONFLICTS=$(echo "$PORT_CHECK" | python3 -c "import sys, json; data=json.load(sys.stdin); print('\n'.join([f'Port {p} is already in use' for p in data['conflicts']]))" 2>/dev/null)
+            # Calculate application ports from offset (backend and frontend only)
+            BACKEND_PORT=$((DEFAULT_BACKEND_PORT + PORT_OFFSET))
+            WEBUI_PORT=$((DEFAULT_WEBUI_PORT + PORT_OFFSET))
 
-            echo ""
-            echo -e "${RED}⚠️  Port conflict detected:${NC}"
-            echo "$CONFLICTS"
-            echo -e "${YELLOW}Please choose a different offset${NC}"
-            echo ""
-        fi
-    done
+            # Use Python utility for port validation
+            set +e
+            PORT_CHECK=$(python3 "$SETUP_UTILS" validate-ports "$BACKEND_PORT" "$WEBUI_PORT" 2>/dev/null)
+            PORT_EXIT_CODE=$?
+            set -e
+
+            if [ $PORT_EXIT_CODE -eq 0 ]; then
+                PORTS_AVAILABLE=true
+            else
+                # Parse conflicts from JSON
+                CONFLICTS=$(echo "$PORT_CHECK" | python3 -c "import sys, json; data=json.load(sys.stdin); print('\n'.join([f'Port {p} is already in use' for p in data['conflicts']]))" 2>/dev/null)
+
+                echo ""
+                echo -e "${RED}⚠️  Port conflict detected:${NC}"
+                echo "$CONFLICTS"
+                echo -e "${YELLOW}Please choose a different offset${NC}"
+                echo ""
+            fi
+        done
+    fi
 
     # Find available Redis database (0-15)
     # Redis only supports 16 databases, so we use an environment marker system:
@@ -241,38 +283,39 @@ EOF
         echo -e "${GREEN}   ✅ Security keys already configured${NC}"
     fi
 
-    # Prompt for admin credentials
-    echo ""
-    echo -e "${BOLD}Admin Account Setup${NC}"
-    echo -e "${YELLOW}Create your administrator account${NC}"
-    echo ""
-
-    read -p "Admin name [admin]: " INPUT_ADMIN_NAME
-    ADMIN_NAME="${INPUT_ADMIN_NAME:-admin}"
-
-    read -p "Admin email [admin@example.com]: " INPUT_ADMIN_EMAIL
-    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@example.com}"
-
-    # Password with confirmation
-    while true; do
-        read -sp "Admin password [password]: " INPUT_ADMIN_PASSWORD
+    # Prompt for admin credentials (skip if --no-admin)
+    if [[ "$CREATE_ADMIN" == true ]] && [[ "$QUICK_MODE" == false ]]; then
         echo ""
-        if [[ -z "$INPUT_ADMIN_PASSWORD" ]]; then
-            ADMIN_PASSWORD="password"
-            break
-        fi
-        read -sp "Confirm password: " INPUT_ADMIN_PASSWORD_CONFIRM
+        echo -e "${BOLD}Admin Account Setup${NC}"
+        echo -e "${YELLOW}Create your administrator account${NC}"
         echo ""
-        if [[ "$INPUT_ADMIN_PASSWORD" == "$INPUT_ADMIN_PASSWORD_CONFIRM" ]]; then
-            ADMIN_PASSWORD="$INPUT_ADMIN_PASSWORD"
-            break
-        else
-            echo -e "${RED}Passwords do not match. Please try again.${NC}"
-        fi
-    done
 
-    # Update admin credentials in secrets.yaml
-    python3 -c "
+        read -p "Admin name [admin]: " INPUT_ADMIN_NAME
+        ADMIN_NAME="${INPUT_ADMIN_NAME:-admin}"
+
+        read -p "Admin email [admin@example.com]: " INPUT_ADMIN_EMAIL
+        ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@example.com}"
+
+        # Password with confirmation
+        while true; do
+            read -sp "Admin password [password]: " INPUT_ADMIN_PASSWORD
+            echo ""
+            if [[ -z "$INPUT_ADMIN_PASSWORD" ]]; then
+                ADMIN_PASSWORD="password"
+                break
+            fi
+            read -sp "Confirm password: " INPUT_ADMIN_PASSWORD_CONFIRM
+            echo ""
+            if [[ "$INPUT_ADMIN_PASSWORD" == "$INPUT_ADMIN_PASSWORD_CONFIRM" ]]; then
+                ADMIN_PASSWORD="$INPUT_ADMIN_PASSWORD"
+                break
+            else
+                echo -e "${RED}Passwords do not match. Please try again.${NC}"
+            fi
+        done
+
+        # Update admin credentials in secrets.yaml
+        python3 -c "
 import yaml
 with open('$SECRETS_FILE', 'r') as f:
     data = yaml.safe_load(f)
@@ -285,8 +328,9 @@ with open('$SECRETS_FILE', 'w') as f:
     yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 " 2>/dev/null
 
-    echo ""
-    echo -e "${GREEN}✅ Admin credentials configured${NC}"
+        echo ""
+        echo -e "${GREEN}✅ Admin credentials configured${NC}"
+    fi
 
     echo ""
     echo -e "${GREEN}✅ Deployment configuration saved${NC}"
@@ -311,13 +355,30 @@ else
     echo ""
 fi
 
-# Development server mode (always enabled)
-USE_DEV_SERVER=true
-COMPOSE_OVERRIDE_FILE="-f compose/overrides/dev-webui.yml"
+# WebUI mode (based on --dev/--prod flag)
+USE_DEV_SERVER=$DEV_MODE
+if [[ "$DEV_MODE" == true ]]; then
+    COMPOSE_OVERRIDE_FILE="-f compose/overrides/dev-webui.yml"
+    echo ""
+    echo -e "${GREEN}🔥 Development server with hot-reload enabled${NC}"
+    echo ""
+else
+    COMPOSE_OVERRIDE_FILE="-f compose/overrides/prod-webui.yml"
+    echo ""
+    echo -e "${GREEN}📦 Production build with nginx${NC}"
+    echo ""
+fi
 
-echo ""
-echo -e "${GREEN}🔥 Development server with hot-reload enabled${NC}"
-echo ""
+# Save DEV_MODE to .env for make commands to use
+if grep -q "^DEV_MODE=" "$ENV_FILE" 2>/dev/null; then
+    # Update existing DEV_MODE
+    sed -i.bak "s/^DEV_MODE=.*/DEV_MODE=${DEV_MODE}/" "$ENV_FILE" && rm -f "${ENV_FILE}.bak"
+else
+    # Append DEV_MODE
+    echo "" >> "$ENV_FILE"
+    echo "# Development mode (used by Makefile)" >> "$ENV_FILE"
+    echo "DEV_MODE=${DEV_MODE}" >> "$ENV_FILE"
+fi
 
 # Start infrastructure
 echo -e "${BLUE}🏗️  Starting infrastructure...${NC}"
@@ -385,18 +446,20 @@ echo ""
 if [[ "$BACKEND_HEALTHY" == "True" ]]; then
     echo -e "${GREEN}${BOLD}✅ ${APP_DISPLAY_NAME} is ready!${NC}"
 
-    # Create admin user from secrets.yaml
-    echo ""
-    echo -e "${BLUE}👤 Creating admin user...${NC}"
-    ADMIN_RESULT=$(python3 "$SETUP_UTILS" create-admin "$BACKEND_PORT" "$SECRETS_FILE" 2>&1)
-    ADMIN_SUCCESS=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['success'])" 2>/dev/null || echo "false")
+    # Create admin user from secrets.yaml (if CREATE_ADMIN is true)
+    if [[ "$CREATE_ADMIN" == true ]]; then
+        echo ""
+        echo -e "${BLUE}👤 Creating admin user...${NC}"
+        ADMIN_RESULT=$(python3 "$SETUP_UTILS" create-admin "$BACKEND_PORT" "$SECRETS_FILE" 2>&1)
+        ADMIN_SUCCESS=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['success'])" 2>/dev/null || echo "false")
 
-    if [[ "$ADMIN_SUCCESS" == "True" ]]; then
-        ADMIN_MESSAGE=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['message'])" 2>/dev/null || echo "Success")
-        echo -e "${GREEN}   ✅ ${ADMIN_MESSAGE}${NC}"
-    else
-        ADMIN_ERROR=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', 'Unknown error'))" 2>/dev/null || echo "Failed")
-        echo -e "${YELLOW}   ⚠️  ${ADMIN_ERROR}${NC}"
+        if [[ "$ADMIN_SUCCESS" == "True" ]]; then
+            ADMIN_MESSAGE=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin)['message'])" 2>/dev/null || echo "Success")
+            echo -e "${GREEN}   ✅ ${ADMIN_MESSAGE}${NC}"
+        else
+            ADMIN_ERROR=$(echo "$ADMIN_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', 'Unknown error'))" 2>/dev/null || echo "Failed")
+            echo -e "${YELLOW}   ⚠️  ${ADMIN_ERROR}${NC}"
+        fi
     fi
 else
     echo -e "${YELLOW}⚠️  Backend is starting... (may take a moment)${NC}"
@@ -431,8 +494,8 @@ echo ""
 echo -e "  ${GREEN}✓${NC} After setup, all settings managed via Settings page"
 echo ""
 
-# Check for Tailscale
-if command -v tailscale &> /dev/null && tailscale status &> /dev/null; then
+# Check for Tailscale (skip in quick mode)
+if [[ "$QUICK_MODE" == false ]] && command -v tailscale &> /dev/null && tailscale status &> /dev/null; then
     TAILSCALE_HOSTNAME=$(tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | cut -d'"' -f4 | head -1 || echo "")
 
     if [[ -n "$TAILSCALE_HOSTNAME" ]]; then
@@ -464,6 +527,21 @@ if command -v tailscale &> /dev/null && tailscale status &> /dev/null; then
             echo -e "   ${BOLD}make restart${NC}"
             echo ""
         fi
+    fi
+fi
+
+# Open browser for quick mode with no admin (go straight to register)
+if [[ "$QUICK_MODE" == true ]] && [[ "$CREATE_ADMIN" == false ]]; then
+    echo ""
+    echo -e "${BLUE}🌐 Opening registration page...${NC}"
+    if command -v open > /dev/null; then
+        open "http://localhost:${WEBUI_PORT}/register"
+    elif command -v xdg-open > /dev/null; then
+        xdg-open "http://localhost:${WEBUI_PORT}/register"
+    elif command -v start > /dev/null; then
+        start "http://localhost:${WEBUI_PORT}/register"
+    else
+        echo "   Please open your browser to: http://localhost:${WEBUI_PORT}/register"
     fi
 fi
 

@@ -648,9 +648,9 @@ export default function ServicesPage() {
                             <div className="flex items-center gap-2">
                               {/* Config status icon */}
                               {provider.configured ? (
-                                <CheckCircle className="h-4 w-4 text-success-500" title="Configured" />
+                                <CheckCircle className="h-4 w-4 text-success-500" />
                               ) : (
-                                <AlertCircle className="h-4 w-4 text-warning-500" title="Missing required fields" />
+                                <AlertCircle className="h-4 w-4 text-warning-500" />
                               )}
 
                               {/* Selection status */}

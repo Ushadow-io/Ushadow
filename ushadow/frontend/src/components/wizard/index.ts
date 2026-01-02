@@ -50,3 +50,6 @@ export type { ConfiguredSummaryProps } from './ConfiguredSummary';
 
 export { ProviderSelector } from './ProviderSelector';
 export type { ProviderSelectorProps } from './ProviderSelector';
+
+export { WhatsNext } from './WhatsNext';
+export type { WhatsNextProps } from './WhatsNext';

@@ -393,13 +393,7 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
         data['security']['session_secret'] = secrets.token_urlsafe(32)
         created_new = True
 
-    # Ensure admin section exists with defaults
-    if 'admin' not in data:
-        data['admin'] = {
-            'name': 'admin',
-            'email': 'admin@example.com',
-            'password': 'password'
-        }
+    # Note: No default admin credentials - users register via /register page
 
     # Ensure api_keys section exists
     if 'api_keys' not in data:
@@ -477,9 +471,20 @@ if __name__ == '__main__':
                 secrets_data = yaml.safe_load(f) or {}
 
             admin = secrets_data.get('admin', {})
+
+            # Require explicit admin credentials - no hardcoded defaults
+            # Users should register via web UI if not configured
+            if not admin or not admin.get('email') or not admin.get('password'):
+                print(json.dumps({
+                    'success': False,
+                    'error': 'No admin credentials in secrets.yaml - use /register page',
+                    'skip': True
+                }))
+                sys.exit(0)  # Not an error, just skip
+
             name = admin.get('name', 'admin')
-            email = admin.get('email', 'admin@example.com')
-            password = admin.get('password', 'password')
+            email = admin['email']
+            password = admin['password']
 
             # Call backend setup API
             import requests

@@ -1,10 +1,13 @@
 import { Activity, MessageSquare, Plug, Bot, Workflow, TrendingUp, Sparkles } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 
 export default function Dashboard() {
   const { isDark } = useTheme()
+  const { isEnabled } = useFeatureFlags()
 
-  const stats = [
+  // Define all stats with optional feature flag requirements
+  const allStats = [
     {
       label: 'Conversations',
       value: '0',
@@ -17,23 +20,32 @@ export default function Dashboard() {
       value: '0',
       icon: Plug,
       accentColor: '#22c55e', // primary-500
-      glowColor: 'rgba(34, 197, 94, 0.15)'
+      glowColor: 'rgba(34, 197, 94, 0.15)',
+      featureFlag: 'mcp_hub'
     },
     {
       label: 'Active Agents',
       value: '0',
       icon: Bot,
       accentColor: '#c084fc', // accent-400
-      glowColor: 'rgba(192, 132, 252, 0.15)'
+      glowColor: 'rgba(192, 132, 252, 0.15)',
+      featureFlag: 'agent_zero'
     },
     {
       label: 'n8n Workflows',
       value: '0',
       icon: Workflow,
       accentColor: '#a855f7', // accent-500
-      glowColor: 'rgba(168, 85, 247, 0.15)'
+      glowColor: 'rgba(168, 85, 247, 0.15)',
+      featureFlag: 'n8n_workflows'
     },
   ]
+
+  // Filter stats based on feature flags
+  const stats = allStats.filter(stat => {
+    if (!stat.featureFlag) return true
+    return isEnabled(stat.featureFlag)
+  })
 
   return (
     <div className="space-y-6" data-testid="dashboard-page">
@@ -165,32 +177,36 @@ export default function Dashboard() {
           >
             Start Conversation
           </button>
-          <button
-            data-testid="action-connect-mcp"
-            className="py-3 px-4 rounded-lg font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
-            style={{
-              backgroundColor: '#a855f7',
-              color: '#ffffff',
-              boxShadow: isDark
-                ? '0 0 20px rgba(168, 85, 247, 0.2)'
-                : '0 4px 6px rgba(0, 0, 0, 0.1)',
-            }}
-          >
-            Connect MCP Server
-          </button>
-          <button
-            data-testid="action-create-workflow"
-            className="py-3 px-4 rounded-lg font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
-            style={{
-              backgroundImage: 'linear-gradient(135deg, #4ade80 0%, #a855f7 100%)',
-              color: '#0f0f13',
-              boxShadow: isDark
-                ? '0 0 20px rgba(74, 222, 128, 0.2), 0 0 40px rgba(168, 85, 247, 0.2)'
-                : '0 4px 6px rgba(0, 0, 0, 0.1)',
-            }}
-          >
-            Create Workflow
-          </button>
+          {isEnabled('mcp_hub') && (
+            <button
+              data-testid="action-connect-mcp"
+              className="py-3 px-4 rounded-lg font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+              style={{
+                backgroundColor: '#a855f7',
+                color: '#ffffff',
+                boxShadow: isDark
+                  ? '0 0 20px rgba(168, 85, 247, 0.2)'
+                  : '0 4px 6px rgba(0, 0, 0, 0.1)',
+              }}
+            >
+              Connect MCP Server
+            </button>
+          )}
+          {isEnabled('n8n_workflows') && (
+            <button
+              data-testid="action-create-workflow"
+              className="py-3 px-4 rounded-lg font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+              style={{
+                backgroundImage: 'linear-gradient(135deg, #4ade80 0%, #a855f7 100%)',
+                color: '#0f0f13',
+                boxShadow: isDark
+                  ? '0 0 20px rgba(74, 222, 128, 0.2), 0 0 40px rgba(168, 85, 247, 0.2)'
+                  : '0 4px 6px rgba(0, 0, 0, 0.1)',
+              }}
+            >
+              Create Workflow
+            </button>
+          )}
         </div>
       </div>
     </div>

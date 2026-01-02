@@ -14,6 +14,38 @@ flags:
     description: "Show direct links to all wizards on the setup page for testing"
     type: ops
 
+  # =============================================================================
+  # Infrastructure Options
+  # =============================================================================
+
+  # Caddy Routing - Use Caddy reverse proxy for Tailscale routing
+  # When disabled, Tailscale Serve is used directly (simpler setup)
+  caddy_routing:
+    enabled: false
+    description: "Use Caddy reverse proxy for Tailscale routing (advanced multi-service
+      setup)"
+    type: ops
+
+  # =============================================================================
+  # Optional Feature Modules
+  # =============================================================================
+
+  # MCP Hub - Model Context Protocol server management
+  mcp_hub:
+    enabled: false
+    description: "MCP Hub - Connect to MCP servers for external tools and data sources"
+    type: release
+
+  # Agent Zero - AI agent orchestration framework
+  agent_zero:
+    enabled: false
+    description: "Agent Zero - Autonomous AI agents for task automation"
+    type: release
+
+  # n8n Workflows - Visual workflow automation
+  n8n_workflows:
+    enabled: false
+    description: "n8n Workflows - Visual workflow automation and integrations"
   # OpenMemory memories page with knowledge graph visualization
   memories_page:
     enabled: true

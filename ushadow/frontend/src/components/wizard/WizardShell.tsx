@@ -214,7 +214,11 @@ export function WizardShell({
                   {title}
                 </h1>
               </div>
-              {headerActions}
+              {headerActions && (
+                <div className="flex items-center gap-2">
+                  {headerActions}
+                </div>
+              )}
             </div>
             {subtitle && (
               <p

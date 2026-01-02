@@ -1,0 +1,18 @@
+# Production override - nginx serving built static files
+# Usage: docker compose -f docker-compose.yml -f compose/overrides/prod-webui.yml up
+
+services:
+  webui:
+    build:
+      context: ./ushadow/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${WEBUI_PORT:-3000}:80"
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

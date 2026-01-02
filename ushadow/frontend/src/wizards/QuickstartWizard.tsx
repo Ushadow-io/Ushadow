@@ -9,7 +9,7 @@ import { SecretInput, SettingField } from '../components/settings'
 import { useWizard } from '../contexts/WizardContext'
 import { WizardFormProvider, useWizardForm } from '../contexts/WizardFormContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
-import { WizardShell, WizardMessage } from '../components/wizard'
+import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
 
@@ -51,7 +51,6 @@ export default function QuickstartWizard() {
  * QuickstartWizard content - uses WizardFormContext for form handling
  */
 function QuickstartWizardContent() {
-  const navigate = useNavigate()
   const { markPhaseComplete, updateServiceStatus, updateApiKeysStatus } = useWizard()
   const { getValue, saveToApi } = useWizardForm()
   const wizard = useWizardSteps(STEPS)
@@ -158,10 +157,10 @@ function QuickstartWizardContent() {
         prev.map((container) => {
           // Match by exact name only - avoid false positives from partial matches
           const serviceInfo = servicesList.find(
-            (s: any) => s.name === container.name
+            (s) => s.service_name === container.name
           )
 
-          console.log(`[QuickstartWizard] Matching ${container.name}:`, serviceInfo ? { name: serviceInfo.name, status: serviceInfo.status } : 'NOT FOUND')
+          console.log(`[QuickstartWizard] Matching ${container.name}:`, serviceInfo ? { name: serviceInfo.service_name, status: serviceInfo.status } : 'NOT FOUND')
 
           if (serviceInfo) {
             const isRunning = serviceInfo.status === 'running'
@@ -348,12 +347,7 @@ function QuickstartWizardContent() {
       )}
 
       {/* Step 3: Complete */}
-      {wizard.currentStep.id === 'complete' && (
-        <CompleteStep
-          onContinue={() => navigate('/wizard/tailscale')}
-          onGoHome={() => navigate('/')}
-        />
-      )}
+      {wizard.currentStep.id === 'complete' && <CompleteStep />}
     </WizardShell>
   )
 }
@@ -558,12 +552,9 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
 }
 
 // Step 3: Complete
-interface CompleteStepProps {
-  onContinue: () => void
-  onGoHome: () => void
-}
+function CompleteStep() {
+  const navigate = useNavigate()
 
-function CompleteStep({ onContinue, onGoHome }: CompleteStepProps) {
   return (
     <div data-testid="quickstart-step-complete" className="text-center space-y-6">
       <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
@@ -577,46 +568,7 @@ function CompleteStep({ onContinue, onGoHome }: CompleteStepProps) {
         </p>
       </div>
 
-      <div className="p-6 bg-primary-50 dark:bg-primary-900/20 rounded-xl border border-primary-200 dark:border-primary-800">
-        <h3 className="font-semibold text-gray-900 dark:text-white mb-3">What&apos;s Next?</h3>
-        <ul className="text-left text-sm text-gray-700 dark:text-gray-300 space-y-2">
-          <li className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-600" />
-            OpenMemory is ready for storing your memories
-          </li>
-          <li className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-600" />
-            Chronicle is ready for recording conversations
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-4 h-4 rounded-full border-2 border-gray-400" />
-            Add mobile access with Tailscale (Level 2)
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-4 h-4 rounded-full border-2 border-gray-400" />
-            Enable speaker recognition (Level 3)
-          </li>
-        </ul>
-      </div>
-
-      {/* Action buttons */}
-      <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
-        <button
-          onClick={onGoHome}
-          data-testid="quickstart-go-home"
-          className="btn-secondary px-6 py-3"
-        >
-          Go to Dashboard
-        </button>
-        <button
-          onClick={onContinue}
-          data-testid="quickstart-continue-setup"
-          className="btn-primary px-6 py-3 flex items-center justify-center gap-2"
-        >
-          Continue to Level 2
-          <span className="text-xs opacity-75">(Tailscale)</span>
-        </button>
-      </div>
+      <WhatsNext currentLevel={1} onGoHome={() => navigate('/')} />
     </div>
   )
 }

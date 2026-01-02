@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
-import { servicesApi, settingsApi } from '../services/api'
+import { servicesApi, settingsApi, ComposeService } from '../services/api'
 
 // ============================================================================
 // Types
@@ -49,7 +49,7 @@ export interface ConfirmDialogState {
 
 interface ServicesContextType {
   // State
-  serviceInstances: ServiceInstance[]
+  serviceInstances: ComposeService[]
   serviceConfigs: Record<string, Record<string, any>>
   serviceStatuses: Record<string, ContainerStatus>
   loading: boolean
@@ -94,7 +94,7 @@ const ServicesContext = createContext<ServicesContextType | undefined>(undefined
 
 export function ServicesProvider({ children }: { children: ReactNode }) {
   // Core state
-  const [serviceInstances, setServiceInstances] = useState<ServiceInstance[]>([])
+  const [serviceInstances, setServiceInstances] = useState<ComposeService[]>([])
   const [serviceConfigs, setServiceConfigs] = useState<Record<string, Record<string, any>>>({})
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, ContainerStatus>>({})
 
@@ -125,11 +125,12 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   // Data Loading
   // --------------------------------------------------------------------------
 
-  const loadServiceStatuses = useCallback(async (services: ServiceInstance[], configs: Record<string, any>) => {
+  const loadServiceStatuses = useCallback(async (services: ComposeService[], configs: Record<string, any>) => {
     const statuses: Record<string, ContainerStatus> = {}
 
     for (const service of services) {
-      if (service.mode === 'local') {
+      // Services with compose_file are local/docker-managed
+      if (service.compose_file) {
         try {
           const response = await servicesApi.getDockerDetails(service.service_id)
           statuses[service.service_id] = {
@@ -141,6 +142,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
           statuses[service.service_id] = { status: 'not_found' }
         }
       } else {
+        // Cloud services - check if configured
         const isConfigured = configs[service.service_id] &&
                             Object.keys(configs[service.service_id]).length > 0
         statuses[service.service_id] = {
@@ -165,10 +167,12 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
 
       // Build effective config per service
       const effectiveConfigs: Record<string, Record<string, any>> = {}
-      instances.forEach((service: ServiceInstance) => {
+      instances.forEach((service) => {
         effectiveConfigs[service.service_id] = {}
 
-        service.config_schema?.forEach((field: ConfigField) => {
+        // Note: config_schema is available on ServiceInstance (legacy), not ComposeService
+        const configSchema = (service as any).config_schema as ConfigField[] | undefined
+        configSchema?.forEach((field: ConfigField) => {
           if (field.env_var) {
             const keyName = field.env_var.toLowerCase()
             const value = mergedConfig?.api_keys?.[keyName]
@@ -214,7 +218,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     setConfirmDialog({
       isOpen: true,
       serviceId,
-      serviceName: service?.name || serviceId,
+      serviceName: service?.service_name || serviceId,
     })
   }, [serviceInstances])
 
@@ -275,7 +279,8 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
 
     // Validate required fields
     const errors: Record<string, string> = {}
-    service.config_schema
+    const configSchema = (service as any).config_schema as ConfigField[] | undefined
+    configSchema
       ?.filter(f => f.required)
       .forEach(field => {
         const value = editForm[field.key]

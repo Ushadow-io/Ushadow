@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useNavigate, Navigate } from 'react-router-dom'
+import { useNavigate, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { Layers, Eye, EyeOff } from 'lucide-react'
 
@@ -10,16 +10,20 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
+  const location = useLocation()
 
   const { user, login, setupRequired, isLoading: authLoading } = useAuth()
 
-  // After successful login, redirect to dashboard
+  // Get the intended destination from router state (set by ProtectedRoute)
+  const from = (location.state as { from?: string })?.from || '/'
+
+  // After successful login, redirect to intended destination
   useEffect(() => {
     if (user) {
-      console.log('Login successful, redirecting to dashboard...')
-      navigate('/', { replace: true })
+      console.log('Login successful, redirecting to:', from)
+      navigate(from, { replace: true, state: { fromAuth: true } })
     }
-  }, [user, navigate])
+  }, [user, navigate, from])
 
   // Show loading while checking setup status
   if (setupRequired === null || authLoading) {

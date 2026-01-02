@@ -1,6 +1,7 @@
 import React from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
+import { useWizard } from '../../contexts/WizardContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -9,6 +10,8 @@ interface ProtectedRouteProps {
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
   const { user, token, isLoading, isAdmin, setupRequired } = useAuth()
+  const { isFirstTimeUser, getSetupLabel } = useWizard()
+  const location = useLocation()
 
   if (isLoading) {
     return (
@@ -24,7 +27,8 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
   }
 
   if (!token || !user) {
-    return <Navigate to="/login" replace />
+    // Preserve the intended destination so login can redirect back
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />
   }
 
   if (adminOnly && !isAdmin) {
@@ -42,8 +46,21 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     )
   }
 
-  // Note: We no longer force first-time users to the wizard.
-  // The dashboard/nav can show prompts, but users should always be able to navigate freely.
+  // Redirect first-time users to wizard ONLY if they just came from login/register
+  // This prevents redirect loops when accessing the app directly
+  // Check sessionStorage for registration hard-reload case (cleared after reading)
+  const sessionFromAuth = sessionStorage.getItem('fromAuth') === 'true'
+  if (sessionFromAuth) {
+    sessionStorage.removeItem('fromAuth')
+  }
+  const fromAuth = location.state?.from === '/login' ||
+                   location.state?.from === '/register' ||
+                   location.state?.fromAuth === true ||
+                   sessionFromAuth
+  if (isFirstTimeUser() && fromAuth && !location.pathname.startsWith('/wizard')) {
+    const { path } = getSetupLabel()
+    return <Navigate to={path} replace />
+  }
 
   return <>{children}</>
 }

@@ -33,6 +33,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class HealthCheckFilter(logging.Filter):
+    """Filter out health check requests from uvicorn access logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        # Filter out GET /health requests
+        if '"GET /health' in message or '"/health' in message:
+            return False
+        return True
+
+
+# Apply filter to uvicorn access logger
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
 # Get settings from OmegaConf (sync access at module level)
 config = get_settings_store()
 
