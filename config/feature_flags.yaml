@@ -14,6 +14,12 @@ flags:
     description: "Show direct links to all wizards on the setup page for testing"
     type: ops
 
+  # OpenMemory memories page with knowledge graph visualization
+  memories_page:
+    enabled: true
+    description: "Show Memories page in navigation with list view and knowledge graph"
+    type: release
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false

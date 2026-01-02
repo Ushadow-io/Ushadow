@@ -23,6 +23,7 @@ from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
+from src.services.mcp_server import setup_mcp_server
 from src.config.omegaconf_settings import get_settings_store
 
 # Configure logging
@@ -133,6 +134,9 @@ app.include_router(services.router, prefix="/api/services", tags=["services"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
+
+# Setup MCP server for LLM tool access
+setup_mcp_server(app)
 
 
 @app.get("/")

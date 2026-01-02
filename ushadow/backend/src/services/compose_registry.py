@@ -115,6 +115,7 @@ class DiscoveredService:
     display_name: Optional[str] = None  # From x-ushadow (e.g., "OpenMemory")
     description: Optional[str] = None  # From x-ushadow
     namespace: Optional[str] = None  # Docker Compose project / K8s namespace
+    infra_services: List[str] = field(default_factory=list)  # Infra services to start first
 
     # Environment variables
     required_env_vars: List[ComposeEnvVar] = field(default_factory=list)
@@ -269,6 +270,7 @@ class ComposeServiceRegistry:
                 display_name=service.display_name,
                 description=service.description,
                 namespace=service.namespace,
+                infra_services=service.infra_services,
                 required_env_vars=service.required_env_vars,
                 optional_env_vars=service.optional_env_vars,
             )

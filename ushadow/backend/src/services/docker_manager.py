@@ -918,6 +918,64 @@ class DockerManager:
 
         return subprocess_env, container_env
 
+
+    async def _start_infra_services(self, infra_services: list[str]) -> tuple[bool, str]:
+        """
+        Start infrastructure services from docker-compose.infra.yml.
+
+        Args:
+            infra_services: List of service names to start (e.g., ["postgres", "qdrant"])
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        if not infra_services:
+            return True, "No infra services required"
+
+        try:
+            # Infra compose file is in /compose inside container
+            infra_compose_path = Path("/compose/docker-compose.infra.yml")
+            if not infra_compose_path.exists():
+                logger.warning(f"Infra compose file not found: {infra_compose_path}")
+                return False, "Infrastructure compose file not found"
+
+            import os
+            subprocess_env = os.environ.copy()
+            subprocess_env["COMPOSE_IGNORE_ORPHANS"] = "true"
+
+            for service in infra_services:
+                logger.info(f"Starting infra service: {service}")
+                cmd = [
+                    "docker", "compose",
+                    "-f", str(infra_compose_path),
+                    "-p", "infra",
+                    "up", "-d", service
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    env=subprocess_env,
+                    cwd=str(infra_compose_path.parent),
+                    capture_output=True,
+                    text=True,
+                    timeout=120  # Longer timeout for pulling images
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"Failed to start infra service {service}: {result.stderr}")
+                    return False, f"Failed to start infra service '{service}': {result.stderr[:200]}"
+
+                logger.info(f"Started infra service: {service}")
+
+            return True, f"Started infra services: {', '.join(infra_services)}"
+
+        except subprocess.TimeoutExpired:
+            logger.error("Timeout starting infra services")
+            return False, "Infrastructure service start timeout"
+        except Exception as e:
+            logger.error(f"Error starting infra services: {e}")
+            return False, f"Failed to start infrastructure: {str(e)}"
+
     async def _start_service_via_compose(self, service_name: str, compose_file: str) -> tuple[bool, str]:
         """
         Start a service using docker-compose.
@@ -930,6 +988,18 @@ class DockerManager:
             Tuple of (success: bool, message: str)
         """
         try:
+            # Get the discovered service from the registry for metadata
+            compose_registry = get_compose_registry()
+            discovered = compose_registry.get_service_by_name(service_name)
+
+            # Check if this service requires infra services to be started first
+            infra_services = discovered.infra_services if discovered else []
+            if infra_services:
+                logger.info(f"Service {service_name} requires infra services: {infra_services}")
+                success, msg = await self._start_infra_services(infra_services)
+                if not success:
+                    return False, msg
+
             # Translate relative paths to container mount points
             # compose/xxx.yaml -> /compose/xxx.yaml (mounted in container)
             # docker-compose.infra.yml -> /config/../docker-compose.infra.yml (project root)
@@ -953,9 +1023,7 @@ class DockerManager:
 
             # Run docker-compose up -d for this service
             # Use declared namespace from x-ushadow, fall back to COMPOSE_PROJECT_NAME
-            import os
-            service_config = self.MANAGEABLE_SERVICES[service_name]
-            project_name = service_config.get("namespace")
+            project_name = discovered.namespace if discovered else None
             if not project_name:
                 project_name = os.environ.get("COMPOSE_PROJECT_NAME")
             if not project_name:
@@ -967,11 +1035,11 @@ class DockerManager:
 
             logger.info(f"[start_service_via_compose] Using project_name: {project_name} for service: {service_name}")
 
-            # Check if service requires a specific compose profile
-            compose_profile = self.MANAGEABLE_SERVICES[service_name].get("compose_profile")
+            # Check if service requires a specific compose profile (use first profile if any)
+            compose_profile = discovered.profiles[0] if discovered and discovered.profiles else None
 
-            # Get docker service name (may differ from service_name)
-            docker_service_name = self.MANAGEABLE_SERVICES[service_name].get("docker_service_name", service_name)
+            # Get docker service name from the discovered service
+            docker_service_name = discovered.service_name if discovered else service_name
 
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution

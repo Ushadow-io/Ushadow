@@ -251,7 +251,7 @@ if __name__ == '__main__':
         all_exist, existing = check_infrastructure_exists()
         print(json.dumps({'all_exist': all_exist, 'existing': existing}))
     elif cmd == 'start-infrastructure':
-        compose_file = sys.argv[2] if len(sys.argv) > 2 else 'docker-compose.infra.yml'
+        compose_file = sys.argv[2] if len(sys.argv) > 2 else 'compose/docker-compose.infra.yml'
         project_name = sys.argv[3] if len(sys.argv) > 3 else 'infra'
         success, msg = start_infrastructure(compose_file, project_name)
         print(json.dumps({'success': success, 'message': msg}))
