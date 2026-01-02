@@ -14,6 +14,7 @@ export interface UNode {
   id: string;
   name: string;
   apiUrl: string;
+  chronicleApiUrl?: string;  // Chronicle/OMI backend API URL (different port)
   streamUrl: string;
   tailscaleIp?: string;
   addedAt: string;

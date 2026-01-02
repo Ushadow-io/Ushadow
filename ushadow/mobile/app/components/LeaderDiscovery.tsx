@@ -21,7 +21,7 @@ import QRScanner, { UshadowConnectionData } from './QRScanner';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 
 interface LeaderDiscoveryProps {
-  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string) => void;
+  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string) => void;
 }
 
 export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
@@ -55,14 +55,14 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
     const result = await connectFromQR(data);
     if (result.success && result.leader && onLeaderFound) {
       // Pass auth token from QR code if available (v3+)
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl);
     }
   };
 
   const handleConnectToScanned = async () => {
     const result = await connectToScanned();
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl);
     }
   };
 
@@ -71,7 +71,7 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
 
     const result = await connectToLeader(savedLeader.tailscaleIp, savedLeader.port);
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl);
     }
   };
 
@@ -85,13 +85,13 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
 
     const result = await connectToEndpoint(trimmed);
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl);
     }
   };
 
   const handleConnectToLeader = () => {
     if (leader && onLeaderFound) {
-      onLeaderFound(leader.apiUrl, leader.streamUrl);
+      onLeaderFound(leader.apiUrl, leader.streamUrl, undefined, leader.chronicleApiUrl);
     }
   };
 
@@ -231,16 +231,9 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
             onPress={handleConnectToLeader}
             testID="continue-button"
           >
-            <Text style={styles.connectButtonText}>Continue</Text>
+            <Text style={styles.connectButtonText}>Use This Server</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity
-          style={styles.rescanButton}
-          onPress={() => setShowScanner(true)}
-          testID="rescan-button"
-        >
-          <Text style={styles.rescanText}>Scan New QR</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -254,170 +247,117 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
         onScan={handleQRScan}
       />
 
-      {/* Scanned Server - Always show if available */}
-      {scannedServer ? (
-        <>
-          {renderScannedServer(scannedServer)}
-
-          {/* Error Display */}
-          {error && (
-            <View style={styles.errorSection}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
-
-          {/* Manual Connection Toggle */}
-          <TouchableOpacity
-            style={styles.toggleManual}
-            onPress={() => setShowManual(!showManual)}
-            testID="toggle-manual"
-          >
-            <Text style={styles.toggleManualText}>
-              {showManual ? 'Hide manual entry' : 'Enter address manually'}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Manual Endpoint Entry */}
-          {showManual && (
-            <View style={styles.manualSection}>
-              <Text style={styles.inputLabel}>Endpoint</Text>
-              <TextInput
-                style={styles.input}
-                value={endpoint}
-                onChangeText={setEndpoint}
-                placeholder="my-leader.tailnet.ts.net or 100.64.1.5:8000"
-                placeholderTextColor={theme.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                testID="manual-endpoint-input"
-              />
-              <Text style={styles.endpointHint}>
-                Tailscale hostname or IP address. Port defaults to 8000 if not specified.
-              </Text>
-              <TouchableOpacity
-                style={[styles.manualConnectButton, isConnecting && styles.buttonDisabled]}
-                onPress={handleManualConnect}
-                disabled={isConnecting}
-                testID="manual-connect-button"
-              >
-                <Text style={styles.buttonText}>Connect</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </>
-      ) : (
-        <>
-          {/* No Scanned Server - Show initial setup UI */}
-          {/* Connection Status */}
-          <View style={styles.statusSection}>
-            <View style={styles.statusRow}>
-              <View
-                style={[
-                  styles.statusDot,
-                  isOnTailscale === true
-                    ? styles.statusOnline
-                    : isOnTailscale === false
-                    ? styles.statusOffline
-                    : styles.statusUnknown,
-                ]}
-              />
-              <Text style={styles.statusText}>
-                {isOnTailscale === true
-                  ? 'Connected to Tailscale'
-                  : isOnTailscale === false
-                  ? 'Tailscale not detected'
-                  : 'Checking Tailscale...'}
-              </Text>
-            </View>
-          </View>
-
-          {/* Primary Action: Scan QR Code */}
-          <TouchableOpacity
-            style={[styles.primaryButton, isConnecting && styles.buttonDisabled]}
-            onPress={() => setShowScanner(true)}
-            disabled={isConnecting}
-            testID="scan-qr-button"
-          >
-            {isConnecting ? (
-              <ActivityIndicator color={theme.primaryButtonText} size="small" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Scan QR Code</Text>
-            )}
-          </TouchableOpacity>
-
-          <Text style={styles.helperText}>
-            Open the Mobile App wizard on your Ushadow dashboard to get the QR code
+      {/* Connection Status */}
+      <View style={styles.statusSection}>
+        <View style={styles.statusRow}>
+          <View
+            style={[
+              styles.statusDot,
+              isOnTailscale === true
+                ? styles.statusOnline
+                : isOnTailscale === false
+                ? styles.statusOffline
+                : styles.statusUnknown,
+            ]}
+          />
+          <Text style={styles.statusText}>
+            {isOnTailscale === true
+              ? 'Connected to Tailscale'
+              : isOnTailscale === false
+              ? 'Tailscale not detected'
+              : 'Checking Tailscale...'}
           </Text>
+        </View>
+      </View>
 
-          {/* Saved Leader Quick Reconnect */}
-          {savedLeader && (
-            <View style={styles.savedSection}>
-              <View style={styles.savedHeader}>
-                <Text style={styles.savedLabel}>Previous Connection</Text>
-                <TouchableOpacity onPress={clearSaved} style={styles.clearButton}>
-                  <Text style={styles.clearButtonText}>Clear</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.savedValue}>
-                {savedLeader.hostname} ({savedLeader.tailscaleIp})
-              </Text>
-              <TouchableOpacity
-                style={[styles.reconnectButton, isConnecting && styles.buttonDisabled]}
-                onPress={handleReconnect}
-                disabled={isConnecting}
-                testID="reconnect-button"
-              >
-                <Text style={styles.buttonText}>Reconnect</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+      {/* Primary Action: Scan QR Code - Always visible */}
+      <TouchableOpacity
+        style={[styles.primaryButton, isConnecting && styles.buttonDisabled]}
+        onPress={() => setShowScanner(true)}
+        disabled={isConnecting}
+        testID="scan-qr-button"
+      >
+        {isConnecting ? (
+          <ActivityIndicator color={theme.primaryButtonText} size="small" />
+        ) : (
+          <Text style={styles.primaryButtonText}>Scan QR Code</Text>
+        )}
+      </TouchableOpacity>
 
-          {/* Manual Connection Toggle */}
+      <Text style={styles.helperText}>
+        Click on the leader node in your Ushadow dashboard to show the QR code
+      </Text>
+
+      {/* Scanned Server Card - Show if available */}
+      {scannedServer && renderScannedServer(scannedServer)}
+
+      {/* Saved Leader Quick Reconnect - only if different from scanned */}
+      {savedLeader && !scannedServer && (
+        <View style={styles.savedSection}>
+          <View style={styles.savedHeader}>
+            <Text style={styles.savedLabel}>Previous Connection</Text>
+            <TouchableOpacity onPress={clearSaved} style={styles.clearButton}>
+              <Text style={styles.clearButtonText}>Clear</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.savedValue}>
+            {savedLeader.hostname} ({savedLeader.tailscaleIp})
+          </Text>
           <TouchableOpacity
-            style={styles.toggleManual}
-            onPress={() => setShowManual(!showManual)}
-            testID="toggle-manual"
+            style={[styles.reconnectButton, isConnecting && styles.buttonDisabled]}
+            onPress={handleReconnect}
+            disabled={isConnecting}
+            testID="reconnect-button"
           >
-            <Text style={styles.toggleManualText}>
-              {showManual ? 'Hide manual entry' : 'Enter address manually'}
-            </Text>
+            <Text style={styles.buttonText}>Reconnect</Text>
           </TouchableOpacity>
+        </View>
+      )}
 
-          {/* Manual Endpoint Entry */}
-          {showManual && (
-            <View style={styles.manualSection}>
-              <Text style={styles.inputLabel}>Endpoint</Text>
-              <TextInput
-                style={styles.input}
-                value={endpoint}
-                onChangeText={setEndpoint}
-                placeholder="my-leader.tailnet.ts.net or 100.64.1.5:8000"
-                placeholderTextColor={theme.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                testID="manual-endpoint-input"
-              />
-              <Text style={styles.endpointHint}>
-                Tailscale hostname or IP address. Port defaults to 8000 if not specified.
-              </Text>
-              <TouchableOpacity
-                style={[styles.manualConnectButton, isConnecting && styles.buttonDisabled]}
-                onPress={handleManualConnect}
-                disabled={isConnecting}
-                testID="manual-connect-button"
-              >
-                <Text style={styles.buttonText}>Connect</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+      {/* Manual Connection Toggle */}
+      <TouchableOpacity
+        style={styles.toggleManual}
+        onPress={() => setShowManual(!showManual)}
+        testID="toggle-manual"
+      >
+        <Text style={styles.toggleManualText}>
+          {showManual ? 'Hide manual entry' : 'Enter address manually'}
+        </Text>
+      </TouchableOpacity>
 
-          {/* Error Display */}
-          {error && (
-            <View style={styles.errorSection}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
-        </>
+      {/* Manual Endpoint Entry */}
+      {showManual && (
+        <View style={styles.manualSection}>
+          <Text style={styles.inputLabel}>Endpoint</Text>
+          <TextInput
+            style={styles.input}
+            value={endpoint}
+            onChangeText={setEndpoint}
+            placeholder="my-leader.tailnet.ts.net or 100.64.1.5:8000"
+            placeholderTextColor={theme.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            testID="manual-endpoint-input"
+          />
+          <Text style={styles.endpointHint}>
+            Tailscale hostname or IP address. Port defaults to 8000 if not specified.
+          </Text>
+          <TouchableOpacity
+            style={[styles.manualConnectButton, isConnecting && styles.buttonDisabled]}
+            onPress={handleManualConnect}
+            disabled={isConnecting}
+            testID="manual-connect-button"
+          >
+            <Text style={styles.buttonText}>Connect</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Error Display */}
+      {error && (
+        <View style={styles.errorSection}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
       )}
     </ScrollView>
   );

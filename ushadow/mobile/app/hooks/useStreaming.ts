@@ -14,12 +14,16 @@ export interface UseStreaming {
   isConnecting: boolean;
   isRecording: boolean;
   isInitializing: boolean;
+  isRetrying: boolean;
+  retryCount: number;
+  maxRetries: number;
   error: string | null;
   audioLevel: number;
 
   // Actions
   startStreaming: (streamUrl: string) => Promise<void>;
   stopStreaming: () => Promise<void>;
+  cancelRetry: () => void;
 }
 
 export const useStreaming = (): UseStreaming => {
@@ -30,9 +34,13 @@ export const useStreaming = (): UseStreaming => {
   const {
     isStreaming: wsStreaming,
     isConnecting,
+    isRetrying,
+    retryCount,
+    maxRetries,
     error: wsError,
     startStreaming: wsStart,
     stopStreaming: wsStop,
+    cancelRetry,
     sendAudio,
   } = useAudioStreamer();
 
@@ -101,9 +109,13 @@ export const useStreaming = (): UseStreaming => {
     isConnecting,
     isRecording,
     isInitializing,
+    isRetrying,
+    retryCount,
+    maxRetries,
     error,
     audioLevel,
     startStreaming: startStreamingCombined,
     stopStreaming: stopStreamingCombined,
+    cancelRetry,
   };
 };

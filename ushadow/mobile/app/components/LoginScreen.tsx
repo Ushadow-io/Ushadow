@@ -7,7 +7,7 @@
  * URL Format:
  * - Server URL: https://{tailscale-host} (e.g., https://blue.spangled-kettle.ts.net)
  * - Login endpoint: {serverUrl}/api/auth/login
- * - The login uses FastAPI form-urlencoded POST with username/password
+ * - The login uses JSON POST with username/password
  * - Returns JWT token valid for both ushadow and Chronicle services
  */
 
@@ -64,17 +64,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       console.log('[Login] Attempting login to:', loginUrl);
 
-      // Login request (form-urlencoded as required by FastAPI)
-      const formData = new URLSearchParams();
-      formData.append('username', email.trim());
-      formData.append('password', password);
-
+      // Login request (JSON body)
       const response = await fetch(loginUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Type': 'application/json',
         },
-        body: formData.toString(),
+        body: JSON.stringify({
+          email: email.trim(),
+          password: password,
+        }),
       });
 
       if (!response.ok) {

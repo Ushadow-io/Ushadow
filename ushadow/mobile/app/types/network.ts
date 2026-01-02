@@ -32,6 +32,8 @@ export interface ServiceDeployment {
   display_name: string;
   status: string;
   unode_hostname: string;
+  port?: number;
+  api_url?: string;
 }
 
 /**
@@ -42,6 +44,10 @@ export interface LeaderInfo {
   tailscale_ip: string;
   capabilities: LeaderCapabilities;
   api_port: number;
+  // API URLs for specific services
+  ushadow_api_url: string;
+  chronicle_api_url?: string;
+  // WebSocket streaming URLs
   ws_pcm_url: string;
   ws_omi_url: string;
   unodes: UNode[];
@@ -55,6 +61,7 @@ export interface DiscoveredLeader {
   hostname: string;
   tailscaleIp: string;
   apiUrl: string;
+  chronicleApiUrl?: string;  // Chronicle/OMI backend API URL (different port)
   streamUrl: string;  // Kept for backwards compatibility
   wsPcmUrl: string;   // WebSocket URL for PCM audio streaming
   wsOmiUrl: string;   // WebSocket URL for OMI format streaming

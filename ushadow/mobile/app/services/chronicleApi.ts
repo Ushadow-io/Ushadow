@@ -83,8 +83,8 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
     throw new Error('Not authenticated. Please log in first.');
   }
 
-  const url = `${baseUrl}/api/chronicle${endpoint}`;
-  console.log(`[ChronicleAPI] ${options.method || 'GET'} ${endpoint}`);
+  const url = `${baseUrl}/api${endpoint}`;
+  console.log(`[ChronicleAPI] ${options.method || 'GET'} ${url}`);
 
   const response = await fetch(url, {
     ...options,
@@ -191,5 +191,79 @@ export async function deleteMemory(memoryId: string): Promise<void> {
   } catch (error) {
     console.error('[ChronicleAPI] Failed to delete memory:', error);
     throw error;
+  }
+}
+
+/**
+ * Verify authentication against a specific UNode API.
+ * Makes a lightweight request to check if the token is still valid.
+ *
+ * @param apiUrl The UNode's API URL
+ * @param token The auth token to verify
+ * @returns Object with auth status and optional error message
+ */
+export async function verifyUnodeAuth(
+  apiUrl: string,
+  token: string
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    // Use conversations endpoint with limit=1 to verify auth (lightweight)
+    const url = `${apiUrl}/api/conversations?limit=1`;
+    console.log(`[ChronicleAPI] Verifying auth at: ${url}`);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (response.ok) {
+      console.log('[ChronicleAPI] Auth verified successfully');
+      return { valid: true };
+    }
+
+    // Try to get error details from response body
+    let errorDetail = '';
+    try {
+      const errorBody = await response.text();
+      if (errorBody) {
+        // Try to parse as JSON for detail field
+        try {
+          const errorJson = JSON.parse(errorBody);
+          errorDetail = errorJson.detail || errorJson.error || errorJson.message || errorBody;
+        } catch {
+          errorDetail = errorBody.substring(0, 100); // Truncate raw text
+        }
+      }
+    } catch {
+      // Ignore body parsing errors
+    }
+
+    console.log(`[ChronicleAPI] Auth failed: ${response.status} - ${errorDetail}`);
+
+    if (response.status === 401) {
+      return { valid: false, error: `401 Unauthorized${errorDetail ? ': ' + errorDetail : ''}` };
+    }
+
+    if (response.status === 403) {
+      return { valid: false, error: `403 Forbidden${errorDetail ? ': ' + errorDetail : ''}` };
+    }
+
+    if (response.status === 404) {
+      // Endpoint not found - Chronicle service may not be running
+      console.log('[ChronicleAPI] Chronicle endpoint not found (404)');
+      return { valid: false, error: '404 Not Found - Chronicle service may not be running' };
+    }
+
+    return { valid: false, error: `${response.status} Error${errorDetail ? ': ' + errorDetail : ''}` };
+  } catch (error) {
+    console.error('[ChronicleAPI] Auth verification failed:', error);
+    // Network errors might mean the server is unreachable
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('Network') || message.includes('fetch')) {
+      return { valid: false, error: 'Network error - server unreachable' };
+    }
+    return { valid: false, error: message };
   }
 }

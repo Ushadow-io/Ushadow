@@ -18,9 +18,13 @@ import NetInfo from '@react-native-community/netinfo';
 export interface UseAudioStreamer {
   isStreaming: boolean;
   isConnecting: boolean;
+  isRetrying: boolean;
+  retryCount: number;
+  maxRetries: number;
   error: string | null;
   startStreaming: (url: string) => Promise<void>;
   stopStreaming: () => void;
+  cancelRetry: () => void;
   sendAudio: (audioBytes: Uint8Array) => void;
   getWebSocketReadyState: () => number | undefined;
 }
@@ -50,6 +54,8 @@ const HEARTBEAT_MS = 25000;
 export const useAudioStreamer = (): UseAudioStreamer => {
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [isRetrying, setIsRetrying] = useState<boolean>(false);
+  const [retryCount, setRetryCount] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
 
   const websocketRef = useRef<WebSocket | null>(null);
@@ -122,12 +128,32 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     setStateSafe(setIsStreaming, false);
     setStateSafe(setIsConnecting, false);
+    setStateSafe(setIsRetrying, false);
+    setStateSafe(setRetryCount, 0);
+    reconnectAttemptsRef.current = 0;
   }, [sendWyomingEvent, setStateSafe]);
+
+  // Cancel retry attempts
+  const cancelRetry = useCallback(() => {
+    console.log('[AudioStreamer] Cancelling retry attempts');
+    manuallyStoppedRef.current = true;
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    setStateSafe(setIsRetrying, false);
+    setStateSafe(setIsConnecting, false);
+    setStateSafe(setRetryCount, 0);
+    reconnectAttemptsRef.current = 0;
+  }, [setStateSafe]);
 
   // Reconnect with exponential backoff
   const attemptReconnect = useCallback(() => {
     if (manuallyStoppedRef.current || !currentUrlRef.current) {
       console.log('[AudioStreamer] Not reconnecting: manually stopped or missing URL');
+      setStateSafe(setIsRetrying, false);
       return;
     }
     if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
@@ -135,6 +161,8 @@ export const useAudioStreamer = (): UseAudioStreamer => {
       manuallyStoppedRef.current = true;
       setStateSafe(setIsStreaming, false);
       setStateSafe(setIsConnecting, false);
+      setStateSafe(setIsRetrying, false);
+      setStateSafe(setRetryCount, 0);
       setStateSafe(setError, 'Failed to reconnect after multiple attempts.');
       return;
     }
@@ -147,10 +175,17 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     setStateSafe(setIsConnecting, true);
+    setStateSafe(setIsRetrying, true);
+    setStateSafe(setRetryCount, attempt);
 
     reconnectTimeoutRef.current = setTimeout(() => {
       if (!manuallyStoppedRef.current) {
         startStreaming(currentUrlRef.current)
+          .then(() => {
+            // Connection successful, reset retry state
+            setStateSafe(setIsRetrying, false);
+            setStateSafe(setRetryCount, 0);
+          })
           .catch(err => {
             console.error('[AudioStreamer] Reconnection failed:', (err as Error).message || err);
             attemptReconnect();
@@ -341,9 +376,13 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   return {
     isStreaming,
     isConnecting,
+    isRetrying,
+    retryCount,
+    maxRetries: MAX_RECONNECT_ATTEMPTS,
     error,
     startStreaming,
     stopStreaming,
+    cancelRetry,
     sendAudio,
     getWebSocketReadyState,
   };
