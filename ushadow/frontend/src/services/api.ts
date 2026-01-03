@@ -343,7 +343,7 @@ export interface ComposeService {
   service_id: string
   service_name: string
   compose_file: string
-  image: string
+  image?: string
   description?: string
   requires: string[]
   depends_on: string[]
@@ -353,6 +353,9 @@ export interface ComposeService {
   optional_env_count: number
   needs_setup: boolean
   installed?: boolean  // For catalog view - whether service is installed
+  status?: string      // Container status (running, stopped, etc.)
+  health?: string      // Container health (healthy, unhealthy, etc.)
+  profiles?: string[]  // Docker compose profiles
 }
 
 // Quickstart wizard endpoints (kept separate from services)
@@ -1017,8 +1020,17 @@ export const tailscaleApi = {
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; results?: string }>('/api/tailscale/configure-serve', config),
-  configureCaddyRouting: () =>
-    api.post<{ status: string; message: string }>('/api/tailscale/configure-caddy-routing'),
+  configureCaddyRouting: (hostname?: string) =>
+    api.post<{ status: string; message: string; cors_origin_added?: string }>(
+      '/api/tailscale/configure-caddy-routing',
+      hostname ? { hostname } : undefined
+    ),
+  updateCorsOrigins: (hostname: string) =>
+    api.post<{
+      status: string
+      origin: string
+      message: string
+    }>('/api/tailscale/update-cors', { hostname }),
 
   // Caddy management
   getCaddyStatus: () =>

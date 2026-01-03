@@ -1,20 +1,16 @@
-# Frontend service definition
+# Frontend service definition (base config)
+# Ports and build config are defined in overrides:
+#   - compose/overrides/dev-webui.yml  (Vite dev server)
+#   - compose/overrides/prod-webui.yml (nginx production)
 
 services:
   webui:
-    build:
-      context: ../ushadow/frontend
-      dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-webui
     env_file:
-      - ../.env          # Environment configuration
+      - ../.env
     environment:
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8000}
       - VITE_ENV_NAME=${VITE_ENV_NAME:-}
-      - NODE_ENV=${NODE_ENV:-development}
-    volumes:
-      - ../ushadow/frontend/src:/app/src
-      - /app/node_modules
     networks:
       - infra-network
     depends_on:

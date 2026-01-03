@@ -3,13 +3,24 @@
  *
  * This service provides direct communication with the Chronicle backend
  * for conversations and queue management functionality.
+ *
+ * Authentication: Chronicle and ushadow share the same AUTH_SECRET_KEY,
+ * so the ushadow JWT token can be used directly with Chronicle.
  */
 import axios from 'axios'
 import { getStorageKey } from '../utils/storage'
+import { api } from './api'
+
+// Connection info from backend
+export interface ChronicleConnectionInfo {
+  url: string
+  available: boolean
+  auth_compatible: boolean
+}
 
 // Get Chronicle backend URL from localStorage or environment
 const getChronicleUrl = (): string => {
-  // Check localStorage first (from Settings page)
+  // Check localStorage first (from Settings page or connection info)
   const storedUrl = localStorage.getItem(getStorageKey('chronicle_url'))
   if (storedUrl) {
     return storedUrl
@@ -20,8 +31,8 @@ const getChronicleUrl = (): string => {
     return import.meta.env.VITE_CHRONICLE_URL
   }
 
-  // Default to localhost:8000 (Chronicle's default port)
-  return 'http://localhost:8000'
+  // Default to localhost:8080 (Chronicle's default port)
+  return 'http://localhost:8080'
 }
 
 // Create Chronicle-specific axios instance
@@ -167,12 +178,119 @@ export interface StreamingStatus {
 
 // Auth API
 export const chronicleAuthApi = {
+  /**
+   * Get Chronicle connection info from ushadow backend.
+   * This also returns whether Chronicle is available and if auth is compatible.
+   */
+  getConnectionInfo: async (): Promise<ChronicleConnectionInfo> => {
+    const response = await api.get<ChronicleConnectionInfo>('/api/chronicle/connection-info')
+    return response.data
+  },
+
+  /**
+   * Try to authenticate with Chronicle using the ushadow JWT token.
+   * Since both services share AUTH_SECRET_KEY, the ushadow token should work.
+   * Returns true if authentication succeeded.
+   */
+  tryUshadowToken: async (): Promise<boolean> => {
+    // Note: AuthContext stores as 'token', not 'auth_token'
+    const storageKey = getStorageKey('token')
+    console.log('[Chronicle API] tryUshadowToken: looking for key:', storageKey)
+    const ushadowToken = localStorage.getItem(storageKey)
+    if (!ushadowToken) {
+      console.log('[Chronicle API] tryUshadowToken: no token found at', storageKey)
+      return false
+    }
+    console.log('[Chronicle API] tryUshadowToken: found ushadow token, attempting to use it')
+
+    try {
+      // Use the ushadow token as the Chronicle token
+      localStorage.setItem(getStorageKey('chronicle_token'), ushadowToken)
+
+      // Verify it works by calling /users/me
+      const chronicleApi = getChronicleApi()
+      console.log('[Chronicle API] tryUshadowToken: calling /users/me to verify token...')
+      const response = await chronicleApi.get('/users/me')
+      console.log('[Chronicle API] tryUshadowToken: SUCCESS - token accepted, user =', response.data?.email || response.data)
+
+      return true
+    } catch (error: any) {
+      // Token didn't work, clear it
+      console.log('[Chronicle API] tryUshadowToken: FAILED -', error.response?.status, error.response?.data || error.message)
+      localStorage.removeItem(getStorageKey('chronicle_token'))
+      return false
+    }
+  },
+
+  /**
+   * Initialize Chronicle with the best available URL and auth.
+   * 1. Fetches connection info from backend (gets optimal URL)
+   * 2. Tries to use ushadow token for auth
+   * 3. Returns success status
+   */
+  autoConnect: async (): Promise<{ connected: boolean; url: string; needsLogin: boolean }> => {
+    console.log('[Chronicle API] autoConnect: starting...')
+    try {
+      // Get connection info from backend
+      console.log('[Chronicle API] autoConnect: fetching connection info from backend...')
+      const info = await chronicleAuthApi.getConnectionInfo()
+      console.log('[Chronicle API] autoConnect: connection info =', info)
+
+      // Store the URL from backend
+      if (info.url) {
+        setChronicleUrl(info.url)
+      }
+
+      if (!info.available) {
+        console.log('[Chronicle API] autoConnect: Chronicle not available')
+        return { connected: false, url: info.url, needsLogin: false }
+      }
+
+      // Try using ushadow token
+      if (info.auth_compatible) {
+        console.log('[Chronicle API] autoConnect: auth_compatible=true, trying ushadow token...')
+        const tokenWorked = await chronicleAuthApi.tryUshadowToken()
+        if (tokenWorked) {
+          console.log('[Chronicle API] autoConnect: ushadow token worked!')
+          return { connected: true, url: info.url, needsLogin: false }
+        }
+        console.log('[Chronicle API] autoConnect: ushadow token did not work')
+      } else {
+        console.log('[Chronicle API] autoConnect: auth_compatible=false, skipping ushadow token')
+      }
+
+      // Check if we have an existing Chronicle token
+      console.log('[Chronicle API] autoConnect: checking for existing chronicle_token...')
+      if (chronicleAuthApi.isAuthenticated()) {
+        console.log('[Chronicle API] autoConnect: found existing token, verifying...')
+        try {
+          await chronicleAuthApi.getMe()
+          console.log('[Chronicle API] autoConnect: existing token is valid')
+          return { connected: true, url: info.url, needsLogin: false }
+        } catch {
+          // Token expired
+          console.log('[Chronicle API] autoConnect: existing token expired, clearing')
+          chronicleAuthApi.logout()
+        }
+      } else {
+        console.log('[Chronicle API] autoConnect: no existing chronicle_token')
+      }
+
+      console.log('[Chronicle API] autoConnect: needs manual login')
+      return { connected: false, url: info.url, needsLogin: true }
+    } catch (error) {
+      console.warn('[Chronicle API] autoConnect: failed to get connection info:', error)
+      // Fall back to stored/default URL
+      return { connected: false, url: getChronicleUrl(), needsLogin: true }
+    }
+  },
+
   login: async (email: string, password: string) => {
-    const api = getChronicleApi()
+    const chronicleApi = getChronicleApi()
     const formData = new FormData()
     formData.append('username', email)
     formData.append('password', password)
-    const response = await api.post('/auth/jwt/login', formData)
+    const response = await chronicleApi.post('/auth/jwt/login', formData)
     // Store the Chronicle token
     if (response.data?.access_token) {
       localStorage.setItem(getStorageKey('chronicle_token'), response.data.access_token)

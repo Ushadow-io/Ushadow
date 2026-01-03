@@ -18,6 +18,7 @@ const getBasename = () => {
 }
 
 import ProtectedRoute from './components/auth/ProtectedRoute'
+import FeatureRoute from './components/auth/FeatureRoute'
 import Layout from './components/layout/Layout'
 
 // Pages
@@ -31,7 +32,6 @@ import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
-import FeatureFlags from './pages/FeatureFlags'
 import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
 import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
@@ -87,15 +87,14 @@ function AppContent() {
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
-                <Route path="mcp" element={<MCPPage />} />
-                <Route path="agent-zero" element={<AgentZeroPage />} />
-                <Route path="n8n" element={<N8NPage />} />
+                <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
+                <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
+                <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />
                 <Route path="settings" element={<SettingsPage />} />
-                <Route path="feature-flags" element={<FeatureFlags />} />
 
                 {/* Catch-all redirect to dashboard */}
                 <Route path="*" element={<Navigate to="/" replace />} />

@@ -43,7 +43,7 @@ const STEPS: WizardStep[] = [
 
 export default function MemoryWizard() {
   const navigate = useNavigate()
-  const { wizardState, markPhaseComplete } = useWizard()
+  const { wizardState } = useWizard()
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -91,7 +91,6 @@ export default function MemoryWizard() {
       })
 
       showMessage('success', 'Memory configured successfully!')
-      markPhaseComplete('memory')
 
       setTimeout(() => {
         navigate('/wizard/chronicle')

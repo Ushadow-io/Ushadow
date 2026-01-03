@@ -19,7 +19,8 @@ import {
 } from 'lucide-react'
 import { tailscaleApi } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
-import { WizardShell, WizardMessage } from '../components/wizard'
+import { useWizard } from '../contexts/WizardContext'
+import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
 
@@ -49,6 +50,7 @@ interface MobileConnectionQR {
 export default function MobileAppWizard() {
   const navigate = useNavigate()
   const wizard = useWizardSteps(STEPS)
+  const { markPhaseComplete } = useWizard()
 
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<WizardMessage | null>(null)
@@ -135,6 +137,7 @@ export default function MobileAppWizard() {
     } else if (wizard.currentStep.id === 'connect') {
       wizard.next()
     } else if (wizard.currentStep.id === 'complete') {
+      markPhaseComplete('mobile')
       navigate('/')
     }
   }
@@ -337,7 +340,7 @@ export default function MobileAppWizard() {
               <CheckCircle className="w-10 h-10 text-white" />
             </div>
             <h2 className="text-2xl font-semibold text-white">
-              Mobile App Ready!
+              Level 3 Complete!
             </h2>
             <p className="text-gray-400 max-w-md mx-auto">
               You can now control your Ushadow cluster from the mobile app.
@@ -355,6 +358,8 @@ export default function MobileAppWizard() {
                 <li>Quick access to recent memories</li>
               </ul>
             </div>
+
+            <WhatsNext currentLevel={3} onGoHome={() => navigate('/')} />
           </div>
         )
 

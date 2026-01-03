@@ -19,7 +19,7 @@ x-ushadow:
 
 services:
   chronicle-backend:
-    image: ghcr.io/ushadow-io/chronicle-backend:${CHRONICLE_IMAGE_TAG:-latest}
+    image: ghcr.io/ushadow-io/chronicle-backend:auth-fix
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
     # Sidecar mode: Run both workers and backend in same container
     command:

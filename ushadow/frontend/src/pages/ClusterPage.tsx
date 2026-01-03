@@ -1,17 +1,8 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle } from 'lucide-react'
-import { clusterApi, deploymentsApi, servicesApi, Deployment } from '../services/api'
-
-// Service from the catalog API
-interface CatalogService {
-  service_id: string
-  service_name: string
-  description: string | null
-  image: string
-  enabled: boolean
-  installed: boolean
-}
+import { clusterApi, deploymentsApi, servicesApi, Deployment, ComposeService } from '../services/api'
+import Modal from '../components/Modal'
 
 interface UNode {
   id: string
@@ -134,7 +125,7 @@ export default function ClusterPage() {
   const [copied, setCopied] = useState<string | null>(null)
 
   // Deployment state
-  const [services, setServices] = useState<CatalogService[]>([])
+  const [services, setServices] = useState<ComposeService[]>([])
   const [deployments, setDeployments] = useState<Deployment[]>([])
   const [showDeployModal, setShowDeployModal] = useState(false)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
@@ -678,7 +669,7 @@ export default function ClusterPage() {
                       >
                         <div className="flex items-center space-x-2">
                           {isNodeOffline && (
-                            <AlertTriangle className="h-3 w-3 text-warning-500" title="Node offline" />
+                            <AlertTriangle className="h-3 w-3 text-warning-500" />
                           )}
                           <span className={`px-1.5 py-0.5 text-xs rounded ${
                             effectiveStatus === 'unreachable'

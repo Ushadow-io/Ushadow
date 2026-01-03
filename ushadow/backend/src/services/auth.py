@@ -48,8 +48,9 @@ ENV_MODE = config.get_sync("environment.mode") or "development"
 COOKIE_SECURE = ENV_MODE == "production"
 
 # Admin configuration from OmegaConf (secrets.yaml -> admin.*)
-ADMIN_EMAIL = config.get_sync("admin.email") or config.get_sync("auth.admin_email") or "admin@example.com"
-ADMIN_PASSWORD = config.get_sync("admin.password")
+# Only creates admin on startup if explicitly configured in secrets.yaml
+ADMIN_EMAIL = config.get_sync("admin.email") or config.get_sync("auth.admin_email")
+ADMIN_PASSWORD = config.get_sync("admin.password")  # Must be explicitly set in secrets.yaml
 ADMIN_NAME = config.get_sync("admin.name") or config.get_sync("auth.admin_name") or "admin"
 
 # Accepted token issuers - comma-separated list of services whose tokens we accept
@@ -63,12 +64,15 @@ logger.info(f"Accepting tokens from issuers: {ACCEPTED_ISSUERS}")
 
 class UserManager(BaseUserManager[User, PydanticObjectId]):
     """User manager with customization for ushadow.
-    
+
     Handles user lifecycle events and MongoDB ObjectId parsing.
     """
 
     reset_password_token_secret = SECRET_KEY
     verification_token_secret = SECRET_KEY
+
+    # Temporary storage for plaintext password (captured in create, used in on_after_register)
+    _pending_plaintext_password: Optional[str] = None
 
     def parse_id(self, value: str) -> PydanticObjectId:
         """Parse string ID to PydanticObjectId for MongoDB compatibility."""
@@ -77,9 +81,43 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         except Exception as e:
             raise ValueError(f"Invalid ObjectId format: {value}") from e
 
+    async def create(self, user_create, safe: bool = False, request: Optional[Request] = None):
+        """Override create to capture plaintext password before hashing."""
+        # Capture plaintext before parent hashes it
+        self._pending_plaintext_password = user_create.password
+        try:
+            return await super().create(user_create, safe=safe, request=request)
+        finally:
+            # Clear after use (will be consumed by on_after_register)
+            pass  # Cleared in on_after_register
+
     async def on_after_register(self, user: User, request: Optional[Request] = None):
-        """Called after a user registers."""
+        """Called after a user registers.
+
+        For admin users, writes credentials to secrets.yaml so dependent services
+        (e.g., Chronicle) can create matching admin users with the same password hash.
+        """
         logger.info(f"User {user.user_id} ({user.email}) has registered.")
+
+        # Write admin credentials to secrets.yaml for dependent services
+        # TODO(USH-5): Align password dependencies - Chronicle and other services should
+        # read admin.password and admin.password_hash from secrets.yaml
+        # https://linear.app/ushadow/issue/USH-5/align-container-passwords
+        if user.is_superuser:
+            try:
+                settings = get_settings_store()
+                await settings.save_to_secrets({
+                    "admin": {
+                        "email": user.email,
+                        "password": self._pending_plaintext_password,
+                        "password_hash": user.hashed_password,
+                    }
+                })
+                logger.info(f"Saved admin credentials to secrets.yaml for {user.email}")
+            except Exception as e:
+                logger.error(f"Failed to save admin credentials to secrets.yaml: {e}")
+            finally:
+                self._pending_plaintext_password = None
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
@@ -298,12 +336,13 @@ def get_accessible_user_ids(user: User) -> list[str] | None:
 
 
 async def create_admin_user_if_needed():
-    """Create admin user during startup if it doesn't exist.
-    
-    Uses ADMIN_EMAIL and ADMIN_PASSWORD from settings/secrets.yaml.
+    """Create admin user during startup if explicitly configured in secrets.yaml.
+
+    Only creates if both admin.email and admin.password are set in secrets.yaml.
+    Writes password hash back to secrets.yaml for dependent services.
     """
-    if not ADMIN_PASSWORD:
-        logger.warning("Skipping admin user creation - ADMIN_PASSWORD not set")
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        logger.info("Skipping admin user creation - credentials not configured in secrets.yaml")
         return
 
     try:
@@ -332,6 +371,23 @@ async def create_admin_user_if_needed():
 
         admin_user = await user_manager.create(admin_create)
         logger.info(f"✅ Created admin user: {admin_user.email} (ID: {admin_user.id})")
+
+        # Write admin credentials to secrets.yaml for dependent services
+        # TODO(USH-5): Align password dependencies - Chronicle and other services should
+        # read admin.password and admin.password_hash from secrets.yaml
+        # https://linear.app/ushadow/issue/USH-5/align-container-passwords
+        try:
+            settings = get_settings_store()
+            await settings.save_to_secrets({
+                "admin": {
+                    "email": admin_user.email,
+                    "password": ADMIN_PASSWORD,
+                    "password_hash": admin_user.hashed_password,
+                }
+            })
+            logger.info(f"Saved admin credentials to secrets.yaml for dependent services")
+        except Exception as e:
+            logger.error(f"Failed to save admin credentials to secrets.yaml: {e}")
 
     except Exception as e:
         logger.error(f"Failed to create admin user: {e}", exc_info=True)

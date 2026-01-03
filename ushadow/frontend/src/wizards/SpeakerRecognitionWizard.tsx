@@ -8,7 +8,7 @@ import { Users, CheckCircle, Cpu, Zap, ExternalLink, AlertTriangle, Loader2, Key
 import { wizardApi, servicesApi, settingsApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
-import { WizardShell, WizardMessage } from '../components/wizard'
+import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import { SecretInput } from '../components/settings'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
@@ -851,6 +851,7 @@ function StartContainerStep({ containerStatus, onStart, onRefresh }: StartContai
 
 // Step 5: Complete
 function CompleteStep() {
+  const navigate = useNavigate()
   const { watch } = useFormContext<SpeakerRecFormData>()
   const computeMode = watch('computeMode')
   const hasDeepgram = !!watch('deepgramApiKey')
@@ -865,7 +866,7 @@ function CompleteStep() {
 
       <div>
         <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
-          Speaker Recognition is Running!
+          Level 4 Complete - All Done!
         </h2>
         <p className="text-gray-600 dark:text-gray-400">
           Your speaker recognition service is configured and running.
@@ -909,9 +910,7 @@ function CompleteStep() {
         </div>
       </div>
 
-      <div className="text-sm text-gray-500 dark:text-gray-400">
-        <p>Click "Complete" to finish setup and start using speaker recognition.</p>
-      </div>
+      <WhatsNext currentLevel={4} onGoHome={() => navigate('/')} />
     </div>
   )
 }

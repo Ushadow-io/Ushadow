@@ -33,6 +33,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class HealthCheckFilter(logging.Filter):
+    """Filter out health check requests from uvicorn access logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        # Filter out GET /health requests
+        if '"GET /health' in message or '"/health' in message:
+            return False
+        return True
+
+
+# Apply filter to uvicorn access logger
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
 # Get settings from OmegaConf (sync access at module level)
 config = get_settings_store()
 
@@ -52,7 +67,7 @@ async def check_stale_unodes_task():
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Get settings: OS env vars take priority over OmegaConf YAML
-    env_name = os.environ.get("ENV_NAME") or await config.get("environment.name") or "ushadow"
+    env_name = os.environ.get("COMPOSE_PROJECT_NAME") or await config.get("environment.name") or "ushadow"
     mongodb_uri = os.environ.get("MONGODB_URI") or await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
     mongodb_database = os.environ.get("MONGODB_DATABASE") or await config.get("infrastructure.mongodb_database") or "ushadow"
 
@@ -77,10 +92,10 @@ async def lifespan(app: FastAPI):
     await init_beanie(database=db, document_models=[User])
     logger.info("✓ Beanie ODM initialized")
     
-    # Create admin user if configured and doesn't exist
+    # Create admin user if explicitly configured in secrets.yaml
     from src.services.auth import create_admin_user_if_needed
     await create_admin_user_if_needed()
-    
+
     # Initialize u-node manager
     await init_unode_manager(db)
     logger.info("✓ UNode manager initialized")

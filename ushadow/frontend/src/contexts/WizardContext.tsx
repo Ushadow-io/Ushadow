@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react'
+import { LucideIcon } from 'lucide-react'
 import { api } from '../services/api'
+import { getIconForLevel } from '../wizards/registry'
 
 export type WizardMode = 'quickstart' | 'local' | 'custom' | null
 
-export type WizardPhase = 'quickstart' | 'tailscale' | 'speaker' | 'advanced'
+export type WizardPhase = 'quickstart' | 'tailscale' | 'mobile' | 'speaker' | 'advanced'
 
 // Setup levels for progressive onboarding
 export type SetupLevel = 0 | 1 | 2 | 3
@@ -52,7 +54,7 @@ interface WizardContextType {
   updateServiceStatus: (service: string, status: Partial<ServiceStatus> | boolean) => void
   updateApiKeysStatus: (configured: boolean) => void
   getServiceStatus: (service: string) => ServiceStatus | undefined
-  getSetupLabel: () => { label: string; description: string; path: string }
+  getSetupLabel: () => { label: string; description: string; path: string; level: number; icon: LucideIcon }
   isFirstTimeUser: () => boolean
 }
 
@@ -76,8 +78,8 @@ const initialState: WizardState = {
 export function WizardProvider({ children }: { children: ReactNode }) {
   const [wizardState, setWizardState] = useState<WizardState>(initialState)
 
-  // Load state from backend on mount
-  useEffect(() => {
+  // Fetch state from backend
+  const fetchState = () => {
     api.get('/api/wizard/setup-state')
       .then((res) => {
         if (res.data && Object.keys(res.data).length > 0) {
@@ -92,28 +94,52 @@ export function WizardProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch(() => {})
+  }
+
+  // Load state from backend on mount
+  useEffect(() => {
+    fetchState()
   }, [])
 
-  const saveState = (newState: WizardState) => {
-    setWizardState(newState)
-    api.put('/api/wizard/setup-state', newState).catch(() => {})
+  // Refresh state when page gains visibility (helps after OAuth redirects)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchState()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  // Helper to update state and persist to backend
+  // Uses functional update to avoid stale closure issues when multiple updates happen quickly
+  const updateState = (updater: (prev: WizardState) => WizardState) => {
+    setWizardState(prev => {
+      const newState = updater(prev)
+      api.put('/api/wizard/setup-state', newState).catch(() => {})
+      return newState
+    })
   }
 
   const setMode = (mode: WizardMode) => {
-    saveState({ ...wizardState, mode })
+    updateState(prev => ({ ...prev, mode }))
   }
 
   const markPhaseComplete = (phase: WizardPhase) => {
-    if (!wizardState.completedPhases.includes(phase)) {
-      saveState({
-        ...wizardState,
-        completedPhases: [...wizardState.completedPhases, phase],
-      })
-    }
+    updateState(prev => {
+      if (prev.completedPhases.includes(phase)) {
+        return prev // No change needed
+      }
+      return {
+        ...prev,
+        completedPhases: [...prev.completedPhases, phase],
+      }
+    })
   }
 
   const setCurrentPhase = (phase: WizardPhase | null) => {
-    saveState({ ...wizardState, currentPhase: phase })
+    updateState(prev => ({ ...prev, currentPhase: phase }))
   }
 
   const resetWizard = () => {
@@ -130,32 +156,34 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     service: string,
     status: Partial<ServiceStatus> | boolean
   ) => {
-    const currentStatus = wizardState.services.services[service] || defaultServiceStatus
-    const newStatus = typeof status === 'boolean'
-      ? { ...currentStatus, configured: status, running: status }
-      : { ...currentStatus, ...status }
+    updateState(prev => {
+      const currentStatus = prev.services.services[service] || defaultServiceStatus
+      const newStatus = typeof status === 'boolean'
+        ? { ...currentStatus, configured: status, running: status }
+        : { ...currentStatus, ...status }
 
-    saveState({
-      ...wizardState,
-      services: {
-        ...wizardState.services,
+      return {
+        ...prev,
         services: {
-          ...wizardState.services.services,
-          [service]: newStatus,
+          ...prev.services,
+          services: {
+            ...prev.services.services,
+            [service]: newStatus,
+          },
         },
-      },
+      }
     })
   }
 
   // Update API keys status separately
   const updateApiKeysStatus = (configured: boolean) => {
-    saveState({
-      ...wizardState,
+    updateState(prev => ({
+      ...prev,
       services: {
-        ...wizardState.services,
+        ...prev.services,
         apiKeys: configured,
       },
-    })
+    }))
   }
 
   // Get status for a specific service
@@ -204,19 +232,24 @@ export function WizardProvider({ children }: { children: ReactNode }) {
   }, [wizardState.services])
 
   // Get dynamic label for sidebar based on completed phases
-  const getSetupLabel = (): { label: string; description: string; path: string } => {
+  // Flow order: quickstart → tailscale → mobile → speaker
+  // Returns level number and icon to keep badge, label, and icon in sync
+  const getSetupLabel = (): { label: string; description: string; path: string; level: number; icon: LucideIcon } => {
     const phases = wizardState.completedPhases
 
     if (!phases.includes('quickstart')) {
-      return { label: 'Get Started', description: 'Set up your AI platform', path: '/wizard/start' }
+      return { label: 'Get Started', description: 'Set up your AI platform', path: '/wizard/start', level: 1, icon: getIconForLevel(1) }
     }
     if (!phases.includes('tailscale')) {
-      return { label: 'Add Mobile', description: 'Secure network access', path: '/wizard/tailscale' }
+      return { label: 'Add Tailscale', description: 'Secure network access', path: '/wizard/tailscale', level: 2, icon: getIconForLevel(2) }
+    }
+    if (!phases.includes('mobile')) {
+      return { label: 'Add Mobile', description: 'Connect mobile app', path: '/wizard/mobile-app', level: 3, icon: getIconForLevel(3) }
     }
     if (!phases.includes('speaker')) {
-      return { label: 'Add Voice ID', description: 'Speaker recognition', path: '/wizard/speaker-recognition' }
+      return { label: 'Add Voice ID', description: 'Speaker recognition', path: '/wizard/speaker-recognition', level: 4, icon: getIconForLevel(4) }
     }
-    return { label: 'Setup Complete', description: 'All services configured', path: '/settings' }
+    return { label: 'Setup Complete', description: 'All services configured', path: '/settings', level: 5, icon: getIconForLevel(5) }
   }
 
   // Check if this is a first-time user (no setup started)

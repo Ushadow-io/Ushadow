@@ -390,7 +390,7 @@ export default function SettingsPage() {
       )}
 
       {/* Debug: Raw Config */}
-      {process.env.NODE_ENV === 'development' && (
+      {import.meta.env.DEV && (
         <details className="mt-8">
           <summary className="cursor-pointer text-sm text-neutral-500">Debug: Raw Config</summary>
           <pre className="mt-2 p-4 bg-neutral-100 dark:bg-neutral-800 rounded-lg text-xs overflow-auto max-h-96">

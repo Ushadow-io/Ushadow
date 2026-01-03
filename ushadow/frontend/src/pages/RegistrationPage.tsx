@@ -22,7 +22,7 @@ export default function RegistrationPage() {
   useEffect(() => {
     if (user) {
       console.log('Registration successful, redirecting to dashboard...')
-      navigate('/', { replace: true })
+      navigate('/', { replace: true, state: { fromAuth: true } })
     }
   }, [user, navigate])
 
@@ -83,6 +83,10 @@ export default function RegistrationPage() {
       const { access_token } = response.data
       localStorage.setItem(getStorageKey('token'), access_token)
 
+      // Set flag so ProtectedRoute knows user just came from registration
+      // This survives the hard reload that follows
+      sessionStorage.setItem('fromAuth', 'true')
+
       // Reload the page to refresh auth context
       window.location.href = '/'
     } catch (error: any) {
@@ -109,7 +113,7 @@ export default function RegistrationPage() {
     >
       <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
         {/* Decorative background blur circles - brand green and purple */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
           <div
             className="absolute -top-40 -right-40 w-96 h-96 rounded-full blur-3xl"
             style={{ backgroundColor: 'rgba(168, 85, 247, 0.15)' }}

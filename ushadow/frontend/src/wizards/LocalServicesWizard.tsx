@@ -127,7 +127,7 @@ export default function LocalServicesWizard() {
       const services = response.data
 
       // Check Ollama
-      const ollamaService = services.find((s: any) => s.name.includes('ollama'))
+      const ollamaService = services.find((s) => s.service_name.includes('ollama'))
       if (ollamaService) {
         setOllamaStatus((prev) => ({
           ...prev,
@@ -139,7 +139,7 @@ export default function LocalServicesWizard() {
       }
 
       // Check Parakeet
-      const parakeetService = services.find((s: any) => s.name.includes('parakeet'))
+      const parakeetService = services.find((s) => s.service_name.includes('parakeet'))
       if (parakeetService) {
         setParakeetStatus((prev) => ({
           ...prev,
@@ -159,7 +159,7 @@ export default function LocalServicesWizard() {
       setCoreContainers((prev) =>
         prev.map((container) => {
           const serviceInfo = services.find(
-            (s: any) => s.name === container.name || s.name.includes(container.name)
+            (s) => s.service_name === container.name || s.service_name.includes(container.name)
           )
           if (serviceInfo) {
             return {

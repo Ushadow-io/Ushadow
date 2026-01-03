@@ -217,15 +217,17 @@ async def get_setup_status(user_manager=Depends(get_user_manager)):
         )
 
 
-@router.post("/setup", response_model=UserRead)
+@router.post("/setup", response_model=LoginResponse)
 async def create_initial_admin(
     setup_data: SetupRequest,
+    response: Response,
     user_manager=Depends(get_user_manager),
 ):
-    """Create the first admin user.
-    
+    """Create the first admin user and auto-login.
+
     Only works if no users exist yet. This endpoint bypasses normal
-    registration to create a superuser account.
+    registration to create a superuser account, then returns a token
+    for immediate login.
     """
     try:
         # Check if setup is required
@@ -255,15 +257,34 @@ async def create_initial_admin(
         admin_user = await user_manager.create(admin_create)
         logger.info(f"Admin user created via setup: {admin_user.email}")
 
-        return UserRead(
-            id=admin_user.id,
-            email=admin_user.email,
-            display_name=admin_user.display_name,
-            is_active=admin_user.is_active,
-            is_superuser=admin_user.is_superuser,
-            is_verified=admin_user.is_verified,
-            created_at=admin_user.created_at,
-            updated_at=admin_user.updated_at,
+        # Generate token for auto-login
+        token = generate_jwt_for_service(
+            user_id=str(admin_user.id),
+            user_email=admin_user.email,
+        )
+
+        # Set cookie for SSE/WebSocket support
+        response.set_cookie(
+            key="ushadow_auth",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=False,  # Set True in production
+            max_age=86400,  # 24 hours
+        )
+
+        return LoginResponse(
+            access_token=token,
+            user=UserRead(
+                id=admin_user.id,
+                email=admin_user.email,
+                display_name=admin_user.display_name,
+                is_active=admin_user.is_active,
+                is_superuser=admin_user.is_superuser,
+                is_verified=admin_user.is_verified,
+                created_at=admin_user.created_at,
+                updated_at=admin_user.updated_at,
+            ),
         )
 
     except HTTPException:

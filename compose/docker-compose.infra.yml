@@ -6,7 +6,7 @@
 #   docker compose -f compose/docker-compose.infra.yml down                   # Stop (keeps data)
 #   docker compose -f compose/docker-compose.infra.yml down -v                # Stop and remove data
 
-name: ushadow-infra
+name: infra
 
 services:
   mongo:

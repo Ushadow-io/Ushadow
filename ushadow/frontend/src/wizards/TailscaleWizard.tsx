@@ -11,11 +11,13 @@ import {
   RefreshCw,
   Monitor,
   ExternalLink,
+  AlertTriangle,
 } from 'lucide-react'
 import { tailscaleApi, TailscaleConfig, ContainerStatus, AuthUrlResponse } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
-import { WizardShell, WizardMessage } from '../components/wizard'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
+import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
 
@@ -48,6 +50,10 @@ const OS_INSTALL_INFO = {
 export default function TailscaleWizard() {
   const navigate = useNavigate()
   const { updateServiceStatus, markPhaseComplete } = useWizard()
+  const { isEnabled } = useFeatureFlags()
+
+  // Check if Caddy routing is enabled via feature flag
+  const caddyEnabled = isEnabled('caddy_routing')
 
   // Use the shared wizard steps hook for navigation
   const wizard = useWizardSteps(STEPS)
@@ -82,6 +88,14 @@ export default function TailscaleWizard() {
   // Certificate status
   const [certificateProvisioned, setCertificateProvisioned] = useState(false)
 
+  // CORS update status
+  const [corsStatus, setCorsStatus] = useState<{
+    updated: boolean
+    origin?: string
+    error?: string
+    loading: boolean
+  }>({ updated: false, loading: false })
+
   // ============================================================================
   // Initial check on welcome step
   // ============================================================================
@@ -102,6 +116,38 @@ export default function TailscaleWizard() {
     }
   }, [wizard.currentStep.id])
 
+  // ============================================================================
+  // Complete Step: Update CORS origins
+  // ============================================================================
+
+  useEffect(() => {
+    if (wizard.currentStep.id === 'complete' && config.hostname && !corsStatus.updated && !corsStatus.loading) {
+      updateCorsOrigins()
+    }
+  }, [wizard.currentStep.id, config.hostname])
+
+  const updateCorsOrigins = async () => {
+    if (!config.hostname) return
+
+    setCorsStatus({ updated: false, loading: true })
+    try {
+      // Call dedicated CORS update endpoint (doesn't touch Caddy routes)
+      const response = await tailscaleApi.updateCorsOrigins(config.hostname)
+      setCorsStatus({
+        updated: true,
+        origin: response.data.origin,
+        loading: false
+      })
+    } catch (err) {
+      console.error('Failed to update CORS:', err)
+      setCorsStatus({
+        updated: false,
+        error: 'Failed to update CORS origins',
+        loading: false
+      })
+    }
+  }
+
   const checkContainerStatus = async () => {
     setLoading(true)
     setMessage(null)
@@ -109,14 +155,18 @@ export default function TailscaleWizard() {
       const response = await tailscaleApi.getContainerStatus()
       setContainerStatus(response.data)
 
-      // Also check Caddy status
-      try {
-        const caddyResponse = await tailscaleApi.getCaddyStatus()
-        setCaddyRunning(caddyResponse.data.running)
-        if (caddyResponse.data.running) {
-          setConfig(prev => ({ ...prev, use_caddy_proxy: true }))
+      // Only check Caddy status if caddy_routing feature flag is enabled
+      if (caddyEnabled) {
+        try {
+          const caddyResponse = await tailscaleApi.getCaddyStatus()
+          setCaddyRunning(caddyResponse.data.running)
+          if (caddyResponse.data.running) {
+            setConfig(prev => ({ ...prev, use_caddy_proxy: true }))
+          }
+        } catch {
+          setCaddyRunning(false)
         }
-      } catch {
+      } else {
         setCaddyRunning(false)
       }
 
@@ -134,19 +184,26 @@ export default function TailscaleWizard() {
     setLoading(true)
     setMessage(null)
     try {
-      // Start both Tailscale and Caddy for full reverse proxy support
-      const response = await tailscaleApi.startContainerWithCaddy()
-      await checkContainerStatus()
+      if (caddyEnabled) {
+        // Start both Tailscale and Caddy for full reverse proxy support
+        const response = await tailscaleApi.startContainerWithCaddy()
+        await checkContainerStatus()
 
-      // Check if Caddy started successfully
-      if (response.data.details?.caddy?.status === 'running' ||
-          response.data.details?.caddy?.status === 'started' ||
-          response.data.details?.caddy?.status === 'created') {
-        setCaddyRunning(true)
-        setConfig(prev => ({ ...prev, use_caddy_proxy: true }))
-        setMessage({ type: 'success', text: 'Tailscale and Caddy started successfully!' })
+        // Check if Caddy started successfully
+        if (response.data.details?.caddy?.status === 'running' ||
+            response.data.details?.caddy?.status === 'started' ||
+            response.data.details?.caddy?.status === 'created') {
+          setCaddyRunning(true)
+          setConfig(prev => ({ ...prev, use_caddy_proxy: true }))
+          setMessage({ type: 'success', text: 'Tailscale and Caddy started successfully!' })
+        } else {
+          setMessage({ type: 'success', text: 'Tailscale started (Caddy status: ' + response.data.details?.caddy?.status + ')' })
+        }
       } else {
-        setMessage({ type: 'success', text: 'Tailscale started (Caddy status: ' + response.data.details?.caddy?.status + ')' })
+        // Only start Tailscale (Caddy disabled via feature flag)
+        await tailscaleApi.startContainer()
+        await checkContainerStatus()
+        setMessage({ type: 'success', text: 'Tailscale container started!' })
       }
     } catch (err) {
       // Fallback to just Tailscale if Caddy fails
@@ -154,7 +211,7 @@ export default function TailscaleWizard() {
         await tailscaleApi.startContainer()
         await checkContainerStatus()
         setCaddyRunning(false)
-        setMessage({ type: 'success', text: 'Tailscale container started (Caddy not available)' })
+        setMessage({ type: 'success', text: 'Tailscale container started' })
       } catch (fallbackErr) {
         setMessage({ type: 'error', text: getErrorMessage(fallbackErr, 'Failed to start container') })
       }
@@ -305,23 +362,30 @@ export default function TailscaleWizard() {
         return false
       }
 
-      setMessage({ type: 'info', text: 'Configuring routing through Caddy...' })
+      // Only try Caddy routing if feature flag is enabled
+      if (caddyEnabled) {
+        setMessage({ type: 'info', text: 'Configuring routing through Caddy...' })
 
-      // Try Caddy routing first (supports /chronicle/* path routing)
-      try {
-        const caddyResponse = await tailscaleApi.configureCaddyRouting()
-        if (caddyResponse.data.status === 'configured') {
-          setCertificateProvisioned(true)
-          updateServiceStatus('tailscale', { configured: true, running: true })
-          markPhaseComplete('tailscale')
-          setMessage({ type: 'success', text: 'HTTPS access configured with Caddy reverse proxy!' })
-          return true
+        // Try Caddy routing (supports /chronicle/* path routing)
+        // Pass hostname so CORS origins can be updated
+        try {
+          const caddyResponse = await tailscaleApi.configureCaddyRouting(hostname)
+          if (caddyResponse.data.status === 'configured') {
+            setCertificateProvisioned(true)
+            updateServiceStatus('tailscale', { configured: true, running: true })
+            markPhaseComplete('tailscale')
+            const corsMsg = caddyResponse.data.cors_origin_added
+              ? ` CORS updated for ${caddyResponse.data.cors_origin_added}`
+              : ''
+            setMessage({ type: 'success', text: `HTTPS access configured with Caddy reverse proxy!${corsMsg}` })
+            return true
+          }
+        } catch (caddyErr) {
+          console.log('Caddy routing not available, falling back to direct Tailscale Serve')
         }
-      } catch (caddyErr) {
-        console.log('Caddy routing not available, falling back to direct Tailscale Serve')
       }
 
-      // Fallback to direct Tailscale Serve routes
+      // Use direct Tailscale Serve routes (default when Caddy disabled)
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
@@ -338,20 +402,6 @@ export default function TailscaleWizard() {
     } catch (err) {
       setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to provision certificate') })
       return false
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const completeSetup = async () => {
-    setLoading(true)
-    setMessage(null)
-    try {
-      await tailscaleApi.complete()
-      setMessage({ type: 'success', text: 'Setup complete!' })
-      setTimeout(() => navigate('/dashboard'), 2000)
-    } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to complete setup') })
     } finally {
       setLoading(false)
     }
@@ -515,7 +565,9 @@ export default function TailscaleWizard() {
           {containerStatus && (
             <div className="space-y-2">
               <StatusItem label="Tailscale Container" status={containerStatus.running} />
-              <StatusItem label="Caddy Reverse Proxy" status={caddyRunning} />
+              {caddyEnabled && (
+                <StatusItem label="Caddy Reverse Proxy" status={caddyRunning} />
+              )}
             </div>
           )}
 
@@ -528,7 +580,7 @@ export default function TailscaleWizard() {
               className="btn-primary flex items-center gap-2"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Server className="w-4 h-4" />}
-              Start Tailscale & Caddy
+              {caddyEnabled ? 'Start Tailscale & Caddy' : 'Start Tailscale'}
             </button>
           )}
 
@@ -537,12 +589,12 @@ export default function TailscaleWizard() {
               <p className="text-sm text-green-800 dark:text-green-200">
                 Tailscale container is running and ready for authentication
               </p>
-              {caddyRunning && (
+              {caddyEnabled && caddyRunning && (
                 <p className="text-sm text-green-700 dark:text-green-300">
                   Caddy reverse proxy is active for multi-service routing
                 </p>
               )}
-              {!caddyRunning && (
+              {caddyEnabled && !caddyRunning && (
                 <button
                   data-testid="start-caddy-only"
                   onClick={async () => {
@@ -821,39 +873,59 @@ export default function TailscaleWizard() {
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
                 Tailscale container running in Docker
               </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                Caddy reverse proxy for multi-service routing
-              </li>
+              {caddyEnabled && (
+                <li className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                  Caddy reverse proxy for multi-service routing
+                </li>
+              )}
               <li className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
                 HTTPS certificate provisioned
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                Service routes: /chronicle/*, /api/*, /*
+                {caddyEnabled ? 'Service routes: /chronicle/*, /api/*, /*' : 'Tailscale Serve configured'}
+              </li>
+              <li className="flex items-center gap-2" data-testid="cors-status">
+                {corsStatus.loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                    <span>Updating CORS origins...</span>
+                  </>
+                ) : corsStatus.updated ? (
+                  <>
+                    <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                    <span>CORS origin added: <code className="text-xs bg-gray-200 dark:bg-gray-600 px-1 rounded">{corsStatus.origin}</code></span>
+                  </>
+                ) : corsStatus.error ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4 text-amber-500" />
+                    <span className="text-amber-600 dark:text-amber-400">{corsStatus.error}</span>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-300 rounded-full" />
+                    <span className="text-gray-400">CORS origins pending...</span>
+                  </>
+                )}
               </li>
             </ul>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
-            <button
-              onClick={() => navigate('/')}
-              data-testid="tailscale-go-home"
-              className="btn-secondary px-6 py-3"
-            >
-              Go to Dashboard
-            </button>
-            <button
-              onClick={() => navigate('/wizard/speaker-recognition')}
-              data-testid="tailscale-continue-setup"
-              className="btn-primary px-6 py-3 flex items-center justify-center gap-2"
-            >
-              Continue to Level 3
-              <span className="text-xs opacity-75">(Speaker Recognition)</span>
-            </button>
-          </div>
+          <WhatsNext
+            currentLevel={2}
+            onGoHome={() => {
+              markPhaseComplete('tailscale')
+              navigate('/')
+            }}
+            onContinue={() => {
+              markPhaseComplete('tailscale')
+              // Redirect through Tailscale URL to Level 3 (may require re-login)
+              const tailscaleUrl = `https://${config.hostname}/wizard/mobile-app`
+              window.location.href = tailscaleUrl
+            }}
+          />
         </div>
       )}
     </WizardShell>

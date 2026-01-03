@@ -219,8 +219,8 @@ class UNodeManager:
         if not tailscale_ip:
             tailscale_ip = os.environ.get("TAILSCALE_IP")
 
-        # Use ENV_NAME as hostname (matches the deployment identity)
-        hostname = os.environ.get("ENV_NAME")
+        # Use COMPOSE_PROJECT_NAME as hostname (matches the deployment identity)
+        hostname = os.environ.get("COMPOSE_PROJECT_NAME")
         if not hostname:
             # Fall back to Tailscale DNSName
             if status_data:

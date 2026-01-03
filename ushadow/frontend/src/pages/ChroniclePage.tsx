@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { MessageSquare, ListTodo, LogIn, LogOut, AlertCircle, Settings, Radio } from 'lucide-react'
+import { MessageSquare, ListTodo, LogIn, LogOut, AlertCircle, Settings, Radio, RefreshCw, WifiOff } from 'lucide-react'
 import { chronicleAuthApi, getChronicleBaseUrl, setChronicleUrl } from '../services/chronicleApi'
 import ChronicleConversations from '../components/chronicle/ChronicleConversations'
 import ChronicleQueue from '../components/chronicle/ChronicleQueue'
@@ -8,13 +8,14 @@ import { getStorageKey } from '../utils/storage'
 import { useChronicle } from '../contexts/ChronicleContext'
 
 type TabType = 'recording' | 'conversations' | 'queue'
+type ConnectionState = 'loading' | 'connected' | 'unavailable' | 'needs-login'
 
 export default function ChroniclePage() {
   const [activeTab, setActiveTab] = useState<TabType>('recording')
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
+  const [connectionState, setConnectionState] = useState<ConnectionState>('loading')
   const [loginError, setLoginError] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [chronicleUrl, setChronicleUrlState] = useState('')
 
   // Get recording from context (shared with Layout header button)
   const { recording, checkConnection } = useChronicle()
@@ -22,32 +23,43 @@ export default function ChroniclePage() {
   // Login form state
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [chronicleUrl, setChronicleUrlInput] = useState('')
+  const [chronicleUrlInput, setChronicleUrlInput] = useState('')
   const [isLoggingIn, setIsLoggingIn] = useState(false)
 
   useEffect(() => {
-    checkAuth()
-    // Load saved URL
-    const savedUrl = localStorage.getItem(getStorageKey('chronicle_url')) || 'http://localhost:8000'
-    setChronicleUrlInput(savedUrl)
+    autoConnect()
   }, [])
 
-  const checkAuth = async () => {
-    setIsLoading(true)
+  const autoConnect = async () => {
+    console.log('[Chronicle] autoConnect: starting...')
+    setConnectionState('loading')
+    setLoginError(null)
     try {
-      if (chronicleAuthApi.isAuthenticated()) {
-        // Verify the token is still valid
-        await chronicleAuthApi.getMe()
-        setIsAuthenticated(true)
+      console.log('[Chronicle] autoConnect: calling chronicleAuthApi.autoConnect()')
+      const result = await chronicleAuthApi.autoConnect()
+      console.log('[Chronicle] autoConnect: result =', result)
+      setChronicleUrlState(result.url)
+      setChronicleUrlInput(result.url)
+
+      if (result.connected) {
+        console.log('[Chronicle] autoConnect: connected successfully via JWT token')
+        setConnectionState('connected')
+        // Update context so header record button appears
+        checkConnection()
+      } else if (result.needsLogin) {
+        console.log('[Chronicle] autoConnect: needs manual login')
+        setConnectionState('needs-login')
       } else {
-        setIsAuthenticated(false)
+        console.log('[Chronicle] autoConnect: Chronicle unavailable')
+        setConnectionState('unavailable')
       }
-    } catch {
-      // Token expired or invalid
-      chronicleAuthApi.logout()
-      setIsAuthenticated(false)
-    } finally {
-      setIsLoading(false)
+    } catch (error) {
+      console.error('[Chronicle] autoConnect: failed with error:', error)
+      // Fall back to saved URL
+      const savedUrl = localStorage.getItem(getStorageKey('chronicle_url')) || 'http://localhost:8080'
+      setChronicleUrlState(savedUrl)
+      setChronicleUrlInput(savedUrl)
+      setConnectionState('unavailable')
     }
   }
 
@@ -58,10 +70,10 @@ export default function ChroniclePage() {
 
     try {
       // Save the URL first
-      setChronicleUrl(chronicleUrl)
+      setChronicleUrl(chronicleUrlInput)
 
       await chronicleAuthApi.login(email, password)
-      setIsAuthenticated(true)
+      setConnectionState('connected')
       setEmail('')
       setPassword('')
       // Update context so header record button appears
@@ -81,24 +93,76 @@ export default function ChroniclePage() {
 
   const handleLogout = () => {
     chronicleAuthApi.logout()
-    setIsAuthenticated(false)
+    setConnectionState('needs-login')
   }
 
   const handleAuthRequired = () => {
     // Called when a component detects auth is needed
-    setIsAuthenticated(false)
+    setConnectionState('needs-login')
   }
 
-  if (isLoading) {
+  // Loading state
+  if (connectionState === 'loading') {
     return (
       <div className="flex items-center justify-center h-64" data-testid="chronicle-loading">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+        <span className="ml-3 text-neutral-600 dark:text-neutral-400">Connecting to Chronicle...</span>
       </div>
     )
   }
 
-  // Login form when not authenticated
-  if (!isAuthenticated) {
+  // Unavailable state - Chronicle backend not reachable
+  if (connectionState === 'unavailable') {
+    return (
+      <div className="space-y-6" data-testid="chronicle-unavailable-page">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center space-x-2">
+              <MessageSquare className="h-8 w-8 text-primary-600 dark:text-primary-400" />
+              <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Chronicle</h1>
+            </div>
+            <p className="mt-2 text-neutral-600 dark:text-neutral-400">
+              AI-powered conversation and memory system
+            </p>
+          </div>
+        </div>
+
+        {/* Unavailable Card */}
+        <div className="card p-6 max-w-md mx-auto" data-testid="chronicle-unavailable-card">
+          <div className="flex items-center space-x-2 mb-4">
+            <WifiOff className="h-6 w-6 text-amber-500" />
+            <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+              Chronicle Unavailable
+            </h2>
+          </div>
+
+          <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+            The Chronicle backend is not reachable. Make sure the Chronicle service is running.
+          </p>
+
+          <div className="text-sm text-neutral-500 dark:text-neutral-400 mb-4">
+            <span className="font-medium">URL:</span>{' '}
+            <code className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded">
+              {chronicleUrl || 'Not configured'}
+            </code>
+          </div>
+
+          <button
+            onClick={autoConnect}
+            className="btn-primary w-full flex items-center justify-center space-x-2"
+            data-testid="chronicle-retry-button"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span>Retry Connection</span>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Login form when authentication is needed
+  if (connectionState === 'needs-login') {
     return (
       <div className="space-y-6" data-testid="chronicle-login-page">
         {/* Header */}
@@ -139,14 +203,14 @@ export default function ChroniclePage() {
               <input
                 type="url"
                 id="chronicle-url"
-                value={chronicleUrl}
+                value={chronicleUrlInput}
                 onChange={(e) => setChronicleUrlInput(e.target.value)}
-                placeholder="http://localhost:8000"
+                placeholder="http://localhost:8080"
                 className="input w-full"
                 data-testid="chronicle-url-input"
               />
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                Current: {getChronicleBaseUrl()}
+                Auto-detected from backend. Change only if needed.
               </p>
             </div>
 
@@ -249,10 +313,13 @@ export default function ChroniclePage() {
           <div className="flex items-center space-x-2 text-sm">
             <span className="text-neutral-600 dark:text-neutral-400">Backend URL:</span>
             <code className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded text-neutral-700 dark:text-neutral-300">
-              {getChronicleBaseUrl()}
+              {chronicleUrl || getChronicleBaseUrl()}
             </code>
             <span className="badge badge-success">Connected</span>
           </div>
+          <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+            Using ushadow JWT for authentication (shared auth)
+          </p>
         </div>
       )}
 

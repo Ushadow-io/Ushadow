@@ -1,24 +1,6 @@
 import { useState, useEffect } from 'react'
-import { X, Plus, Loader2, Server, Cloud, HardDrive } from 'lucide-react'
-import { servicesApi } from '../services/api'
-
-interface CatalogService {
-  service_id: string
-  name: string
-  description?: string
-  mode?: string  // Single mode (new format)
-  modes?: ('cloud' | 'local')[]  // Legacy array format
-  template?: string | null
-  is_default?: boolean
-  installed?: boolean
-  enabled?: boolean
-  docker_image?: string
-  tags?: string[]
-  ui?: {
-    category?: string
-    icon?: string
-  }
-}
+import { X, Plus, Loader2, Server } from 'lucide-react'
+import { servicesApi, ComposeService } from '../services/api'
 
 interface AddServiceModalProps {
   isOpen: boolean
@@ -26,27 +8,15 @@ interface AddServiceModalProps {
   onServiceInstalled: () => void
 }
 
-// Helper to get modes array from service (handles both formats)
-function getServiceModes(service: CatalogService): ('cloud' | 'local')[] {
-  if (service.modes && service.modes.length > 0) {
-    return service.modes
-  }
-  if (service.mode === 'cloud' || service.mode === 'local') {
-    return [service.mode]
-  }
-  return ['cloud']  // Default fallback
-}
-
 export default function AddServiceModal({
   isOpen,
   onClose,
   onServiceInstalled,
 }: AddServiceModalProps) {
-  const [services, setServices] = useState<CatalogService[]>([])
+  const [services, setServices] = useState<ComposeService[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)
-  const [selectedService, setSelectedService] = useState<CatalogService | null>(null)
-  const [selectedMode, setSelectedMode] = useState<'cloud' | 'local'>('cloud')
+  const [selectedService, setSelectedService] = useState<ComposeService | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -62,7 +32,7 @@ export default function AddServiceModal({
       const response = await servicesApi.getCatalog()
       // Filter to only show services that aren't already installed
       const availableServices = (response.data || []).filter(
-        (s: CatalogService) => !s.installed
+        (s) => !s.installed
       )
       setServices(availableServices)
     } catch (err: any) {
@@ -78,7 +48,7 @@ export default function AddServiceModal({
     setInstalling(true)
     setError(null)
     try {
-      await servicesApi.installService(selectedService.service_id)
+      await servicesApi.install(selectedService.service_id)
       onServiceInstalled()
       onClose()
       setSelectedService(null)
@@ -145,16 +115,11 @@ export default function AddServiceModal({
             </div>
           ) : (
             <div className="space-y-4">
-              {services.map((service) => {
-                const modes = getServiceModes(service)
-                return (
+              {services.map((service) => (
                   <button
                     key={service.service_id}
                     id={`service-catalog-${service.service_id}`}
-                    onClick={() => {
-                      setSelectedService(service)
-                      setSelectedMode(modes[0] || 'cloud')
-                    }}
+                    onClick={() => setSelectedService(service)}
                     className={`w-full p-4 rounded-lg border-2 text-left transition-all ${
                       selectedService?.service_id === service.service_id
                         ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
@@ -165,68 +130,24 @@ export default function AddServiceModal({
                       <Server className="w-5 h-5 text-primary-600 mt-0.5" />
                       <div>
                         <h3 className="font-medium text-gray-900 dark:text-white">
-                          {service.name}
+                          {service.service_name}
                         </h3>
                         {service.description && (
                           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                             {service.description}
                           </p>
                         )}
-                        <div className="flex gap-2 mt-2">
-                          {modes.map((mode) => (
-                            <span
-                              key={mode}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-                            >
-                              {mode === 'cloud' ? <Cloud className="w-3 h-3" /> : <HardDrive className="w-3 h-3" />}
-                              {mode}
-                            </span>
-                          ))}
-                        </div>
+                        {service.needs_setup && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 mt-2">
+                            Requires configuration
+                          </span>
+                        )}
                       </div>
                     </div>
                   </button>
-                )
-              })}
+                ))}
             </div>
           )}
-
-          {/* Mode Selection - only show if multiple modes available */}
-          {selectedService && (() => {
-            const modes = getServiceModes(selectedService)
-            return modes.length > 1 ? (
-              <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                  Deployment Mode
-                </label>
-                <div className="flex gap-4">
-                  {modes.map((mode) => (
-                    <button
-                      key={mode}
-                      id={`mode-select-${mode}`}
-                      onClick={() => setSelectedMode(mode)}
-                      className={`flex-1 p-4 rounded-lg border-2 transition-all ${
-                        selectedMode === mode
-                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                          : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        {mode === 'cloud' ? (
-                          <Cloud className="w-5 h-5 text-primary-600" />
-                        ) : (
-                          <HardDrive className="w-5 h-5 text-primary-600" />
-                        )}
-                        <span className="font-medium text-gray-900 dark:text-white capitalize">
-                          {mode}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null
-          })()}
         </div>
 
         {/* Footer */}
