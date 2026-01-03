@@ -6,8 +6,9 @@ Centralizes CORS configuration, request logging, and global exception handlers.
 
 import json
 import logging
-import time
 import os
+import re
+import time
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,29 +34,72 @@ def _get_tailscale_hostname() -> str | None:
     return None
 
 
+def _get_cors_origins_from_config() -> list[str]:
+    """
+    Get CORS origins from OmegaConf settings.
+
+    Priority:
+    1. OmegaConf security.cors_origins (from config.overrides.yaml or config.defaults.yaml)
+    2. CORS_ORIGINS environment variable (fallback)
+    3. Default to ['*']
+    """
+    try:
+        from src.config.omegaconf_settings import get_settings_store
+        settings = get_settings_store()
+        cors_origins = settings.get_sync("security.cors_origins", "")
+
+        if cors_origins and cors_origins.strip():
+            origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+            if origins:
+                return origins
+    except Exception as e:
+        logger.warning(f"Could not read CORS from OmegaConf: {e}")
+
+    # Fallback to environment variable
+    cors_origins_env = os.getenv('CORS_ORIGINS', '*')
+    if cors_origins_env == '*':
+        return ['*']
+    return [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+
+
+def _get_tailscale_origin_regex() -> str | None:
+    """Build a regex pattern for Tailscale MagicDNS origins.
+
+    Matches: https://{project_name}.*.ts.net (any tailnet suffix)
+    Example: https://ushadow.spangled-kettle.ts.net
+    """
+    project_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip()
+    if project_name:
+        # Pattern: https://{project_name}.{tailnet-suffix}.ts.net
+        escaped_name = re.escape(project_name)
+        return rf"https://{escaped_name}\.[-a-z0-9]+\.ts\.net"
+    return None
+
+
 def setup_cors_middleware(app: FastAPI) -> None:
     """Configure CORS middleware for the FastAPI application."""
-    # Get CORS origins from environment or use defaults
-    cors_origins_env = os.getenv('CORS_ORIGINS', '*')
+    # Get CORS origins from OmegaConf (with env var fallback)
+    allowed_origins = _get_cors_origins_from_config()
 
-    if cors_origins_env == '*':
-        allowed_origins = ['*']
-    else:
-        allowed_origins = [origin.strip() for origin in cors_origins_env.split(',')]
-
-    # Add Tailscale hostname if configured
+    # Add Tailscale hostname if configured (and not already in list)
     tailscale_hostname = _get_tailscale_hostname()
     if tailscale_hostname:
         tailscale_origin = f"https://{tailscale_hostname}"
         if tailscale_origin not in allowed_origins and '*' not in allowed_origins:
             allowed_origins.append(tailscale_origin)
-            logger.info(f"🔒 Added Tailscale origin to CORS: {tailscale_origin}")
+            logger.info(f"Added Tailscale origin to CORS: {tailscale_origin}")
 
-    logger.info(f"🌐 CORS configured with origins: {allowed_origins}")
+    # Build Tailscale origin regex for any tailnet
+    tailscale_regex = _get_tailscale_origin_regex()
+    if tailscale_regex:
+        logger.info(f"Tailscale CORS regex: {tailscale_regex}")
+
+    logger.info(f"CORS configured with origins: {allowed_origins}")
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        allow_origin_regex=tailscale_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -7,16 +7,17 @@ set -e
 echo "🧹 Ushadow Admin Reset"
 echo "========================================"
 
-# Check we're in the right directory
-if [ ! -f "compose/docker-compose.yml" ] && [ ! -f "docker-compose.infra.yml" ]; then
-    echo "❌ Error: Must be run from the ushadow directory"
-    echo "   cd to the directory containing compose/docker-compose.yml"
+# Check we're in the right directory (project root)
+if [ ! -f "docker-compose.yml" ]; then
+    echo "❌ Error: Must be run from the project root directory"
+    echo "   cd to the directory containing docker-compose.yml"
     exit 1
 fi
 echo ""
 echo "⚠️  WARNING: This will:"
 echo "   - Remove ALL admin users from the database"
 echo "   - Delete config/secrets.yaml (all API keys and credentials)"
+echo "   - Delete config/config.overrides.yaml (wizard state and service preferences)"
 echo "   - Allow you to run ./quick-start.sh for a fresh setup"
 echo ""
 read -p "Are you sure? (yes/no): " -r
@@ -45,7 +46,7 @@ echo "🔍 Checking MongoDB connection..."
 if ! docker ps | grep -q "mongo"; then
     echo "⚠️  MongoDB container is not running"
     echo "   Starting MongoDB..."
-    docker compose -f docker-compose.infra.yml up -d mongo
+    docker compose -f compose/docker-compose.infra.yml up -d mongo
     echo "   Waiting for MongoDB to be ready..."
     sleep 5
 fi
@@ -68,10 +69,19 @@ else
     echo "   ℹ️  config/secrets.yaml not found (already clean)"
 fi
 
+echo ""
+echo "🗑️  Removing wizard state (config.overrides.yaml)..."
+if [ -f "config/config.overrides.yaml" ]; then
+    rm "config/config.overrides.yaml"
+    echo "   ✅ config/config.overrides.yaml removed"
+else
+    echo "   ℹ️  config/config.overrides.yaml not found (already clean)"
+fi
+
 
 echo ""
 echo "🔄 Restarting backend to invalidate active sessions..."
-docker compose -f compose/docker-compose.yml restart ushadow-backend 2>/dev/null || echo "   ⚠️  Backend not running (that's ok)"
+docker compose -f docker-compose.yml restart ushadow-backend 2>/dev/null || echo "   ⚠️  Backend not running (that's ok)"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -79,7 +89,7 @@ echo "✅ Admin reset complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "🚀 Next steps:"
-echo "   1. Run ./quick-start.sh to regenerate secrets and setup"
+echo "   1. Run ./start-dev.sh to regenerate secrets and setup"
 echo "   2. Clear your browser cache (Cmd+Shift+R or hard refresh)"
 echo "   3. Log in with your new admin credentials"
 echo ""

@@ -124,14 +124,14 @@ reset-tailscale:
 infra-up:
 	@echo "🏗️  Starting infrastructure..."
 	@docker network create ushadow-network 2>/dev/null || true
-	@docker compose -f docker-compose.infra.yml -p infra up -d
+	@docker compose -f compose/docker-compose.infra.yml -p infra up -d
 	@echo "✅ Infrastructure started"
 
 infra-down:
-	docker compose -f docker-compose.infra.yml -p infra down
+	docker compose -f compose/docker-compose.infra.yml -p infra down
 
 infra-logs:
-	docker compose -f docker-compose.infra.yml -p infra logs -f
+	docker compose -f compose/docker-compose.infra.yml -p infra logs -f
 
 # Chronicle commands
 chronicle-up:
@@ -256,7 +256,7 @@ format:
 clean:
 	docker compose -f compose/docker-compose.yml down -v
 	docker compose -f deployment/docker-compose.chronicle.yml down -v
-	docker compose -f docker-compose.infra.yml down -v
+	docker compose -f compose/docker-compose.infra.yml down -v
 
 clean-logs:
 	find . -name "*.log" -type f -delete

@@ -1,6 +1,6 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, Wand2, FlaskConical, Cloud, Sparkles, Shield, Mic, MicOff, CheckCircle2, Loader2 } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
