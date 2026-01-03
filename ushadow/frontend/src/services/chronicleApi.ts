@@ -11,11 +11,14 @@ import axios from 'axios'
 import { getStorageKey } from '../utils/storage'
 import { api } from './api'
 
-// Connection info from backend
+// Connection info from generic services endpoint
 export interface ChronicleConnectionInfo {
-  url: string
+  service: string
+  url: string | null
+  port: number | null
+  env_var: string | null
+  default_port: number | null
   available: boolean
-  auth_compatible: boolean
 }
 
 // Get Chronicle backend URL from localStorage or environment
@@ -179,11 +182,11 @@ export interface StreamingStatus {
 // Auth API
 export const chronicleAuthApi = {
   /**
-   * Get Chronicle connection info from ushadow backend.
-   * This also returns whether Chronicle is available and if auth is compatible.
+   * Get Chronicle connection info from the generic services endpoint.
+   * Returns URL, port, and availability status.
    */
   getConnectionInfo: async (): Promise<ChronicleConnectionInfo> => {
-    const response = await api.get<ChronicleConnectionInfo>('/api/chronicle/connection-info')
+    const response = await api.get<ChronicleConnectionInfo>('/api/services/chronicle-backend/connection-info')
     return response.data
   },
 
@@ -243,21 +246,17 @@ export const chronicleAuthApi = {
 
       if (!info.available) {
         console.log('[Chronicle API] autoConnect: Chronicle not available')
-        return { connected: false, url: info.url, needsLogin: false }
+        return { connected: false, url: info.url ?? null, needsLogin: false }
       }
 
-      // Try using ushadow token
-      if (info.auth_compatible) {
-        console.log('[Chronicle API] autoConnect: auth_compatible=true, trying ushadow token...')
-        const tokenWorked = await chronicleAuthApi.tryUshadowToken()
-        if (tokenWorked) {
-          console.log('[Chronicle API] autoConnect: ushadow token worked!')
-          return { connected: true, url: info.url, needsLogin: false }
-        }
-        console.log('[Chronicle API] autoConnect: ushadow token did not work')
-      } else {
-        console.log('[Chronicle API] autoConnect: auth_compatible=false, skipping ushadow token')
+      // Try using ushadow token (auth is always compatible when sharing AUTH_SECRET_KEY)
+      console.log('[Chronicle API] autoConnect: trying ushadow token...')
+      const tokenWorked = await chronicleAuthApi.tryUshadowToken()
+      if (tokenWorked) {
+        console.log('[Chronicle API] autoConnect: ushadow token worked!')
+        return { connected: true, url: info.url ?? null, needsLogin: false }
       }
+      console.log('[Chronicle API] autoConnect: ushadow token did not work')
 
       // Check if we have an existing Chronicle token
       console.log('[Chronicle API] autoConnect: checking for existing chronicle_token...')
@@ -266,7 +265,7 @@ export const chronicleAuthApi = {
         try {
           await chronicleAuthApi.getMe()
           console.log('[Chronicle API] autoConnect: existing token is valid')
-          return { connected: true, url: info.url, needsLogin: false }
+          return { connected: true, url: info.url ?? null, needsLogin: false }
         } catch {
           // Token expired
           console.log('[Chronicle API] autoConnect: existing token expired, clearing')
@@ -277,7 +276,7 @@ export const chronicleAuthApi = {
       }
 
       console.log('[Chronicle API] autoConnect: needs manual login')
-      return { connected: false, url: info.url, needsLogin: true }
+      return { connected: false, url: info.url ?? null, needsLogin: true }
     } catch (error) {
       console.warn('[Chronicle API] autoConnect: failed to get connection info:', error)
       // Fall back to stored/default URL

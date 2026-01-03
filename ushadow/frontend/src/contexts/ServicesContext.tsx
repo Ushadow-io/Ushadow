@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { servicesApi, settingsApi, ComposeService } from '../services/api'
+import { PortConflictDialog } from '../components/services/PortConflictDialog'
+import type { PortConflict } from '../hooks/useServiceStart'
 
 // ============================================================================
 // Types
@@ -43,6 +45,13 @@ export interface ConfirmDialogState {
   serviceName: string | null
 }
 
+export interface PortConflictDialogState {
+  isOpen: boolean
+  serviceId: string | null
+  serviceName: string | null
+  conflicts: PortConflict[]
+}
+
 // ============================================================================
 // Context Interface
 // ============================================================================
@@ -56,6 +65,7 @@ interface ServicesContextType {
   saving: boolean
   message: ServiceMessage | null
   confirmDialog: ConfirmDialogState
+  portConflictDialog: PortConflictDialogState
   editingService: string | null
   editForm: Record<string, any>
   validationErrors: Record<string, string>
@@ -70,6 +80,8 @@ interface ServicesContextType {
   stopService: (serviceId: string) => void
   confirmStopService: () => Promise<void>
   cancelStopService: () => void
+  resolvePortConflict: (envVar: string, newPort: number) => Promise<void>
+  dismissPortConflict: () => void
   toggleEnabled: (serviceId: string, currentEnabled: boolean) => Promise<void>
   startEditing: (serviceId: string) => void
   saveConfig: (serviceId: string) => Promise<void>
@@ -119,6 +131,14 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     isOpen: false,
     serviceId: null,
     serviceName: null,
+  })
+
+  // Port conflict dialog state
+  const [portConflictDialog, setPortConflictDialog] = useState<PortConflictDialogState>({
+    isOpen: false,
+    serviceId: null,
+    serviceName: null,
+    conflicts: [],
   })
 
   // --------------------------------------------------------------------------
@@ -203,15 +223,39 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   // --------------------------------------------------------------------------
 
   const startService = useCallback(async (serviceId: string) => {
+    const service = serviceInstances.find(s => s.service_id === serviceId)
     setStartingService(serviceId)
+
     try {
+      // First, run preflight check for port conflicts
+      const preflightResponse = await servicesApi.preflightCheck(serviceId)
+      const preflight = preflightResponse.data
+
+      if (!preflight.can_start && preflight.port_conflicts.length > 0) {
+        // Port conflicts detected - show dialog
+        setPortConflictDialog({
+          isOpen: true,
+          serviceId,
+          serviceName: service?.service_name || serviceId,
+          conflicts: preflight.port_conflicts.map(c => ({
+            port: c.port,
+            envVar: c.env_var,
+            usedBy: c.used_by,
+            suggestedPort: c.suggested_port
+          }))
+        })
+        setStartingService(null)
+        return
+      }
+
+      // No conflicts - proceed with start
       await servicesApi.startService(serviceId)
       setMessage({ type: 'success', text: 'Service starting...' })
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to start service' })
       setStartingService(null)
     }
-  }, [])
+  }, [serviceInstances])
 
   const stopService = useCallback((serviceId: string) => {
     const service = serviceInstances.find(s => s.service_id === serviceId)
@@ -239,6 +283,43 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
 
   const cancelStopService = useCallback(() => {
     setConfirmDialog({ isOpen: false, serviceId: null, serviceName: null })
+  }, [])
+
+  const resolvePortConflict = useCallback(async (envVar: string, newPort: number) => {
+    const { serviceId, serviceName } = portConflictDialog
+    if (!serviceId) return
+
+    setStartingService(serviceId)
+
+    try {
+      // Set the port override
+      await servicesApi.setPortOverride(serviceId, envVar, newPort)
+
+      // Close the dialog
+      setPortConflictDialog({
+        isOpen: false,
+        serviceId: null,
+        serviceName: null,
+        conflicts: [],
+      })
+
+      // Retry the start
+      await servicesApi.startService(serviceId)
+      setMessage({ type: 'success', text: `Service starting on port ${newPort}...` })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to resolve port conflict' })
+      setStartingService(null)
+    }
+  }, [portConflictDialog])
+
+  const dismissPortConflict = useCallback(() => {
+    setPortConflictDialog({
+      isOpen: false,
+      serviceId: null,
+      serviceName: null,
+      conflicts: [],
+    })
+    setStartingService(null)
   }, [])
 
   const toggleEnabled = useCallback(async (serviceId: string, currentEnabled: boolean) => {
@@ -363,6 +444,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     saving,
     message,
     confirmDialog,
+    portConflictDialog,
     editingService,
     editForm,
     validationErrors,
@@ -377,6 +459,8 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     stopService,
     confirmStopService,
     cancelStopService,
+    resolvePortConflict,
+    dismissPortConflict,
     toggleEnabled,
     startEditing,
     saveConfig,
@@ -391,6 +475,15 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
 
   return (
     <ServicesContext.Provider value={value}>
+      {/* Port Conflict Dialog */}
+      <PortConflictDialog
+        isOpen={portConflictDialog.isOpen}
+        serviceName={portConflictDialog.serviceName || ''}
+        conflicts={portConflictDialog.conflicts}
+        onResolve={resolvePortConflict}
+        onDismiss={dismissPortConflict}
+        isResolving={!!startingService}
+      />
       {children}
     </ServicesContext.Provider>
   )

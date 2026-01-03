@@ -1,6 +1,7 @@
 import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { settingsApi } from '../services/api'
+import { JsonTreeViewer } from '../components/JsonTreeViewer'
 
 interface ApiKey {
   name: string
@@ -392,10 +393,12 @@ export default function SettingsPage() {
       {/* Debug: Raw Config */}
       {import.meta.env.DEV && (
         <details className="mt-8">
-          <summary className="cursor-pointer text-sm text-neutral-500">Debug: Raw Config</summary>
-          <pre className="mt-2 p-4 bg-neutral-100 dark:bg-neutral-800 rounded-lg text-xs overflow-auto max-h-96">
-            {JSON.stringify(config, null, 2)}
-          </pre>
+          <summary className="cursor-pointer text-sm text-neutral-500 hover:text-neutral-400">
+            Debug: Raw Config
+          </summary>
+          <div className="mt-2 max-h-[500px] overflow-auto">
+            <JsonTreeViewer data={config} initialExpandDepth={2} />
+          </div>
         </details>
       )}
     </div>

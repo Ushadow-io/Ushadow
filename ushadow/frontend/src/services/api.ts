@@ -192,6 +192,35 @@ export const servicesApi = {
   // Lifecycle
   // -------------------------------------------------------------------------
 
+  /** Pre-flight check before starting a service (checks for port conflicts) */
+  preflightCheck: (name: string) => api.get<{
+    can_start: boolean
+    port_conflicts: Array<{
+      port: number
+      env_var: string | null
+      used_by: string
+      suggested_port: number
+    }>
+    message: string | null
+  }>(`/api/services/${name}/preflight`),
+
+  /** Set a port override for a service */
+  setPortOverride: (name: string, envVar: string, port: number) =>
+    api.post<{ success: boolean; message: string }>(`/api/services/${name}/port-override`, {
+      env_var: envVar,
+      port
+    }),
+
+  /** Get connection info for a service (URL with resolved port) */
+  getConnectionInfo: (name: string) =>
+    api.get<{
+      service: string
+      url: string | null
+      port: number | null
+      env_var: string | null
+      default_port: number | null
+    }>(`/api/services/${name}/connection-info`),
+
   /** Start a service container */
   startService: (name: string) => api.post<{ success: boolean; message: string }>(`/api/services/${name}/start`),
 
@@ -335,8 +364,10 @@ export interface QuickstartConfig {
 }
 
 export interface PortMapping {
-  host?: string      // Host port (may contain ${VAR:-default} interpolation)
-  container: string  // Container port
+  host?: string       // Resolved host port (with overrides applied)
+  container?: string  // Container port
+  env_var?: string    // Environment variable name for this port
+  default_port?: number // Default port from compose file
 }
 
 export interface ComposeService {

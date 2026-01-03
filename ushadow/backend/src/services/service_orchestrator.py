@@ -796,6 +796,18 @@ class ServiceOrchestrator:
         # Check if needs setup
         needs_setup = await self._check_needs_setup(service)
 
+        # Get resolved ports (with overrides applied)
+        resolved_ports = self.docker_manager.get_service_ports(service.service_name)
+        # Convert to the expected format with actual port values
+        ports_with_actual = []
+        for rp in resolved_ports:
+            ports_with_actual.append({
+                "host": str(rp["port"]),  # The actual port to use
+                "container": rp.get("container_port"),
+                "env_var": rp.get("env_var"),
+                "default_port": rp.get("default_port"),
+            })
+
         return ServiceSummary(
             service_id=service.service_id,
             service_name=service.service_name,
@@ -809,7 +821,7 @@ class ServiceOrchestrator:
             health=health,
             requires=service.requires,
             depends_on=service.depends_on,
-            ports=service.ports,
+            ports=ports_with_actual,
             profiles=service.profiles,
             required_env_count=len(service.required_env_vars),
             optional_env_count=len(service.optional_env_vars),
