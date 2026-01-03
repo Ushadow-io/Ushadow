@@ -354,6 +354,10 @@ class ServiceDeployment(BaseModel):
     display_name: str
     status: str  # running, stopped, etc.
     unode_hostname: str
+    route_path: Optional[str] = None  # e.g., "/chronicle"
+    internal_port: Optional[int] = None  # Container's internal port
+    external_url: Optional[str] = None  # e.g., "https://pink.spangled-kettle.ts.net/chronicle"
+    internal_url: Optional[str] = None  # e.g., "http://ushadow-pink-chronicle-backend:8000"
 
 
 class LeaderInfoResponse(BaseModel):
@@ -368,12 +372,13 @@ class LeaderInfoResponse(BaseModel):
     # Leader info
     hostname: str
     tailscale_ip: str
+    tailscale_hostname: Optional[str] = None  # Full Tailscale DNS name
     capabilities: UNodeCapabilities
     api_port: int = 8000
 
-    # Streaming URLs
-    ws_pcm_url: str  # WebSocket for PCM audio streaming
-    ws_omi_url: str  # WebSocket for OMI format streaming
+    # Streaming URLs (derived from Chronicle service route_path)
+    ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
+    ws_omi_url: Optional[str] = None  # WebSocket for OMI format streaming
 
     # Cluster info
     unodes: List[UNode]
@@ -427,32 +432,74 @@ async def get_leader_info():
             logger.warning("Using raw Tailscale IP - streaming may not work correctly")
             tailscale_hostname = leader.tailscale_ip
     
-    # Build secure WebSocket URLs through Tailscale serve
-    # These go through HTTPS port 443 via Tailscale serve, no port needed
-    if tailscale_hostname:
-        ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
-        ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
-    else:
-        # Fallback to old format if we can't determine hostname
-        chronicle_port = int(os.environ.get("CHRONICLE_PORT", "8080"))
-        ws_pcm_url = f"ws://{leader.tailscale_ip}:{chronicle_port}/ws_pcm"
-        ws_omi_url = f"ws://{leader.tailscale_ip}:{chronicle_port}/ws_omi"
+    # Build service deployments with URLs from compose registry
+    from src.services.compose_registry import get_compose_registry
 
-    # TODO: Fetch actual service deployments from docker/compose
-    # For now, return services from unode metadata
+    env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
+    compose_registry = get_compose_registry()
+
+    # Get Chronicle service route_path for WebSocket URLs
+    chronicle_service = compose_registry.get_service_by_name("chronicle-backend")
+    chronicle_route = chronicle_service.route_path if chronicle_service else None
+
+    # Build WebSocket URLs from Chronicle's route_path
+    ws_pcm_url = None
+    ws_omi_url = None
+    if tailscale_hostname and chronicle_route:
+        ws_pcm_url = f"wss://{tailscale_hostname}{chronicle_route}/ws_pcm"
+        ws_omi_url = f"wss://{tailscale_hostname}{chronicle_route}/ws_omi"
+
     services: List[ServiceDeployment] = []
     for unode in unodes:
         for service_name in unode.services:
+            # Look up service in compose registry for route_path and ports
+            discovered_service = compose_registry.get_service_by_name(service_name)
+
+            route_path = None
+            internal_port = None
+            external_url = None
+            internal_url = None
+            display_name = service_name.replace("_", " ").replace("-", " ").title()
+
+            if discovered_service:
+                route_path = discovered_service.route_path
+                display_name = discovered_service.display_name or display_name
+
+                # Get internal port from compose ports
+                if discovered_service.ports:
+                    container_port = discovered_service.ports[0].get("container")
+                    if container_port:
+                        try:
+                            internal_port = int(container_port)
+                        except (ValueError, TypeError):
+                            pass
+
+                # Build container name
+                container_name = f"{env_name}-{service_name}"
+
+                # Build internal URL (container-to-container)
+                if internal_port:
+                    internal_url = f"http://{container_name}:{internal_port}"
+
+                # Build external URL (through Tailscale Serve)
+                if route_path and tailscale_hostname:
+                    external_url = f"https://{tailscale_hostname}{route_path}"
+
             services.append(ServiceDeployment(
                 name=service_name,
-                display_name=service_name.replace("_", " ").title(),
-                status="running",  # TODO: Get actual status
-                unode_hostname=unode.hostname
+                display_name=display_name,
+                status="running",  # TODO: Get actual status from docker
+                unode_hostname=unode.hostname,
+                route_path=route_path,
+                internal_port=internal_port,
+                external_url=external_url,
+                internal_url=internal_url,
             ))
 
     return LeaderInfoResponse(
         hostname=leader.hostname,
         tailscale_ip=leader.tailscale_ip,
+        tailscale_hostname=tailscale_hostname,
         capabilities=leader.capabilities,
         api_port=api_port,
         ws_pcm_url=ws_pcm_url,

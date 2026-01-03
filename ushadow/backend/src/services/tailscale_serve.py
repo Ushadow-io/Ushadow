@@ -259,6 +259,12 @@ def configure_base_routes(
         if not add_serve_route(route, target):
             success = False
 
+    # Chronicle backend route
+    chronicle_container = "chronicle-backend"
+    chronicle_port = 8000
+    if not add_serve_route("/chronicle", f"http://{chronicle_container}:{chronicle_port}"):
+        success = False
+
     # Frontend catches everything else
     if not add_serve_route("/", frontend_target):
         success = False

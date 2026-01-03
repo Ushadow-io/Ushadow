@@ -156,9 +156,10 @@ def start_infrastructure(
 
         # Create and start infrastructure
         # Note: Must include --profile flags since all services in infra compose have profiles
+        # Only start core infra (mongo, redis) - memory services started separately when needed
         result = subprocess.run(
             ["docker", "compose", "-f", compose_file, "-p", project_name,
-             "--profile", "infra", "--profile", "memory", "up", "-d"],
+             "--profile", "infra", "up", "-d"],
             capture_output=True,
             text=True,
             timeout=120

@@ -859,6 +859,7 @@ async def start_tailscale_container(
                     "TS_ACCEPT_DNS": "true",
                     "TS_EXTRA_ARGS": "--advertise-tags=tag:container",
                     "TS_HOSTNAME": ts_hostname,  # Explicitly set Tailscale hostname
+                    "TS_SERVE_CONFIG": "/config/tailscale-serve.json",
                 },
                 labels={
                     "com.docker.compose.project": env_name,
@@ -867,7 +868,8 @@ async def start_tailscale_container(
                 },
                 volumes={
                     volume_name: {"bind": "/var/lib/tailscale", "mode": "rw"},
-                    str(CERTS_DIR.absolute()): {"bind": "/certs", "mode": "rw"},
+                    f"{PROJECT_ROOT}/config/certs": {"bind": "/certs", "mode": "rw"},
+                    f"{PROJECT_ROOT}/config": {"bind": "/config", "mode": "ro"},
                 },
                 cap_add=["NET_ADMIN", "NET_RAW"],
                 network="infra-network",
@@ -1288,3 +1290,202 @@ async def complete_setup(
     except Exception as e:
         logger.error(f"Error completing setup: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to complete setup: {str(e)}")
+
+
+# ============================================================================
+# CORS Configuration
+# ============================================================================
+
+class UpdateCorsRequest(BaseModel):
+    """Request to update CORS origins with Tailscale hostname"""
+    hostname: str = Field(..., description="Tailscale hostname (e.g., machine.tail12345.ts.net)")
+
+
+@router.post("/update-cors")
+async def update_cors_origins(
+    request: UpdateCorsRequest,
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
+    """Add Tailscale hostname to CORS allowed origins.
+
+    This endpoint appends the Tailscale HTTPS origin to the security.cors_origins
+    setting so the frontend can make requests from the Tailscale URL.
+
+    Note: The CORS middleware reads origins at startup. A server restart may be
+    needed for the new origin to take effect.
+    """
+    try:
+        settings = get_settings_store()
+
+        # Build the origin URL
+        origin = f"https://{request.hostname}"
+
+        # Get current origins (async to avoid stale cache)
+        current_origins = await settings.get("security.cors_origins", "")
+
+        # Parse existing origins (handle both string and None)
+        if current_origins and str(current_origins).strip():
+            origins_list = [o.strip() for o in str(current_origins).split(",") if o.strip()]
+        else:
+            origins_list = []
+
+        logger.info(f"Current CORS origins before update: {origins_list}")
+
+        # Check if already present
+        if origin in origins_list:
+            return {
+                "status": "already_present",
+                "origin": origin,
+                "message": f"Origin {origin} is already in CORS allowed origins"
+            }
+
+        # Append new origin
+        origins_list.append(origin)
+        new_origins = ",".join(origins_list)
+
+        # Save updated origins to security.cors_origins
+        await settings.update({"security.cors_origins": new_origins})
+
+        logger.info(f"Updated CORS origins to: {new_origins}")
+
+        return {
+            "status": "success",
+            "origin": origin,
+            "message": f"Added {origin} to CORS allowed origins. Restart may be required for changes to take effect."
+        }
+
+    except Exception as e:
+        logger.error(f"Error updating CORS origins: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update CORS origins: {str(e)}")
+
+
+# ============================================================================
+# Route Management
+# ============================================================================
+
+class RegenerateRoutesResponse(BaseModel):
+    """Response from route regeneration."""
+    success: bool
+    message: str
+    routes_count: int = 0
+    config_path: Optional[str] = None
+
+
+@router.post("/routes/regenerate", response_model=RegenerateRoutesResponse)
+async def regenerate_serve_routes(
+    current_user: User = Depends(get_current_user)
+) -> RegenerateRoutesResponse:
+    """Regenerate Tailscale Serve routes from all deployed services.
+
+    This scans all compose files for route definitions, checks which services
+    are running, and generates/applies the tailscale-serve.json configuration.
+
+    Routes are defined in x-ushadow section of compose files:
+        x-ushadow:
+          service-name:
+            routes:
+              - path: /chronicle
+                internal_port: 8000
+                preserve_path: true
+    """
+    try:
+        from src.services.tailscale_serve_config import (
+            generate_serve_config,
+            write_serve_config,
+            apply_serve_config,
+        )
+
+        # Generate config from current state
+        config = generate_serve_config()
+
+        # Write to file
+        config_path = write_serve_config(config)
+
+        # Apply via set-raw
+        success = apply_serve_config(config)
+
+        if success:
+            return RegenerateRoutesResponse(
+                success=True,
+                message=f"Successfully regenerated {len(config.routes)} routes",
+                routes_count=len(config.routes),
+                config_path=config_path,
+            )
+        else:
+            return RegenerateRoutesResponse(
+                success=False,
+                message="Generated config but failed to apply via set-raw",
+                routes_count=len(config.routes),
+                config_path=config_path,
+            )
+
+    except ValueError as e:
+        # Missing hostname or other config issue
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error regenerating routes: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to regenerate routes: {str(e)}")
+
+
+class ServeRoutesStatus(BaseModel):
+    """Current Tailscale Serve routes status."""
+    hostname: Optional[str] = None
+    routes: List[Dict[str, Any]] = []
+    config_exists: bool = False
+    tailscale_configured: bool = False
+
+
+@router.get("/routes/status", response_model=ServeRoutesStatus)
+async def get_serve_routes_status(
+    current_user: User = Depends(get_current_user)
+) -> ServeRoutesStatus:
+    """Get current Tailscale Serve routes status.
+
+    Returns the current hostname, configured routes, and whether
+    Tailscale Serve is properly configured.
+    """
+    try:
+        import yaml as pyyaml
+
+        # Check if tailscale config exists
+        config_path = "/config/tailscale.yaml"
+        hostname = None
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                ts_config = pyyaml.safe_load(f)
+                hostname = ts_config.get('hostname')
+
+        # Check if serve config exists
+        serve_config_path = "/config/tailscale-serve.json"
+        config_exists = os.path.exists(serve_config_path)
+        routes = []
+
+        if config_exists:
+            with open(serve_config_path, 'r') as f:
+                serve_config = json.load(f)
+                # Extract routes from config
+                web = serve_config.get("Web", {})
+                for host_port, handler_config in web.items():
+                    handlers = handler_config.get("Handlers", {})
+                    for path, proxy_config in handlers.items():
+                        routes.append({
+                            "path": path,
+                            "proxy": proxy_config.get("Proxy", ""),
+                            "host": host_port,
+                        })
+
+        # Check if Tailscale Serve is configured (has routes)
+        from src.services.tailscale_serve import get_serve_status
+        serve_status = get_serve_status()
+        tailscale_configured = bool(serve_status and serve_status.strip())
+
+        return ServeRoutesStatus(
+            hostname=hostname,
+            routes=routes,
+            config_exists=config_exists,
+            tailscale_configured=tailscale_configured,
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting routes status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get routes status: {str(e)}")

@@ -432,7 +432,7 @@ echo ""
 # Start application
 echo -e "${BLUE}🚀 Starting ${APP_DISPLAY_NAME} application...${NC}"
 echo ""
-docker compose -f ${APP_COMPOSE_FILE} $COMPOSE_OVERRIDE_FILE up -d --build  # Build and start with .env overrides
+docker compose -f ${APP_COMPOSE_FILE} $COMPOSE_OVERRIDE_FILE up -d --build
 
 echo ""
 echo "   Waiting for backend to be healthy..."

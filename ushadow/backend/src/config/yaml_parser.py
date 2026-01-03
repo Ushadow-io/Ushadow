@@ -208,6 +208,7 @@ class ComposeService:
     description: Optional[str] = None
     namespace: Optional[str] = None  # Docker Compose project name / K8s namespace
     infra_services: List[str] = field(default_factory=list)  # Infra services to start first
+    route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -363,6 +364,8 @@ class ComposeParser(BaseYAMLParser):
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
+        # Route path for Tailscale Serve (e.g., "/chronicle")
+        route_path = service_meta.get("route_path")
 
         return ComposeService(
             name=name,
@@ -381,6 +384,7 @@ class ComposeParser(BaseYAMLParser):
             description=description,
             namespace=namespace,
             infra_services=infra_services,
+            route_path=route_path,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:

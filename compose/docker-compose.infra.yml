@@ -48,7 +48,7 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant
-    profiles: ["memory","qrant"]
+    profiles: ["memory","qdrant"]
     ports:
       - "6333:6333"  # HTTP
       - "6334:6334"  # gRPC
@@ -134,7 +134,7 @@ services:
 networks:
   infra-network:
     name: infra-network
-    driver: bridge
+    external: true
 
 volumes:
   mongo_data:

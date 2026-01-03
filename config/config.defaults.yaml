@@ -71,6 +71,9 @@ network:
   host_ip: localhost
   backend_public_port: 8000
   webui_port: 5173
+
+# Security Configuration
+security:
   cors_origins: http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000
 
 # Infrastructure Services
