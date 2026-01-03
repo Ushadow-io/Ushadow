@@ -10,6 +10,7 @@ Manages application settings using OmegaConf for:
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -189,7 +190,6 @@ class SettingsStore:
             if Path("/config").exists():
                 config_dir = Path("/config")
             else:
-                import os
                 project_root = os.environ.get("PROJECT_ROOT")
                 if project_root:
                     config_dir = Path(project_root) / "config"
@@ -206,7 +206,9 @@ class SettingsStore:
 
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
-        self.cache_ttl: int = 5  # seconds  # seconds
+        # Disable cache in dev mode for faster iteration
+        dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
+        self.cache_ttl: int = 0 if dev_mode else 5  # seconds
 
     def clear_cache(self) -> None:
         """Clear the configuration cache, forcing reload on next access."""
@@ -549,8 +551,8 @@ class SettingsStore:
         """
         Check if there's an existing setting value that matches an env var.
 
-        Uses OmegaConf tree search (resolver) first, then provider mapping,
-        then falls back to fuzzy matching.
+        Uses OmegaConf tree search (resolver) first, then os.environ,
+        then provider mapping, then falls back to fuzzy matching.
 
         Args:
             env_var_name: Environment variable name
@@ -561,6 +563,11 @@ class SettingsStore:
         # First, try OmegaConf tree search (e.g., MEMORY_SERVER_URL -> infrastructure.memory_server_url)
         value = await self.get_by_env_var(env_var_name)
         if value and str(value).strip():
+            return True
+
+        # Check os.environ (e.g., from compose file or .env)
+        env_value = os.environ.get(env_var_name)
+        if env_value and str(env_value).strip():
             return True
 
         # Try provider-derived mapping
@@ -713,9 +720,17 @@ class SettingsStore:
             return literal_value
         elif source == "default":
             if env_name:
+                # First try to resolve from settings
                 resolved = await self.get_by_env_var(env_name)
                 if resolved:
+                    logger.info(f"resolve_env_value: {env_name} -> {resolved} (from settings)")
                     return resolved
+                # Fall back to os.environ (e.g., from .env file)
+                env_value = os.environ.get(env_name)
+                if env_value:
+                    logger.info(f"resolve_env_value: {env_name} -> {env_value} (from os.environ)")
+                    return env_value
+                logger.info(f"resolve_env_value: {env_name} -> {default_value} (fallback to default)")
             return default_value
         return None
 
