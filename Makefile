@@ -121,17 +121,20 @@ reset-tailscale:
 	@./setup/reset-tailscale.sh
 
 # Infrastructure commands
+# Note: Services use profiles, so we must specify --profile to include them
+INFRA_COMPOSE := docker compose -f compose/docker-compose.infra.yml -p infra --profile infra --profile memory
+
 infra-up:
 	@echo "🏗️  Starting infrastructure..."
-	@docker network create ushadow-network 2>/dev/null || true
-	@docker compose -f compose/docker-compose.infra.yml -p infra up -d
+	@docker network create infra-network 2>/dev/null || true
+	@$(INFRA_COMPOSE) up -d
 	@echo "✅ Infrastructure started"
 
 infra-down:
-	docker compose -f compose/docker-compose.infra.yml -p infra down
+	$(INFRA_COMPOSE) down
 
 infra-logs:
-	docker compose -f compose/docker-compose.infra.yml -p infra logs -f
+	$(INFRA_COMPOSE) logs -f
 
 # Chronicle commands
 chronicle-up:

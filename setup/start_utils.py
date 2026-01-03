@@ -155,8 +155,10 @@ def start_infrastructure(
             return False, f"Compose file not found: {compose_file}"
 
         # Create and start infrastructure
+        # Note: Must include --profile flags since all services in infra compose have profiles
         result = subprocess.run(
-            ["docker", "compose", "-f", compose_file, "-p", project_name, "up", "-d"],
+            ["docker", "compose", "-f", compose_file, "-p", project_name,
+             "--profile", "infra", "--profile", "memory", "up", "-d"],
             capture_output=True,
             text=True,
             timeout=120

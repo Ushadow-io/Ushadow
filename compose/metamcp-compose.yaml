@@ -26,7 +26,6 @@ services:
   metamcp:
     image: ghcr.io/metatool-ai/metamcp:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-metamcp
-    pull_policy: always
     # Requires postgres from infra (started via infra_services in x-ushadow)
     ports:
       - "${METAMCP_PORT:-12008}:12008"
