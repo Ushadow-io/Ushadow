@@ -58,6 +58,146 @@ def _extract_port_env_vars(ports: List[Dict[str, Any]]) -> Dict[str, int]:
     return result
 
 
+def check_port_in_use(port: int, host: str = "0.0.0.0", exclude_container: Optional[str] = None) -> Optional[str]:
+    """
+    Check if a port is in use on the host.
+
+    Note: When running inside a Docker container, socket bind tests don't work
+    reliably for detecting host ports. We rely primarily on the Docker API check.
+
+    Args:
+        port: Port number to check
+        host: Host address to check (default: 0.0.0.0)
+        exclude_container: Container name pattern to exclude from check (for self-check)
+
+    Returns:
+        None if port is available, or a string describing what's using it
+    """
+    logger.info(f"Checking if port {port} is in use (exclude_container={exclude_container})")
+
+    docker_available = False
+
+    # Check if any Docker container is using this port via Docker API
+    try:
+        client = docker.from_env()
+        client.ping()  # Verify Docker is actually responsive
+        docker_available = True
+
+        containers = client.containers.list(all=False)  # Only running containers
+        logger.debug(f"Found {len(containers)} running Docker containers")
+
+        for container in containers:
+            container_name = container.name
+            container_status = container.status
+
+            # Skip the container we're trying to start (if specified)
+            if exclude_container and exclude_container in container_name:
+                logger.debug(f"Skipping excluded container: {container_name}")
+                continue
+
+            # Check NetworkSettings.Ports (actual active port bindings for running containers)
+            network_settings = container.attrs.get("NetworkSettings", {})
+            ports = network_settings.get("Ports", {})
+
+            if ports:
+                for container_port, bindings in ports.items():
+                    if bindings:
+                        for binding in bindings:
+                            host_ip = binding.get("HostIp", "")
+                            host_port = binding.get("HostPort")
+                            if host_port:
+                                try:
+                                    if int(host_port) == port:
+                                        logger.info(f"Port {port} in use by Docker container '{container_name}' (status: {container_status})")
+                                        return f"Docker: {container_name}"
+                                except ValueError:
+                                    pass
+
+        logger.debug(f"No Docker container found using port {port}")
+
+    except Exception as e:
+        logger.warning(f"Docker API check failed: {e}")
+        # If Docker fails, we can't reliably check ports from inside a container
+        # Fall through to socket test, but log a warning
+
+    # Socket bind test - NOTE: This doesn't work reliably from inside a container!
+    # It will test the container's network namespace, not the host's.
+    # We only use this as a backup for non-Docker processes when Docker API fails.
+    if not docker_available:
+        logger.warning("Docker API unavailable - socket test may be unreliable from container")
+
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            # Port is available (at least in our network namespace)
+            logger.debug(f"Socket bind test passed for port {port}")
+            return None
+    except socket.error as e:
+        logger.debug(f"Socket bind test failed for port {port}: {e}")
+
+    # Port is in use - try to find what's using it via lsof
+    # NOTE: lsof also runs inside the container, so may not find host processes
+    try:
+        result = subprocess.run(
+            ["lsof", "-i", f":{port}", "-P", "-n"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                parts = lines[1].split()
+                if len(parts) >= 2:
+                    process_info = f"{parts[0]} (PID: {parts[1]})"
+                    logger.info(f"Port {port} in use by process: {process_info}")
+                    return process_info
+        return "unknown process"
+    except Exception as e:
+        logger.debug(f"lsof check failed: {e}")
+        return "unknown process"
+
+
+def debug_list_docker_ports() -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Debug function to list all Docker container port bindings.
+    Returns a dict mapping container names to their port bindings.
+    """
+    result = {}
+    try:
+        client = docker.from_env()
+        containers = client.containers.list(all=False)  # Only running containers
+        for container in containers:
+            ports_info = []
+            network_settings = container.attrs.get("NetworkSettings", {})
+            ports = network_settings.get("Ports", {})
+            if ports:
+                for container_port, bindings in ports.items():
+                    if bindings:
+                        for binding in bindings:
+                            ports_info.append({
+                                "container_port": container_port,
+                                "host_ip": binding.get("HostIp", ""),
+                                "host_port": binding.get("HostPort")
+                            })
+            if ports_info:
+                result[container.name] = ports_info
+    except Exception as e:
+        logger.error(f"Failed to list Docker ports: {e}")
+    return result
+
+
+@dataclass
+class PortConflict:
+    """Represents a port conflict."""
+    port: int
+    env_var: Optional[str]  # The env var that controls this port (e.g., CHRONICLE_PORT)
+    used_by: str  # Description of what's using the port
+    suggested_port: int  # A suggested alternative port
+
+
 class ServiceStatus(str, Enum):
     """Service status enum."""
 
@@ -578,6 +718,135 @@ class DockerManager:
 
         return services
 
+    def get_service_ports(self, service_name: str) -> List[Dict[str, Any]]:
+        """
+        Get the ports that a service would use.
+
+        Args:
+            service_name: Name of the service
+
+        Returns:
+            List of port configurations with 'port', 'env_var', and 'source' keys
+        """
+        from src.config.omegaconf_settings import get_settings_store
+
+        service_config = self.MANAGEABLE_SERVICES.get(service_name, {})
+        ports = service_config.get('ports', [])
+        if not ports:
+            metadata = service_config.get('metadata', {})
+            ports = metadata.get('ports', [])
+
+        # Load port overrides from services.{name}.ports
+        settings = get_settings_store()
+        config_key = service_name.replace("-", "_")
+        port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
+
+        result = []
+        for port_config in ports:
+            host_port = port_config.get('host', '')
+            if not host_port:
+                continue
+
+            # Check if it's an env var reference
+            match = PORT_ENV_VAR_PATTERN.search(str(host_port))
+            if match:
+                env_var = match.group(1)
+                default_port = int(match.group(2))
+
+                # Check: 1) config override, 2) environment, 3) default
+                override_port = port_overrides.get(env_var)
+
+                if override_port is not None:
+                    actual_port = int(override_port)
+                    logger.debug(f"Using port {actual_port} from config for {env_var}")
+                elif os.environ.get(env_var):
+                    try:
+                        actual_port = int(os.environ.get(env_var))
+                        logger.debug(f"Using port {actual_port} from environment for {env_var}")
+                    except ValueError:
+                        actual_port = default_port
+                else:
+                    actual_port = default_port
+                    logger.debug(f"Using default port {actual_port} for {env_var}")
+
+                result.append({
+                    'port': actual_port,
+                    'env_var': env_var,
+                    'default_port': default_port,
+                    'container_port': port_config.get('container')
+                })
+            else:
+                # Static port
+                try:
+                    port_num = int(str(host_port).split(':')[0])
+                    result.append({
+                        'port': port_num,
+                        'env_var': None,
+                        'default_port': port_num,
+                        'container_port': port_config.get('container')
+                    })
+                except ValueError:
+                    continue
+
+        return result
+
+    def check_port_conflicts(self, service_name: str) -> List[PortConflict]:
+        """
+        Check if a service's ports conflict with ports already in use.
+
+        Args:
+            service_name: Name of the service to check
+
+        Returns:
+            List of PortConflict objects for any conflicting ports
+        """
+        conflicts = []
+        service_ports = self.get_service_ports(service_name)
+
+        logger.info(f"Checking port conflicts for service '{service_name}'")
+        logger.info(f"Service ports to check: {service_ports}")
+
+        # Build the full container name pattern to exclude (only OUR environment's container)
+        # Container names follow pattern: {COMPOSE_PROJECT_NAME}-{service_name}
+        compose_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+        exclude_pattern = f"{compose_project}-{service_name}"
+        logger.debug(f"Exclude pattern for self-check: {exclude_pattern}")
+
+        # Debug: log all Docker port bindings
+        docker_ports = debug_list_docker_ports()
+        if docker_ports:
+            logger.info(f"Current Docker port bindings: {docker_ports}")
+        else:
+            logger.info("No Docker port bindings found")
+
+        for port_info in service_ports:
+            port = port_info['port']
+            # Exclude ONLY our own environment's container when checking
+            used_by = check_port_in_use(port, exclude_container=exclude_pattern)
+
+            if used_by:
+                logger.warning(f"Port conflict detected: port {port} is used by {used_by}")
+                # Find a suggested alternative port
+                suggested = port + 1
+                while check_port_in_use(suggested) and suggested < port + 100:
+                    suggested += 1
+
+                conflicts.append(PortConflict(
+                    port=port,
+                    env_var=port_info.get('env_var'),
+                    used_by=used_by,
+                    suggested_port=suggested
+                ))
+            else:
+                logger.debug(f"Port {port} is available")
+
+        if conflicts:
+            logger.warning(f"Found {len(conflicts)} port conflict(s) for service '{service_name}'")
+        else:
+            logger.info(f"No port conflicts for service '{service_name}'")
+
+        return conflicts
+
     async def start_service(self, service_name: str) -> tuple[bool, str]:
         """
         Start a Docker service.
@@ -665,35 +934,26 @@ class DockerManager:
         for env_var in service.all_env_vars:
             config = saved_config.get(env_var.name, {})
             source = config.get("source", "default")
+            setting_path = config.get("setting_path")
+            literal_value = config.get("value")
 
-            if source == "setting":
-                setting_path = config.get("setting_path")
-                if setting_path:
-                    value = await settings.get(setting_path)
-                    if value:
-                        resolved[env_var.name] = str(value)
-                    elif env_var.is_required:
-                        logger.warning(
-                            f"Service {service_name}: env var {env_var.name} "
-                            f"references empty setting {setting_path}"
-                        )
+            # Use settings.resolve_env_value as single source of truth
+            # This ensures UI display and container startup use identical resolution
+            value = await settings.resolve_env_value(
+                source=source,
+                setting_path=setting_path,
+                literal_value=literal_value,
+                default_value=env_var.default_value,
+                env_name=env_var.name
+            )
 
-            elif source == "literal":
-                value = config.get("value")
-                if value:
-                    resolved[env_var.name] = value
-                elif env_var.is_required:
-                    logger.warning(
-                        f"Service {service_name}: env var {env_var.name} "
-                        f"has no literal value configured"
-                    )
-
-            elif source == "default":
-                # Use OmegaConf resolver to search config tree by env var name
-                value = await settings.get_by_env_var(env_var.name)
-                if value:
-                    resolved[env_var.name] = value
-                    logger.debug(f"Resolved {env_var.name} from settings")
+            if value:
+                resolved[env_var.name] = str(value)
+            elif env_var.is_required and source != "default":
+                logger.warning(
+                    f"Service {service_name}: env var {env_var.name} "
+                    f"has no value for source={source}"
+                )
 
         logger.info(
             f"Resolved {len(resolved)} env vars for {service_name} from compose config"
@@ -753,10 +1013,16 @@ class DockerManager:
                     except Exception as e:
                         logger.debug(f"CapabilityResolver fallback for {service_name}: {e}")
 
-                # Apply PORT_OFFSET for compose-discovered services in same namespace
-                subprocess_env, container_env = self._apply_port_offset(
-                    service_name, service_config, subprocess_env, container_env
-                )
+                # Apply port overrides from services.{name}.ports
+                from src.config.omegaconf_settings import get_settings_store
+                settings = get_settings_store()
+                config_key = service_name.replace("-", "_")
+                port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
+                for env_var, port in port_overrides.items():
+                    container_env[env_var] = str(port)
+                    subprocess_env[env_var] = str(port)
+                    logger.info(f"Applied port override: {env_var}={port}")
+
                 return subprocess_env, container_env
 
             except Exception as e:
@@ -819,105 +1085,7 @@ class DockerManager:
             logger.error(f"Failed to resolve env vars for {service_name}: {e}")
             raise ValueError(f"Failed to configure service: {e}")
 
-        # Apply PORT_OFFSET for services in the same namespace
-        subprocess_env, container_env = self._apply_port_offset(
-            service_name, service_config, subprocess_env, container_env
-        )
-
         return subprocess_env, container_env
-
-    def _apply_port_offset(
-        self,
-        service_name: str,
-        service_config: Dict[str, Any],
-        subprocess_env: Dict[str, str],
-        container_env: Dict[str, str],
-    ) -> tuple[Dict[str, str], Dict[str, str]]:
-        """
-        Apply PORT_OFFSET to service port env vars when in the same namespace.
-
-        This allows multiple environments (purple, green, etc.) to run the same
-        services without port conflicts. Only applies when:
-        1. PORT_OFFSET is set and non-zero
-        2. The service namespace matches COMPOSE_PROJECT_NAME (same environment)
-        3. The port env var isn't already explicitly set
-
-        Args:
-            service_name: Name of the service
-            service_config: Service configuration from MANAGEABLE_SERVICES
-            subprocess_env: Environment for subprocess (will be modified)
-            container_env: Environment for container (will be modified)
-
-        Returns:
-            Modified (subprocess_env, container_env) tuple
-        """
-        # Get PORT_OFFSET from environment
-        port_offset_str = os.environ.get('PORT_OFFSET', '0')
-        try:
-            port_offset = int(port_offset_str)
-        except ValueError:
-            port_offset = 0
-
-        if port_offset == 0:
-            return subprocess_env, container_env
-
-        # Get current project name
-        current_project = os.environ.get('COMPOSE_PROJECT_NAME', 'ushadow')
-
-        # Get service namespace (from x-ushadow or defaults to current project)
-        service_namespace = service_config.get('namespace')
-        if not service_namespace:
-            # If no namespace declared, service runs in current project namespace
-            service_namespace = current_project
-
-        # Only apply offset if service is in the same namespace as current environment
-        if service_namespace != current_project:
-            logger.debug(
-                f"Skipping port offset for {service_name}: "
-                f"namespace '{service_namespace}' != project '{current_project}'"
-            )
-            return subprocess_env, container_env
-
-        # Get ports from service config (parsed from compose file)
-        ports = service_config.get('ports', [])
-        if not ports:
-            # Try to get from metadata if compose-discovered
-            metadata = service_config.get('metadata', {})
-            ports = metadata.get('ports', [])
-
-        if not ports:
-            return subprocess_env, container_env
-
-        # Extract port env vars and their defaults
-        port_env_vars = _extract_port_env_vars(ports)
-
-        for env_var, default_port in port_env_vars.items():
-            # Skip if already explicitly set in environment
-            if env_var in os.environ:
-                logger.debug(
-                    f"Port var {env_var} already set to {os.environ[env_var]}, skipping offset"
-                )
-                continue
-
-            # Skip if already in subprocess_env with a non-default value
-            if env_var in subprocess_env:
-                existing = subprocess_env[env_var]
-                if existing != str(default_port):
-                    logger.debug(
-                        f"Port var {env_var} already configured to {existing}, skipping offset"
-                    )
-                    continue
-
-            # Apply offset
-            new_port = default_port + port_offset
-            subprocess_env[env_var] = str(new_port)
-            container_env[env_var] = str(new_port)
-            logger.info(
-                f"Applied PORT_OFFSET to {env_var}: {default_port} + {port_offset} = {new_port}"
-            )
-
-        return subprocess_env, container_env
-
 
     async def _start_infra_services(self, infra_services: list[str]) -> tuple[bool, str]:
         """
