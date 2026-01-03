@@ -3,6 +3,11 @@ ushadow Backend - AI Orchestration Platform
 FastAPI application entry point
 """
 
+# Load .env file before any other imports that might use environment variables
+# Search up directory tree to find .env at project root
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(usecwd=True))
+
 import asyncio
 import logging
 import os

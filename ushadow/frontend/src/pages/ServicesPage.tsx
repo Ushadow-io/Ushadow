@@ -30,6 +30,8 @@ import {
   EnvVarConfig
 } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
+import Modal from '../components/Modal'
+import { PortConflictDialog } from '../components/services'
 
 export default function ServicesPage() {
   // Compose services state
@@ -56,12 +58,36 @@ export default function ServicesPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [startingService, setStartingService] = useState<string | null>(null)
+  const [loadingEnvConfig, setLoadingEnvConfig] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   const [serviceErrors, setServiceErrors] = useState<Record<string, string>>({})
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
     serviceName: string | null
   }>({ isOpen: false, serviceName: null })
+
+  // Port conflict dialog state
+  const [portConflictDialog, setPortConflictDialog] = useState<{
+    isOpen: boolean
+    serviceId: string | null
+    serviceName: string | null
+    conflicts: Array<{
+      port: number
+      envVar: string | null
+      usedBy: string
+      suggestedPort: number
+    }>
+  }>({ isOpen: false, serviceId: null, serviceName: null, conflicts: [] })
+
+  // Port edit dialog state
+  const [portEditDialog, setPortEditDialog] = useState<{
+    isOpen: boolean
+    serviceId: string | null
+    serviceName: string | null
+    currentPort: number | null
+    envVar: string | null
+    newPort: string
+  }>({ isOpen: false, serviceId: null, serviceName: null, currentPort: null, envVar: null, newPort: '' })
 
   // Catalog modal state
   const [showCatalog, setShowCatalog] = useState(false)
@@ -187,6 +213,28 @@ export default function ServicesPage() {
       return next
     })
     try {
+      // First, run preflight check for port conflicts
+      const preflightResponse = await servicesApi.preflightCheck(serviceName)
+      const preflight = preflightResponse.data
+
+      if (!preflight.can_start && preflight.port_conflicts.length > 0) {
+        // Port conflicts detected - show dialog
+        setPortConflictDialog({
+          isOpen: true,
+          serviceId: serviceName,
+          serviceName: serviceName,
+          conflicts: preflight.port_conflicts.map(c => ({
+            port: c.port,
+            envVar: c.env_var,
+            usedBy: c.used_by,
+            suggestedPort: c.suggested_port
+          }))
+        })
+        setStartingService(null)
+        return
+      }
+
+      // No conflicts - proceed with start
       const response = await servicesApi.startService(serviceName)
       // Check for success: false in response body (API returns 200 even on failure)
       if (response.data && response.data.success === false) {
@@ -198,6 +246,31 @@ export default function ServicesPage() {
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || error.response?.data?.message || 'Failed to start service'
       setServiceErrors(prev => ({ ...prev, [serviceName]: errorMsg }))
+      setStartingService(null)
+    }
+  }
+
+  const handleResolvePortConflict = async (envVar: string, newPort: number) => {
+    const { serviceId } = portConflictDialog
+    if (!serviceId) return
+
+    setPortConflictDialog({ isOpen: false, serviceId: null, serviceName: null, conflicts: [] })
+    setStartingService(serviceId)
+
+    try {
+      // Apply the port override
+      await servicesApi.setPortOverride(serviceId, envVar, newPort)
+
+      // Now start the service
+      const response = await servicesApi.startService(serviceId)
+      if (response.data && response.data.success === false) {
+        const errorMsg = response.data.message || 'Failed to start service'
+        setServiceErrors(prev => ({ ...prev, [serviceId]: errorMsg }))
+        setStartingService(null)
+      }
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || 'Failed to apply port override'
+      setServiceErrors(prev => ({ ...prev, [serviceId]: errorMsg }))
       setStartingService(null)
     }
   }
@@ -221,6 +294,27 @@ export default function ServicesPage() {
       }))
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to stop service' })
+    }
+  }
+
+  const handleSavePortEdit = async () => {
+    const { serviceId, envVar, newPort } = portEditDialog
+    if (!serviceId || !envVar || !newPort) return
+
+    const port = parseInt(newPort, 10)
+    if (isNaN(port) || port < 1 || port > 65535) {
+      setMessage({ type: 'error', text: 'Invalid port number' })
+      return
+    }
+
+    try {
+      await servicesApi.setPortOverride(serviceId, envVar, port)
+      setPortEditDialog({ isOpen: false, serviceId: null, serviceName: null, currentPort: null, envVar: null, newPort: '' })
+      setMessage({ type: 'success', text: `Port updated to ${port}` })
+      // Reload services to get updated port
+      await loadData()
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to update port' })
     }
   }
 
@@ -335,8 +429,12 @@ export default function ServicesPage() {
 
   const handleExpandService = async (serviceId: string) => {
     // Load env config when expanding
+    console.log('[ServicesPage] Loading env config for:', serviceId)
+    setLoadingEnvConfig(serviceId)
+    setExpandedServices(prev => new Set(prev).add(serviceId))
     try {
       const response = await servicesApi.getEnvConfig(serviceId)
+      console.log('[ServicesPage] Env config loaded for:', serviceId)
       const data = response.data
 
       // Initialize edit form with current config
@@ -352,9 +450,10 @@ export default function ServicesPage() {
 
       setEnvConfig(data)
       setEnvEditForm(formData)
-      setExpandedServices(prev => new Set(prev).add(serviceId))
     } catch (error: any) {
       setMessage({ type: 'error', text: 'Failed to load env configuration' })
+    } finally {
+      setLoadingEnvConfig(null)
     }
   }
 
@@ -784,6 +883,12 @@ export default function ServicesPage() {
               const isExpanded = expandedServices.has(service.service_id)
               const isEditing = editingServiceId === service.service_id
               const isStarting = startingService === service.service_name
+              const isLoadingConfig = loadingEnvConfig === service.service_id
+
+              // Debug logging
+              if (isExpanded || isLoadingConfig) {
+                console.log(`[ServicesPage] ${service.service_name}: isExpanded=${isExpanded}, isLoadingConfig=${isLoadingConfig}, hasEnvConfig=${!!envConfig}`)
+              }
 
               // Card styling based on status
               const getCardClasses = () => {
@@ -937,25 +1042,46 @@ export default function ServicesPage() {
                           </span>
                         </div>
 
-                        {/* Right: Status indicator or URL */}
+                        {/* Right: Port display with edit */}
                         <div className="flex items-center gap-2">
-                          {status.state === 'running' && service.ports && service.ports.length > 0 && service.ports[0].host && (() => {
-                            // Extract port from ${VAR:-default} syntax or use as-is
-                            const portStr = service.ports[0].host
-                            const match = portStr.match(/\$\{[^:]+:-(\d+)\}/)
-                            const port = match ? match[1] : portStr.replace(/\D/g, '') || portStr
-                            return (
-                              <a
-                                href={`http://localhost:${port}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-primary-600 hover:text-primary-700 dark:text-primary-400 hover:underline"
+                          {service.ports && service.ports.length > 0 && service.ports[0].host && (
+                            <div className="flex items-center gap-1">
+                              {status.state === 'running' ? (
+                                <a
+                                  href={`http://localhost:${service.ports[0].host}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-primary-600 hover:text-primary-700 dark:text-primary-400 hover:underline"
+                                  data-testid={`service-port-${service.service_id}`}
+                                >
+                                  :{service.ports[0].host}
+                                </a>
+                              ) : (
+                                <span className="text-neutral-500" data-testid={`service-port-${service.service_id}`}>
+                                  :{service.ports[0].host}
+                                </span>
+                              )}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setPortEditDialog({
+                                    isOpen: true,
+                                    serviceId: service.service_id,
+                                    serviceName: service.service_name,
+                                    currentPort: parseInt(service.ports[0].host || '0', 10),
+                                    envVar: service.ports[0].env_var || null,
+                                    newPort: service.ports[0].host || ''
+                                  })
+                                }}
+                                className="p-0.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+                                title="Edit port"
+                                data-testid={`edit-port-${service.service_id}`}
                               >
-                                :{port}
-                              </a>
-                            )
-                          })()}
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )}
                           {service.needs_setup && (
                             <span className="text-warning-600 dark:text-warning-400">Needs Setup</span>
                           )}
@@ -967,8 +1093,15 @@ export default function ServicesPage() {
                   {/* Expanded Content */}
                   {isExpanded && (
                     <div className="px-4 pb-4 border-t border-neutral-200 dark:border-neutral-700">
+                      {/* Loading state */}
+                      {isLoadingConfig && (
+                        <div className="mt-3 flex items-center justify-center py-4" data-testid={`loading-config-${service.service_name}`}>
+                          <Loader2 className="h-5 w-5 animate-spin text-primary-500" />
+                          <span className="ml-2 text-sm text-neutral-500">Loading configuration...</span>
+                        </div>
+                      )}
                       {/* View Mode: Show resolved env vars */}
-                      {!isEditing && envConfig && (
+                      {!isEditing && envConfig && !isLoadingConfig && (
                         <div className="mt-3 space-y-1.5">
                           {[...envConfig.required_env_vars, ...envConfig.optional_env_vars].map(ev => (
                             <div key={ev.name} className="flex items-baseline gap-2 text-sm">
@@ -999,7 +1132,7 @@ export default function ServicesPage() {
                       )}
 
                       {/* Edit Mode */}
-                      {isEditing && envConfig && (
+                      {isEditing && envConfig && !isLoadingConfig && (
                         <div className="mt-3">
                           {[...envConfig.required_env_vars, ...envConfig.optional_env_vars].map(ev => (
                             <EnvVarEditor
@@ -1230,6 +1363,62 @@ export default function ServicesPage() {
         onConfirm={confirmStopService}
         onCancel={() => setConfirmDialog({ isOpen: false, serviceName: null })}
       />
+
+      {/* Port Conflict Dialog */}
+      <PortConflictDialog
+        isOpen={portConflictDialog.isOpen}
+        serviceName={portConflictDialog.serviceName || ''}
+        conflicts={portConflictDialog.conflicts}
+        onResolve={handleResolvePortConflict}
+        onDismiss={() => setPortConflictDialog({ isOpen: false, serviceId: null, serviceName: null, conflicts: [] })}
+      />
+
+      {/* Port Edit Dialog */}
+      <Modal
+        isOpen={portEditDialog.isOpen}
+        onClose={() => setPortEditDialog({ isOpen: false, serviceId: null, serviceName: null, currentPort: null, envVar: null, newPort: '' })}
+        title={`Edit Port for ${portEditDialog.serviceName}`}
+        maxWidth="sm"
+        testId="port-edit-modal"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+              Port Number
+            </label>
+            <input
+              type="number"
+              value={portEditDialog.newPort}
+              onChange={(e) => setPortEditDialog(prev => ({ ...prev, newPort: e.target.value }))}
+              className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+              placeholder="e.g., 8080"
+              min="1"
+              max="65535"
+              data-testid="port-edit-input"
+            />
+            {portEditDialog.envVar && (
+              <p className="mt-1 text-xs text-neutral-500">
+                Environment variable: {portEditDialog.envVar}
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setPortEditDialog({ isOpen: false, serviceId: null, serviceName: null, currentPort: null, envVar: null, newPort: '' })}
+              className="px-4 py-2 text-neutral-600 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSavePortEdit}
+              className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+              data-testid="port-edit-save"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

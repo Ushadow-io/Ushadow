@@ -88,6 +88,27 @@ class LogsResponse(BaseModel):
     logs: str
 
 
+class PortConflictInfo(BaseModel):
+    """Information about a port conflict."""
+    port: int
+    env_var: Optional[str] = None
+    used_by: str
+    suggested_port: int
+
+
+class PreflightCheckResponse(BaseModel):
+    """Response from pre-start checks."""
+    can_start: bool
+    port_conflicts: List[PortConflictInfo] = []
+    message: Optional[str] = None
+
+
+class PortOverrideRequest(BaseModel):
+    """Request to override a service's port."""
+    env_var: str = Field(..., description="Environment variable name (e.g., CHRONICLE_PORT)")
+    port: int = Field(..., ge=1, le=65535, description="New port number")
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -223,6 +244,177 @@ async def get_docker_details(
 # =============================================================================
 # Lifecycle Endpoints
 # =============================================================================
+
+@router.get("/{name}/preflight", response_model=PreflightCheckResponse)
+async def preflight_check(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> PreflightCheckResponse:
+    """
+    Pre-start checks for a service.
+
+    Checks for port conflicts before attempting to start a service.
+    If conflicts are found, returns suggested alternative ports.
+    """
+    from src.services.docker_manager import get_docker_manager
+
+    docker_mgr = get_docker_manager()
+
+    # Check if service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Check for port conflicts
+    conflicts = docker_mgr.check_port_conflicts(name)
+
+    if conflicts:
+        return PreflightCheckResponse(
+            can_start=False,
+            port_conflicts=[
+                PortConflictInfo(
+                    port=c.port,
+                    env_var=c.env_var,
+                    used_by=c.used_by,
+                    suggested_port=c.suggested_port
+                )
+                for c in conflicts
+            ],
+            message=f"Port conflict: {conflicts[0].port} is in use by {conflicts[0].used_by}"
+        )
+
+    return PreflightCheckResponse(can_start=True)
+
+
+@router.post("/{name}/port-override", response_model=ActionResponse)
+async def set_port_override(
+    name: str,
+    request: PortOverrideRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> ActionResponse:
+    """
+    Set a port override for a service.
+
+    This saves the port to service_preferences and sets the environment variable
+    so that subsequent service starts will use the new port.
+    """
+    from src.services.docker_manager import get_docker_manager, check_port_in_use
+    from src.config.omegaconf_settings import get_settings_store
+
+    docker_mgr = get_docker_manager()
+
+    # Validate service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Check that the new port is available
+    conflict = check_port_in_use(request.port)
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Port {request.port} is already in use by {conflict}"
+        )
+
+    # Save the port override simply as services.{name}.ports.{ENV_VAR}
+    settings = get_settings_store()
+    # Normalize service name for config key (replace - with _)
+    config_key = name.replace("-", "_")
+    await settings.update({
+        f"services.{config_key}.ports.{request.env_var}": request.port
+    })
+
+    # Also set the environment variable for immediate use
+    import os
+    os.environ[request.env_var] = str(request.port)
+
+    logger.info(f"Set port override: services.{config_key}.ports.{request.env_var}={request.port}")
+
+    return ActionResponse(
+        success=True,
+        message=f"Port {request.port} configured for {name}"
+    )
+
+
+@router.get("/{name}/connection-info")
+async def get_service_connection_info(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get connection info for a service (URL with resolved port).
+
+    Returns the base URL to connect to this service, with any port
+    overrides applied, plus availability status.
+    """
+    import httpx
+    from src.services.docker_manager import get_docker_manager
+
+    docker_mgr = get_docker_manager()
+
+    # Validate service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Get resolved ports
+    ports = docker_mgr.get_service_ports(name)
+
+    if not ports:
+        return {
+            "service": name,
+            "url": None,
+            "port": None,
+            "env_var": None,
+            "available": False,
+            "message": "Service has no exposed ports"
+        }
+
+    # Use the first port (primary port)
+    primary_port = ports[0]
+    port = primary_port.get("port") or primary_port.get("default_port")
+    external_url = f"http://localhost:{port}" if port else None
+
+    # Check if service is available via health endpoint
+    available = False
+    if external_url:
+        # Try common health check paths
+        internal_url = f"http://{name}:8000"  # Internal Docker network URL
+        for health_path in ["/health", "/readiness", "/api/health"]:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    response = await client.get(f"{internal_url}{health_path}")
+                    if response.status_code == 200:
+                        available = True
+                        break
+            except Exception:
+                continue
+
+    return {
+        "service": name,
+        "url": external_url,
+        "port": port,
+        "env_var": primary_port.get("env_var"),
+        "default_port": primary_port.get("default_port"),
+        "available": available,
+    }
+
+
+@router.get("/debug/docker-ports")
+async def debug_docker_ports(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Debug endpoint to show all Docker container port bindings.
+    """
+    from src.services.docker_manager import debug_list_docker_ports
+
+    ports = debug_list_docker_ports()
+    return {
+        "containers": ports,
+        "total_containers": len(ports)
+    }
+
 
 @router.post("/{name}/start", response_model=ActionResponse)
 async def start_service(

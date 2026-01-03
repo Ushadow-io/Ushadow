@@ -1,7 +1,11 @@
-"""Chronicle integration proxy endpoints"""
+"""Chronicle integration proxy endpoints
+
+Note: For connection info (URL, port, availability), use the generic
+/api/services/chronicle-backend/connection-info endpoint instead.
+"""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Header, Query

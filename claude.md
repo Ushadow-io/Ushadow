@@ -18,9 +18,27 @@ Always use `data-testid` attributes (not `id`) for test automation. Follow these
 | Setting fields | `setting-field-{id}`, `setting-field-{id}-input`, `setting-field-{id}-select` | |
 | Buttons/Actions | `{context}-{action}` | `quickstart-refresh-status` |
 
-### Reusable Settings Components
+### Reusable UI Components
 
-Use components from `frontend/src/components/settings/`:
+**Modals**: Always use the `Modal` component from `frontend/src/components/Modal.tsx`. Never create custom modal markup with `fixed inset-0` divs.
+
+```tsx
+import Modal from '../components/Modal'
+
+<Modal
+  isOpen={isOpen}
+  onClose={handleClose}
+  title="Modal Title"
+  maxWidth="sm"  // 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  testId="my-modal"
+>
+  {/* Modal content */}
+</Modal>
+```
+
+**Confirm Dialogs**: Use `ConfirmDialog` from `frontend/src/components/ConfirmDialog.tsx` for confirmation prompts.
+
+**Settings Components**: Use components from `frontend/src/components/settings/`:
 - `SecretInput` - API keys and passwords with visibility toggle
 - `SettingField` - Generic field (text, secret, url, select, toggle types)
 - `SettingsSection` - Container for grouping related settings
