@@ -358,6 +358,9 @@ class ServiceDeployment(BaseModel):
     internal_port: Optional[int] = None  # Container's internal port
     external_url: Optional[str] = None  # e.g., "https://pink.spangled-kettle.ts.net/chronicle"
     internal_url: Optional[str] = None  # e.g., "http://ushadow-pink-chronicle-backend:8000"
+    # Legacy WebSocket URLs (for chronicle service)
+    ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
+    ws_omi_url: Optional[str] = None  # WebSocket for OMI format streaming
 
 
 class LeaderInfoResponse(BaseModel):
@@ -485,6 +488,13 @@ async def get_leader_info():
                 if route_path and tailscale_hostname:
                     external_url = f"https://{tailscale_hostname}{route_path}"
 
+            # Add WebSocket URLs for chronicle service (legacy support)
+            service_ws_pcm_url = None
+            service_ws_omi_url = None
+            if service_name == "chronicle-backend" and tailscale_hostname and route_path:
+                service_ws_pcm_url = f"wss://{tailscale_hostname}{route_path}/ws_pcm"
+                service_ws_omi_url = f"wss://{tailscale_hostname}{route_path}/ws_omi"
+
             services.append(ServiceDeployment(
                 name=service_name,
                 display_name=display_name,
@@ -494,6 +504,8 @@ async def get_leader_info():
                 internal_port=internal_port,
                 external_url=external_url,
                 internal_url=internal_url,
+                ws_pcm_url=service_ws_pcm_url,
+                ws_omi_url=service_ws_omi_url,
             ))
 
     return LeaderInfoResponse(
