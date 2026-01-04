@@ -164,10 +164,10 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
         ))}
       </View>
 
-      {/* Audio Level Indicator - only show when streaming */}
+      {/* Audio Level Indicator with dB - only show when streaming */}
       {isStreaming && (
         <View style={styles.levelContainer}>
-          <Text style={styles.levelLabel}>Audio Level</Text>
+          <Text style={styles.levelLabel}>Level</Text>
           <View style={styles.levelBarBackground}>
             <View
               style={[
@@ -184,7 +184,9 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
               ]}
             />
           </View>
-          <Text style={styles.levelValue}>{Math.round(audioLevel)}%</Text>
+          <Text style={styles.levelValue}>
+            {Math.round((audioLevel * 0.6) - 60)} dB
+          </Text>
         </View>
       )}
     </View>
@@ -265,7 +267,7 @@ const styles = StyleSheet.create({
   levelValue: {
     fontSize: fontSize.xs,
     color: theme.textSecondary,
-    width: 35,
+    width: 50,
     textAlign: 'right',
     fontFamily: 'monospace',
   },

@@ -46,6 +46,8 @@ export default function ConversationsScreen() {
       }
 
       const response = await fetchConversations(1, 50);
+      console.log(`[Conversations] Raw response:`, JSON.stringify(response, null, 2));
+      console.log(`[Conversations] First conversation:`, JSON.stringify(response.conversations[0], null, 2));
       setConversations(response.conversations);
       console.log(`[Conversations] Loaded ${response.conversations.length} conversations`);
     } catch (err) {
@@ -70,7 +72,8 @@ export default function ConversationsScreen() {
     setExpandedId(expandedId === id ? null : id);
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return 'Unknown date';
     const date = new Date(dateString);
     return date.toLocaleDateString(undefined, {
       month: 'short',
@@ -87,7 +90,7 @@ export default function ConversationsScreen() {
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   };
 
-  const getStatusColor = (status: Conversation['status']) => {
+  const getStatusColor = (status: string) => {
     switch (status) {
       case 'active':
         return colors.success.default;
@@ -101,23 +104,32 @@ export default function ConversationsScreen() {
   };
 
   const renderConversation = ({ item }: { item: Conversation }) => {
-    const isExpanded = expandedId === item.id;
-    const transcriptPreview = item.transcript?.text?.slice(0, 150) || 'No transcript available';
+    const itemId = item.id || item.conversation_id;
+    const isExpanded = expandedId === itemId;
+
+    // Use title as main heading, summary as preview
+    const title = item.title || 'Untitled Conversation';
+    const preview = item.summary || item.detailed_summary?.slice(0, 200) || 'No summary available';
+
+    // Determine status from has_memory or default
+    const hasContent = item.has_memory || (item.memory_count && item.memory_count > 0);
 
     return (
       <TouchableOpacity
         style={styles.conversationCard}
-        onPress={() => toggleExpand(item.id)}
+        onPress={() => toggleExpand(itemId)}
         activeOpacity={0.7}
-        testID={`conversation-${item.id}`}
+        testID={`conversation-${itemId}`}
       >
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
-            <View style={[styles.statusDot, { backgroundColor: getStatusColor(item.status) }]} />
+            <View style={[styles.statusDot, { backgroundColor: hasContent ? colors.success.default : colors.primary[400] }]} />
             <Text style={styles.cardDate}>{formatDate(item.created_at)}</Text>
           </View>
           <View style={styles.cardHeaderRight}>
-            <Text style={styles.duration}>{formatDuration(item.duration_seconds)}</Text>
+            {item.segment_count !== undefined && (
+              <Text style={styles.duration}>{item.segment_count} segments</Text>
+            )}
             <Ionicons
               name={isExpanded ? 'chevron-up' : 'chevron-down'}
               size={20}
@@ -126,20 +138,29 @@ export default function ConversationsScreen() {
           </View>
         </View>
 
+        {/* Title */}
+        <Text style={styles.conversationTitle} numberOfLines={isExpanded ? undefined : 1}>
+          {title}
+        </Text>
+
+        {/* Summary preview */}
         <Text
           style={styles.transcriptPreview}
-          numberOfLines={isExpanded ? undefined : 3}
+          numberOfLines={isExpanded ? undefined : 2}
         >
-          {transcriptPreview}
-          {!isExpanded && transcriptPreview.length >= 150 && '...'}
+          {preview}
         </Text>
 
         {isExpanded && (
           <View style={styles.expandedContent}>
-            {item.transcript?.text && item.transcript.text.length > 150 && (
-              <Text style={styles.fullTranscript}>
-                {item.transcript.text}
-              </Text>
+            {/* Detailed summary if available */}
+            {item.detailed_summary && (
+              <View style={styles.detailedSummarySection}>
+                <Text style={styles.sectionLabel}>Detailed Summary</Text>
+                <Text style={styles.fullTranscript}>
+                  {item.detailed_summary}
+                </Text>
+              </View>
             )}
 
             <View style={styles.metadataSection}>
@@ -147,33 +168,25 @@ export default function ConversationsScreen() {
                 <Text style={styles.metadataLabel}>Client:</Text>
                 <Text style={styles.metadataValue}>{item.client_id}</Text>
               </View>
-              {item.transcript?.word_count && (
+              {item.segment_count !== undefined && (
                 <View style={styles.metadataRow}>
-                  <Text style={styles.metadataLabel}>Words:</Text>
-                  <Text style={styles.metadataValue}>{item.transcript.word_count}</Text>
+                  <Text style={styles.metadataLabel}>Segments:</Text>
+                  <Text style={styles.metadataValue}>{item.segment_count}</Text>
                 </View>
               )}
-              <View style={styles.metadataRow}>
-                <Text style={styles.metadataLabel}>Status:</Text>
-                <Text style={[styles.metadataValue, { color: getStatusColor(item.status) }]}>
-                  {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-                </Text>
-              </View>
+              {item.memory_count !== undefined && (
+                <View style={styles.metadataRow}>
+                  <Text style={styles.metadataLabel}>Memories:</Text>
+                  <Text style={styles.metadataValue}>{item.memory_count}</Text>
+                </View>
+              )}
+              {item.transcript_version_count !== undefined && (
+                <View style={styles.metadataRow}>
+                  <Text style={styles.metadataLabel}>Transcript Versions:</Text>
+                  <Text style={styles.metadataValue}>{item.transcript_version_count}</Text>
+                </View>
+              )}
             </View>
-
-            {item.speaker_segments && item.speaker_segments.length > 0 && (
-              <View style={styles.speakersSection}>
-                <Text style={styles.speakersTitle}>Speakers</Text>
-                {item.speaker_segments.slice(0, 5).map((segment, index) => (
-                  <View key={index} style={styles.speakerSegment}>
-                    <Text style={styles.speakerLabel}>{segment.speaker_label}:</Text>
-                    <Text style={styles.speakerText} numberOfLines={2}>
-                      {segment.text}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
           </View>
         )}
       </TouchableOpacity>
@@ -234,7 +247,7 @@ export default function ConversationsScreen() {
         <FlatList
           data={conversations}
           renderItem={renderConversation}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item, index) => item.id || item.conversation_id || `conv-${index}`}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={renderEmptyState}
           refreshControl={
@@ -337,15 +350,34 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: theme.textMuted,
   },
+  conversationTitle: {
+    fontSize: fontSize.base,
+    fontWeight: '600',
+    color: theme.textPrimary,
+    marginBottom: spacing.xs,
+  },
   transcriptPreview: {
     fontSize: fontSize.sm,
-    color: theme.textPrimary,
+    color: theme.textSecondary,
     lineHeight: 20,
   },
   expandedContent: {
     marginTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: theme.border,
+    paddingTop: spacing.md,
+  },
+  detailedSummarySection: {
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
+  },
+  sectionLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: theme.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: spacing.xs,
     paddingTop: spacing.md,
   },
   fullTranscript: {

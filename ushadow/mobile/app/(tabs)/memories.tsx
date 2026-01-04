@@ -242,7 +242,7 @@ export default function MemoriesScreen() {
         <FlatList
           data={memories}
           renderItem={renderMemory}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item, index) => item.id || `memory-${index}`}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={renderEmptyState}
           refreshControl={

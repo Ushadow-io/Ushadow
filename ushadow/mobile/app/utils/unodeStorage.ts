@@ -203,3 +203,75 @@ export async function updateUnodeToken(id: string, token: string): Promise<void>
     throw error;
   }
 }
+
+/**
+ * Update UNode's stream URL path (keeps host, updates path)
+ */
+export async function updateUnodeStreamPath(id: string, newPath: string): Promise<void> {
+  try {
+    const unodes = await getUnodes();
+    const index = unodes.findIndex(u => u.id === id);
+    if (index >= 0) {
+      const config = parseStreamUrl(unodes[index].streamUrl);
+      config.path = newPath;
+      unodes[index].streamUrl = buildStreamUrl(config);
+      await AsyncStorage.setItem(UNODES_KEY, JSON.stringify(unodes));
+      console.log('[UnodeStorage] Updated stream path for unode:', id, 'to:', unodes[index].streamUrl);
+    }
+  } catch (error) {
+    console.error('[UnodeStorage] Failed to update stream path:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update UNode's full stream URL config (protocol, host, path)
+ */
+export async function updateUnodeStreamConfig(
+  id: string,
+  updates: Partial<StreamUrlConfig>
+): Promise<void> {
+  try {
+    const unodes = await getUnodes();
+    const index = unodes.findIndex(u => u.id === id);
+    if (index >= 0) {
+      const config = parseStreamUrl(unodes[index].streamUrl);
+      // Apply updates
+      if (updates.protocol) config.protocol = updates.protocol;
+      if (updates.host) config.host = updates.host;
+      if (updates.path) config.path = updates.path;
+      unodes[index].streamUrl = buildStreamUrl(config);
+      await AsyncStorage.setItem(UNODES_KEY, JSON.stringify(unodes));
+      console.log('[UnodeStorage] Updated stream config for unode:', id, 'to:', unodes[index].streamUrl);
+    }
+  } catch (error) {
+    console.error('[UnodeStorage] Failed to update stream config:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update UNode's API URLs
+ */
+export async function updateUnodeUrls(
+  id: string,
+  updates: { apiUrl?: string; chronicleApiUrl?: string }
+): Promise<void> {
+  try {
+    const unodes = await getUnodes();
+    const index = unodes.findIndex(u => u.id === id);
+    if (index >= 0) {
+      if (updates.apiUrl !== undefined) {
+        unodes[index].apiUrl = updates.apiUrl;
+      }
+      if (updates.chronicleApiUrl !== undefined) {
+        unodes[index].chronicleApiUrl = updates.chronicleApiUrl;
+      }
+      await AsyncStorage.setItem(UNODES_KEY, JSON.stringify(unodes));
+      console.log('[UnodeStorage] Updated URLs for unode:', id);
+    }
+  } catch (error) {
+    console.error('[UnodeStorage] Failed to update URLs:', error);
+    throw error;
+  }
+}

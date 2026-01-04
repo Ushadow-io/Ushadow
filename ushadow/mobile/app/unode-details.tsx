@@ -17,11 +17,14 @@ import {
   Alert,
   ActivityIndicator,
   Modal,
+  TextInput,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from './theme';
 import { LeaderDiscovery } from './components/LeaderDiscovery';
+import QRScanner, { UshadowConnectionData } from './components/QRScanner';
+import { useTailscaleDiscovery } from './hooks/useTailscaleDiscovery';
 
 // Storage
 import {
@@ -31,8 +34,11 @@ import {
   removeUnode,
   getActiveUnodeId,
   setActiveUnode,
+  updateUnodeStreamConfig,
+  updateUnodeUrls,
+  parseStreamUrl,
 } from './utils/unodeStorage';
-import { getAuthToken } from './utils/authStorage';
+import { getAuthToken, saveAuthToken } from './utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from './services/chronicleApi';
@@ -45,11 +51,16 @@ interface UNodeStatus {
   chronicle: ConnectionStatus;
   ushadowError?: string;
   chronicleError?: string;
+  ushadowStatusCode?: number;
+  chronicleStatusCode?: number;
 }
 
 export default function UNodeDetailsPage() {
   const router = useRouter();
   const params = useLocalSearchParams();
+
+  // Tailscale discovery hook for QR scanning
+  const { connectFromQR } = useTailscaleDiscovery();
 
   // State
   const [unodes, setUnodes] = useState<UNode[]>([]);
@@ -58,11 +69,49 @@ export default function UNodeDetailsPage() {
   const [statuses, setStatuses] = useState<Record<string, UNodeStatus>>({});
   const [loading, setLoading] = useState(true);
   const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [rescanNodeId, setRescanNodeId] = useState<string | null>(null); // Track node being rescanned
+  const [cardExpanded, setCardExpanded] = useState(false);
+
+  // Editable endpoint paths for testing
+  // These should match the endpoints used in chronicleApi.verifyUnodeAuth
+  const [ushadowEndpoint, setUshadowEndpoint] = useState('/api/auth/me');
+  const [chronicleEndpoint, setChronicleEndpoint] = useState('/chronicle/users/me');
+  const [streamEndpoint, setStreamEndpoint] = useState('/chronicle/ws_pcm');
+  const [streamProtocol, setStreamProtocol] = useState<'ws' | 'wss'>('wss');
+
+  // URL editing mode
+  const [showUrlEdit, setShowUrlEdit] = useState(false);
+  const [editApiUrl, setEditApiUrl] = useState('');
+  const [editChronicleApiUrl, setEditChronicleApiUrl] = useState('');
 
   // Load data on mount
   useEffect(() => {
     loadData();
   }, []);
+
+  // Initialize stream config and URLs from selected node
+  // Only run when selectedId changes, not when unodes updates (to avoid overwriting edits)
+  useEffect(() => {
+    const loadNodeConfig = async () => {
+      if (selectedId) {
+        const nodes = await getUnodes();
+        const node = nodes.find(n => n.id === selectedId);
+        if (node) {
+          // Load stream config
+          if (node.streamUrl) {
+            const config = parseStreamUrl(node.streamUrl);
+            setStreamEndpoint(config.path);
+            setStreamProtocol(config.protocol);
+          }
+          // Load URLs for editing
+          setEditApiUrl(node.apiUrl || '');
+          setEditChronicleApiUrl(node.chronicleApiUrl || '');
+        }
+      }
+    };
+    loadNodeConfig();
+  }, [selectedId]); // Only re-run when selection changes
 
   const loadData = async () => {
     setLoading(true);
@@ -108,13 +157,15 @@ export default function UNodeDetailsPage() {
     // Check ushadow connection (auth endpoint)
     let ushadowStatus: ConnectionStatus = 'unknown';
     let ushadowError: string | undefined;
-    const ushadowUrl = `${node.apiUrl}/api/auth/me`;
+    let ushadowStatusCode: number | undefined;
+    const ushadowUrl = `${node.apiUrl}${ushadowEndpoint}`;
     console.log(`[UNodeDetails] Checking ushadow auth: ${ushadowUrl}`);
     try {
       const response = await fetch(ushadowUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
       console.log(`[UNodeDetails] Ushadow response: ${response.status}`);
+      ushadowStatusCode = response.status;
       if (response.ok) {
         const data = await response.json();
         console.log(`[UNodeDetails] Ushadow auth OK:`, data);
@@ -122,38 +173,40 @@ export default function UNodeDetailsPage() {
       } else {
         const errorText = await response.text();
         console.log(`[UNodeDetails] Ushadow auth failed: ${response.status} - ${errorText}`);
-        if (response.status === 401) {
-          ushadowStatus = 'error';
-          ushadowError = `401: ${errorText.substring(0, 100)}`;
-        } else {
-          ushadowStatus = 'error';
-          ushadowError = `${response.status}: ${errorText.substring(0, 100)}`;
-        }
+        ushadowStatus = 'error';
+        ushadowError = errorText.substring(0, 100);
       }
     } catch (err) {
       console.error(`[UNodeDetails] Ushadow request failed:`, err);
       ushadowStatus = 'error';
-      ushadowError = `Network error: ${err instanceof Error ? err.message : String(err)}`;
+      ushadowError = err instanceof Error ? err.message : String(err);
     }
 
-    // Check chronicle connection - use chronicleApiUrl if available
+    // Check chronicle connection - chronicle is proxied at /chronicle/ on main apiUrl
     let chronicleStatus: ConnectionStatus = 'unknown';
     let chronicleError: string | undefined;
-    const chronicleUrl = node.chronicleApiUrl || node.apiUrl;
-    console.log(`[UNodeDetails] Checking chronicle: ${chronicleUrl}/api/conversations`);
+    let chronicleStatusCode: number | undefined;
+    // Use apiUrl as base since chronicle is proxied (endpoint includes /chronicle/ prefix)
+    const chronicleFullUrl = `${node.apiUrl}${chronicleEndpoint}`;
+    console.log(`[UNodeDetails] Checking chronicle: ${chronicleFullUrl}`);
     try {
-      const result = await verifyUnodeAuth(chronicleUrl, token);
-      console.log(`[UNodeDetails] Chronicle result:`, result);
-      if (result.valid) {
+      const response = await fetch(chronicleFullUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      console.log(`[UNodeDetails] Chronicle response: ${response.status}`);
+      chronicleStatusCode = response.status;
+      if (response.ok) {
         chronicleStatus = 'connected';
       } else {
+        const errorText = await response.text();
+        console.log(`[UNodeDetails] Chronicle failed: ${response.status} - ${errorText}`);
         chronicleStatus = 'error';
-        chronicleError = result.error;
+        chronicleError = errorText.substring(0, 100);
       }
     } catch (err) {
       console.error(`[UNodeDetails] Chronicle request failed:`, err);
       chronicleStatus = 'error';
-      chronicleError = `Network error: ${err instanceof Error ? err.message : String(err)}`;
+      chronicleError = err instanceof Error ? err.message : String(err);
     }
 
     setStatuses(prev => ({
@@ -163,6 +216,8 @@ export default function UNodeDetailsPage() {
         chronicle: chronicleStatus,
         ushadowError,
         chronicleError,
+        ushadowStatusCode,
+        chronicleStatusCode,
       },
     }));
   };
@@ -206,14 +261,106 @@ export default function UNodeDetailsPage() {
     }
   };
 
+  // Save stream config when user finishes editing
+  const handleStreamConfigSave = async () => {
+    if (selectedId && streamEndpoint) {
+      try {
+        await updateUnodeStreamConfig(selectedId, {
+          protocol: streamProtocol,
+          path: streamEndpoint,
+        });
+        console.log('[UNodeDetails] Saved stream config:', streamProtocol, streamEndpoint);
+      } catch (error) {
+        console.error('[UNodeDetails] Failed to save stream config:', error);
+      }
+    }
+  };
+
+  // Save URL changes
+  const handleUrlsSave = async () => {
+    if (selectedId) {
+      try {
+        await updateUnodeUrls(selectedId, {
+          apiUrl: editApiUrl,
+          chronicleApiUrl: editChronicleApiUrl || undefined,
+        });
+        // Refresh unodes to reflect changes
+        const updatedUnodes = await getUnodes();
+        setUnodes(updatedUnodes);
+        console.log('[UNodeDetails] Saved URLs:', editApiUrl, editChronicleApiUrl);
+      } catch (error) {
+        console.error('[UNodeDetails] Failed to save URLs:', error);
+      }
+    }
+  };
+
+  // Handle protocol toggle
+  const handleProtocolToggle = async () => {
+    const newProtocol = streamProtocol === 'wss' ? 'ws' : 'wss';
+    setStreamProtocol(newProtocol);
+    if (selectedId) {
+      try {
+        await updateUnodeStreamConfig(selectedId, { protocol: newProtocol });
+        console.log('[UNodeDetails] Saved stream protocol:', newProtocol);
+      } catch (error) {
+        console.error('[UNodeDetails] Failed to save protocol:', error);
+      }
+    }
+  };
+
   // Show add UNode modal
   const handleAddUNode = () => {
+    setRescanNodeId(null); // Adding new, not rescanning
     setShowDiscoveryModal(true);
   };
 
-  // Handle UNode found from discovery
+  // Open scanner directly for rescan
+  const handleRescanNode = (node: UNode) => {
+    setRescanNodeId(node.id);
+    setShowScanner(true);
+  };
+
+  // Handle QR scan result for rescan
+  const handleQRScan = async (data: UshadowConnectionData) => {
+    setShowScanner(false);
+
+    // Connect using the QR data
+    const result = await connectFromQR(data);
+    if (!result.success || !result.leader) {
+      Alert.alert('Connection Failed', 'Could not connect to the scanned server');
+      setRescanNodeId(null);
+      return;
+    }
+
+    // Update the existing node with new connection info
+    const existingNode = unodes.find(n => n.id === rescanNodeId);
+    const savedNode = await saveUnode({
+      id: rescanNodeId!, // Keep same ID
+      name: existingNode?.name || result.leader.hostname.split('.')[0] || 'UNode',
+      apiUrl: result.leader.apiUrl,
+      chronicleApiUrl: result.leader.chronicleApiUrl,
+      streamUrl: result.leader.streamUrl,
+      tailscaleIp: new URL(result.leader.apiUrl).hostname,
+      authToken: data.auth_token,
+    });
+
+    // Reload and refresh status
+    const updatedUnodes = await getUnodes();
+    setUnodes(updatedUnodes);
+    setRescanNodeId(null);
+
+    if (data.auth_token) {
+      // Save token globally so other pages can use it
+      await saveAuthToken(data.auth_token);
+      setAuthToken(data.auth_token);
+      checkNodeStatus(savedNode, data.auth_token);
+    }
+  };
+
+  // Handle UNode found from discovery (for adding new nodes)
   const handleUnodeFound = async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string) => {
     const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
+
     const savedNode = await saveUnode({
       name,
       apiUrl,
@@ -223,15 +370,17 @@ export default function UNodeDetailsPage() {
       authToken: token,
     });
 
-    // Reload unodes and select the new one
+    // Reload unodes and select the new node
     const updatedUnodes = await getUnodes();
     setUnodes(updatedUnodes);
     setSelectedId(savedNode.id);
     await setActiveUnode(savedNode.id);
     setShowDiscoveryModal(false);
 
-    // Check status of the new node
+    // Check status of the node
     if (token) {
+      // Save token globally so other pages can use it
+      await saveAuthToken(token);
       setAuthToken(token);
       checkNodeStatus(savedNode, token);
     }
@@ -297,88 +446,251 @@ export default function UNodeDetailsPage() {
       chronicle: 'unknown',
     };
 
+    // Determine overall status for collapsed view
+    const isConnected = status.ushadow === 'connected' && status.chronicle === 'connected';
+    const hasError = status.ushadow === 'error' || status.chronicle === 'error';
+    const isChecking = status.ushadow === 'checking' || status.chronicle === 'checking';
+
     return (
       <View style={styles.selectedCard}>
-        {/* Header */}
-        <View style={styles.selectedHeader}>
+        {/* Collapsed Header - Always visible, tap to expand */}
+        <TouchableOpacity
+          style={styles.selectedHeader}
+          onPress={() => setCardExpanded(!cardExpanded)}
+          activeOpacity={0.7}
+        >
           <View style={styles.selectedIconContainer}>
             <Ionicons name="server" size={32} color={colors.primary[400]} />
           </View>
           <View style={styles.selectedInfo}>
             <Text style={styles.selectedName}>{selectedNode.name}</Text>
-            <Text style={styles.selectedUrl}>{selectedNode.apiUrl}</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={() => handleRefreshStatus(selectedNode)}
-          >
-            <Ionicons name="refresh" size={20} color={theme.textSecondary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Connection Statuses */}
-        <View style={styles.statusSection}>
-          <Text style={styles.statusSectionTitle}>Connection Status</Text>
-
-          {/* Ushadow Status */}
-          <View style={styles.statusItemFull}>
-            <View style={styles.statusItemHeader}>
-              <Text style={styles.statusItemLabel}>Ushadow Auth</Text>
-              {renderStatusBadge(status.ushadow, status.ushadowError)}
+            {/* Compact status list */}
+            <View style={styles.compactStatusList}>
+              <View style={styles.compactStatusRow}>
+                <Text style={styles.compactServiceName}>ushadow:</Text>
+                {status.ushadow === 'checking' ? (
+                  <ActivityIndicator size="small" color={colors.warning.default} />
+                ) : (
+                  <Text style={[styles.compactStatusText,
+                    status.ushadow === 'connected' ? styles.statusTextConnected :
+                    status.ushadow === 'error' ? styles.statusTextError : styles.statusTextUnknown]}>
+                    {status.ushadow === 'connected' ? '200' : status.ushadowStatusCode || status.ushadow}
+                  </Text>
+                )}
+              </View>
+              <View style={styles.compactStatusRow}>
+                <Text style={styles.compactServiceName}>chronicle:</Text>
+                {status.chronicle === 'checking' ? (
+                  <ActivityIndicator size="small" color={colors.warning.default} />
+                ) : (
+                  <Text style={[styles.compactStatusText,
+                    status.chronicle === 'connected' ? styles.statusTextConnected :
+                    status.chronicle === 'error' ? styles.statusTextError : styles.statusTextUnknown]}>
+                    {status.chronicle === 'connected' ? '200' : status.chronicleStatusCode || status.chronicle}
+                  </Text>
+                )}
+              </View>
             </View>
-            <Text style={styles.statusEndpoint}>{selectedNode.apiUrl}/api/auth/me</Text>
-            {status.ushadowError && status.ushadow === 'error' && (
-              <Text style={styles.statusErrorDetail}>{status.ushadowError}</Text>
-            )}
           </View>
+          <Ionicons
+            name={cardExpanded ? 'chevron-up' : 'chevron-down'}
+            size={24}
+            color={theme.textSecondary}
+          />
+        </TouchableOpacity>
 
-          {/* Chronicle Status */}
-          <View style={styles.statusItemFull}>
-            <View style={styles.statusItemHeader}>
-              <Text style={styles.statusItemLabel}>Chronicle API</Text>
-              {renderStatusBadge(status.chronicle, status.chronicleError)}
+        {/* Expanded Content */}
+        {cardExpanded && (
+          <>
+            {/* URL Configuration - Hidden behind edit button */}
+            <View style={styles.urlSection}>
+              <TouchableOpacity
+                style={styles.editUrlsButton}
+                onPress={() => setShowUrlEdit(!showUrlEdit)}
+              >
+                <Ionicons
+                  name={showUrlEdit ? 'chevron-up' : 'settings-outline'}
+                  size={16}
+                  color={colors.primary[400]}
+                />
+                <Text style={styles.editUrlsText}>
+                  {showUrlEdit ? 'Hide URL Config' : 'Edit URLs'}
+                </Text>
+              </TouchableOpacity>
+
+              {showUrlEdit && (
+                <View style={styles.urlEditFields}>
+                  {/* API URL */}
+                  <View style={styles.urlField}>
+                    <Text style={styles.urlFieldLabel}>API URL (Ushadow)</Text>
+                    <TextInput
+                      style={styles.urlInput}
+                      value={editApiUrl}
+                      onChangeText={setEditApiUrl}
+                      onBlur={handleUrlsSave}
+                      onSubmitEditing={handleUrlsSave}
+                      placeholder="https://example.ts.net"
+                      placeholderTextColor={theme.textMuted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                      returnKeyType="done"
+                      testID="edit-api-url"
+                    />
+                  </View>
+
+                  {/* Chronicle API URL */}
+                  <View style={styles.urlField}>
+                    <Text style={styles.urlFieldLabel}>Chronicle API URL (optional)</Text>
+                    <Text style={styles.urlFieldHint}>
+                      Leave empty to use: API URL + /chronicle/api
+                    </Text>
+                    <TextInput
+                      style={styles.urlInput}
+                      value={editChronicleApiUrl}
+                      onChangeText={setEditChronicleApiUrl}
+                      onBlur={handleUrlsSave}
+                      onSubmitEditing={handleUrlsSave}
+                      placeholder="https://example.ts.net/chronicle/api"
+                      placeholderTextColor={theme.textMuted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                      returnKeyType="done"
+                      testID="edit-chronicle-api-url"
+                    />
+                  </View>
+                </View>
+              )}
             </View>
-            <Text style={styles.statusEndpoint}>{selectedNode.chronicleApiUrl || selectedNode.apiUrl}/api/conversations</Text>
-            {status.chronicleError && status.chronicle === 'error' && (
-              <Text style={styles.statusErrorDetail}>{status.chronicleError}</Text>
-            )}
-          </View>
-        </View>
 
-        {/* Details */}
-        <View style={styles.detailsSection}>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Stream URL</Text>
-            <Text style={styles.detailValue} numberOfLines={1} ellipsizeMode="middle">
-              {selectedNode.streamUrl}
-            </Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Added</Text>
-            <Text style={styles.detailValue}>{formatDate(selectedNode.addedAt)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Last Connected</Text>
-            <Text style={styles.detailValue}>{formatDate(selectedNode.lastConnectedAt)}</Text>
-          </View>
-          {selectedNode.tailscaleIp && (
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Tailscale IP</Text>
-              <Text style={styles.detailValue}>{selectedNode.tailscaleIp}</Text>
+            {/* Connection Statuses */}
+            <View style={styles.statusSection}>
+              <Text style={styles.statusSectionTitle}>Connection Status</Text>
+
+              {/* Ushadow Status */}
+              <View style={styles.statusItemFull}>
+                <View style={styles.statusItemHeader}>
+                  <Text style={styles.statusItemLabel}>Ushadow Auth</Text>
+                  {renderStatusBadge(status.ushadow, status.ushadowError)}
+                </View>
+                <Text style={styles.endpointBaseUrl}>{selectedNode.apiUrl}</Text>
+                <TextInput
+                  style={styles.endpointInput}
+                  value={ushadowEndpoint}
+                  onChangeText={setUshadowEndpoint}
+                  placeholder="/api/auth/me"
+                  placeholderTextColor={theme.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                />
+                {status.ushadowError && status.ushadow === 'error' && (
+                  <Text style={styles.statusErrorDetail}>{status.ushadowError}</Text>
+                )}
+              </View>
+
+              {/* Chronicle Status */}
+              <View style={styles.statusItemFull}>
+                <View style={styles.statusItemHeader}>
+                  <Text style={styles.statusItemLabel}>Chronicle API</Text>
+                  {renderStatusBadge(status.chronicle, status.chronicleError)}
+                </View>
+                <Text style={styles.endpointBaseUrl}>{selectedNode.apiUrl}</Text>
+                <TextInput
+                  style={styles.endpointInput}
+                  value={chronicleEndpoint}
+                  onChangeText={setChronicleEndpoint}
+                  placeholder="/users/me"
+                  placeholderTextColor={theme.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                />
+                {status.chronicleError && status.chronicle === 'error' && (
+                  <Text style={styles.statusErrorDetail}>{status.chronicleError}</Text>
+                )}
+              </View>
+
+              {/* Streaming URL */}
+              <View style={styles.statusItemFull}>
+                <View style={styles.statusItemHeader}>
+                  <Text style={styles.statusItemLabel}>Stream URL</Text>
+                  {/* Protocol Toggle */}
+                  <TouchableOpacity
+                    style={[
+                      styles.protocolToggle,
+                      streamProtocol === 'wss' && styles.protocolToggleSecure
+                    ]}
+                    onPress={handleProtocolToggle}
+                  >
+                    <Text style={styles.protocolToggleText}>{streamProtocol}://</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.endpointBaseUrl}>
+                  {streamProtocol}://{selectedNode.apiUrl?.replace('https://', '').replace('http://', '') || ''}
+                </Text>
+                <TextInput
+                  style={styles.endpointInput}
+                  value={streamEndpoint}
+                  onChangeText={setStreamEndpoint}
+                  onBlur={handleStreamConfigSave}
+                  onSubmitEditing={handleStreamConfigSave}
+                  placeholder="/chronicle/ws_pcm"
+                  placeholderTextColor={theme.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.refreshStatusButton}
+                onPress={() => handleRefreshStatus(selectedNode)}
+              >
+                <Ionicons name="refresh" size={16} color={colors.primary[400]} />
+                <Text style={styles.refreshStatusText}>Test Endpoints</Text>
+              </TouchableOpacity>
             </View>
-          )}
-        </View>
 
-        {/* Actions */}
-        <View style={styles.actionsSection}>
-          <TouchableOpacity
-            style={styles.removeButton}
-            onPress={() => handleRemoveNode(selectedNode)}
-          >
-            <Ionicons name="trash-outline" size={18} color={colors.error.default} />
-            <Text style={styles.removeButtonText}>Remove</Text>
-          </TouchableOpacity>
-        </View>
+            {/* Details */}
+            <View style={styles.detailsSection}>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Added</Text>
+                <Text style={styles.detailValue}>{formatDate(selectedNode.addedAt)}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Last Connected</Text>
+                <Text style={styles.detailValue}>{formatDate(selectedNode.lastConnectedAt)}</Text>
+              </View>
+              {selectedNode.tailscaleIp && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Tailscale IP</Text>
+                  <Text style={styles.detailValue}>{selectedNode.tailscaleIp}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Actions */}
+            <View style={styles.actionsSection}>
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => handleRemoveNode(selectedNode)}
+              >
+                <Ionicons name="trash-outline" size={18} color="#fff" />
+                <Text style={styles.removeButtonText}>Remove</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.rescanButton}
+                onPress={() => handleRescanNode(selectedNode)}
+                testID="rescan-qr-button"
+              >
+                <Ionicons name="qr-code-outline" size={18} color="#fff" />
+                <Text style={styles.rescanButtonText}>Rescan</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
     );
   };
@@ -462,7 +774,14 @@ export default function UNodeDetailsPage() {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Discovery Modal */}
+      {/* QR Scanner for rescan */}
+      <QRScanner
+        visible={showScanner}
+        onClose={() => { setShowScanner(false); setRescanNodeId(null); }}
+        onScan={handleQRScan}
+      />
+
+      {/* Discovery Modal for adding new nodes */}
       <Modal
         visible={showDiscoveryModal}
         animationType="slide"
@@ -612,6 +931,55 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     marginTop: 2,
   },
+  // Compact status for collapsed view
+  compactStatusList: {
+    marginTop: spacing.xs,
+  },
+  compactStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  compactServiceName: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusDotConnected: {
+    backgroundColor: colors.success.default,
+  },
+  statusDotError: {
+    backgroundColor: colors.error.default,
+  },
+  statusDotUnknown: {
+    backgroundColor: theme.textMuted,
+  },
+  compactStatusText: {
+    fontSize: fontSize.sm,
+  },
+  statusTextConnected: {
+    color: colors.success.default,
+  },
+  statusTextError: {
+    color: colors.error.default,
+  },
+  statusTextUnknown: {
+    color: theme.textMuted,
+  },
+  refreshStatusButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  refreshStatusText: {
+    fontSize: fontSize.sm,
+    color: colors.primary[400],
+  },
   refreshButton: {
     padding: spacing.sm,
   },
@@ -666,6 +1034,39 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontFamily: 'monospace',
   },
+  endpointBaseUrl: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    fontFamily: 'monospace',
+    marginTop: spacing.xs,
+  },
+  endpointInput: {
+    fontSize: fontSize.sm,
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    backgroundColor: '#1a1a2e',
+    borderWidth: 1,
+    borderColor: colors.primary[600],
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  protocolToggle: {
+    backgroundColor: colors.warning.default,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  protocolToggleSecure: {
+    backgroundColor: colors.success.default,
+  },
+  protocolToggleText: {
+    fontSize: fontSize.xs,
+    color: '#fff',
+    fontWeight: '600',
+    fontFamily: 'monospace',
+  },
   statusErrorDetail: {
     fontSize: fontSize.sm,
     color: colors.error.default,
@@ -695,19 +1096,37 @@ const styles = StyleSheet.create({
   },
   // Actions
   actionsSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     padding: spacing.lg,
-    alignItems: 'flex-start',
   },
   removeButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: colors.error.default,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
     gap: spacing.xs,
-    padding: spacing.sm,
   },
   removeButtonText: {
-    fontSize: fontSize.sm,
-    color: colors.error.default,
-    fontWeight: '500',
+    fontSize: fontSize.base,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  rescanButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary[400],
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    gap: spacing.xs,
+  },
+  rescanButtonText: {
+    fontSize: fontSize.base,
+    color: '#fff',
+    fontWeight: '600',
   },
   // Other nodes list
   otherNodesList: {
@@ -792,5 +1211,57 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     flex: 1,
+  },
+  // URL editing section
+  urlSection: {
+    padding: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  editUrlsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: theme.backgroundInput,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.primary[600],
+  },
+  editUrlsText: {
+    fontSize: fontSize.sm,
+    color: colors.primary[400],
+    fontWeight: '600',
+  },
+  urlEditFields: {
+    marginTop: spacing.md,
+  },
+  urlField: {
+    marginBottom: spacing.md,
+  },
+  urlFieldLabel: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    textTransform: 'uppercase',
+    marginBottom: spacing.xs,
+  },
+  urlFieldHint: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    fontStyle: 'italic',
+    marginBottom: spacing.xs,
+  },
+  urlInput: {
+    fontSize: fontSize.sm,
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    backgroundColor: '#1a1a2e',
+    borderWidth: 1,
+    borderColor: colors.primary[600],
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
   },
 });

@@ -1,0 +1,17 @@
+diff --git a/node_modules/friend-lite-react-native/src/OmiConnection.ts b/node_modules/friend-lite-react-native/src/OmiConnection.ts
+index 5345f8d..4a93a74 100644
+--- a/node_modules/friend-lite-react-native/src/OmiConnection.ts
++++ b/node_modules/friend-lite-react-native/src/OmiConnection.ts
+@@ -317,7 +317,11 @@ export class OmiConnection {
+         // Set up the monitor - this automatically enables notifications
+         const subscription = audioDataStreamCharacteristic.monitor((error: any, characteristic: any) => {
+           if (error) {
+-            console.error('Audio data stream notification error:', error);
++            // Suppress "Operation was cancelled" errors - these are expected when stopping
++            const errorMessage = error?.message || String(error);
++            if (!errorMessage.includes('cancelled') && !errorMessage.includes('canceled')) {
++              console.error('Audio data stream notification error:', error);
++            }
+             return;
+           }
+ 

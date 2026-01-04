@@ -125,27 +125,6 @@ export const StreamingButton: React.FC<StreamingButtonProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Audio Level Indicator */}
-      {isRecording && (
-        <View style={styles.audioLevelContainer} testID={`${testID}-audio-level`}>
-          <View style={styles.audioLevelBackground}>
-            <View
-              style={[
-                styles.audioLevelBar,
-                { width: `${Math.min(audioLevel * 100, 100)}%` },
-              ]}
-            />
-          </View>
-          <Text style={styles.audioLevelText}>Audio Level</Text>
-        </View>
-      )}
-
-      {/* Status Message */}
-      {isRecording && (
-        <Text style={styles.statusText} testID={`${testID}-status`}>
-          Streaming audio to server...
-        </Text>
-      )}
 
       {/* Connecting Message */}
       {isConnecting && !isRetrying && (
@@ -260,27 +239,6 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: theme.textMuted,
     fontStyle: 'italic',
-  },
-  audioLevelContainer: {
-    marginTop: spacing.md,
-    alignItems: 'center',
-  },
-  audioLevelBackground: {
-    width: '100%',
-    height: 4,
-    backgroundColor: theme.backgroundInput,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  audioLevelBar: {
-    height: '100%',
-    backgroundColor: brandGreen,
-    borderRadius: 2,
-  },
-  audioLevelText: {
-    marginTop: spacing.xs,
-    fontSize: 10,
-    color: theme.textMuted,
   },
 });
 

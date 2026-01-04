@@ -18,6 +18,7 @@ import {
   SafeAreaView,
   Alert,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
 // Components
@@ -48,8 +49,9 @@ import {
   removeUnode,
   getActiveUnodeId,
   setActiveUnode as setActiveUnodeStorage,
+  parseStreamUrl,
 } from '../../utils/unodeStorage';
-import { appendTokenToUrl } from '../../utils/authStorage';
+import { appendTokenToUrl, saveAuthToken } from '../../utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from '../../services/chronicleApi';
@@ -126,6 +128,18 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     ? phoneStreaming.isStreaming
     : (isListeningAudio && omiStreamer.isStreaming);
 
+  // Debug logging for streaming state
+  useEffect(() => {
+    console.log('[UnifiedStreamingPage] Streaming state:', {
+      sourceType: selectedSource.type,
+      isStreaming,
+      phoneIsStreaming: phoneStreaming.isStreaming,
+      phoneIsRecording: phoneStreaming.isRecording,
+      omiIsStreaming: omiStreamer.isStreaming,
+      isListeningAudio,
+    });
+  }, [selectedSource.type, isStreaming, phoneStreaming.isStreaming, phoneStreaming.isRecording, omiStreamer.isStreaming, isListeningAudio]);
+
   const isConnecting = selectedSource.type === 'microphone'
     ? phoneStreaming.isConnecting
     : (isOmiConnecting || omiStreamer.isConnecting);
@@ -167,6 +181,25 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   useEffect(() => {
     loadSavedData();
   }, []);
+
+  // Refresh unodes when screen regains focus (e.g., returning from unode-details)
+  // Always reload to pick up any config changes (protocol, path, etc.)
+  useFocusEffect(
+    useCallback(() => {
+      const refreshUnodes = async () => {
+        const [activeId, savedUnodes] = await Promise.all([
+          getActiveUnodeId(),
+          getUnodes(),
+        ]);
+        setUnodes(savedUnodes);
+        if (activeId && activeId !== selectedUnodeId) {
+          setSelectedUnodeId(activeId);
+        }
+        console.log('[UnifiedStreamingPage] Refreshed unodes on focus');
+      };
+      refreshUnodes();
+    }, [selectedUnodeId])
+  );
 
   const loadSavedData = useCallback(async () => {
     try {
@@ -264,25 +297,36 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Get selected UNode
   const selectedUNode = unodes.find(u => u.id === selectedUnodeId);
 
-  // Build stream URL
+  // Build stream URL from apiUrl + stored config (protocol + path)
+  // This handles cases where the stored streamUrl has malformed hostname
   const getStreamUrl = useCallback((): string | null => {
-    if (!selectedUNode) return null;
+    if (!selectedUNode?.apiUrl) return null;
 
-    let url = selectedUNode.streamUrl;
+    // Get the stored config (protocol + path) or use defaults
+    const storedConfig = selectedUNode.streamUrl
+      ? parseStreamUrl(selectedUNode.streamUrl)
+      : { protocol: 'wss' as const, path: '/chronicle/ws_pcm' };
 
-    // Add appropriate endpoint based on source
+    // Extract host from apiUrl (strip protocol)
+    const host = selectedUNode.apiUrl.replace('https://', '').replace('http://', '');
+
+    // Determine endpoint based on source type
+    let path = storedConfig.path;
     if (selectedSource.type === 'microphone') {
-      if (!url.includes('/ws_pcm')) {
-        url = url.replace(/\/$/, '') + '/ws_pcm';
+      // Ensure we're using ws_pcm for microphone
+      if (!path.includes('ws_pcm')) {
+        path = path.replace('ws_omi', 'ws_pcm');
       }
     } else {
-      if (!url.includes('/ws_omi')) {
-        url = url.replace(/ws_pcm/, 'ws_omi').replace(/\/$/, '');
-        if (!url.includes('/ws_omi')) {
-          url = url + '/ws_omi';
-        }
+      // OMI device - use ws_omi
+      if (!path.includes('ws_omi')) {
+        path = path.replace('ws_pcm', 'ws_omi');
       }
     }
+
+    // Use stored protocol (user can toggle between ws and wss)
+    const url = `${storedConfig.protocol}://${host}${path}`;
+    console.log('[UnifiedStreamingPage] Built stream URL:', url);
 
     // Add auth token
     if (authToken) {
@@ -431,6 +475,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       tailscaleIp: new URL(apiUrl).hostname,
       authToken: token,
     });
+
+    // Save token globally so other pages can use it
+    if (token) {
+      await saveAuthToken(token);
+    }
 
     const updatedUnodes = await getUnodes();
     setUnodes(updatedUnodes);

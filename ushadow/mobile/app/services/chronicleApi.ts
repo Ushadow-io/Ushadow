@@ -5,19 +5,31 @@
  */
 
 import { getAuthToken, getApiUrl } from '../utils/authStorage';
+import { getActiveUnode } from '../utils/unodeStorage';
 
 // Types matching Chronicle backend responses
 export interface Conversation {
-  id: string;
   conversation_id: string;
-  client_id: string;
+  audio_uuid?: string;
   user_id: string;
+  client_id: string;
+  audio_path?: string;
   created_at: string;
-  ended_at?: string;
-  duration_seconds?: number;
+  deleted?: boolean;
+  title?: string;
+  summary?: string;
+  detailed_summary?: string;
+  active_transcript_version?: string;
+  segment_count?: number;
+  has_memory?: boolean;
+  memory_count?: number;
+  transcript_version_count?: number;
+  // Legacy fields for compatibility
+  id?: string;
+  status?: 'active' | 'closed' | 'processing';
   transcript?: TranscriptVersion;
   speaker_segments?: SpeakerSegment[];
-  status: 'active' | 'closed' | 'processing';
+  duration_seconds?: number;
 }
 
 export interface TranscriptVersion {
@@ -61,29 +73,64 @@ export interface MemoriesSearchResponse {
 }
 
 /**
- * Get the base API URL for Chronicle backend.
- * Uses the stored API URL or falls back to default.
+ * Get the Chronicle API base URL.
+ * Uses chronicleApiUrl if set, otherwise constructs from apiUrl + /chronicle/api
  */
-async function getBaseUrl(): Promise<string> {
+async function getChronicleApiUrl(): Promise<string> {
+  const activeUnode = await getActiveUnode();
+
+  // First, check if UNode has explicit Chronicle API URL
+  if (activeUnode?.chronicleApiUrl) {
+    console.log(`[ChronicleAPI] Using UNode chronicleApiUrl: ${activeUnode.chronicleApiUrl}`);
+    return activeUnode.chronicleApiUrl;
+  }
+
+  // Construct from apiUrl + /chronicle/api
+  if (activeUnode?.apiUrl) {
+    const chronicleUrl = `${activeUnode.apiUrl}/chronicle/api`;
+    console.log(`[ChronicleAPI] Constructed Chronicle URL: ${chronicleUrl}`);
+    return chronicleUrl;
+  }
+
+  // Fall back to global storage (legacy)
   const storedUrl = await getApiUrl();
   if (storedUrl) {
-    return storedUrl;
+    const chronicleUrl = `${storedUrl}/chronicle/api`;
+    console.log(`[ChronicleAPI] Using stored URL + /chronicle/api: ${chronicleUrl}`);
+    return chronicleUrl;
   }
-  // Default to the Tailscale URL
-  return 'https://blue.spangled-kettle.ts.net';
+
+  // Default fallback
+  console.log('[ChronicleAPI] Using default Chronicle API URL');
+  return 'https://blue.spangled-kettle.ts.net/chronicle/api';
+}
+
+/**
+ * Get the auth token from active UNode or global storage.
+ */
+async function getToken(): Promise<string | null> {
+  // First, try to get token from active UNode
+  const activeUnode = await getActiveUnode();
+  if (activeUnode?.authToken) {
+    return activeUnode.authToken;
+  }
+
+  // Fall back to global storage (legacy)
+  return getAuthToken();
 }
 
 /**
  * Make an authenticated API request to Chronicle backend.
  */
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const [baseUrl, token] = await Promise.all([getBaseUrl(), getAuthToken()]);
+  const [chronicleApiUrl, token] = await Promise.all([getChronicleApiUrl(), getToken()]);
 
   if (!token) {
     throw new Error('Not authenticated. Please log in first.');
   }
 
-  const url = `${baseUrl}/api${endpoint}`;
+  // chronicleApiUrl already includes /chronicle/api, just append the endpoint
+  const url = `${chronicleApiUrl}${endpoint}`;
   console.log(`[ChronicleAPI] ${options.method || 'GET'} ${url}`);
 
   const response = await fetch(url, {
@@ -205,61 +252,56 @@ export async function deleteMemory(memoryId: string): Promise<void> {
 export async function verifyUnodeAuth(
   apiUrl: string,
   token: string
-): Promise<{ valid: boolean; error?: string }> {
+): Promise<{ valid: boolean; error?: string; ushadowOk?: boolean; chronicleOk?: boolean }> {
   try {
-    // Use conversations endpoint with limit=1 to verify auth (lightweight)
-    const url = `${apiUrl}/api/conversations?limit=1`;
-    console.log(`[ChronicleAPI] Verifying auth at: ${url}`);
+    // Check ushadow auth at /api/auth/me
+    const ushadowUrl = `${apiUrl}/api/auth/me`;
+    console.log(`[ChronicleAPI] Verifying ushadow auth at: ${ushadowUrl}`);
 
-    const response = await fetch(url, {
+    const ushadowResponse = await fetch(ushadowUrl, {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
     });
 
-    if (response.ok) {
-      console.log('[ChronicleAPI] Auth verified successfully');
-      return { valid: true };
+    const ushadowOk = ushadowResponse.ok;
+    console.log(`[ChronicleAPI] Ushadow auth: ${ushadowResponse.status}`);
+
+    // Check chronicle auth at /chronicle/users/me (proxied through ushadow)
+    const chronicleUrl = `${apiUrl}/chronicle/users/me`;
+    console.log(`[ChronicleAPI] Verifying chronicle auth at: ${chronicleUrl}`);
+
+    const chronicleResponse = await fetch(chronicleUrl, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const chronicleOk = chronicleResponse.ok;
+    console.log(`[ChronicleAPI] Chronicle auth: ${chronicleResponse.status}`);
+
+    // Both must be OK for full auth
+    if (ushadowOk && chronicleOk) {
+      console.log('[ChronicleAPI] Auth verified successfully (both services)');
+      return { valid: true, ushadowOk: true, chronicleOk: true };
     }
 
-    // Try to get error details from response body
-    let errorDetail = '';
-    try {
-      const errorBody = await response.text();
-      if (errorBody) {
-        // Try to parse as JSON for detail field
-        try {
-          const errorJson = JSON.parse(errorBody);
-          errorDetail = errorJson.detail || errorJson.error || errorJson.message || errorBody;
-        } catch {
-          errorDetail = errorBody.substring(0, 100); // Truncate raw text
-        }
-      }
-    } catch {
-      // Ignore body parsing errors
+    // Build error message based on what failed
+    const errors: string[] = [];
+    if (!ushadowOk) {
+      errors.push(`ushadow: ${ushadowResponse.status}`);
+    }
+    if (!chronicleOk) {
+      errors.push(`chronicle: ${chronicleResponse.status}`);
     }
 
-    console.log(`[ChronicleAPI] Auth failed: ${response.status} - ${errorDetail}`);
-
-    if (response.status === 401) {
-      return { valid: false, error: `401 Unauthorized${errorDetail ? ': ' + errorDetail : ''}` };
-    }
-
-    if (response.status === 403) {
-      return { valid: false, error: `403 Forbidden${errorDetail ? ': ' + errorDetail : ''}` };
-    }
-
-    if (response.status === 404) {
-      // Endpoint not found - Chronicle service may not be running
-      console.log('[ChronicleAPI] Chronicle endpoint not found (404)');
-      return { valid: false, error: '404 Not Found - Chronicle service may not be running' };
-    }
-
-    return { valid: false, error: `${response.status} Error${errorDetail ? ': ' + errorDetail : ''}` };
+    console.log(`[ChronicleAPI] Auth failed: ${errors.join(', ')}`);
+    return {
+      valid: false,
+      error: errors.join(', '),
+      ushadowOk,
+      chronicleOk
+    };
   } catch (error) {
     console.error('[ChronicleAPI] Auth verification failed:', error);
-    // Network errors might mean the server is unreachable
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('Network') || message.includes('fetch')) {
       return { valid: false, error: 'Network error - server unreachable' };
