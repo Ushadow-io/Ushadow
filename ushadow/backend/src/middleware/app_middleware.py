@@ -38,10 +38,9 @@ def _get_cors_origins_from_config() -> list[str]:
     """
     Get CORS origins from OmegaConf settings.
 
-    Priority:
-    1. OmegaConf security.cors_origins (from config.overrides.yaml or config.defaults.yaml)
-    2. CORS_ORIGINS environment variable (fallback)
-    3. Default to ['*']
+    OmegaConf resolves ${oc.env:CORS_ORIGINS,...} in config.defaults.yaml,
+    so env var is used if set, otherwise defaults apply.
+    Config priority: overrides.yaml > secrets.yaml > defaults.yaml
     """
     try:
         from src.config.omegaconf_settings import get_settings_store
@@ -55,11 +54,7 @@ def _get_cors_origins_from_config() -> list[str]:
     except Exception as e:
         logger.warning(f"Could not read CORS from OmegaConf: {e}")
 
-    # Fallback to environment variable
-    cors_origins_env = os.getenv('CORS_ORIGINS', '*')
-    if cors_origins_env == '*':
-        return ['*']
-    return [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+    return ['*']
 
 
 def _get_tailscale_origin_regex() -> str | None:

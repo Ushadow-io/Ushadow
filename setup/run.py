@@ -3,8 +3,8 @@
 Cross-platform Ushadow startup script.
 
 This is the main entry point that can be called from:
-- Linux/macOS: python3 setup/run.py [--quick] [--prod] [--no-admin]
-- Windows: python setup/run.py [--quick] [--prod] [--no-admin]
+- Linux/macOS: python3 setup/run.py [--quick] [--prod] [--skip-admin]
+- Windows: python setup/run.py [--quick] [--prod] [--skip-admin]
 
 It replaces the bash-specific logic in start-dev.sh with cross-platform Python.
 """
@@ -15,6 +15,7 @@ import sys
 import subprocess
 import time
 import json
+import getpass
 from pathlib import Path
 
 # Add setup directory to path for imports
@@ -54,6 +55,56 @@ def print_header():
     print_color(Colors.BOLD, f"🚀 {APP_DISPLAY_NAME} Quick Start")
     print_color(Colors.BOLD, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print()
+
+def prompt_for_config() -> dict:
+    """Prompt user for configuration in interactive mode."""
+    print_color(Colors.BLUE, "📝 Configuration")
+    print()
+
+    # Environment name
+    env_name = input(f"  Environment name [{APP_NAME}]: ").strip()
+    if not env_name:
+        env_name = APP_NAME
+
+    # Port offset
+    while True:
+        offset_str = input("  Port offset [0]: ").strip()
+        if not offset_str:
+            port_offset = 0
+            break
+        try:
+            port_offset = int(offset_str)
+            if 0 <= port_offset < 1000:
+                break
+            print_color(Colors.RED, "    Port offset must be 0-999")
+        except ValueError:
+            print_color(Colors.RED, "    Please enter a number")
+
+    print()
+    return {"env_name": env_name, "port_offset": port_offset}
+
+def prompt_for_admin() -> dict:
+    """Prompt user for admin credentials."""
+    print_color(Colors.BLUE, "👤 Admin Account")
+    print()
+
+    # Email
+    email = input("  Admin email [admin@example.com]: ").strip()
+    if not email:
+        email = "admin@example.com"
+
+    # Password
+    password = getpass.getpass("  Admin password [password]: ")
+    if not password:
+        password = "password"
+
+    # Display name
+    name = input("  Display name [Admin]: ").strip()
+    if not name:
+        name = "Admin"
+
+    print()
+    return {"email": email, "password": password, "name": name}
 
 def check_docker():
     """Check if Docker is available."""
@@ -254,7 +305,7 @@ def main():
     parser.add_argument("--quick", action="store_true", help="Use defaults without prompts")
     parser.add_argument("--dev", action="store_true", help="Development mode with hot-reload")
     parser.add_argument("--prod", action="store_true", help="Production mode")
-    parser.add_argument("--no-admin", action="store_true", help="Skip admin creation (use web wizard)")
+    parser.add_argument("--skip-admin", action="store_true", help="Skip admin creation (use web wizard)")
     parser.add_argument("--reset", action="store_true", help="Reset configuration")
     args = parser.parse_args()
 
@@ -281,10 +332,37 @@ def main():
     # Ensure config directory exists
     config_dir.mkdir(exist_ok=True)
 
-    # Generate or use existing config
+    # Always ensure secrets.yaml exists with auth keys
+    created_new, secrets_data = ensure_secrets_yaml(str(secrets_file))
+    if created_new:
+        print_color(Colors.GREEN, "✅ Generated security keys in secrets.yaml")
+
+    # Check for existing config
+    use_existing = False
     if env_file.exists() and not args.reset:
+        if args.quick:
+            use_existing = True
+        else:
+            # Read current config to show user
+            env_content = env_file.read_text()
+            current_env = ""
+            current_backend = DEFAULT_BACKEND_PORT
+            current_webui = DEFAULT_WEBUI_PORT
+            for line in env_content.splitlines():
+                if line.startswith("ENV_NAME="):
+                    current_env = line.split("=")[1]
+                elif line.startswith("BACKEND_PORT="):
+                    current_backend = int(line.split("=")[1])
+                elif line.startswith("WEBUI_PORT="):
+                    current_webui = int(line.split("=")[1])
+
+            print_color(Colors.YELLOW, f"📁 Existing config found: {current_env} (ports {current_backend}/{current_webui})")
+            reuse = input("  Reuse existing config? [Y/n]: ").strip().lower()
+            use_existing = reuse != 'n'
+            print()
+
+    if use_existing:
         print_color(Colors.GREEN, "✅ Using existing configuration")
-        # Read ports from existing .env
         env_content = env_file.read_text()
         backend_port = DEFAULT_BACKEND_PORT
         webui_port = DEFAULT_WEBUI_PORT
@@ -295,11 +373,38 @@ def main():
                 webui_port = int(line.split("=")[1])
         config = {"backend_port": backend_port, "webui_port": webui_port}
     else:
+        # Prompt for config in interactive mode
+        if args.quick:
+            env_name = APP_NAME
+            port_offset = 0
+        else:
+            user_config = prompt_for_config()
+            env_name = user_config["env_name"]
+            port_offset = user_config["port_offset"]
+
+            # Prompt for admin credentials
+            if not args.skip_admin:
+                admin_creds = prompt_for_admin()
+                try:
+                    import yaml
+                    secrets_data['admin'] = {
+                        'name': admin_creds['name'],
+                        'email': admin_creds['email'],
+                        'password': admin_creds['password']
+                    }
+                    with open(secrets_file, 'w') as f:
+                        f.write("# Ushadow Secrets\n")
+                        f.write("# DO NOT COMMIT - Contains sensitive credentials\n\n")
+                        yaml.dump(secrets_data, f, default_flow_style=False, sort_keys=False)
+                    print_color(Colors.GREEN, "✅ Admin credentials saved to secrets.yaml")
+                except Exception as e:
+                    print_color(Colors.YELLOW, f"⚠️  Could not save admin credentials: {e}")
+
         print_color(Colors.BLUE, "🔧 Generating configuration...")
         print()
         config = generate_env_file(
-            env_name=APP_NAME,
-            port_offset=0,
+            env_name=env_name,
+            port_offset=port_offset,
             env_file=env_file,
             secrets_file=secrets_file
         )
@@ -316,7 +421,7 @@ def main():
     wait_and_open(
         config["backend_port"],
         config["webui_port"],
-        open_browser=(args.quick and args.no_admin)
+        open_browser=args.quick
     )
 
 if __name__ == "__main__":

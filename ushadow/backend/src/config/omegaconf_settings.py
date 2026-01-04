@@ -64,9 +64,19 @@ def _env_resolver(env_var_name: str, _root_: DictConfig) -> Optional[str]:
     return None
 
 
-# Register the resolver (only once)
+# Register resolvers (only once)
 if not OmegaConf.has_resolver("env"):
     OmegaConf.register_new_resolver("env", _env_resolver)
+
+if not OmegaConf.has_resolver("merge_csv"):
+    # Merge comma-separated values from multiple sources, deduplicating
+    # Usage: ${merge_csv:${oc.env:CORS_ORIGINS,},http://localhost:3000}
+    OmegaConf.register_new_resolver(
+        "merge_csv",
+        lambda *args: ",".join(sorted(set(
+            o.strip() for a in args if a for o in str(a).split(",") if o.strip()
+        )))
+    )
 
 
 # =============================================================================
