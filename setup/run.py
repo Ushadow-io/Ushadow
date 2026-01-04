@@ -13,7 +13,6 @@ import argparse
 import os
 import sys
 import subprocess
-import secrets
 import time
 import json
 from pathlib import Path
