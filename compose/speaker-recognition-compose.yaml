@@ -47,7 +47,7 @@ services:
       - speaker_data:/app/data
     environment:
       - HF_HOME=/models
-      - HF_TOKEN=${HF_TOKEN}
+      - HF_TOKEN=${HF_TOKEN:-}
       - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.15}
       - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-0.0.0.0}
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
@@ -81,7 +81,7 @@ services:
       - speaker_data:/app/data
     environment:
       - HF_HOME=/models
-      - HF_TOKEN=${HF_TOKEN}
+      - HF_TOKEN=${HF_TOKEN:-}
       - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.15}
       - SPEAKER_SERVICE_HOST=${SPEAKER_SERVICE_HOST:-0.0.0.0}
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}

@@ -81,6 +81,37 @@ done
 SETUP_UTILS="${SETUP_DIR}/setup_utils.py"
 START_UTILS="${SETUP_DIR}/start_utils.py"
 
+# ============================================================================
+# Python Detection (handles Windows where python3 doesn't exist)
+# ============================================================================
+PYTHON_CMD=""
+if command -v python3 &> /dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &> /dev/null; then
+    # Check if it's Python 3.x
+    PY_VERSION=$(python --version 2>&1)
+    if [[ "$PY_VERSION" == Python\ 3* ]]; then
+        PYTHON_CMD="python"
+    fi
+fi
+
+if [[ -z "$PYTHON_CMD" ]]; then
+    echo -e "${RED}❌ Python 3 is required but not found${NC}"
+    echo ""
+    echo "Please install Python 3.10 or later:"
+    echo "  Windows: https://www.python.org/downloads/windows/"
+    echo "  macOS:   brew install python3"
+    echo "  Linux:   sudo apt install python3"
+    echo ""
+    exit 1
+fi
+
+# Create python3 alias function if needed (for scripts that use python3)
+if [[ "$PYTHON_CMD" == "python" ]]; then
+    python3() { python "$@"; }
+    export -f python3
+fi
+
 # Print header
 echo ""
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

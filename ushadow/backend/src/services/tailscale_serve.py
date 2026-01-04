@@ -10,6 +10,8 @@ import os
 import docker
 import yaml
 from typing import Optional, Dict, List
+from dataclasses import dataclass
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +131,79 @@ def exec_tailscale_command(command: str) -> tuple[int, str, str]:
     except Exception as e:
         logger.error(f"Error executing tailscale command: {e}")
         return 1, "", str(e)
+
+
+@dataclass
+class TailscaleStatus:
+    """Unified Tailscale status information."""
+    hostname: Optional[str] = None  # Full DNS name like "pink.spangled-kettle.ts.net"
+    ip: Optional[str] = None  # IPv4 address like "100.x.x.x"
+    authenticated: bool = False
+
+    @property
+    def ext_url(self) -> Optional[str]:
+        """External HTTPS URL (through Tailscale serve)."""
+        return f"https://{self.hostname}" if self.hostname else None
+
+    @property
+    def host_url(self) -> str:
+        """Host/local URL for direct container access."""
+        backend_port = int(os.getenv("BACKEND_PORT", "8000"))
+        return f"http://localhost:{backend_port}"
+
+
+def get_tailscale_status() -> TailscaleStatus:
+    """Get Tailscale status (hostname, IP) from container.
+
+    This is the single source of truth for Tailscale connection info.
+    Use this instead of calling exec_in_container directly.
+
+    Returns:
+        TailscaleStatus with hostname, ip, and authenticated flag
+    """
+    status = TailscaleStatus()
+
+    # Try to get status from container
+    try:
+        exit_code, stdout, _ = exec_tailscale_command("tailscale status --json")
+        if exit_code == 0 and stdout.strip():
+            data = json.loads(stdout)
+            self_node = data.get("Self", {})
+
+            # Get hostname (DNSName)
+            dns_name = self_node.get("DNSName", "")
+            if dns_name:
+                status.hostname = dns_name.rstrip(".")
+                status.authenticated = True
+
+            # Get IPv4 address
+            tailscale_ips = self_node.get("TailscaleIPs", [])
+            for ip in tailscale_ips:
+                if "." in ip:  # IPv4
+                    status.ip = ip
+                    break
+    except Exception as e:
+        logger.debug(f"Could not get Tailscale status from container: {e}")
+
+    # Fall back to config file if container didn't return hostname
+    if not status.hostname:
+        try:
+            config_path = "/config/tailscale.yaml"
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                    hostname = config.get('hostname', '')
+                    if hostname:
+                        status.hostname = hostname
+                        status.authenticated = True
+        except Exception as e:
+            logger.debug(f"Could not read Tailscale hostname from config: {e}")
+
+    # Fall back to env var for IP
+    if not status.ip:
+        status.ip = os.environ.get("TAILSCALE_IP")
+
+    return status
 
 
 def add_serve_route(path: str, target: str) -> bool:

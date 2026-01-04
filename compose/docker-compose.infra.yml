@@ -90,7 +90,7 @@ services:
       start_period: 10s
 
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:latest
     container_name: neo4j
     profiles: ["memory","neo4j"]
     ports:

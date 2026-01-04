@@ -1,13 +1,13 @@
 #!/bin/bash
 # Ushadow Quick Start - Zero-prompt startup with defaults
 #
-# This is a thin wrapper around start-dev.sh that:
-# - Uses defaults (env: ushadow, port offset: 0)
-# - Skips all prompts
-# - Uses production build (no hot-reload)
-# - Opens registration page instead of creating admin
+# This runs production mode with:
+# - Default settings (env: ushadow, port offset: 0)
+# - No prompts
+# - Production build (no hot-reload)
+# - Opens registration page for first-time setup
 #
-# For interactive setup, use: ./start-dev.sh
-# For dev mode with hot-reload: ./dev.sh
+# For development mode with hot-reload: ./dev.sh
+# For interactive setup: python3 setup/run.py
 
-exec ./start-dev.sh --quick --prod --no-admin "$@"
+exec python3 setup/run.py --quick --prod --no-admin "$@"

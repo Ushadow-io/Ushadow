@@ -12,7 +12,7 @@
 # to connect this node to your cluster.
 # =============================================================================
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 function Write-Step { param($msg) Write-Host "`n[$script:step/4] $msg" -ForegroundColor Cyan; $script:step++ }
 function Write-Ok { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -57,9 +57,19 @@ Write-Step "Checking Tailscale installation..."
 
 $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
 
+# Also check if tailscale is in PATH
+if (-not (Test-Path $tsPath)) {
+    $tsInPath = Get-Command tailscale -ErrorAction SilentlyContinue
+    if ($tsInPath) { $tsPath = $tsInPath.Source }
+}
+
 if (Test-Path $tsPath) {
-    $tsVersion = & $tsPath version 2>$null | Select-Object -First 1
-    Write-Ok "Tailscale already installed ($tsVersion)"
+    try {
+        $tsVersion = & $tsPath version 2>$null | Select-Object -First 1
+        Write-Ok "Tailscale already installed ($tsVersion)"
+    } catch {
+        Write-Ok "Tailscale already installed"
+    }
 } else {
     Write-Host "  Installing Tailscale..." -ForegroundColor Yellow
 
@@ -90,49 +100,88 @@ if ($needRestart) {
 # Step 3: Check Tailscale connection
 Write-Step "Checking Tailscale connection..."
 
-$connected = $false
-for ($i = 0; $i -lt 30; $i++) {
-    try {
-        $status = & $tsPath status 2>&1
-        if ($LASTEXITCODE -eq 0 -and $status -notmatch "stopped|Logged out") {
-            $connected = $true
-            break
-        }
-    } catch {}
+# Re-check tsPath in case it was just installed
+if (-not (Test-Path $tsPath)) {
+    $tsInPath = Get-Command tailscale -ErrorAction SilentlyContinue
+    if ($tsInPath) { $tsPath = $tsInPath.Source }
+}
 
-    if ($i -eq 0) {
-        Write-Host "  Waiting for Tailscale login..." -ForegroundColor Gray
+if (-not (Test-Path $tsPath)) {
+    Write-Warn "Tailscale not found. Please restart PowerShell and run this script again."
+    exit 0
+}
+
+# Check if already connected
+$connected = $false
+try {
+    $status = & $tsPath status 2>&1
+    if ($LASTEXITCODE -eq 0 -and $status -notmatch "stopped|Logged out|NeedsLogin") {
+        $connected = $true
     }
-    Start-Sleep -Seconds 2
+} catch {}
+
+if (-not $connected) {
+    Write-Host "  Starting Tailscale login (scan QR code or click URL)..." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Run tailscale up with QR code display
+    try {
+        & $tsPath up --qr 2>&1
+    } catch {
+        Write-Host "  Could not show QR code. Please log in via system tray." -ForegroundColor Yellow
+    }
+
+    # Wait for connection after login attempt
+    Write-Host ""
+    Write-Host "  Waiting for Tailscale connection..." -ForegroundColor Gray
+    for ($i = 0; $i -lt 60; $i++) {
+        try {
+            $status = & $tsPath status 2>&1
+            if ($LASTEXITCODE -eq 0 -and $status -notmatch "stopped|Logged out|NeedsLogin") {
+                $connected = $true
+                break
+            }
+        } catch {}
+        Start-Sleep -Seconds 2
+    }
 }
 
 if (-not $connected) {
-    Write-Warn "Tailscale not connected. Please log in via the system tray icon."
-    Write-Host "  After logging in, run the join command from your Ushadow dashboard.`n" -ForegroundColor White
+    Write-Warn "Tailscale not connected. Please log in and try again."
     exit 0
 }
 
 # Get Tailscale IP
-$tsIP = & $tsPath ip -4 2>$null
+try {
+    $tsIP = & $tsPath ip -4 2>$null
+} catch {
+    $tsIP = "unknown"
+}
 Write-Ok "Tailscale connected (IP: $tsIP)"
 
 # Step 4: Check Docker is running
 Write-Step "Checking Docker is running..."
 
 $dockerRunning = $false
-for ($i = 0; $i -lt 10; $i++) {
-    try {
-        docker info 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $dockerRunning = $true
-            break
-        }
-    } catch {}
+$dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 
-    if ($i -eq 0) {
-        Write-Host "  Waiting for Docker to start..." -ForegroundColor Gray
+if ($dockerCmd) {
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            $result = & docker info 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $dockerRunning = $true
+                break
+            }
+        } catch {
+            # Ignore errors
+        }
+
+        if ($i -eq 0) {
+            Write-Host "  Waiting for Docker to start..." -ForegroundColor Gray
+        }
+        Start-Sleep -Seconds 2
     }
-    Start-Sleep -Seconds 2
 }
 
 if (-not $dockerRunning) {

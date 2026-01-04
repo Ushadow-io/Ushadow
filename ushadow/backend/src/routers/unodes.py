@@ -22,6 +22,7 @@ from src.models.unode import (
 )
 from src.services.unode_manager import get_unode_manager
 from src.services.auth import get_current_user
+from src.services.tailscale_serve import get_tailscale_status
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -407,31 +408,11 @@ async def get_leader_info():
     # Get all unodes
     unodes = await unode_manager.list_unodes()
 
-    # Build streaming URLs using Tailscale hostname (through Tailscale serve)
-    # Format: wss://{tailscale-host}/ws_pcm - routes through Tailscale serve to backend
+    # Get Tailscale status (single source of truth)
+    ts_status = get_tailscale_status()
+    tailscale_hostname = ts_status.hostname  # e.g., "blue.spangled-kettle.ts.net"
     api_port = 8000
-    
-    # Get the full Tailscale hostname from config (e.g., "blue.spangled-kettle.ts.net")
-    tailscale_hostname = None
-    try:
-        import yaml
-        config_path = "/config/tailscale.yaml"
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-                tailscale_hostname = config.get('hostname', '')
-    except Exception as e:
-        logger.warning(f"Could not read Tailscale hostname from config: {e}")
-    
-    # Fall back to constructing from environment if config not available
-    if not tailscale_hostname:
-        # Use TAILSCALE_HOSTNAME env var if set, otherwise try to construct it
-        tailscale_hostname = os.environ.get("TAILSCALE_HOSTNAME", "")
-        if not tailscale_hostname and leader.tailscale_ip:
-            # Last resort: use the raw IP (won't work through Tailscale serve)
-            logger.warning("Using raw Tailscale IP - streaming may not work correctly")
-            tailscale_hostname = leader.tailscale_ip
-    
+
     # Build service deployments with URLs from compose registry
     from src.services.compose_registry import get_compose_registry
 
