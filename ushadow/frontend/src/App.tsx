@@ -6,6 +6,7 @@ import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
+import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
 
 // Get router basename from Vite build config (for path-based deployments like /wiz/)
@@ -101,6 +102,7 @@ function AppContent() {
               </Route>
         </Routes>
       </div>
+      <BugReportButton />
       <EnvironmentFooter />
     </div>
   )

@@ -25,6 +25,7 @@ services:
       # Compose project name for per-environment Tailscale containers
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
       - MONGODB_DATABBASE=${MONGODB_DATABASE:-ushadow}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:${WEBUI_PORT}}
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config  # Mount config directory (read-write for feature flags)
