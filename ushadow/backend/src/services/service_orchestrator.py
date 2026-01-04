@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 WELL_KNOWN_ENV_MAPPINGS = {
     "AUTH_SECRET_KEY": "security.auth_secret_key",
     "ADMIN_PASSWORD": "security.admin_password",
+    "USER": "auth.admin_email",  # For OpenMemory backend
 }
 
 
