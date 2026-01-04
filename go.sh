@@ -10,4 +10,4 @@
 # For development mode with hot-reload: ./dev.sh
 # For interactive setup: python3 setup/run.py
 
-exec python3 setup/run.py --quick --prod --no-admin "$@"
+exec python3 setup/run.py --quick --prod --skip-admin "$@"

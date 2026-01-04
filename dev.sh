@@ -7,4 +7,4 @@
 # Usage:
 #   ./dev.sh
 
-exec python3 setup/run.py --dev --no-admin "$@"
+exec python3 setup/run.py --dev "$@"
