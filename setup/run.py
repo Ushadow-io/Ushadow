@@ -79,15 +79,14 @@ def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_f
     webui_port = DEFAULT_WEBUI_PORT + port_offset
 
     # Validate ports
-    result = validate_ports(backend_port, webui_port)
-    if result["conflicts"]:
-        print_color(Colors.RED, f"❌ Port conflict: {result['conflicts']}")
+    all_available, conflicts = validate_ports([backend_port, webui_port])
+    if conflicts:
+        print_color(Colors.RED, f"❌ Port conflict: {conflicts}")
         return None
 
     # Find available Redis database
     preferred_redis_db = (port_offset // 10) % 16
-    redis_result = find_available_redis_db(preferred_redis_db, env_name)
-    redis_db = redis_result.get("db_num", preferred_redis_db)
+    redis_db = find_available_redis_db(preferred_redis_db, env_name)
     set_redis_db_env_marker(redis_db, env_name)
 
     # Set database names
@@ -146,8 +145,8 @@ DEV_MODE=false
     print()
 
     # Ensure secrets.yaml exists
-    result = ensure_secrets_yaml(str(secrets_file))
-    if result.get("created_new"):
+    created_new, _ = ensure_secrets_yaml(str(secrets_file))
+    if created_new:
         print_color(Colors.GREEN, "✅ Generated security keys in secrets.yaml")
     else:
         print_color(Colors.GREEN, "✅ Security keys already configured")
@@ -164,16 +163,16 @@ def start_services(dev_mode: bool):
     ensure_networks()
 
     # Check if infrastructure is running
-    infra_status = check_infrastructure_running()
-    if infra_status.get("running"):
+    infra_running = check_infrastructure_running()
+    if infra_running:
         print_color(Colors.GREEN, "   ✅ Infrastructure already running")
     else:
         print_color(Colors.YELLOW, "   Starting infrastructure...")
-        result = start_infrastructure(INFRA_COMPOSE_FILE, INFRA_PROJECT_NAME)
-        if result.get("success"):
-            print_color(Colors.GREEN, f"   ✅ {result.get('message', 'Started')}")
+        success, message = start_infrastructure(INFRA_COMPOSE_FILE, INFRA_PROJECT_NAME)
+        if success:
+            print_color(Colors.GREEN, f"   ✅ {message}")
         else:
-            print_color(Colors.RED, f"   ❌ {result.get('message', 'Failed to start')}")
+            print_color(Colors.RED, f"   ❌ {message}")
             return False
 
     print()
@@ -204,10 +203,10 @@ def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
     print("   Waiting for backend to be healthy...")
     time.sleep(3)
 
-    result = wait_for_backend_health(backend_port, timeout=60)
+    healthy, elapsed = wait_for_backend_health(backend_port, timeout=60)
 
     print()
-    if result.get("healthy"):
+    if healthy:
         print_color(Colors.GREEN + Colors.BOLD, f"✅ {APP_DISPLAY_NAME} is ready!")
     else:
         print_color(Colors.YELLOW, "⚠️  Backend is starting... (may take a moment)")

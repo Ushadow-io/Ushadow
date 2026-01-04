@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from src.services.auth import get_current_user, generate_jwt_for_service
 from src.models.user import User
 from src.config.omegaconf_settings import get_settings_store
+from src.services.tailscale_serve import get_tailscale_status
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -617,34 +618,15 @@ async def get_container_status(
             if not is_running:
                 return ContainerStatus(exists=True, running=False)
 
-            # Check if authenticated - try to get status
-            try:
-                exit_code, stdout, _ = await exec_in_container("tailscale status --json")
-
-                if exit_code == 0 and stdout.strip():
-                    status_data = json.loads(stdout)
-                    self_node = status_data.get('Self')
-
-                    if self_node:
-                        hostname = self_node.get('DNSName', '').rstrip('.')
-                        tailscale_ips = self_node.get('TailscaleIPs', [])
-                        ip_address = tailscale_ips[0] if tailscale_ips else None
-
-                        return ContainerStatus(
-                            exists=True,
-                            running=True,
-                            authenticated=bool(hostname),
-                            hostname=hostname,
-                            ip_address=ip_address
-                        )
-
-                # Not authenticated yet
-                return ContainerStatus(exists=True, running=True, authenticated=False)
-
-            except Exception as exec_error:
-                logger.warning(f"Failed to get Tailscale status from container: {exec_error}")
-                # Container running but can't get status yet (might be starting up)
-                return ContainerStatus(exists=True, running=True, authenticated=False)
+            # Use shared utility for status (single source of truth)
+            ts_status = get_tailscale_status()
+            return ContainerStatus(
+                exists=True,
+                running=True,
+                authenticated=ts_status.authenticated,
+                hostname=ts_status.hostname,
+                ip_address=ts_status.ip
+            )
 
         except docker.errors.NotFound:
             return ContainerStatus(exists=False, running=False)

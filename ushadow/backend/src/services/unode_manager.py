@@ -18,6 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import get_auth_secret_key
+from src.services.tailscale_serve import get_tailscale_status, TailscaleStatus
 from src.models.unode import (
     UNode,
     UNodeInDB,
@@ -331,12 +332,13 @@ class UNodeManager:
 
         await self.tokens_collection.insert_one(token_doc)
 
-        # Get Tailscale DNS name for HTTPS URLs (tailscale serve proxies to backend)
-        tailscale_dns = self._get_tailscale_dns_name()
-        if tailscale_dns:
-            base_url = f"https://{tailscale_dns}"
-        else:
-            base_url = f"http://localhost:{BACKEND_PORT}"
+        # Get Tailscale status for URL generation
+        ts_status = get_tailscale_status()
+        ext_url = ts_status.ext_url  # https://{tailscale-dns} or None
+        host_url = ts_status.host_url  # http://localhost:8000
+
+        # Use external URL if available, otherwise fall back to host URL
+        base_url = ext_url or host_url
 
         # Standard join commands (require Tailscale already connected)
         join_command = f'curl -sL "{base_url}/api/unodes/join/{token}" | sh'
@@ -363,16 +365,19 @@ class UNodeManager:
 
     def _generate_bootstrap_bash(self, token: str, base_url: str) -> str:
         """Generate a bash bootstrap command using public bootstrap script."""
-        # Public bootstrap script installs Docker + Tailscale and authenticates
-        # Then we run the join command to register with this cluster
-        script = f'''curl -fsSL https://ushadow.io/bootstrap.sh | bash && curl -sL "{base_url}/api/unodes/join/{token}" | sh'''
+        # Public bootstrap script installs Docker + Tailscale
+        # After connecting to Tailscale, user runs the join command separately
+        join_cmd = f'curl -sL "{base_url}/api/unodes/join/{token}" | sh'
+        script = f'''curl -fsSL https://ushadow.io/bootstrap.sh | bash; echo ""; echo "After connecting to Tailscale, run:"; echo '{join_cmd}' '''
         return script
 
     def _generate_bootstrap_powershell(self, token: str, base_url: str) -> str:
         """Generate a PowerShell bootstrap command using public bootstrap script."""
-        # Public bootstrap script installs Docker + Tailscale and authenticates
-        # Then we run the join command to register with this cluster
-        script = f'''iex (iwr https://ushadow.io/bootstrap.ps1).Content; iex (iwr "{base_url}/api/unodes/join/{token}/ps1").Content'''
+        # Public bootstrap script installs Docker + Tailscale
+        # After connecting to Tailscale, user runs the join command separately
+        # Use irm (Invoke-RestMethod) which returns string, not bytes like iwr
+        join_cmd = f'iex (irm "{base_url}/api/unodes/join/{token}/ps1")'
+        script = f'''iex (irm https://ushadow.io/bootstrap.ps1); Write-Host "`nAfter connecting to Tailscale, run:`n{join_cmd}" -ForegroundColor Cyan'''
         return script
 
     async def get_bootstrap_script_bash(self, token: str) -> str:
@@ -1221,12 +1226,12 @@ Write-Host ""
         if not valid:
             return f"#!/bin/sh\necho 'Error: {error}'\nexit 1"
 
-        # Get Tailscale DNS name for HTTPS URLs (tailscale serve proxies to backend)
-        tailscale_dns = self._get_tailscale_dns_name()
-        if tailscale_dns:
-            leader_url = f"https://{tailscale_dns}"
-        else:
-            leader_url = f"http://localhost:{BACKEND_PORT}"
+        # Get Tailscale status for URL generation
+        ts_status = get_tailscale_status()
+        ext_url = ts_status.ext_url  # https://{tailscale-dns} or None
+        host_url = ts_status.host_url  # http://localhost:8000
+        leader_url = ext_url or host_url
+        leader_display = ts_status.hostname or 'localhost'
 
         script = f'''#!/bin/sh
 # Ushadow UNode Join Script
@@ -1240,7 +1245,7 @@ echo ""
 echo "=============================================="
 echo "  Ushadow UNode Join"
 echo "=============================================="
-echo "  Leader: {leader_host}"
+echo "  Leader: {leader_display}"
 echo ""
 
 # Detect OS
@@ -1481,12 +1486,12 @@ echo ""
         if not valid:
             return f"Write-Error 'Error: {error}'; exit 1"
 
-        # Get Tailscale DNS name for HTTPS URLs (tailscale serve proxies to backend)
-        tailscale_dns = self._get_tailscale_dns_name()
-        if tailscale_dns:
-            leader_url = f"https://{tailscale_dns}"
-        else:
-            leader_url = f"http://localhost:{BACKEND_PORT}"
+        # Get Tailscale status for URL generation
+        ts_status = get_tailscale_status()
+        ext_url = ts_status.ext_url  # https://{tailscale-dns} or None
+        host_url = ts_status.host_url  # http://localhost:8000
+        leader_url = ext_url or host_url
+        leader_display = ts_status.hostname or 'localhost'
 
         script = f'''# Ushadow UNode Join Script (PowerShell)
 # Generated: {datetime.now(timezone.utc).isoformat()}
@@ -1500,7 +1505,7 @@ Write-Host ""
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "  Ushadow UNode Join" -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "  Leader: {tailscale_dns or 'localhost'}"
+Write-Host "  Leader: {leader_display}"
 Write-Host ""
 
 # Check if running as admin for installations
