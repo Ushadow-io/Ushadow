@@ -1106,3 +1106,42 @@ export const tailscaleApi = {
   // Setup completion
   complete: () => api.post<{ status: string; message: string }>('/api/tailscale/complete'),
 }
+
+// =============================================================================
+// Chat API - WebUI Chat Interface
+// =============================================================================
+
+export interface ChatMessage {
+  id?: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+export interface ChatStatus {
+  configured: boolean
+  provider: string | null
+  model: string | null
+  memory_available: boolean
+  error: string | null
+}
+
+export interface ChatRequest {
+  messages: ChatMessage[]
+  system?: string
+  use_memory?: boolean
+  user_id?: string
+  temperature?: number
+  max_tokens?: number
+}
+
+export const chatApi = {
+  /** Get chat configuration status */
+  getStatus: () => api.get<ChatStatus>('/api/chat/status'),
+
+  /** Non-streaming chat completion */
+  sendMessage: (request: ChatRequest) =>
+    api.post<ChatMessage>('/api/chat/simple', request),
+
+  /** Get the streaming endpoint URL (for direct fetch) */
+  getStreamUrl: () => `${BACKEND_URL}/api/chat`,
+}

@@ -12,6 +12,9 @@ email-validator==2.2.0
 httpx==0.27.2
 aiohttp==3.11.7
 
+# LLM Integration - Unified API for multiple providers
+litellm>=1.50.0
+
 # MCP Server for LLM tool access
 mcp>=1.1.0
 

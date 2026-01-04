@@ -51,6 +51,9 @@ dependencies = [
 
     # Configuration Management
     "omegaconf>=2.3.0",
+
+    # LLM Integration
+    "litellm>=1.50.0",
 ]
 
 [project.optional-dependencies]
