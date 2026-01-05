@@ -16,7 +16,10 @@ from src.models.deployment import (
     ServiceDefinitionUpdate,
     Deployment,
     DeploymentStatus,
+    DeploymentTargetType,
+    DeployRequest,
 )
+from src.models.kubernetes import KubernetesDeploymentSpec
 from src.services.compose_registry import get_compose_registry
 
 logger = logging.getLogger(__name__)
@@ -80,9 +83,30 @@ class DeploymentManager:
         await self.deployments_collection.create_index("id", unique=True)
         await self.deployments_collection.create_index("service_id")
         await self.deployments_collection.create_index("unode_hostname")
+        await self.deployments_collection.create_index("cluster_id")
+        await self.deployments_collection.create_index("target_type")
+        
+        # Drop old conflicting indexes if they exist (before partial filter was added)
+        try:
+            await self.deployments_collection.drop_index("service_id_1_unode_hostname_1")
+        except Exception:
+            pass  # Index doesn't exist
+        try:
+            await self.deployments_collection.drop_index("service_id_1_cluster_id_1_namespace_1")
+        except Exception:
+            pass  # Index doesn't exist
+        
+        # Unique index for docker deployments (unode_hostname must be a string, not null)
         await self.deployments_collection.create_index(
             [("service_id", 1), ("unode_hostname", 1)],
-            unique=True
+            unique=True,
+            partialFilterExpression={"unode_hostname": {"$type": "string"}}
+        )
+        # Unique index for k8s deployments (cluster_id must be a string, not null)
+        await self.deployments_collection.create_index(
+            [("service_id", 1), ("cluster_id", 1), ("namespace", 1)],
+            unique=True,
+            partialFilterExpression={"cluster_id": {"$type": "string"}}
         )
         logger.info("DeploymentManager initialized")
 
@@ -313,6 +337,139 @@ class DeploymentManager:
 
         return deployment
 
+    async def deploy_to_target(self, request: DeployRequest) -> Deployment:
+        """
+        Deploy a service to the specified target.
+
+        This is the main entry point for unified deployments that routes
+        to the appropriate deployment method based on target_type.
+        """
+        # Validate request based on target type
+        if request.target_type == DeploymentTargetType.DOCKER_UNODE:
+            if not request.unode_hostname:
+                raise ValueError("unode_hostname is required for docker_unode target")
+            return await self.deploy_service(request.service_id, request.unode_hostname)
+
+        elif request.target_type == DeploymentTargetType.LOCAL_DOCKER:
+            # For local docker, use the current node (COMPOSE_PROJECT_NAME)
+            env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
+            hostname = request.unode_hostname or env_name
+            return await self.deploy_service(request.service_id, hostname)
+
+        elif request.target_type == DeploymentTargetType.KUBERNETES:
+            if not request.cluster_id:
+                raise ValueError("cluster_id is required for kubernetes target")
+            return await self._deploy_to_kubernetes(request)
+
+        else:
+            raise ValueError(f"Unknown target type: {request.target_type}")
+
+    async def _deploy_to_kubernetes(self, request: DeployRequest) -> Deployment:
+        """Deploy a service to a Kubernetes cluster."""
+        from src.services.kubernetes_manager import get_kubernetes_manager
+
+        # Get service definition
+        service = await self.get_service(request.service_id)
+        if not service:
+            compose_registry = get_compose_registry()
+            discovered = compose_registry.get_service(request.service_id)
+            if discovered:
+                service = ServiceDefinition(
+                    service_id=discovered.service_id,
+                    name=discovered.service_name,
+                    description=discovered.description or "",
+                    image=discovered.image or "",
+                    ports={},
+                    environment={},
+                )
+            else:
+                raise ValueError(f"Service not found: {request.service_id}")
+
+        # Get K8s manager
+        k8s_manager = await get_kubernetes_manager()
+
+        # Verify cluster exists
+        cluster = await k8s_manager.get_cluster(request.cluster_id)
+        if not cluster:
+            raise ValueError(f"Kubernetes cluster not found: {request.cluster_id}")
+
+        # Create deployment record
+        deployment_id = str(uuid.uuid4())[:8]
+        namespace = request.namespace or "default"
+        now = datetime.now(timezone.utc)
+
+        deployment = Deployment(
+            id=deployment_id,
+            service_id=request.service_id,
+            target_type=DeploymentTargetType.KUBERNETES,
+            cluster_id=request.cluster_id,
+            namespace=namespace,
+            status=DeploymentStatus.DEPLOYING,
+            container_name=f"{service.service_id}-k8s",
+            created_at=now,
+            deployed_config=service.model_dump(),
+        )
+
+        # Build K8s spec from request
+        k8s_spec = KubernetesDeploymentSpec(
+            replicas=request.replicas or 1,
+            namespace=namespace,
+            service_type=request.service_type or "ClusterIP",
+        )
+        if request.ingress_host:
+            k8s_spec.ingress = {
+                "enabled": True,
+                "host": request.ingress_host,
+                "path": "/",
+            }
+
+        # Upsert deployment (replace if exists)
+        await self.deployments_collection.replace_one(
+            {
+                "service_id": request.service_id,
+                "cluster_id": request.cluster_id,
+                "namespace": namespace
+            },
+            deployment.model_dump(),
+            upsert=True
+        )
+
+        try:
+            # Deploy to Kubernetes
+            success, message = await k8s_manager.deploy_to_kubernetes(
+                cluster_id=request.cluster_id,
+                service_def=service.model_dump(),
+                namespace=namespace,
+                k8s_spec=k8s_spec
+            )
+
+            if success:
+                deployment.status = DeploymentStatus.RUNNING
+                deployment.deployed_at = datetime.now(timezone.utc)
+                # Construct access URL based on service type
+                if k8s_spec.service_type == "LoadBalancer":
+                    deployment.access_url = f"http://{service.service_id}.{namespace}.svc"
+                elif request.ingress_host:
+                    deployment.access_url = f"https://{request.ingress_host}"
+                logger.info(f"K8s deployment succeeded: {message}")
+            else:
+                deployment.status = DeploymentStatus.FAILED
+                deployment.error = message
+                logger.error(f"K8s deployment failed: {message}")
+
+        except Exception as e:
+            logger.error(f"K8s deployment error for {request.service_id}: {e}")
+            deployment.status = DeploymentStatus.FAILED
+            deployment.error = str(e)
+
+        # Update deployment record
+        await self.deployments_collection.replace_one(
+            {"id": deployment_id},
+            deployment.model_dump()
+        )
+
+        return deployment
+
     async def stop_deployment(self, deployment_id: str) -> Deployment:
         """Stop a deployment."""
         deployment = await self.get_deployment(deployment_id)
@@ -409,7 +566,9 @@ class DeploymentManager:
     async def list_deployments(
         self,
         service_id: Optional[str] = None,
-        unode_hostname: Optional[str] = None
+        unode_hostname: Optional[str] = None,
+        cluster_id: Optional[str] = None,
+        target_type: Optional[DeploymentTargetType] = None
     ) -> List[Deployment]:
         """List deployments with optional filters."""
         query = {}
@@ -417,6 +576,10 @@ class DeploymentManager:
             query["service_id"] = service_id
         if unode_hostname:
             query["unode_hostname"] = unode_hostname
+        if cluster_id:
+            query["cluster_id"] = cluster_id
+        if target_type:
+            query["target_type"] = target_type.value if isinstance(target_type, DeploymentTargetType) else target_type
 
         cursor = self.deployments_collection.find(query)
         deployments = []

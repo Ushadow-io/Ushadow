@@ -5,11 +5,11 @@
 #   - Docker Desktop (container runtime)
 #   - Tailscale (secure networking)
 #
-# Usage:
-#   iex (iwr https://ushadow.io/bootstrap.ps1).Content
+# Usage (interactive):
+#   iex (irm https://ushadow.io/bootstrap.ps1)
 #
-# After running this script, use the join command from your Ushadow dashboard
-# to connect this node to your cluster.
+# Usage (auto-join with token):
+#   $env:TOKEN="abc123"; $env:LEADER_URL="http://100.x.x.x:8000"; iex (irm https://ushadow.io/bootstrap.ps1)
 # =============================================================================
 
 $ErrorActionPreference = "Continue"
@@ -166,27 +166,42 @@ $dockerRunning = $false
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 
 if ($dockerCmd) {
-    for ($i = 0; $i -lt 10; $i++) {
-        try {
-            $result = & docker info 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                $dockerRunning = $true
-                break
-            }
-        } catch {
-            # Ignore errors
+    # Quick check if already running
+    try {
+        $result = & docker info 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $dockerRunning = $true
         }
+    } catch {}
+}
 
-        if ($i -eq 0) {
-            Write-Host "  Waiting for Docker to start..." -ForegroundColor Gray
+if (-not $dockerRunning) {
+    # Try to start Docker Desktop
+    $dockerPath = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path $dockerPath) {
+        Write-Host "  Starting Docker Desktop..." -ForegroundColor Yellow
+        Start-Process $dockerPath
+        Write-Host "  Waiting for Docker to start (this may take 30-60 seconds)..." -ForegroundColor Yellow
+
+        # Wait up to 90 seconds
+        for ($i = 0; $i -lt 18; $i++) {
+            Start-Sleep -Seconds 5
+            try {
+                $result = & docker info 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $dockerRunning = $true
+                    break
+                }
+            } catch {}
+            Write-Host "    Still waiting... ($($i * 5 + 5) seconds)" -ForegroundColor Gray
         }
-        Start-Sleep -Seconds 2
     }
 }
 
 if (-not $dockerRunning) {
-    Write-Warn "Docker not running. Please start Docker Desktop."
-    Write-Host "  After Docker starts, run the join command from your Ushadow dashboard.`n" -ForegroundColor White
+    Write-Warn "Docker not running yet. It may still be starting."
+    Write-Host "  Wait for Docker Desktop to fully start (whale icon stops animating)," -ForegroundColor White
+    Write-Host "  then run the join command from your Ushadow dashboard.`n" -ForegroundColor White
     exit 0
 }
 
@@ -197,14 +212,75 @@ Write-Host "`n==========================================" -ForegroundColor Green
 Write-Host "  Bootstrap Complete!" -ForegroundColor Green
 Write-Host "==========================================`n" -ForegroundColor Green
 
-Write-Host "This machine is now ready to join a Ushadow cluster.`n" -ForegroundColor White
-Write-Host "Next steps:" -ForegroundColor White
-Write-Host "  1. Go to your Ushadow dashboard" -ForegroundColor White
-Write-Host "  2. Navigate to Cluster > Generate Join Token" -ForegroundColor White
-Write-Host "  3. Copy the join command and run it on this machine`n" -ForegroundColor White
-
 Write-Host "System Info:" -ForegroundColor Cyan
 Write-Host "  Hostname:     $env:COMPUTERNAME" -ForegroundColor White
 Write-Host "  Tailscale IP: $tsIP" -ForegroundColor White
 $dockerVer = docker --version 2>$null
 Write-Host "  Docker:       $dockerVer`n" -ForegroundColor White
+
+# Check if TOKEN and LEADER_URL were provided - if so, auto-join
+if ($env:TOKEN -and $env:LEADER_URL) {
+    Write-Host "==========================================" -ForegroundColor Cyan
+    Write-Host "  Joining Ushadow Cluster..." -ForegroundColor Cyan
+    Write-Host "==========================================`n" -ForegroundColor Cyan
+
+    $NODE_HOSTNAME = $env:COMPUTERNAME
+    $TAILSCALE_IP = (tailscale ip -4 2>$null)
+
+    if (-not $TAILSCALE_IP) {
+        Write-Err "Could not get Tailscale IP"
+        exit 1
+    }
+
+    Write-Host "[INFO] Registering $NODE_HOSTNAME ($TAILSCALE_IP) with cluster..." -ForegroundColor Cyan
+
+    $body = @{
+        token = $env:TOKEN
+        hostname = $NODE_HOSTNAME
+        tailscale_ip = $TAILSCALE_IP
+        platform = "windows"
+        manager_version = "0.1.0"
+    } | ConvertTo-Json
+
+    try {
+        $response = Invoke-RestMethod -Uri "$($env:LEADER_URL)/api/unodes/register" -Method Post -Body $body -ContentType "application/json"
+        if ($response.success) {
+            $UNODE_SECRET = $response.unode.metadata.unode_secret
+            Write-Ok "Registered with cluster"
+        } else {
+            Write-Err "Registration failed: $($response.message)"
+            exit 1
+        }
+    } catch {
+        Write-Err "Registration failed: $_"
+        exit 1
+    }
+
+    # Stop existing manager if running
+    docker stop ushadow-manager 2>$null | Out-Null
+    docker rm ushadow-manager 2>$null | Out-Null
+
+    # Start manager
+    Write-Host "[INFO] Starting ushadow-manager..." -ForegroundColor Cyan
+    docker pull ghcr.io/ushadow-io/ushadow-manager:latest 2>$null | Out-Null
+
+    docker run -d --name ushadow-manager --restart unless-stopped `
+        -v //var/run/docker.sock:/var/run/docker.sock `
+        -e LEADER_URL="$($env:LEADER_URL)" -e UNODE_SECRET="$UNODE_SECRET" `
+        -e NODE_HOSTNAME="$NODE_HOSTNAME" -e TAILSCALE_IP="$TAILSCALE_IP" `
+        -p 8444:8444 ghcr.io/ushadow-io/ushadow-manager:latest
+
+    Write-Host "`n==========================================" -ForegroundColor Green
+    Write-Ok "UNode joined successfully!"
+    Write-Host "==========================================" -ForegroundColor Green
+    Write-Host "  Hostname:  $NODE_HOSTNAME" -ForegroundColor White
+    Write-Host "  IP:        $TAILSCALE_IP" -ForegroundColor White
+    Write-Host "  Manager:   http://localhost:8444" -ForegroundColor White
+    Write-Host "  Dashboard: $($env:LEADER_URL)/unodes`n" -ForegroundColor White
+} else {
+    Write-Host "This machine is now ready to join a Ushadow cluster.`n" -ForegroundColor White
+    Write-Host "Next steps:" -ForegroundColor White
+    Write-Host "  1. Go to your Ushadow dashboard" -ForegroundColor White
+    Write-Host "  2. Navigate to Cluster > Generate Join Token" -ForegroundColor White
+    Write-Host "  3. Copy the join command and run it on this machine`n" -ForegroundColor White
+}

@@ -103,13 +103,32 @@ async def deploy_service(
     data: DeployRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Deploy a service to a u-node."""
+    """
+    Deploy a service to a target.
+
+    Supports three target types:
+    - docker_unode: Deploy to a remote u-node via manager API (default)
+    - kubernetes: Deploy to a Kubernetes cluster
+    - local_docker: Deploy to local Docker on the same node
+
+    Examples:
+        # Deploy to a u-node (default behavior)
+        POST /api/deployments/deploy
+        {"service_id": "chronicle", "unode_hostname": "worker-1"}
+
+        # Deploy to Kubernetes
+        POST /api/deployments/deploy
+        {
+            "service_id": "chronicle",
+            "target_type": "kubernetes",
+            "cluster_id": "abc123",
+            "namespace": "prod",
+            "replicas": 2
+        }
+    """
     manager = get_deployment_manager()
     try:
-        deployment = await manager.deploy_service(
-            data.service_id,
-            data.unode_hostname
-        )
+        deployment = await manager.deploy_to_target(data)
         return deployment
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -122,13 +141,25 @@ async def deploy_service(
 async def list_deployments(
     service_id: Optional[str] = None,
     unode_hostname: Optional[str] = None,
+    cluster_id: Optional[str] = None,
+    target_type: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """List all deployments with optional filters."""
+    """
+    List all deployments with optional filters.
+
+    Query parameters:
+        - service_id: Filter by service ID
+        - unode_hostname: Filter by u-node hostname (for docker deployments)
+        - cluster_id: Filter by Kubernetes cluster ID
+        - target_type: Filter by target type (docker_unode, kubernetes, local_docker)
+    """
     manager = get_deployment_manager()
     return await manager.list_deployments(
         service_id=service_id,
-        unode_hostname=unode_hostname
+        unode_hostname=unode_hostname,
+        cluster_id=cluster_id,
+        target_type=target_type
     )
 
 

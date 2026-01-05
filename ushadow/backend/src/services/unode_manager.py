@@ -332,230 +332,17 @@ class UNodeManager:
 
         await self.tokens_collection.insert_one(token_doc)
 
-        # Get Tailscale status for URL generation
+        # Get leader URL from Tailscale status
         ts_status = get_tailscale_status()
-        ext_url = ts_status.ext_url  # https://{tailscale-dns} or None
-        host_url = ts_status.host_url  # http://localhost:8000
-
-        # Use external URL if available, otherwise fall back to host URL
-        base_url = ext_url or host_url
-
-        # Standard join commands (require Tailscale already connected)
-        join_command = f'curl -sL "{base_url}/api/unodes/join/{token}" | sh'
-        join_command_ps = f'iex (iwr "{base_url}/api/unodes/join/{token}/ps1").Content'
-        join_script_url = f"{base_url}/api/unodes/join/{token}"
-        join_script_url_ps = f"{base_url}/api/unodes/join/{token}/ps1"
-
-        # Bootstrap commands - self-contained, install Tailscale first, then join
-        bootstrap_bash = self._generate_bootstrap_bash(token, base_url)
-        bootstrap_ps = self._generate_bootstrap_powershell(token, base_url)
+        url = ts_status.ext_url or ts_status.host_url
 
         logger.info(f"Created join token (expires: {expires_at})")
 
         return JoinTokenResponse(
             token=token,
             expires_at=expires_at,
-            join_command=join_command,
-            join_command_powershell=join_command_ps,
-            join_script_url=join_script_url,
-            join_script_url_powershell=join_script_url_ps,
-            bootstrap_command=bootstrap_bash,
-            bootstrap_command_powershell=bootstrap_ps,
+            url=url,
         )
-
-    def _generate_bootstrap_bash(self, token: str, base_url: str) -> str:
-        """Generate a bash bootstrap command using public bootstrap script.
-        
-        Sets JOIN_URL env var so bootstrap.sh automatically joins the cluster
-        after installing Docker + Tailscale.
-        """
-        join_url = f"{base_url}/api/unodes/join/{token}"
-        return f'JOIN_URL="{join_url}" bash -c "$(curl -fsSL https://ushadow.io/bootstrap.sh)"'
-
-    def _generate_bootstrap_powershell(self, token: str, base_url: str) -> str:
-        """Generate a PowerShell bootstrap command using public bootstrap script.
-        
-        Sets JOIN_URL env var so bootstrap.ps1 automatically joins the cluster
-        after installing Docker + Tailscale.
-        """
-        join_url = f"{base_url}/api/unodes/join/{token}/ps1"
-        return f'$env:JOIN_URL="{join_url}"; iex (irm https://ushadow.io/bootstrap.ps1)'
-
-    async def get_bootstrap_script_bash(self, token: str) -> str:
-        """Generate the full bootstrap script for bash (served via public URL)."""
-        import os
-
-        valid, token_doc, error = await self.validate_token(token)
-        if not valid:
-            return f"#!/bin/sh\necho 'Error: {error}'\nexit 1"
-
-        leader_host = os.environ.get("TAILSCALE_IP")
-        if not leader_host:
-            leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
-            leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        leader_port = BACKEND_PORT
-
-        script = f'''#!/bin/sh
-# Ushadow UNode Bootstrap Script
-# Installs Docker, Tailscale, connects, then joins cluster
-# Generated: {datetime.now(timezone.utc).isoformat()}
-
-set -e
-TOKEN="{token}"
-LEADER_URL="http://{leader_host}:{leader_port}"
-
-echo ""
-echo "=============================================="
-echo "  Ushadow UNode Bootstrap"
-echo "=============================================="
-echo ""
-
-# Install Tailscale
-echo "[1/3] Installing Tailscale..."
-if command -v tailscale >/dev/null 2>&1; then
-    echo "      Tailscale already installed"
-else
-    curl -fsSL https://tailscale.com/install.sh | sh
-fi
-
-# Connect to Tailscale
-echo "[2/3] Connecting to Tailscale..."
-if tailscale status >/dev/null 2>&1; then
-    echo "      Already connected"
-else
-    echo "      Starting Tailscale..."
-    sudo tailscale up
-fi
-
-# Run the join script
-echo "[3/3] Joining cluster..."
-curl -sL "$LEADER_URL/api/unodes/join/$TOKEN" | sh
-'''
-        return script
-
-    async def get_bootstrap_script_powershell(self, token: str) -> str:
-        """Generate the full bootstrap script for PowerShell (served via public URL)."""
-        import os
-
-        valid, token_doc, error = await self.validate_token(token)
-        if not valid:
-            return f"Write-Error 'Error: {error}'; exit 1"
-
-        leader_host = os.environ.get("TAILSCALE_IP")
-        if not leader_host:
-            leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
-            leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        leader_port = BACKEND_PORT
-
-        script = f'''# Ushadow UNode Bootstrap - All-in-one installer
-# Just run: iex (iwr "http://LEADER:8000/api/unodes/bootstrap/TOKEN/ps1").Content
-
-$ErrorActionPreference = "Continue"
-$TOKEN = "{token}"
-$LEADER = "{leader_host}"
-$PORT = {leader_port}
-
-Write-Host ""
-Write-Host "  Ushadow UNode Setup" -ForegroundColor Cyan
-Write-Host "  ===================" -ForegroundColor Cyan
-Write-Host ""
-
-$dockerExe = "$env:ProgramFiles\\Docker\\Docker\\Docker Desktop.exe"
-$tsExe = "$env:ProgramFiles\\Tailscale\\tailscale.exe"
-$tsGui = "$env:ProgramFiles\\Tailscale\\tailscale-ipn.exe"
-
-# 1. Install Docker if needed
-if (-not (Get-Command docker -EA SilentlyContinue)) {{
-    Write-Host "[1/6] Installing Docker Desktop..." -ForegroundColor Yellow
-    winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements | Out-Null
-    Write-Host "      Installed!" -ForegroundColor Green
-}} else {{
-    Write-Host "[1/6] Docker already installed" -ForegroundColor Green
-}}
-
-# 2. Install Tailscale if needed
-if (-not (Test-Path $tsExe)) {{
-    Write-Host "[2/6] Installing Tailscale..." -ForegroundColor Yellow
-    winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements | Out-Null
-    Write-Host "      Installed!" -ForegroundColor Green
-}} else {{
-    Write-Host "[2/6] Tailscale already installed" -ForegroundColor Green
-}}
-
-# 3. Start Docker Desktop and wait
-Write-Host "[3/6] Starting Docker Desktop..." -ForegroundColor Yellow
-$dockerOk = $false
-try {{ docker info 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dockerOk = $true }} }} catch {{}}
-
-if (-not $dockerOk) {{
-    if (Test-Path $dockerExe) {{ Start-Process $dockerExe }}
-    Write-Host "      Waiting for Docker to start (this may take a minute)..." -ForegroundColor Gray
-    for ($i = 0; $i -lt 90; $i++) {{
-        Start-Sleep 2
-        try {{ docker info 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dockerOk = $true; break }} }} catch {{}}
-    }}
-}}
-if ($dockerOk) {{
-    Write-Host "      Docker is running!" -ForegroundColor Green
-}} else {{
-    Write-Host "      Docker not ready. Please start Docker Desktop and re-run." -ForegroundColor Red
-    exit 1
-}}
-
-# 4. Start Tailscale and prompt login
-Write-Host "[4/6] Connecting to Tailscale..." -ForegroundColor Yellow
-$tsOk = $false
-try {{ & $tsExe status 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $tsOk = $true }} }} catch {{}}
-
-if (-not $tsOk) {{
-    if (Test-Path $tsGui) {{ Start-Process $tsGui }}
-    Write-Host ""
-    Write-Host "      >>> Please log in to Tailscale in the window that opened <<<" -ForegroundColor Magenta
-    Write-Host "      Waiting for Tailscale connection..." -ForegroundColor Gray
-    for ($i = 0; $i -lt 120; $i++) {{
-        Start-Sleep 2
-        try {{ & $tsExe status 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) {{ $tsOk = $true; break }} }} catch {{}}
-    }}
-}}
-if ($tsOk) {{
-    Write-Host "      Connected to Tailscale!" -ForegroundColor Green
-}} else {{
-    Write-Host "      Tailscale not connected. Please log in and re-run." -ForegroundColor Red
-    exit 1
-}}
-
-# 5. Register with cluster
-Write-Host "[5/6] Registering with cluster..." -ForegroundColor Yellow
-$HOSTNAME = $env:COMPUTERNAME
-$TSIP = & $tsExe ip -4 2>$null
-if (-not $TSIP) {{ Write-Host "Could not get Tailscale IP" -ForegroundColor Red; exit 1 }}
-
-$body = @{{ token=$TOKEN; hostname=$HOSTNAME; tailscale_ip=$TSIP; platform="windows"; manager_version="0.1.0" }} | ConvertTo-Json
-try {{
-    $r = Invoke-RestMethod -Uri "http://$LEADER`:$PORT/api/unodes/register" -Method Post -Body $body -ContentType "application/json"
-    if ($r.success) {{
-        Write-Host "      Registered!" -ForegroundColor Green
-        $SECRET = $r.unode.metadata.unode_secret
-    }} else {{
-        Write-Host "      Failed: $($r.message)" -ForegroundColor Red; exit 1
-    }}
-}} catch {{
-    Write-Host "      Failed: $_" -ForegroundColor Red; exit 1
-}}
-
-# 6. Start manager container
-Write-Host "[6/6] Starting manager..." -ForegroundColor Yellow
-docker stop ushadow-manager 2>$null | Out-Null
-docker rm ushadow-manager 2>$null | Out-Null
-docker pull ghcr.io/ushadow-io/ushadow-manager:latest | Out-Null
-docker run -d --name ushadow-manager --restart unless-stopped -v //var/run/docker.sock:/var/run/docker.sock -e LEADER_URL="http://$LEADER`:$PORT" -e NODE_SECRET="$SECRET" -e NODE_HOSTNAME="$HOSTNAME" -e TAILSCALE_IP="$TSIP" -p 8444:8444 ghcr.io/ushadow-io/ushadow-manager:latest | Out-Null
-
-Write-Host ""
-Write-Host "  Done! $HOSTNAME joined the cluster." -ForegroundColor Green
-Write-Host "  Tailscale IP: $TSIP" -ForegroundColor Gray
-Write-Host ""
-'''
-        return script
 
     async def validate_token(self, token: str) -> Tuple[bool, Optional[JoinToken], str]:
         """Validate a join token. Returns (valid, token_doc, error_message)."""
@@ -964,7 +751,8 @@ Write-Host ""
     async def upgrade_unode(
         self,
         hostname: str,
-        image: str = "ghcr.io/ushadow-io/ushadow-manager:latest"
+        image: str = "ghcr.io/ushadow-io/ushadow-manager:latest",
+        refresh_secrets: bool = False
     ) -> Tuple[bool, str]:
         """
         Trigger a remote u-node to upgrade its manager.
@@ -972,6 +760,7 @@ Write-Host ""
         Args:
             hostname: The hostname of the u-node to upgrade
             image: The new Docker image to use
+            refresh_secrets: If True, generate and deploy a new authentication secret
 
         Returns:
             Tuple of (success, message)
@@ -998,21 +787,50 @@ Write-Host ""
 
         manager_url = f"http://{unode.tailscale_ip}:8444"
 
+        # Prepare upgrade payload
+        payload = {"image": image}
+
+        # Generate new secret if requested
+        new_secret = None
+        if refresh_secrets:
+            new_secret = secrets.token_urlsafe(32)
+            payload["new_secret"] = new_secret
+            logger.info(f"Refreshing secret for {hostname} during upgrade")
+
         try:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=120)  # Long timeout for image pull
             ) as session:
                 async with session.post(
                     f"{manager_url}/upgrade",
-                    json={"image": image},
+                    json=payload,
                     headers={"X-Node-Secret": node_secret}
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        logger.info(f"Upgrade initiated on {hostname}: {data.get('message')}")
-                        return True, data.get("message", "Upgrade initiated")
+
+                        # If secret was refreshed and upgrade succeeded, update MongoDB
+                        if new_secret and data.get("success"):
+                            new_secret_hash = hashlib.sha256(new_secret.encode()).hexdigest()
+                            new_secret_encrypted = self._encrypt_secret(new_secret)
+
+                            await self.unodes_collection.update_one(
+                                {"hostname": hostname},
+                                {"$set": {
+                                    "unode_secret_hash": new_secret_hash,
+                                    "unode_secret_encrypted": new_secret_encrypted,
+                                }}
+                            )
+                            logger.info(f"Updated secret for {hostname} in database")
+
+                        message = data.get("message", "Upgrade initiated")
+                        if new_secret:
+                            message += " (secret refreshed)"
+                        logger.info(f"Upgrade initiated on {hostname}: {message}")
+                        return True, message
+
                     elif response.status == 401:
-                        return False, "Authentication failed - node requires secret"
+                        return False, "Authentication failed - node secret mismatch. Try re-registering the node."
                     else:
                         text = await response.text()
                         return False, f"Upgrade failed: {response.status} - {text}"
@@ -1220,434 +1038,6 @@ Write-Host ""
         except Exception as e:
             logger.warning(f"Could not get own Tailscale IP: {e}")
         return None
-
-    async def get_join_script(self, token: str) -> str:
-        """Generate the join script for a token."""
-        valid, token_doc, error = await self.validate_token(token)
-        if not valid:
-            return f"#!/bin/sh\necho 'Error: {error}'\nexit 1"
-
-        # Get Tailscale status for URL generation
-        ts_status = get_tailscale_status()
-        ext_url = ts_status.ext_url  # https://{tailscale-dns} or None
-        host_url = ts_status.host_url  # http://localhost:8000
-        leader_url = ext_url or host_url
-        leader_display = ts_status.hostname or 'localhost'
-
-        script = f'''#!/bin/sh
-# Ushadow UNode Join Script
-# Generated: {datetime.now(timezone.utc).isoformat()}
-# Auto-installs Docker and Tailscale if missing
-
-TOKEN="{token}"
-LEADER_URL="{leader_url}"
-
-echo ""
-echo "=============================================="
-echo "  Ushadow UNode Join"
-echo "=============================================="
-echo "  Leader: {leader_display}"
-echo ""
-
-# Detect OS
-detect_os() {{
-    case "$(uname -s)" in
-        Linux*)
-            if [ -f /etc/os-release ]; then
-                . /etc/os-release
-                echo "$ID"
-            else
-                echo "linux"
-            fi
-            ;;
-        Darwin*) echo "macos";;
-        MINGW*|CYGWIN*|MSYS*) echo "windows";;
-        *)       echo "unknown";;
-    esac
-}}
-
-OS=$(detect_os)
-echo "[1/5] Detected OS: $OS"
-
-# Install Docker if missing
-install_docker() {{
-    echo "[2/5] Checking Docker..."
-    if command -v docker >/dev/null 2>&1; then
-        echo "      Docker already installed"
-        return 0
-    fi
-
-    echo "      Installing Docker..."
-    case "$OS" in
-        ubuntu|debian|pop)
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq docker.io
-            sudo systemctl enable --now docker
-            sudo usermod -aG docker $USER
-            ;;
-        fedora|rhel|centos|rocky|alma)
-            sudo dnf install -y docker
-            sudo systemctl enable --now docker
-            sudo usermod -aG docker $USER
-            ;;
-        macos)
-            if command -v brew >/dev/null 2>&1; then
-                echo "      Installing Docker via Homebrew..."
-                brew install --cask docker
-                open -a Docker
-                echo ""
-                echo "      Docker Desktop installed and starting."
-                echo "      Please complete Docker setup, then re-run this script."
-                exit 0
-            else
-                echo "      Please install Docker Desktop from: https://docs.docker.com/desktop/install/mac-install/"
-                echo "      Then re-run this script."
-                exit 1
-            fi
-            ;;
-        windows)
-            if command -v winget >/dev/null 2>&1; then
-                echo "      Installing Docker Desktop via winget..."
-                winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements
-                echo ""
-                echo "      Docker Desktop installed!"
-                echo "      Please start Docker Desktop and complete setup, then re-run this script."
-                exit 0
-            else
-                echo "      Please install Docker Desktop from: https://docs.docker.com/desktop/install/windows-install/"
-                echo "      Or install winget first: https://aka.ms/getwinget"
-                echo "      Then re-run this script."
-                exit 1
-            fi
-            ;;
-        *)
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            ;;
-    esac
-    echo "      Docker installed!"
-}}
-
-# Install Tailscale if missing
-install_tailscale() {{
-    echo "[3/5] Checking Tailscale..."
-    if command -v tailscale >/dev/null 2>&1; then
-        echo "      Tailscale already installed"
-        return 0
-    fi
-
-    echo "      Installing Tailscale..."
-    case "$OS" in
-        ubuntu|debian|pop|fedora|rhel|centos|rocky|alma|arch|opensuse*)
-            curl -fsSL https://tailscale.com/install.sh | sh
-            ;;
-        macos)
-            if command -v brew >/dev/null 2>&1; then
-                echo "      Installing Tailscale via Homebrew..."
-                brew install --cask tailscale
-                open -a Tailscale
-                echo ""
-                echo "      Tailscale installed! Please log in, then re-run this script."
-                exit 0
-            else
-                echo "      Please install Tailscale from: https://tailscale.com/download/mac"
-                echo "      Then re-run this script."
-                exit 1
-            fi
-            ;;
-        windows)
-            if command -v winget >/dev/null 2>&1; then
-                echo "      Installing Tailscale via winget..."
-                winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements
-                echo ""
-                echo "      Tailscale installed!"
-                echo "      Please start Tailscale from Start Menu and log in, then re-run this script."
-                exit 0
-            else
-                echo "      Please install Tailscale from: https://tailscale.com/download/windows"
-                echo "      Or install winget first: https://aka.ms/getwinget"
-                echo "      Then re-run this script."
-                exit 1
-            fi
-            ;;
-        *)
-            curl -fsSL https://tailscale.com/install.sh | sh
-            ;;
-    esac
-    echo "      Tailscale installed!"
-}}
-
-# Connect to Tailscale if not connected
-connect_tailscale() {{
-    echo "[4/5] Checking Tailscale connection..."
-    if tailscale status >/dev/null 2>&1; then
-        echo "      Already connected to Tailscale"
-    else
-        echo "      Starting Tailscale..."
-        case "$OS" in
-            macos)
-                open -a Tailscale
-                echo ""
-                echo "      Tailscale app opened. Please log in, then re-run this script."
-                exit 0
-                ;;
-            windows)
-                echo "      Please open Tailscale from the Start Menu and log in."
-                echo "      Then re-run this script."
-                exit 0
-                ;;
-            *)
-                sudo tailscale up
-                ;;
-        esac
-    fi
-}}
-
-# Main installation
-install_docker
-install_tailscale
-connect_tailscale
-
-# Get u-node info
-NODE_HOSTNAME=$(hostname)
-TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
-
-if [ -z "$TAILSCALE_IP" ]; then
-    echo "      Could not get Tailscale IP. Please ensure Tailscale is connected."
-    exit 1
-fi
-echo "      Tailscale IP: $TAILSCALE_IP"
-
-# Detect platform for registration
-case "$(uname -s)" in
-    Linux*)  PLATFORM="linux";;
-    Darwin*) PLATFORM="macos";;
-    MINGW*|CYGWIN*|MSYS*) PLATFORM="windows";;
-    *)       PLATFORM="unknown";;
-esac
-
-# Register with leader
-echo "[5/5] Registering with cluster..."
-REGISTER_RESPONSE=$(curl -s -X POST "$LEADER_URL/api/unodes/register" \\
-    -H "Content-Type: application/json" \\
-    -d "{{
-        \\"token\\": \\"$TOKEN\\",
-        \\"hostname\\": \\"$NODE_HOSTNAME\\",
-        \\"tailscale_ip\\": \\"$TAILSCALE_IP\\",
-        \\"platform\\": \\"$PLATFORM\\",
-        \\"manager_version\\": \\"0.1.0\\"
-    }}")
-
-# Check if registration succeeded
-if echo "$REGISTER_RESPONSE" | grep -q '"success":true'; then
-    UNODE_SECRET=$(echo "$REGISTER_RESPONSE" | grep -o '"unode_secret":"[^"]*"' | cut -d'"' -f4)
-    echo "      Registered with cluster!"
-else
-    ERROR=$(echo "$REGISTER_RESPONSE" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
-    echo "      Registration failed: $ERROR"
-    echo "      Full response: $REGISTER_RESPONSE"
-    exit 1
-fi
-
-# Stop existing manager if running
-docker stop ushadow-manager 2>/dev/null || true
-docker rm ushadow-manager 2>/dev/null || true
-
-# Pull and run manager
-echo ""
-echo "Starting ushadow-manager..."
-docker pull ghcr.io/ushadow-io/ushadow-manager:latest
-
-docker run -d \\
-    --name ushadow-manager \\
-    --restart unless-stopped \\
-    -v /var/run/docker.sock:/var/run/docker.sock \\
-    -e LEADER_URL="$LEADER_URL" \\
-    -e UNODE_SECRET="$UNODE_SECRET" \\
-    -e NODE_HOSTNAME="$NODE_HOSTNAME" \\
-    -e TAILSCALE_IP="$TAILSCALE_IP" \\
-    -p 8444:8444 \\
-    ghcr.io/ushadow-io/ushadow-manager:latest
-
-echo ""
-echo "=============================================="
-echo "  UNode joined successfully!"
-echo "=============================================="
-echo "  Hostname:  $NODE_HOSTNAME"
-echo "  IP:        $TAILSCALE_IP"
-echo "  Manager:   http://localhost:8444"
-echo "  Dashboard: $LEADER_URL/unodes"
-echo ""
-'''
-        return script
-
-    async def get_join_script_powershell(self, token: str) -> str:
-        """Generate the PowerShell join script for a token."""
-        valid, token_doc, error = await self.validate_token(token)
-        if not valid:
-            return f"Write-Error 'Error: {error}'; exit 1"
-
-        # Get Tailscale status for URL generation
-        ts_status = get_tailscale_status()
-        ext_url = ts_status.ext_url  # https://{tailscale-dns} or None
-        host_url = ts_status.host_url  # http://localhost:8000
-        leader_url = ext_url or host_url
-        leader_display = ts_status.hostname or 'localhost'
-
-        script = f'''# Ushadow UNode Join Script (PowerShell)
-# Generated: {datetime.now(timezone.utc).isoformat()}
-# Auto-installs Docker and Tailscale if missing
-
-$ErrorActionPreference = "Stop"
-$TOKEN = "{token}"
-$LEADER_URL = "{leader_url}"
-
-Write-Host ""
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "  Ushadow UNode Join" -ForegroundColor Cyan
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "  Leader: {leader_display}"
-Write-Host ""
-
-# Check if running as admin for installations
-function Test-Admin {{
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}}
-
-# Install Docker if missing
-function Install-DockerDesktop {{
-    Write-Host "[2/5] Checking Docker..." -ForegroundColor Yellow
-    if (Get-Command docker -ErrorAction SilentlyContinue) {{
-        Write-Host "      Docker already installed" -ForegroundColor Green
-        return $true
-    }}
-
-    Write-Host "      Installing Docker Desktop via winget..."
-    if (Get-Command winget -ErrorAction SilentlyContinue) {{
-        winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements
-        Write-Host ""
-        Write-Host "      Docker Desktop installed!" -ForegroundColor Green
-        Write-Host "      Please start Docker Desktop and complete setup, then re-run this script." -ForegroundColor Yellow
-        exit 0
-    }} else {{
-        Write-Host "      winget not found. Please install Docker Desktop manually:" -ForegroundColor Red
-        Write-Host "      https://docs.docker.com/desktop/install/windows-install/"
-        exit 1
-    }}
-}}
-
-# Install Tailscale if missing
-function Install-Tailscale {{
-    Write-Host "[3/5] Checking Tailscale..." -ForegroundColor Yellow
-    if (Get-Command tailscale -ErrorAction SilentlyContinue) {{
-        Write-Host "      Tailscale already installed" -ForegroundColor Green
-        return $true
-    }}
-
-    Write-Host "      Installing Tailscale via winget..."
-    if (Get-Command winget -ErrorAction SilentlyContinue) {{
-        winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements
-        Write-Host ""
-        Write-Host "      Tailscale installed!" -ForegroundColor Green
-        Write-Host "      Please start Tailscale from Start Menu and log in, then re-run this script." -ForegroundColor Yellow
-        exit 0
-    }} else {{
-        Write-Host "      winget not found. Please install Tailscale manually:" -ForegroundColor Red
-        Write-Host "      https://tailscale.com/download/windows"
-        exit 1
-    }}
-}}
-
-# Check Tailscale connection
-function Test-TailscaleConnection {{
-    Write-Host "[4/5] Checking Tailscale connection..." -ForegroundColor Yellow
-    try {{
-        $status = tailscale status 2>&1
-        if ($LASTEXITCODE -eq 0) {{
-            Write-Host "      Already connected to Tailscale" -ForegroundColor Green
-            return $true
-        }}
-    }} catch {{}}
-
-    Write-Host "      Please open Tailscale from the Start Menu and log in." -ForegroundColor Yellow
-    Write-Host "      Then re-run this script."
-    exit 0
-}}
-
-# Main
-Write-Host "[1/5] Detected OS: Windows" -ForegroundColor Yellow
-
-Install-DockerDesktop
-Install-Tailscale
-Test-TailscaleConnection
-
-# Get u-node info
-$NODE_HOSTNAME = $env:COMPUTERNAME
-$TAILSCALE_IP = (tailscale ip -4 2>$null)
-
-if (-not $TAILSCALE_IP) {{
-    Write-Host "      Could not get Tailscale IP. Please ensure Tailscale is connected." -ForegroundColor Red
-    exit 1
-}}
-Write-Host "      Tailscale IP: $TAILSCALE_IP" -ForegroundColor Green
-
-# Register with leader
-Write-Host "[5/5] Registering with cluster..." -ForegroundColor Yellow
-$body = @{{
-    token = $TOKEN
-    hostname = $NODE_HOSTNAME
-    tailscale_ip = $TAILSCALE_IP
-    platform = "windows"
-    manager_version = "0.1.0"
-}} | ConvertTo-Json
-
-try {{
-    $response = Invoke-RestMethod -Uri "$LEADER_URL/api/unodes/register" -Method Post -Body $body -ContentType "application/json"
-    if ($response.success) {{
-        Write-Host "      Registered with cluster!" -ForegroundColor Green
-        $UNODE_SECRET = $response.unode.metadata.unode_secret
-    }} else {{
-        Write-Host "      Registration failed: $($response.message)" -ForegroundColor Red
-        exit 1
-    }}
-}} catch {{
-    Write-Host "      Registration failed: $_" -ForegroundColor Red
-    exit 1
-}}
-
-# Start the manager container
-Write-Host ""
-Write-Host "Starting ushadow-manager..." -ForegroundColor Yellow
-$ErrorActionPreference = "Continue"
-docker pull ghcr.io/ushadow-io/ushadow-manager:latest 2>$null | Out-Null
-docker stop ushadow-manager 2>$null | Out-Null
-docker rm ushadow-manager 2>$null | Out-Null
-$ErrorActionPreference = "Stop"
-
-docker run -d `
-    --name ushadow-manager `
-    --restart unless-stopped `
-    -v //var/run/docker.sock:/var/run/docker.sock `
-    -e LEADER_URL="$LEADER_URL" `
-    -e UNODE_SECRET="$UNODE_SECRET" `
-    -e NODE_HOSTNAME="$NODE_HOSTNAME" `
-    -e TAILSCALE_IP="$TAILSCALE_IP" `
-    -p 8444:8444 `
-    ghcr.io/ushadow-io/ushadow-manager:latest
-
-Write-Host ""
-Write-Host "==============================================" -ForegroundColor Green
-Write-Host "  UNode joined successfully!" -ForegroundColor Green
-Write-Host "==============================================" -ForegroundColor Green
-Write-Host "  Hostname:  $NODE_HOSTNAME"
-Write-Host "  IP:        $TAILSCALE_IP"
-Write-Host "  Manager:   http://localhost:8444"
-Write-Host "  Leader:    $LEADER_URL"
-Write-Host ""
-'''
-        return script
 
 
 # Global instance (initialized on startup)

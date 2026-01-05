@@ -36,11 +36,15 @@ interface UNode {
 interface JoinToken {
   token: string
   expires_at: string
-  join_command: string
-  join_command_powershell: string
-  bootstrap_command: string
-  bootstrap_command_powershell: string
+  url: string
 }
+
+// Construct bootstrap commands from token + url
+const SCRIPT_URL = 'https://ushadow.io/bootstrap'
+const getBootstrapCommand = (token: string, leaderUrl: string) =>
+  `TOKEN="${token}" LEADER_URL="${leaderUrl}" bash -c "$(curl -fsSL ${SCRIPT_URL}.sh)"`
+const getBootstrapCommandPowershell = (token: string, leaderUrl: string) =>
+  `$env:TOKEN="${token}"; $env:LEADER_URL="${leaderUrl}"; iex (irm ${SCRIPT_URL}.ps1)`
 
 // Discovered peer from Tailscale network
 interface DiscoveredPeer {
@@ -931,7 +935,7 @@ export default function ClusterPage() {
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Linux / macOS</span>
                 <button
-                  onClick={() => copyToClipboard(newToken.bootstrap_command, 'linux')}
+                  onClick={() => copyToClipboard(getBootstrapCommand(newToken.token, newToken.url), 'linux')}
                   className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center space-x-1"
                   data-testid="copy-linux-command"
                 >
@@ -940,7 +944,7 @@ export default function ClusterPage() {
                 </button>
               </div>
               <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap" data-testid="linux-command">
-                {newToken.bootstrap_command}
+                {getBootstrapCommand(newToken.token, newToken.url)}
               </div>
             </div>
 
@@ -949,7 +953,7 @@ export default function ClusterPage() {
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Windows (PowerShell)</span>
                 <button
-                  onClick={() => copyToClipboard(newToken.bootstrap_command_powershell, 'windows')}
+                  onClick={() => copyToClipboard(getBootstrapCommandPowershell(newToken.token, newToken.url), 'windows')}
                   className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center space-x-1"
                   data-testid="copy-windows-command"
                 >
@@ -958,46 +962,9 @@ export default function ClusterPage() {
                 </button>
               </div>
               <div className="bg-neutral-900 rounded-lg p-4 font-mono text-sm text-green-400 break-all whitespace-pre-wrap" data-testid="windows-command">
-                {newToken.bootstrap_command_powershell}
+                {getBootstrapCommandPowershell(newToken.token, newToken.url)}
               </div>
             </div>
-
-            {/* Advanced: Join-only commands for machines that already have Docker + Tailscale */}
-            <details className="mb-6">
-              <summary className="text-sm text-neutral-500 dark:text-neutral-400 cursor-pointer hover:text-neutral-700 dark:hover:text-neutral-300">
-                Already have Docker & Tailscale? Use join-only command
-              </summary>
-              <div className="mt-3 space-y-3 pl-4 border-l-2 border-neutral-200 dark:border-neutral-700">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-neutral-500 dark:text-neutral-400">Linux / macOS</span>
-                    <button
-                      onClick={() => copyToClipboard(newToken.join_command, 'join-linux')}
-                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
-                    >
-                      {copied === 'join-linux' ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  <div className="bg-neutral-800 rounded p-2 font-mono text-xs text-green-400 break-all">
-                    {newToken.join_command}
-                  </div>
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-neutral-500 dark:text-neutral-400">Windows (PowerShell)</span>
-                    <button
-                      onClick={() => copyToClipboard(newToken.join_command_powershell, 'join-windows')}
-                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
-                    >
-                      {copied === 'join-windows' ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  <div className="bg-neutral-800 rounded p-2 font-mono text-xs text-green-400 break-all">
-                    {newToken.join_command_powershell}
-                  </div>
-                </div>
-              </div>
-            </details>
 
             <div className="text-sm text-neutral-500 dark:text-neutral-400 mb-6">
               Token expires: {new Date(newToken.expires_at).toLocaleString()}

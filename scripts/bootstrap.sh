@@ -6,11 +6,11 @@
 #   - Docker (container runtime)
 #   - Tailscale (secure networking)
 #
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ushadow-io/unode-bootstrap/main/bootstrap.sh | bash
+# Usage (interactive):
+#   curl -fsSL https://ushadow.io/bootstrap.sh | bash
 #
-# After running this script, use the join command from your Ushadow dashboard
-# to connect this node to your cluster.
+# Usage (auto-join with token):
+#   TOKEN="abc123" LEADER_URL="http://100.x.x.x:8000" bash -c "$(curl -fsSL https://ushadow.io/bootstrap.sh)"
 # =============================================================================
 
 set -e
@@ -127,11 +127,21 @@ install_docker() {
         macos)
             if command -v brew &> /dev/null; then
                 brew install --cask docker
-                log_warn "Docker Desktop installed. Please start Docker Desktop manually."
             else
-                log_error "Please install Docker Desktop from https://docker.com/products/docker-desktop"
+                log_error "Homebrew is required on macOS. Install from https://brew.sh"
                 exit 1
             fi
+
+            log_info "Starting Docker Desktop..."
+            open -a Docker
+            log_info "Waiting for Docker to start (this may take a minute)..."
+            for i in {1..36}; do
+                if docker info &>/dev/null; then
+                    log_success "Docker is running"
+                    break
+                fi
+                sleep 5
+            done
             ;;
 
         *)
@@ -231,11 +241,19 @@ setup_tailscale() {
 
 # Main
 main() {
+    # Capture env vars immediately (before any sudo operations might clear them)
+    JOIN_TOKEN="${TOKEN:-}"
+    JOIN_URL="${LEADER_URL:-}"
+
     echo ""
     echo "=========================================="
     echo "  Ushadow UNode Bootstrap"
     echo "=========================================="
     echo ""
+
+    if [ -n "$JOIN_TOKEN" ] && [ -n "$JOIN_URL" ]; then
+        log_info "Auto-join mode: will join cluster after bootstrap"
+    fi
 
     check_sudo
 
@@ -271,8 +289,77 @@ main() {
     echo "  Docker:       $(docker --version 2>/dev/null | cut -d' ' -f3 | cut -d',' -f1 || echo 'not running')"
     echo ""
 
-    # Interactive setup dialog
-    setup_dialog
+    # If TOKEN and LEADER_URL were set, auto-join the cluster
+    if [ -n "$JOIN_TOKEN" ] && [ -n "$JOIN_URL" ]; then
+        join_cluster "$JOIN_TOKEN" "$JOIN_URL"
+    else
+        # Interactive setup dialog
+        setup_dialog
+    fi
+}
+
+# Join cluster with token and URL passed as arguments
+join_cluster() {
+    local TOKEN="$1"
+    local LEADER_URL="$2"
+
+    echo "=========================================="
+    echo "  Joining Ushadow Cluster..."
+    echo "=========================================="
+    echo ""
+
+    NODE_HOSTNAME=$(hostname)
+    TAILSCALE_IP=$($SUDO tailscale ip -4 2>/dev/null || echo "")
+
+    if [ -z "$TAILSCALE_IP" ]; then
+        log_error "Could not get Tailscale IP"
+        exit 1
+    fi
+
+    # Detect platform
+    case "$(uname -s)" in
+        Linux*)  PLATFORM="linux";;
+        Darwin*) PLATFORM="macos";;
+        *)       PLATFORM="unknown";;
+    esac
+
+    log_info "Registering $NODE_HOSTNAME ($TAILSCALE_IP) with cluster..."
+
+    RESPONSE=$(curl -s -X POST "$LEADER_URL/api/unodes/register" \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"$TOKEN\",\"hostname\":\"$NODE_HOSTNAME\",\"tailscale_ip\":\"$TAILSCALE_IP\",\"platform\":\"$PLATFORM\",\"manager_version\":\"0.1.0\"}")
+
+    if echo "$RESPONSE" | grep -q '"success":true'; then
+        UNODE_SECRET=$(echo "$RESPONSE" | grep -o '"unode_secret":"[^"]*"' | cut -d'"' -f4)
+        log_success "Registered with cluster"
+    else
+        log_error "Registration failed: $RESPONSE"
+        exit 1
+    fi
+
+    # Stop existing manager if running
+    docker stop ushadow-manager 2>/dev/null || true
+    docker rm ushadow-manager 2>/dev/null || true
+
+    # Start manager
+    log_info "Starting ushadow-manager..."
+    docker pull ghcr.io/ushadow-io/ushadow-manager:latest
+
+    docker run -d --name ushadow-manager --restart unless-stopped \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -e LEADER_URL="$LEADER_URL" -e UNODE_SECRET="$UNODE_SECRET" \
+        -e NODE_HOSTNAME="$NODE_HOSTNAME" -e TAILSCALE_IP="$TAILSCALE_IP" \
+        -p 8444:8444 ghcr.io/ushadow-io/ushadow-manager:latest
+
+    echo ""
+    echo "=========================================="
+    log_success "UNode joined successfully!"
+    echo "=========================================="
+    echo "  Hostname:  $NODE_HOSTNAME"
+    echo "  IP:        $TAILSCALE_IP"
+    echo "  Manager:   http://localhost:8444"
+    echo "  Dashboard: $LEADER_URL/unodes"
+    echo ""
 }
 
 # Interactive dialog for next steps

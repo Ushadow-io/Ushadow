@@ -6,7 +6,6 @@ from typing import List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from src.models.unode import (
@@ -59,53 +58,7 @@ class UNodeActionResponse(BaseModel):
     message: str
 
 
-# Public endpoints (for u-node registration)
-@router.get("/join/{token}", response_class=PlainTextResponse)
-async def get_join_script(token: str):
-    """
-    Get the join script for a token (bash).
-    This is called by: curl -sL "http://leader/api/unodes/join/TOKEN" | sh
-    """
-    unode_manager = await get_unode_manager()
-    script = await unode_manager.get_join_script(token)
-    return PlainTextResponse(content=script, media_type="text/plain")
-
-
-@router.get("/join/{token}/ps1", response_class=PlainTextResponse)
-async def get_join_script_powershell(token: str):
-    """
-    Get the join script for a token (PowerShell).
-    This is called by: iex (iwr "http://leader/api/unodes/join/TOKEN/ps1").Content
-    """
-    unode_manager = await get_unode_manager()
-    script = await unode_manager.get_join_script_powershell(token)
-    return PlainTextResponse(content=script, media_type="text/plain")
-
-
-@router.get("/bootstrap/{token}", response_class=PlainTextResponse)
-async def get_bootstrap_script(token: str):
-    """
-    Get the bootstrap script for a token (bash).
-    Works on machines without Tailscale - installs everything from scratch.
-    Usage: curl -sL "http://PUBLIC_IP:8000/api/unodes/bootstrap/TOKEN" | sh
-    """
-    unode_manager = await get_unode_manager()
-    script = await unode_manager.get_bootstrap_script_bash(token)
-    return PlainTextResponse(content=script, media_type="text/plain")
-
-
-@router.get("/bootstrap/{token}/ps1", response_class=PlainTextResponse)
-async def get_bootstrap_script_powershell(token: str):
-    """
-    Get the bootstrap script for a token (PowerShell).
-    Works on machines without Tailscale - installs everything from scratch.
-    Usage: iex (iwr "http://PUBLIC_IP:8000/api/unodes/bootstrap/TOKEN/ps1").Content
-    """
-    unode_manager = await get_unode_manager()
-    script = await unode_manager.get_bootstrap_script_powershell(token)
-    return PlainTextResponse(content=script, media_type="text/plain")
-
-
+# Public endpoint for u-node registration
 @router.post("/register", response_model=UNodeRegistrationResponse)
 async def register_unode(request: UNodeRegistrationRequest):
     """
@@ -598,6 +551,7 @@ class UpgradeRequest(BaseModel):
     """Request to upgrade a u-node's manager."""
     version: str = "latest"  # Version tag (e.g., "latest", "0.2.0", "v0.2.0")
     registry: str = "ghcr.io/ushadow-io"  # Container registry
+    refresh_secrets: bool = False  # If True, refresh the node's authentication secret
 
     @property
     def image(self) -> str:
@@ -611,6 +565,7 @@ class UpgradeResponse(BaseModel):
     message: str
     hostname: str
     new_image: Optional[str] = None
+    secret_refreshed: bool = False
 
 
 @router.post("/{hostname}/upgrade", response_model=UpgradeResponse)
@@ -626,6 +581,9 @@ async def upgrade_unode(
     1. Pull the new manager image
     2. Stop and remove its current container
     3. Start a new container with the new image
+
+    If refresh_secrets is True, the node's authentication secret will be
+    regenerated during the upgrade, fixing any 401 authentication issues.
 
     The node will be briefly offline during the upgrade (~10 seconds).
     """
@@ -653,14 +611,16 @@ async def upgrade_unode(
     # Trigger upgrade on the remote node
     success, message = await unode_manager.upgrade_unode(
         hostname=hostname,
-        image=request.image
+        image=request.image,
+        refresh_secrets=request.refresh_secrets
     )
 
     return UpgradeResponse(
         success=success,
         message=message,
         hostname=hostname,
-        new_image=request.image if success else None
+        new_image=request.image if success else None,
+        secret_refreshed=success and request.refresh_secrets
     )
 
 

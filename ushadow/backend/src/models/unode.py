@@ -109,16 +109,10 @@ class JoinTokenCreate(BaseModel):
 
 
 class JoinTokenResponse(BaseModel):
-    """Response with join token and script."""
+    """Response with join token and URL for constructing invite commands."""
     token: str
     expires_at: datetime
-    join_command: str  # Bash/shell command (requires Tailscale connected)
-    join_command_powershell: str  # PowerShell command (requires Tailscale connected)
-    join_script_url: str
-    join_script_url_powershell: str
-    # Bootstrap commands - work without Tailscale, install everything from scratch
-    bootstrap_command: str  # One-liner for bash (Linux/macOS)
-    bootstrap_command_powershell: str  # One-liner for PowerShell (Windows)
+    url: str  # Tailscale URL of the leader (e.g., http://100.x.x.x:8000)  # Tailscale URL of the leader (e.g., http://100.x.x.x:8000)
 
 
 class UNodeHeartbeat(BaseModel):

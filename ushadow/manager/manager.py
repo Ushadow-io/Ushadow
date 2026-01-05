@@ -156,6 +156,10 @@ class UshadowManager:
 
         This pulls a new image and schedules a self-restart.
         The restart happens after responding to avoid connection issues.
+
+        Request body:
+            image: Docker image to upgrade to (optional)
+            new_secret: New NODE_SECRET to use after restart (optional)
         """
         if not self._check_auth(request):
             return web.json_response({"error": "Unauthorized"}, status=401)
@@ -166,6 +170,7 @@ class UshadowManager:
             data = {}
 
         image = data.get("image", "ghcr.io/ushadow-io/ushadow-manager:latest")
+        new_secret = data.get("new_secret")  # Optional: refresh secret during upgrade
 
         if not self.docker_client:
             return web.json_response({"success": False, "error": "Docker not available"}, status=500)
@@ -178,12 +183,17 @@ class UshadowManager:
 
             # Schedule the restart after responding
             # We use a background task to restart ourselves
-            asyncio.create_task(self._perform_self_upgrade(image))
+            asyncio.create_task(self._perform_self_upgrade(image, new_secret))
+
+            message = "Upgrade initiated. Manager will restart in ~5 seconds."
+            if new_secret:
+                message += " Secret will be refreshed."
 
             return web.json_response({
                 "success": True,
-                "message": "Upgrade initiated. Manager will restart in ~5 seconds.",
-                "new_image": image
+                "message": message,
+                "new_image": image,
+                "secret_refreshed": new_secret is not None
             })
 
         except ImageNotFound:
@@ -192,15 +202,21 @@ class UshadowManager:
             logger.error(f"Upgrade failed: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
 
-    async def _perform_self_upgrade(self, new_image: str):
+    async def _perform_self_upgrade(self, new_image: str, new_secret: str = None):
         """
         Perform the actual self-upgrade by recreating our own container.
 
         This runs after responding to the upgrade request.
+
+        Args:
+            new_image: The Docker image to use for the new container
+            new_secret: Optional new NODE_SECRET to use (refreshes authentication)
         """
         await asyncio.sleep(3)  # Give time for response to be sent
 
         logger.info("Starting self-upgrade process...")
+        if new_secret:
+            logger.info("Will refresh NODE_SECRET during upgrade")
 
         try:
             # Get our own container
@@ -213,6 +229,11 @@ class UshadowManager:
                 if "=" in env:
                     k, v = env.split("=", 1)
                     env_dict[k] = v
+
+            # Update NODE_SECRET if a new one was provided
+            if new_secret:
+                env_dict["NODE_SECRET"] = new_secret
+                logger.info("NODE_SECRET updated in environment")
 
             # Get port bindings
             ports = my_container.attrs.get("HostConfig", {}).get("PortBindings", {})

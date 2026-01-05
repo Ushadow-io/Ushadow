@@ -13,6 +13,13 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
 
+class DeploymentTargetType(str, Enum):
+    """Type of deployment target."""
+    DOCKER_UNODE = "docker_unode"     # Deploy to remote u-node via manager API
+    KUBERNETES = "kubernetes"          # Deploy to Kubernetes cluster
+    LOCAL_DOCKER = "local_docker"      # Deploy to local Docker (same node)
+
+
 class DeploymentStatus(str, Enum):
     """Status of a deployment."""
     PENDING = "pending"        # Deployment requested but not started
@@ -84,13 +91,31 @@ class ServiceDefinition(BaseModel):
 
 class Deployment(BaseModel):
     """
-    A service deployed to a specific node.
+    A service deployed to a specific target.
 
-    Represents an instance of a ServiceDefinition running on a u-node.
+    Represents an instance of a ServiceDefinition running on a u-node,
+    Kubernetes cluster, or local Docker.
     """
     id: str = Field(..., description="Unique deployment ID")
     service_id: str = Field(..., description="Reference to ServiceDefinition")
-    unode_hostname: str = Field(..., description="Target u-node hostname")
+
+    # Target information
+    target_type: DeploymentTargetType = Field(
+        default=DeploymentTargetType.DOCKER_UNODE,
+        description="Type of deployment target"
+    )
+    unode_hostname: Optional[str] = Field(
+        default=None,
+        description="Target u-node hostname (for docker deployments)"
+    )
+    cluster_id: Optional[str] = Field(
+        default=None,
+        description="Target Kubernetes cluster ID (for k8s deployments)"
+    )
+    namespace: Optional[str] = Field(
+        default="default",
+        description="Kubernetes namespace (for k8s deployments)"
+    )
 
     # Status
     status: DeploymentStatus = Field(
@@ -138,9 +163,58 @@ class Deployment(BaseModel):
 
 
 class DeployRequest(BaseModel):
-    """Request to deploy a service to a node."""
-    service_id: str
-    unode_hostname: str
+    """
+    Request to deploy a service to a target.
+
+    Supports three target types:
+    - docker_unode: Deploy to a remote u-node via manager API
+    - kubernetes: Deploy to a Kubernetes cluster
+    - local_docker: Deploy to local Docker on the same node
+
+    Examples:
+        # Deploy to a u-node
+        {"service_id": "chronicle", "target_type": "docker_unode", "unode_hostname": "worker-1"}
+
+        # Deploy to Kubernetes
+        {"service_id": "chronicle", "target_type": "kubernetes", "cluster_id": "abc123", "namespace": "prod"}
+    """
+    service_id: str = Field(..., description="ID of the service to deploy")
+
+    # Target type determines which target fields are required
+    target_type: DeploymentTargetType = Field(
+        default=DeploymentTargetType.DOCKER_UNODE,
+        description="Type of deployment target"
+    )
+
+    # Docker target fields (required when target_type is docker_unode or local_docker)
+    unode_hostname: Optional[str] = Field(
+        default=None,
+        description="Target u-node hostname (required for docker_unode, optional for local_docker)"
+    )
+
+    # Kubernetes target fields (required when target_type is kubernetes)
+    cluster_id: Optional[str] = Field(
+        default=None,
+        description="Kubernetes cluster ID (required for kubernetes target)"
+    )
+    namespace: Optional[str] = Field(
+        default="default",
+        description="Kubernetes namespace (for kubernetes target)"
+    )
+    replicas: Optional[int] = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Number of pod replicas (for kubernetes target)"
+    )
+    service_type: Optional[str] = Field(
+        default="ClusterIP",
+        description="K8s Service type: ClusterIP, NodePort, LoadBalancer"
+    )
+    ingress_host: Optional[str] = Field(
+        default=None,
+        description="Ingress hostname (enables ingress if set)"
+    )
 
 
 class ServiceDefinitionCreate(BaseModel):
