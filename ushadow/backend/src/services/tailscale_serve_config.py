@@ -97,9 +97,13 @@ def get_base_routes(env_name: str = None) -> List[ServeRoute]:
     backend = f"{env_name}-backend"
     frontend = f"{env_name}-webui"
 
+    # Use port 5173 for dev (Vite), port 80 for prod (nginx)
+    dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
+    frontend_port = 5173 if dev_mode else 80
+
     return [
         # Frontend catches all unmatched paths
-        ServeRoute(path="/", container=frontend, port=5173, preserve_path=False),
+        ServeRoute(path="/", container=frontend, port=frontend_port, preserve_path=False),
         # Backend API routes
         ServeRoute(path="/api", container=backend, port=8000, preserve_path=True),
         ServeRoute(path="/auth", container=backend, port=8000, preserve_path=True),

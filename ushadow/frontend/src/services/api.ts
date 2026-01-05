@@ -1046,11 +1046,12 @@ export const tailscaleApi = {
       message: string
       details?: { tailscale: { status: string }; caddy: { status: string }; routing: { status: string } }
     }>('/api/tailscale/container/start-with-caddy'),
-  getAuthUrl: () => api.get<AuthUrlResponse>('/api/tailscale/container/auth-url'),
+  getAuthUrl: (regenerate: boolean = false) =>
+    api.get<AuthUrlResponse>('/api/tailscale/container/auth-url', { params: { regenerate } }),
   provisionCertInContainer: (hostname: string) =>
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
-    api.post<{ status: string; message: string; results?: string }>('/api/tailscale/configure-serve', config),
+    api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
   configureCaddyRouting: (hostname?: string) =>
     api.post<{ status: string; message: string; cors_origin_added?: string }>(
       '/api/tailscale/configure-caddy-routing',
