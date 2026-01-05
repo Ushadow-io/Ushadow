@@ -96,6 +96,9 @@ export default function TailscaleWizard() {
     loading: boolean
   }>({ updated: false, loading: false })
 
+  // Configured routes (returned from configure-serve)
+  const [configuredRoutes, setConfiguredRoutes] = useState<string>('')
+
   // ============================================================================
   // Initial check on welcome step
   // ============================================================================
@@ -245,11 +248,11 @@ export default function TailscaleWizard() {
     }
   }
 
-  const loadAuthUrl = async () => {
+  const loadAuthUrl = async (regenerate: boolean = false) => {
     setLoading(true)
     setMessage(null)
     try {
-      const response = await tailscaleApi.getAuthUrl()
+      const response = await tailscaleApi.getAuthUrl(regenerate)
       setAuthData(response.data)
       startPollingAuth()
     } catch (err) {
@@ -390,6 +393,10 @@ export default function TailscaleWizard() {
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
       if (serveResponse.data.status === 'configured' || serveResponse.data.status === 'skipped') {
+        // Store the configured routes for display
+        if (serveResponse.data.routes) {
+          setConfiguredRoutes(serveResponse.data.routes)
+        }
         setCertificateProvisioned(true)
         updateServiceStatus('tailscale', { configured: true, running: true })
         markPhaseComplete('tailscale')
@@ -433,7 +440,9 @@ export default function TailscaleWizard() {
   const handleNext = async () => {
     setMessage(null)
 
-    if (wizard.currentStep.id === 'provision' && !certificateProvisioned) {
+    if (wizard.currentStep.id === 'provision') {
+      // Always configure routes when leaving provision step
+      // (even if certs were already provisioned)
       const provisioned = await provisionCertificate()
       if (!provisioned) return
     }
@@ -746,11 +755,16 @@ export default function TailscaleWizard() {
                   </h4>
                   <div className="flex justify-center">
                     <img
+                      key={authData.auth_url}
                       src={authData.qr_code_data}
                       alt="Tailscale Device Authorization QR Code"
                       className="w-64 h-64"
                     />
                   </div>
+                  {/* Debug: show URL for verification */}
+                  <p className="text-xs text-gray-400 text-center font-mono break-all mt-2">
+                    {authData.auth_url.slice(-20)}
+                  </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
                     This will open the Tailscale login page where you can approve the device
                   </p>
@@ -760,9 +774,10 @@ export default function TailscaleWizard() {
                       <span className="text-sm">Waiting for authorization...</span>
                     </div>
                   )}
-                  <div className="flex justify-center">
+                  <div className="flex justify-center gap-3">
                     <button
                       id="check-auth-status"
+                      data-testid="check-auth-status"
                       onClick={async () => {
                         try {
                           const response = await tailscaleApi.getContainerStatus()
@@ -781,6 +796,23 @@ export default function TailscaleWizard() {
                     >
                       <RefreshCw className="w-4 h-4 mr-2" />
                       Check Status
+                    </button>
+                    <button
+                      id="regenerate-auth-code"
+                      data-testid="regenerate-auth-code"
+                      onClick={() => {
+                        setAuthData(null)
+                        loadAuthUrl(true)  // regenerate=true to force new URL
+                      }}
+                      disabled={loading}
+                      className="btn-secondary text-sm"
+                    >
+                      {loading ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                      )}
+                      New QR Code
                     </button>
                   </div>
                 </div>
@@ -883,9 +915,19 @@ export default function TailscaleWizard() {
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
                 HTTPS certificate provisioned
               </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                {caddyEnabled ? 'Service routes: /chronicle/*, /api/*, /*' : 'Tailscale Serve configured'}
+              <li className="flex items-start gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
+                <div>
+                  <span>{caddyEnabled ? 'Caddy reverse proxy routes' : 'Tailscale Serve routes'}</span>
+                  {configuredRoutes && (
+                    <pre
+                      data-testid="configured-routes"
+                      className="mt-2 p-3 bg-gray-100 dark:bg-gray-800 rounded text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-40"
+                    >
+                      {configuredRoutes}
+                    </pre>
+                  )}
+                </div>
               </li>
               <li className="flex items-center gap-2" data-testid="cors-status">
                 {corsStatus.loading ? (

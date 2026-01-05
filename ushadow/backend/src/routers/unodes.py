@@ -384,9 +384,9 @@ class LeaderInfoResponse(BaseModel):
     ushadow_api_url: str  # Main ushadow backend API
     chronicle_api_url: Optional[str] = None  # Chronicle/OMI backend API (if running)
 
-    # Streaming URLs
-    ws_pcm_url: str  # WebSocket for PCM audio streaming
-    ws_omi_url: str  # WebSocket for OMI format streaming
+    # Streaming URLs (only available when Chronicle service is running)
+    ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
+    ws_omi_url: Optional[str] = None  # WebSocket for OMI format streaming
 
     # Cluster info
     unodes: List[UNode]  # Physical/virtual nodes in the cluster

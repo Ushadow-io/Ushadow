@@ -123,7 +123,7 @@ def check_docker():
     print_color(Colors.RED, "❌ Docker not found. Please install Docker Desktop.")
     return False
 
-def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_file: Path):
+def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_file: Path, dev_mode: bool = False):
     """Generate .env file with configuration."""
     backend_port = DEFAULT_BACKEND_PORT + port_offset
     webui_port = DEFAULT_WEBUI_PORT + port_offset
@@ -180,7 +180,7 @@ VITE_ENV_NAME={env_name}
 HOST_IP=localhost
 
 # Development mode
-DEV_MODE=false
+DEV_MODE={'true' if dev_mode else 'false'}
 """
 
     env_file.write_text(env_content)
@@ -206,46 +206,87 @@ DEV_MODE=false
         "webui_port": webui_port,
     }
 
-def start_services(dev_mode: bool):
-    """Start infrastructure and application services."""
-    # Ensure Docker networks
-    print_color(Colors.BLUE, "🏗️  Starting infrastructure...")
+def get_compose_cmd(dev_mode: bool) -> list:
+    """Get the base docker compose command with correct override file."""
+    override_file = "compose/overrides/dev-webui.yml" if dev_mode else "compose/overrides/prod-webui.yml"
+    return ["docker", "compose", "-f", APP_COMPOSE_FILE, "-f", override_file]
+
+
+def read_dev_mode_from_env() -> bool:
+    """Read DEV_MODE from .env file."""
+    env_file = PROJECT_ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if line.startswith("DEV_MODE="):
+                return line.split("=")[1].strip().lower() == "true"
+    return False
+
+
+def compose_up(dev_mode: bool, build: bool = False) -> bool:
+    """Start containers (optionally with rebuild)."""
     ensure_networks()
 
-    # Check if infrastructure is running
+    # Check/start infrastructure
     infra_running = check_infrastructure_running()
-    if infra_running:
-        print_color(Colors.GREEN, "   ✅ Infrastructure already running")
-    else:
-        print_color(Colors.YELLOW, "   Starting infrastructure...")
+    if not infra_running:
+        print_color(Colors.YELLOW, "🏗️  Starting infrastructure...")
         success, message = start_infrastructure(INFRA_COMPOSE_FILE, INFRA_PROJECT_NAME)
-        if success:
-            print_color(Colors.GREEN, f"   ✅ {message}")
-        else:
-            print_color(Colors.RED, f"   ❌ {message}")
+        if not success:
+            print_color(Colors.RED, f"❌ {message}")
             return False
 
-    print()
+    mode_label = "dev" if dev_mode else "prod"
+    action = "Building and starting" if build else "Starting"
+    print_color(Colors.BLUE, f"🚀 {action} {APP_DISPLAY_NAME} ({mode_label} mode)...")
 
-    # Start application
-    print_color(Colors.BLUE, f"🚀 Starting {APP_DISPLAY_NAME} application...")
-    print()
-
-    override_file = "compose/overrides/dev-webui.yml" if dev_mode else "compose/overrides/prod-webui.yml"
-
-    cmd = [
-        "docker", "compose",
-        "-f", APP_COMPOSE_FILE,
-        "-f", override_file,
-        "up", "-d", "--build"
-    ]
+    cmd = get_compose_cmd(dev_mode) + ["up", "-d"]
+    if build:
+        cmd.append("--build")
 
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
         print_color(Colors.RED, "❌ Failed to start application")
         return False
 
+    print_color(Colors.GREEN, "✅ Done")
     return True
+
+
+def compose_down(dev_mode: bool) -> bool:
+    """Stop containers."""
+    mode_label = "dev" if dev_mode else "prod"
+    print_color(Colors.BLUE, f"🛑 Stopping {APP_DISPLAY_NAME} ({mode_label} mode)...")
+
+    cmd = get_compose_cmd(dev_mode) + ["down"]
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+
+    if result.returncode != 0:
+        print_color(Colors.RED, "❌ Failed to stop application")
+        return False
+
+    print_color(Colors.GREEN, "✅ Stopped")
+    return True
+
+
+def compose_restart(dev_mode: bool) -> bool:
+    """Restart containers."""
+    mode_label = "dev" if dev_mode else "prod"
+    print_color(Colors.BLUE, f"🔄 Restarting {APP_DISPLAY_NAME} ({mode_label} mode)...")
+
+    cmd = get_compose_cmd(dev_mode) + ["restart"]
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+
+    if result.returncode != 0:
+        print_color(Colors.RED, "❌ Failed to restart application")
+        return False
+
+    print_color(Colors.GREEN, "✅ Restarted")
+    return True
+
+
+def start_services(dev_mode: bool):
+    """Start infrastructure and application services (legacy - calls compose_up with build)."""
+    return compose_up(dev_mode, build=True)
 
 def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
     """Wait for backend health and optionally open browser."""
@@ -307,13 +348,40 @@ def main():
     parser.add_argument("--prod", action="store_true", help="Production mode")
     parser.add_argument("--skip-admin", action="store_true", help="Skip admin creation (use web wizard)")
     parser.add_argument("--reset", action="store_true", help="Reset configuration")
+    # Simple compose operations (read DEV_MODE from .env)
+    parser.add_argument("--up", action="store_true", help="Start containers (no rebuild)")
+    parser.add_argument("--down", action="store_true", help="Stop containers")
+    parser.add_argument("--build", action="store_true", help="Rebuild and start containers")
+    parser.add_argument("--restart", action="store_true", help="Restart containers")
     args = parser.parse_args()
-
-    # Determine mode
-    dev_mode = args.dev and not args.prod
 
     # Change to project root
     os.chdir(PROJECT_ROOT)
+
+    # Handle simple compose operations (read mode from .env)
+    if args.up or args.down or args.build or args.restart:
+        # Use explicit --dev/--prod flag if provided, otherwise read from .env
+        if args.dev:
+            dev_mode = True
+        elif args.prod:
+            dev_mode = False
+        else:
+            dev_mode = read_dev_mode_from_env()
+
+        if args.down:
+            sys.exit(0 if compose_down(dev_mode) else 1)
+        elif args.restart:
+            sys.exit(0 if compose_restart(dev_mode) else 1)
+        elif args.up:
+            sys.exit(0 if compose_up(dev_mode, build=False) else 1)
+        elif args.build:
+            # Ensure secrets before build
+            secrets_file = PROJECT_ROOT / "config" / "secrets.yaml"
+            ensure_secrets_yaml(str(secrets_file))
+            sys.exit(0 if compose_up(dev_mode, build=True) else 1)
+
+    # Full setup flow
+    dev_mode = args.dev and not args.prod
 
     # Print header
     print_header()
@@ -406,7 +474,8 @@ def main():
             env_name=env_name,
             port_offset=port_offset,
             env_file=env_file,
-            secrets_file=secrets_file
+            secrets_file=secrets_file,
+            dev_mode=dev_mode
         )
         if not config:
             sys.exit(1)
