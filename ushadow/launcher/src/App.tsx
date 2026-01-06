@@ -9,7 +9,7 @@ import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { RefreshCw, Play, Settings, Zap, Loader2, FolderOpen, Pencil } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil } from 'lucide-react'
 import { getColors } from './utils/colors'
 
 function App() {
@@ -39,6 +39,7 @@ function App() {
   const [logExpanded, setLogExpanded] = useState(true)
   const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
+  const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
 
   const logIdRef = useRef(0)
   const lastStateRef = useRef<string>('')
@@ -83,20 +84,20 @@ function App() {
       const prereqs = await tauri.checkPrerequisites()
       setPrerequisites(prereqs)
 
-      // Log state changes only
-      const effective = getEffectivePrereqs(prereqs)
-      if (effective) {
-        const stateKey = JSON.stringify(effective)
-        if (!silent) {
-          logStateChange(stateKey, `Prerequisites: Docker ${effective.docker_running ? 'running' : effective.docker_installed ? 'stopped' : 'not installed'}, Git ${effective.git_installed ? '✓' : '✗'}`)
-        }
+      if (!silent) {
+        // Log actual command results
+        log(`$ docker --version → ${prereqs.docker_version || 'not found'}`)
+        log(`$ docker info → ${prereqs.docker_running ? 'running' : 'not running'}`)
+        log(`$ git --version → ${prereqs.git_version || 'not found'}`)
+        log(`$ tailscale --version → ${prereqs.tailscale_version || 'not found'}`)
       }
+
       return prereqs
     } catch (err) {
       log(`Failed to check prerequisites: ${err}`, 'error')
       return null
     }
-  }, [log, logStateChange, getEffectivePrereqs])
+  }, [log])
 
   const refreshDiscovery = useCallback(async (silent = false) => {
     try {
@@ -118,13 +119,14 @@ function App() {
     }
   }, [log, logStateChange])
 
-  const checkBrew = useCallback(async (silent = false) => {
-    if (platform !== 'macos') return true
+  const checkBrew = useCallback(async (silent = false, osOverride?: string) => {
+    const currentPlatform = osOverride || platform
+    if (currentPlatform !== 'macos') return true
     try {
       const installed = await tauri.checkBrew()
       setBrewInstalled(installed)
       if (!silent) {
-        log(`Homebrew: ${installed ? 'installed' : 'not installed'}`)
+        log(`$ brew --version → ${installed ? 'installed' : 'not found'}`)
       }
       return installed
     } catch (err) {
@@ -138,7 +140,7 @@ function App() {
   // Initialize
   useEffect(() => {
     const init = async () => {
-      log('Initializing launcher...', 'step')
+      log('Initializing...', 'step')
 
       const os = await tauri.getOsType()
       setPlatform(os)
@@ -146,24 +148,42 @@ function App() {
 
       const defaultDir = await tauri.getDefaultProjectDir()
 
+      // Track if this is first time setup (showing project dialog)
+      let isFirstTimeSetup = false
+
       // Show project setup dialog on first launch if no project root is configured
       if (!projectRoot) {
         setProjectRoot(defaultDir)
         setShowProjectDialog(true)
+        isFirstTimeSetup = true
         log('Please configure your repository location', 'step')
       } else {
         // Sync existing project root to Rust backend
         await tauri.setProjectRoot(projectRoot)
       }
 
-      await checkBrew()
+      await checkBrew(false, os)
       await refreshPrerequisites()
-      await refreshDiscovery()
+      const disc = await refreshDiscovery()
 
-      log('Ready', 'success')
+      // Auto-start quick launch if project root was already configured but no environments exist
+      if (!isFirstTimeSetup && disc && disc.environments.length === 0) {
+        log('No environments found - starting quick launch...', 'step')
+        setShouldAutoLaunch(true)
+      } else {
+        log('Ready', 'success')
+      }
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-launch effect - triggers quick launch when shouldAutoLaunch is set
+  useEffect(() => {
+    if (shouldAutoLaunch && !isLaunching) {
+      setShouldAutoLaunch(false)
+      handleQuickLaunch()
+    }
+  }, [shouldAutoLaunch, isLaunching]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling (less frequent, only logs on change)
   useEffect(() => {
@@ -378,23 +398,48 @@ function App() {
   }
 
   // New environment handlers
-  const handleNewEnvClone = async (name: string) => {
+  const handleNewEnvClone = async (name: string, serverMode: 'dev' | 'prod') => {
     setShowNewEnvDialog(false)
     const envPath = `${projectRoot}/../${name}` // Expected clone location
+    const modeLabel = serverMode === 'dev' ? 'hot reload' : 'production'
+
+    // Check port availability in dev mode (non-quick launch)
+    try {
+      const [backendOk, webuiOk, suggestedOffset] = await tauri.checkPorts()
+      if (!backendOk || !webuiOk) {
+        const backendPort = 8000 + suggestedOffset
+        const webuiPort = 3000 + suggestedOffset
+        const proceed = window.confirm(
+          `Default ports are in use:\n` +
+          `• Backend (8000): ${backendOk ? 'available' : 'in use'}\n` +
+          `• WebUI (3000): ${webuiOk ? 'available' : 'in use'}\n\n` +
+          `Use alternate ports instead?\n` +
+          `• Backend: ${backendPort}\n` +
+          `• WebUI: ${webuiPort}`
+        )
+        if (!proceed) {
+          log('Environment creation cancelled - ports in use', 'warning')
+          return
+        }
+        log(`Using alternate ports: backend=${backendPort}, webui=${webuiPort}`)
+      }
+    } catch (err) {
+      log(`Warning: Could not check ports: ${err}`, 'warning')
+    }
 
     // Add to creating environments list
     setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
-    log(`Creating environment "${name}" via clone...`, 'step')
+    log(`Creating environment "${name}" (${modeLabel} mode)...`, 'step')
 
     try {
       if (dryRunMode) {
-        log(`[DRY RUN] Would clone new environment: ${name}`, 'warning')
+        log(`[DRY RUN] Would clone new environment: ${name} (${modeLabel})`, 'warning')
         setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting' } : e))
         await new Promise(r => setTimeout(r, 2000))
         log(`[DRY RUN] Environment "${name}" created`, 'success')
       } else {
         setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting' } : e))
-        const result = await tauri.createEnvironment(name)
+        const result = await tauri.createEnvironment(name, serverMode)
         log(result, 'success')
       }
       // Remove from creating list after success
@@ -451,21 +496,39 @@ function App() {
   const handleClone = async (path: string) => {
     setShowProjectDialog(false)
     setIsLaunching(true)
-    log(`Cloning Ushadow to ${path}...`, 'step')
 
     try {
-      if (dryRunMode) {
-        log('[DRY RUN] Would clone repository', 'warning')
-        await new Promise(r => setTimeout(r, 2000))
-        log('[DRY RUN] Clone simulated', 'success')
+      // Check if repo already exists at this location
+      const status = await tauri.checkProjectDir(path)
+
+      if (status.exists && status.is_valid_repo) {
+        // Repo exists - pull latest instead of cloning
+        log(`Repository found at ${path}, pulling latest...`, 'step')
+        if (dryRunMode) {
+          log('[DRY RUN] Would pull latest changes', 'warning')
+          await new Promise(r => setTimeout(r, 1000))
+        } else {
+          const result = await tauri.updateUshadowRepo(path)
+          log(result, 'success')
+        }
       } else {
-        const result = await tauri.cloneUshadowRepo(path)
-        log(result, 'success')
+        // No repo - clone fresh
+        log(`Cloning Ushadow to ${path}...`, 'step')
+        if (dryRunMode) {
+          log('[DRY RUN] Would clone repository', 'warning')
+          await new Promise(r => setTimeout(r, 2000))
+          log('[DRY RUN] Clone simulated', 'success')
+        } else {
+          const result = await tauri.cloneUshadowRepo(path)
+          log(result, 'success')
+        }
       }
+
+      await tauri.setProjectRoot(path)
       setProjectRoot(path)
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to clone: ${err}`, 'error')
+      log(`Failed to setup project: ${err}`, 'error')
     } finally {
       setIsLaunching(false)
     }
@@ -488,6 +551,9 @@ function App() {
   // Quick launch (for quick mode)
   const handleQuickLaunch = async () => {
     setIsLaunching(true)
+    // Switch to dev mode to show install progress
+    setAppMode('dev')
+    setLogExpanded(true)
     log('Starting quick launch...', 'step')
 
     try {
@@ -514,7 +580,7 @@ function App() {
 
       // Clone if needed
       const status = await tauri.checkProjectDir(projectRoot)
-      if (!status.has_ushadow) {
+      if (!status.is_valid_repo) {
         await handleClone(projectRoot)
       }
 

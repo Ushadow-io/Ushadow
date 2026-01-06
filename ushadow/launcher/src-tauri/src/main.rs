@@ -9,8 +9,8 @@ mod models;
 use commands::{AppState, check_prerequisites, get_os_type, discover_environments,
     start_containers, stop_containers, get_container_status,
     start_infrastructure, stop_infrastructure, restart_infrastructure,
-    start_environment, stop_environment,
-    check_backend_health, check_webui_health, open_browser, set_project_root,
+    start_environment, stop_environment, check_ports,
+    check_backend_health, check_webui_health, open_browser, focus_window, set_project_root,
     create_environment, install_docker_via_brew, start_docker_desktop_macos,
     start_docker_desktop_windows, start_docker_service_linux,
     // Package manager installers
@@ -104,6 +104,7 @@ fn main() {
             // Environment management
             start_environment,
             stop_environment,
+            check_ports,
             // Legacy (for compatibility)
             start_containers,
             stop_containers,
@@ -111,6 +112,7 @@ fn main() {
             check_backend_health,
             check_webui_health,
             open_browser,
+            focus_window,
             discover_environments,
             create_environment,
             // Package manager installers

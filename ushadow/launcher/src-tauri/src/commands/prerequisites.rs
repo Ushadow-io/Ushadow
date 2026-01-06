@@ -1,5 +1,4 @@
 use crate::models::PrerequisiteStatus;
-use super::utils::silent_command;
 use std::env;
 
 /// Check if we're in mock mode
@@ -8,7 +7,10 @@ fn is_mock_mode() -> bool {
 }
 
 /// Check if Docker is installed and running
+/// Uses bash login shell to ensure shell profile is sourced and PATH includes docker
 pub fn check_docker() -> (bool, bool, Option<String>) {
+    use std::process::Command;
+
     // Mock mode for testing
     if is_mock_mode() {
         let installed = env::var("MOCK_DOCKER_INSTALLED").unwrap_or_default() == "true";
@@ -21,7 +23,10 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
         return (installed, running, version);
     }
 
-    let version_output = silent_command("docker").args(["--version"]).output();
+    // Check docker CLI via bash login shell (ensures PATH is set up from shell profile)
+    let version_output = Command::new("bash")
+        .args(["-l", "-c", "docker --version"])
+        .output();
 
     let (installed, version) = match version_output {
         Ok(output) if output.status.success() => {
@@ -35,14 +40,20 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
         return (false, false, None);
     }
 
-    let info_output = silent_command("docker").args(["info"]).output();
+    // Check if Docker daemon is running
+    let info_output = Command::new("bash")
+        .args(["-l", "-c", "docker info"])
+        .output();
     let running = matches!(info_output, Ok(output) if output.status.success());
 
     (installed, running, version)
 }
 
 /// Check if Git is installed
+/// Uses bash login shell to ensure shell profile is sourced and PATH includes git
 pub fn check_git() -> (bool, Option<String>) {
+    use std::process::Command;
+
     // Mock mode for testing
     if is_mock_mode() {
         let installed = env::var("MOCK_GIT_INSTALLED").unwrap_or_default() == "true";
@@ -54,7 +65,9 @@ pub fn check_git() -> (bool, Option<String>) {
         return (installed, version);
     }
 
-    let version_output = silent_command("git").args(["--version"]).output();
+    let version_output = Command::new("bash")
+        .args(["-l", "-c", "git --version"])
+        .output();
 
     match version_output {
         Ok(output) if output.status.success() => {
@@ -66,7 +79,10 @@ pub fn check_git() -> (bool, Option<String>) {
 }
 
 /// Check if Tailscale is installed and connected
+/// Uses bash login shell to ensure shell profile is sourced and PATH includes tailscale
 pub fn check_tailscale() -> (bool, bool, Option<String>) {
+    use std::process::Command;
+
     // Mock mode for testing
     if is_mock_mode() {
         let installed = env::var("MOCK_TAILSCALE_INSTALLED").unwrap_or_default() == "true";
@@ -79,7 +95,9 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
         return (installed, connected, version);
     }
 
-    let version_output = silent_command("tailscale").args(["--version"]).output();
+    let version_output = Command::new("bash")
+        .args(["-l", "-c", "tailscale --version"])
+        .output();
 
     let (installed, version) = match version_output {
         Ok(output) if output.status.success() => {
@@ -98,7 +116,9 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
         return (false, false, None);
     }
 
-    let status_output = silent_command("tailscale").args(["status"]).output();
+    let status_output = Command::new("bash")
+        .args(["-l", "-c", "tailscale status"])
+        .output();
     let connected = matches!(status_output, Ok(output) if output.status.success());
 
     (installed, connected, version)

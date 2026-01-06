@@ -10,6 +10,29 @@ fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
+/// Check if default ports (8000, 3000) are available
+/// Returns (backend_available, webui_available, suggested_offset)
+#[tauri::command]
+pub fn check_ports() -> (bool, bool, u16) {
+    let backend_ok = is_port_available(8000);
+    let webui_ok = is_port_available(3000);
+
+    if backend_ok && webui_ok {
+        return (true, true, 0);
+    }
+
+    // Find next available offset
+    let mut offset = 10u16;
+    while offset <= 1000 {
+        if is_port_available(8000 + offset) && is_port_available(3000 + offset) {
+            return (backend_ok, webui_ok, offset);
+        }
+        offset += 10;
+    }
+
+    (backend_ok, webui_ok, 0)
+}
+
 /// Find available ports starting from the given defaults
 /// Returns (backend_port, webui_port)
 fn find_available_ports(default_backend: u16, default_webui: u16) -> (u16, u16) {
@@ -364,6 +387,22 @@ pub async fn check_webui_health(port: u16) -> Result<bool, String> {
         }
         Err(_) => Ok(false),
     }
+}
+
+/// Focus the main window (bring to foreground)
+#[tauri::command]
+pub fn focus_window(window: tauri::Window) -> Result<(), String> {
+    window.set_focus().map_err(|e| e.to_string())?;
+
+    // On macOS, also activate the app to ensure it comes to front
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Ushadow Launcher\" to activate"])
+            .spawn();
+    }
+
+    Ok(())
 }
 
 /// Open URL in default browser
