@@ -66,7 +66,7 @@ export const tauri = {
 
   // Environment management
   discoverEnvironments: () => invoke<Discovery>('discover_environments'),
-  createEnvironment: (name: string) => invoke<string>('create_environment', { name }),
+  createEnvironment: (name: string, mode?: 'dev' | 'prod') => invoke<string>('create_environment', { name, mode }),
   startEnvironment: (envName: string) => invoke<string>('start_environment', { envName }),
   stopEnvironment: (envName: string) => invoke<string>('stop_environment', { envName }),
 

@@ -1,8 +1,39 @@
+use std::net::TcpListener;
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
 use super::utils::silent_command;
+
+/// Check if a port is available for binding
+fn is_port_available(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Find available ports starting from the given defaults
+/// Returns (backend_port, webui_port)
+fn find_available_ports(default_backend: u16, default_webui: u16) -> (u16, u16) {
+    let mut offset = 0u16;
+
+    loop {
+        let backend_port = default_backend + offset;
+        let webui_port = default_webui + offset;
+
+        // Check both ports are available
+        if is_port_available(backend_port) && is_port_available(webui_port) {
+            return (backend_port, webui_port);
+        }
+
+        // Try next offset (increments of 10 to match script convention)
+        offset += 10;
+
+        // Safety limit - don't search forever
+        if offset > 1000 {
+            // Return defaults anyway, let docker handle the error
+            return (default_backend, default_webui);
+        }
+    }
+}
 
 /// Application state
 pub struct AppState {
@@ -368,8 +399,9 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
 
 /// Create a new environment using start-dev.sh
+/// mode: "dev" for hot-reload, "prod" for production build
 #[tauri::command]
-pub async fn create_environment(state: State<'_, AppState>, name: String) -> Result<String, String> {
+pub async fn create_environment(state: State<'_, AppState>, name: String, mode: Option<String>) -> Result<String, String> {
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
@@ -380,11 +412,24 @@ pub async fn create_environment(state: State<'_, AppState>, name: String) -> Res
         return Err(format!("start-dev.sh not found in {}. Make sure you're pointing to a valid Ushadow repository.", project_root));
     }
 
-    // Run start-dev.sh in quick mode with environment name set via ENV_NAME
+    // Find available ports (default: 8000 for backend, 3000 for webui)
+    let (backend_port, webui_port) = find_available_ports(8000, 3000);
+
+    // Calculate port offset (both ports use same offset from defaults)
+    let port_offset = backend_port - 8000;
+
+    // Determine mode flag
+    let mode_flag = match mode.as_deref() {
+        Some("prod") => "--prod",
+        _ => "--dev", // Default to dev mode (hot-reload)
+    };
+
+    // Run start-dev.sh in quick mode with environment name and port offset
     let output = silent_command("bash")
-        .args(["start-dev.sh", "--quick"])
+        .args(["start-dev.sh", "--quick", mode_flag])
         .current_dir(&project_root)
         .env("ENV_NAME", &name)
+        .env("PORT_OFFSET", port_offset.to_string())
         .env("USHADOW_NO_BROWSER", "1")  // Custom env var we can check in script
         .output()
         .map_err(|e| format!("Failed to run start-dev.sh: {}", e))?;
@@ -396,7 +441,13 @@ pub async fn create_environment(state: State<'_, AppState>, name: String) -> Res
         return Err(format!("Failed to start environment: {}", error_msg.lines().last().unwrap_or(&error_msg)));
     }
 
-    Ok(format!("Environment '{}' started", name))
+    let port_info = if port_offset > 0 {
+        format!(" (ports: backend={}, webui={})", backend_port, webui_port)
+    } else {
+        String::new()
+    };
+
+    Ok(format!("Environment '{}' started{}", name, port_info))
 }
 
 #[cfg(test)]

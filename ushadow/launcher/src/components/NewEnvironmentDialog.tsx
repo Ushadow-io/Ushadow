@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
-import { X, Download, FolderOpen, GitBranch } from 'lucide-react'
+import { X, Download, FolderOpen, GitBranch, Flame, Package } from 'lucide-react'
 
 type CreateMode = 'clone' | 'link' | 'worktree'
+type ServerMode = 'dev' | 'prod'
 
 interface NewEnvironmentDialogProps {
   isOpen: boolean
   projectRoot: string
   onClose: () => void
-  onClone: (name: string) => void
+  onClone: (name: string, serverMode: ServerMode) => void
   onLink: (name: string, path: string) => void
   onWorktree: (name: string, branch: string) => void
 }
@@ -22,6 +23,7 @@ export function NewEnvironmentDialog({
 }: NewEnvironmentDialogProps) {
   const [name, setName] = useState('')
   const [mode, setMode] = useState<CreateMode>('clone')
+  const [serverMode, setServerMode] = useState<ServerMode>('dev')
   const [linkPath, setLinkPath] = useState('')
   const [branch, setBranch] = useState('')
 
@@ -41,6 +43,7 @@ export function NewEnvironmentDialog({
       setLinkPath('')
       setBranch('')
       setMode('clone')
+      setServerMode('dev')
     }
   }, [isOpen])
 
@@ -51,7 +54,7 @@ export function NewEnvironmentDialog({
 
     switch (mode) {
       case 'clone':
-        onClone(name.trim())
+        onClone(name.trim(), serverMode)
         break
       case 'link':
         onLink(name.trim(), linkPath.trim())
@@ -65,6 +68,7 @@ export function NewEnvironmentDialog({
     setName('')
     setLinkPath('')
     setBranch('')
+    setServerMode('dev')
   }
 
   const isValid = name.trim() && (mode !== 'link' || linkPath.trim())
@@ -134,6 +138,47 @@ export function NewEnvironmentDialog({
             />
           </div>
         </div>
+
+        {/* Server Mode - only for clone */}
+        {mode === 'clone' && (
+          <div className="mb-4">
+            <label className="block text-sm text-text-secondary mb-2">
+              Server Mode
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setServerMode('dev')}
+                className={`flex items-center gap-2 p-3 rounded-lg transition-all ${
+                  serverMode === 'dev'
+                    ? 'bg-primary-500/20 border-2 border-primary-500'
+                    : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
+                }`}
+                data-testid="server-mode-dev"
+              >
+                <Flame className={`w-5 h-5 ${serverMode === 'dev' ? 'text-orange-400' : 'text-text-muted'}`} />
+                <div className="text-left">
+                  <p className={`text-sm font-medium ${serverMode === 'dev' ? 'text-primary-400' : ''}`}>Hot Reload</p>
+                  <p className="text-xs text-text-muted">Development server</p>
+                </div>
+              </button>
+              <button
+                onClick={() => setServerMode('prod')}
+                className={`flex items-center gap-2 p-3 rounded-lg transition-all ${
+                  serverMode === 'prod'
+                    ? 'bg-primary-500/20 border-2 border-primary-500'
+                    : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
+                }`}
+                data-testid="server-mode-prod"
+              >
+                <Package className={`w-5 h-5 ${serverMode === 'prod' ? 'text-green-400' : 'text-text-muted'}`} />
+                <div className="text-left">
+                  <p className={`text-sm font-medium ${serverMode === 'prod' ? 'text-primary-400' : ''}`}>Production</p>
+                  <p className="text-xs text-text-muted">Nginx build</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Mode-specific inputs */}
         {mode === 'link' && (
