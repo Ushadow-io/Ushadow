@@ -1,9 +1,7 @@
 name: Launcher Release
 
 on:
-  push:
-    tags:
-      - 'launcher-v*'
+  # Manual release only - no auto-release on push
   workflow_dispatch:
     inputs:
       version:
@@ -57,24 +55,16 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_RELEASE_NAME: ${{ inputs.release_name }}
-          GIT_REF: ${{ github.ref }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            # Validate version format
-            if ! echo "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-              echo "Error: Invalid version format. Use semver (e.g., 1.0.0)"
-              exit 1
-            fi
-            VERSION="$INPUT_VERSION"
-            if [ -n "$INPUT_RELEASE_NAME" ]; then
-              RELEASE_NAME="$INPUT_RELEASE_NAME"
-            else
-              RELEASE_NAME="v$VERSION"
-            fi
+          # Validate version format
+          if ! echo "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: Invalid version format. Use semver (e.g., 1.0.0)"
+            exit 1
+          fi
+          VERSION="$INPUT_VERSION"
+          if [ -n "$INPUT_RELEASE_NAME" ]; then
+            RELEASE_NAME="$INPUT_RELEASE_NAME"
           else
-            # Extract version from tag
-            VERSION=${GIT_REF#refs/tags/launcher-v}
             RELEASE_NAME="v$VERSION"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT

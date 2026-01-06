@@ -11,6 +11,9 @@ use commands::{AppState, check_prerequisites, get_os_type, discover_environments
     check_backend_health, check_webui_health, open_browser, set_project_root,
     create_environment, install_docker_via_brew, start_docker_desktop_macos,
     start_docker_desktop_windows, start_docker_service_linux,
+    // Package manager installers
+    install_homebrew, check_brew,
+    install_docker_windows, install_tailscale_windows, install_tailscale_macos,
     // Project/repo management
     get_default_project_dir, check_project_dir, clone_ushadow_repo,
     update_ushadow_repo, install_git_windows, install_git_macos};
@@ -100,10 +103,17 @@ fn main() {
             open_browser,
             discover_environments,
             create_environment,
+            // Package manager installers
+            install_homebrew,
+            check_brew,
+            // Docker/Tailscale management
             install_docker_via_brew,
+            install_docker_windows,
             start_docker_desktop_macos,
             start_docker_desktop_windows,
             start_docker_service_linux,
+            install_tailscale_windows,
+            install_tailscale_macos,
             // Project/repo management
             get_default_project_dir,
             check_project_dir,

@@ -9,6 +9,56 @@ pub fn check_brew_installed() -> bool {
         .unwrap_or(false)
 }
 
+/// Install Homebrew (macOS)
+/// Opens Terminal to run the official Homebrew installer script
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn install_homebrew() -> Result<String, String> {
+    if check_brew_installed() {
+        return Ok("Homebrew is already installed".to_string());
+    }
+
+    // The official Homebrew installation command
+    // We'll open Terminal and run the installer there so user can see progress and enter password
+    let install_script = r#"
+        tell application "Terminal"
+            activate
+            do script "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        end tell
+    "#;
+
+    let output = Command::new("osascript")
+        .args(["-e", install_script])
+        .output()
+        .map_err(|e| format!("Failed to open Terminal: {}", e))?;
+
+    if output.status.success() {
+        Ok("Homebrew installer opened in Terminal. Please follow the prompts to complete installation.".to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to start Homebrew installation: {}", stderr))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn install_homebrew() -> Result<String, String> {
+    Err("Homebrew installation is only available on macOS".to_string())
+}
+
+/// Check if Homebrew is installed (exported for frontend)
+#[tauri::command]
+pub fn check_brew() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        check_brew_installed()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Install Docker via Homebrew (macOS)
 #[cfg(target_os = "macos")]
 #[tauri::command]
@@ -96,6 +146,98 @@ pub async fn start_docker_desktop_windows() -> Result<String, String> {
 #[tauri::command]
 pub async fn start_docker_desktop_windows() -> Result<String, String> {
     Err("Windows Docker Desktop start is only available on Windows".to_string())
+}
+
+/// Install Docker Desktop via winget (Windows)
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn install_docker_windows() -> Result<String, String> {
+    // Try winget first (Windows 10/11)
+    let output = silent_command("winget")
+        .args([
+            "install",
+            "--id", "Docker.DockerDesktop",
+            "-e",
+            "--source", "winget",
+            "--accept-package-agreements",
+            "--accept-source-agreements"
+        ])
+        .output();
+
+    if let Ok(out) = output {
+        if out.status.success() {
+            return Ok("Docker Desktop installed successfully via winget. Please restart your computer to complete the installation.".to_string());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("winget install failed: {}", stderr));
+    }
+
+    Err("winget not available. Please install Docker Desktop manually from https://docker.com/products/docker-desktop".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn install_docker_windows() -> Result<String, String> {
+    Err("Windows Docker installation is only available on Windows".to_string())
+}
+
+/// Install Tailscale via winget (Windows)
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn install_tailscale_windows() -> Result<String, String> {
+    let output = silent_command("winget")
+        .args([
+            "install",
+            "--id", "Tailscale.Tailscale",
+            "-e",
+            "--source", "winget",
+            "--accept-package-agreements",
+            "--accept-source-agreements"
+        ])
+        .output();
+
+    if let Ok(out) = output {
+        if out.status.success() {
+            return Ok("Tailscale installed successfully via winget".to_string());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("winget install failed: {}", stderr));
+    }
+
+    Err("winget not available. Please install Tailscale manually.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn install_tailscale_windows() -> Result<String, String> {
+    Err("Windows Tailscale installation is only available on Windows".to_string())
+}
+
+/// Install Tailscale via Homebrew (macOS)
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn install_tailscale_macos() -> Result<String, String> {
+    if !check_brew_installed() {
+        return Err("Homebrew is not installed. Please install from https://brew.sh".to_string());
+    }
+
+    let output = silent_command("brew")
+        .args(["install", "--cask", "tailscale"])
+        .output()
+        .map_err(|e| format!("Failed to run brew: {}", e))?;
+
+    if output.status.success() {
+        Ok("Tailscale installed successfully via Homebrew".to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Brew install tailscale failed: {}", stderr))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn install_tailscale_macos() -> Result<String, String> {
+    Err("macOS Tailscale installation is only available on macOS".to_string())
 }
 
 /// Start Docker service (Linux)
@@ -231,21 +373,64 @@ pub async fn clone_ushadow_repo(target_dir: String) -> Result<String, String> {
     }
 }
 
-/// Update an existing Ushadow repository
+/// Update an existing Ushadow repository safely (stash, pull, stash pop)
 #[tauri::command]
 pub async fn update_ushadow_repo(project_dir: String) -> Result<String, String> {
-    let output = silent_command("git")
-        .args(["pull", "--ff-only"])
+    // Step 1: Stash any local changes
+    let stash_output = silent_command("git")
+        .args(["stash", "push", "-m", "ushadow-launcher-auto-stash"])
+        .current_dir(&project_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git stash: {}", e))?;
+
+    let had_changes = if stash_output.status.success() {
+        let stdout = String::from_utf8_lossy(&stash_output.stdout);
+        // Check if anything was actually stashed
+        !stdout.contains("No local changes to save")
+    } else {
+        false
+    };
+
+    // Step 2: Pull latest changes
+    let pull_output = silent_command("git")
+        .args(["pull", "--rebase=false"])
         .current_dir(&project_dir)
         .output()
         .map_err(|e| format!("Failed to run git pull: {}", e))?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(format!("Repository updated: {}", stdout.trim()))
+    if !pull_output.status.success() {
+        let stderr = String::from_utf8_lossy(&pull_output.stderr);
+        // Try to restore stashed changes even if pull failed
+        if had_changes {
+            let _ = silent_command("git")
+                .args(["stash", "pop"])
+                .current_dir(&project_dir)
+                .output();
+        }
+        return Err(format!("Git pull failed: {}", stderr));
+    }
+
+    let pull_result = String::from_utf8_lossy(&pull_output.stdout).trim().to_string();
+
+    // Step 3: Pop stashed changes if we had any
+    if had_changes {
+        let pop_output = silent_command("git")
+            .args(["stash", "pop"])
+            .current_dir(&project_dir)
+            .output()
+            .map_err(|e| format!("Failed to run git stash pop: {}", e))?;
+
+        if !pop_output.status.success() {
+            let stderr = String::from_utf8_lossy(&pop_output.stderr);
+            return Err(format!(
+                "Update pulled but failed to restore local changes: {}. Your changes are in git stash.",
+                stderr
+            ));
+        }
+
+        Ok(format!("Updated and restored local changes. {}", pull_result))
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Git pull failed: {}", stderr))
+        Ok(format!("Updated: {}", pull_result))
     }
 }
 
