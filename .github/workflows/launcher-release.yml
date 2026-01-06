@@ -153,10 +153,6 @@ jobs:
         working-directory: ${{ env.LAUNCHER_DIR }}
         run: npm ci
 
-      - name: Build web assets
-        working-directory: ${{ env.LAUNCHER_DIR }}
-        run: npm run build
-
       - name: Build Tauri app (Universal)
         working-directory: ${{ env.LAUNCHER_DIR }}
         run: npm run build -- --target universal-apple-darwin
@@ -195,10 +191,6 @@ jobs:
       - name: Install dependencies
         working-directory: ${{ env.LAUNCHER_DIR }}
         run: npm ci
-
-      - name: Build web assets
-        working-directory: ${{ env.LAUNCHER_DIR }}
-        run: npm run build
 
       - name: Build Tauri app
         working-directory: ${{ env.LAUNCHER_DIR }}
@@ -254,10 +246,6 @@ jobs:
       - name: Install dependencies
         working-directory: ${{ env.LAUNCHER_DIR }}
         run: npm ci
-
-      - name: Build web assets
-        working-directory: ${{ env.LAUNCHER_DIR }}
-        run: npm run build
 
       - name: Build Tauri app
         working-directory: ${{ env.LAUNCHER_DIR }}
