@@ -1046,11 +1046,12 @@ export const tailscaleApi = {
       message: string
       details?: { tailscale: { status: string }; caddy: { status: string }; routing: { status: string } }
     }>('/api/tailscale/container/start-with-caddy'),
-  getAuthUrl: () => api.get<AuthUrlResponse>('/api/tailscale/container/auth-url'),
+  getAuthUrl: (regenerate: boolean = false) =>
+    api.get<AuthUrlResponse>('/api/tailscale/container/auth-url', { params: { regenerate } }),
   provisionCertInContainer: (hostname: string) =>
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
-    api.post<{ status: string; message: string; results?: string }>('/api/tailscale/configure-serve', config),
+    api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
   configureCaddyRouting: (hostname?: string) =>
     api.post<{ status: string; message: string; cors_origin_added?: string }>(
       '/api/tailscale/configure-caddy-routing',
@@ -1105,4 +1106,43 @@ export const tailscaleApi = {
 
   // Setup completion
   complete: () => api.post<{ status: string; message: string }>('/api/tailscale/complete'),
+}
+
+// =============================================================================
+// Chat API - WebUI Chat Interface
+// =============================================================================
+
+export interface ChatMessage {
+  id?: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+export interface ChatStatus {
+  configured: boolean
+  provider: string | null
+  model: string | null
+  memory_available: boolean
+  error: string | null
+}
+
+export interface ChatRequest {
+  messages: ChatMessage[]
+  system?: string
+  use_memory?: boolean
+  user_id?: string
+  temperature?: number
+  max_tokens?: number
+}
+
+export const chatApi = {
+  /** Get chat configuration status */
+  getStatus: () => api.get<ChatStatus>('/api/chat/status'),
+
+  /** Non-streaming chat completion */
+  sendMessage: (request: ChatRequest) =>
+    api.post<ChatMessage>('/api/chat/simple', request),
+
+  /** Get the streaming endpoint URL (for direct fetch) */
+  getStreamUrl: () => `${BACKEND_URL}/api/chat`,
 }

@@ -1,22 +1,13 @@
 # ushadow Makefile
 # Quick commands for development and deployment
-# should use a function in a python file in scripts folder for anything complex
+# All compose operations delegate to setup/run.py for single source of truth
 
 .PHONY: help up down restart logs build clean test go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev
 
-# Read DEV_MODE from .env if it exists
+# Read .env for display purposes only (actual logic is in run.py)
 -include .env
-
-# Set compose files based on DEV_MODE (set by start-dev.sh)
-ifeq ($(DEV_MODE),true)
-  COMPOSE_FILES := -f docker-compose.yml -f compose/overrides/dev-webui.yml
-  MODE_LABEL := (dev mode)
-else
-  COMPOSE_FILES := -f docker-compose.yml -f compose/overrides/prod-webui.yml
-  MODE_LABEL := (prod mode)
-endif
 
 # Default target
 help:
@@ -31,7 +22,7 @@ help:
 	@echo "  make restart      - Restart ushadow application"
 	@echo "  make logs         - View application logs"
 	@echo "  make logs-f       - Follow application logs"
-	@echo "  make build        - Rebuild containers (auto-detects dev/prod)"
+	@echo "  make build        - Rebuild containers (uses DEV_MODE from .env)"
 	@echo "  make build-with-tailscale - Build with Tailscale socket (Linux only)"
 	@echo "  make clean        - Stop everything and remove volumes"
 	@echo "  make status       - Show running containers"
@@ -85,37 +76,30 @@ prod:
 	@echo ""
 	@echo "Access at: http://localhost:$${WEBUI_PORT:-3000}"
 
-# Application commands (auto-detect dev/prod mode from .env)
+# Application commands - delegate to run.py (reads DEV_MODE from .env)
 up:
-	@echo "🚀 Starting ushadow $(MODE_LABEL)..."
-	docker compose $(COMPOSE_FILES) up -d
+	@python3 setup/run.py --up
 
 down:
-	docker compose $(COMPOSE_FILES) down
+	@python3 setup/run.py --down
 
 restart:
-	docker compose $(COMPOSE_FILES) restart
-
-logs:
-	docker compose -f docker-compose.yml logs --tail=100
-
-logs-f:
-	docker compose -f docker-compose.yml logs -f
+	@python3 setup/run.py --restart
 
 build:
-	@echo "🔐 Ensuring secrets are configured..."
-	@python3 setup/setup_utils.py ensure-secrets config/secrets.yaml > /dev/null
-	@echo "🔨 Building ushadow $(MODE_LABEL)..."
-	docker compose $(COMPOSE_FILES) up -d --build
-	@echo "✅ Build complete"
+	@python3 setup/run.py --build
+
+logs:
+	@docker compose -f docker-compose.yml logs --tail=100
+
+logs-f:
+	@docker compose -f docker-compose.yml logs -f
 
 build-with-tailscale:
-	@echo "🔐 Ensuring secrets are configured..."
-	@python3 setup/setup_utils.py ensure-secrets config/secrets.yaml > /dev/null
 	@echo "🔨 Building with Tailscale socket support (Linux only)..."
 	@echo "⚠️  This requires Tailscale to be running on your Linux host"
-	docker compose -f docker-compose.yml -f compose/overrides/dev-webui.yml -f compose/backend-with-tailscale.yml up -d --build
-	@echo "✅ Build complete - Tailscale socket mounted for auto-detection"
+	@python3 setup/run.py --build
+	@echo "Note: Tailscale socket mount requires manual compose override"
 
 reset-tailscale:
 	@./setup/reset-tailscale.sh

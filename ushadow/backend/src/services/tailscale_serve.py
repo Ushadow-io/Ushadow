@@ -290,7 +290,7 @@ def configure_base_routes(
     backend_container: str = None,
     frontend_container: str = None,
     backend_port: int = 8000,
-    frontend_port: int = 5173
+    frontend_port: int = None  # Auto-detect from DEV_MODE
 ) -> bool:
     """Configure the base routes for an environment.
 
@@ -308,7 +308,7 @@ def configure_base_routes(
         backend_container: Backend container name (defaults to {env}-backend)
         frontend_container: Frontend container name (defaults to {env}-webui)
         backend_port: Backend internal port (default 8000)
-        frontend_port: Frontend internal port (default 5173)
+        frontend_port: Frontend internal port (auto-detect: 5173 for dev, 80 for prod)
 
     Returns:
         True if all routes configured successfully
@@ -320,6 +320,11 @@ def configure_base_routes(
         backend_container = f"{env_name}-backend"
     if not frontend_container:
         frontend_container = f"{env_name}-webui"
+
+    # Auto-detect frontend port based on DEV_MODE
+    if frontend_port is None:
+        dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
+        frontend_port = 5173 if dev_mode else 80
 
     backend_base = f"http://{backend_container}:{backend_port}"
     frontend_target = f"http://{frontend_container}:{frontend_port}"

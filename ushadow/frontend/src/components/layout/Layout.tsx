@@ -51,6 +51,7 @@ export default function Layout() {
   const allNavigationItems: NavigationItem[] = [
     // Separator after wizard section
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
+    { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
