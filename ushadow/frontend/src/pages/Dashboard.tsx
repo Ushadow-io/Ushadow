@@ -134,8 +134,9 @@ export default function Dashboard() {
             style={{ color: isDark ? 'var(--surface-500)' : '#d4d4d8' }}
           />
           <p style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>
-            No activity yet. Start by configuring your services in Settings.
+            No activity yet. Start by configuring your services in Services
           </p>
+           Not working yet
         </div>
       </div>
 

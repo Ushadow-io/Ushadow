@@ -6,6 +6,11 @@ services:
     build:
       context: ./ushadow/frontend
       dockerfile: Dockerfile
+      args:
+        # Vite env vars are baked in at build time - must pass as build args
+        VITE_ENV_NAME: ${VITE_ENV_NAME:-}
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_CHRONICLE_URL: ${VITE_CHRONICLE_URL:-}
     ports:
       - "${WEBUI_PORT:-3000}:80"
     environment:

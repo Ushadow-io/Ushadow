@@ -1066,27 +1066,41 @@ async def configure_caddy_routing(
 
 @router.get("/container/auth-url", response_model=AuthUrlResponse)
 async def get_auth_url(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    regenerate: bool = False
 ) -> AuthUrlResponse:
-    """Get Tailscale authentication URL with QR code"""
+    """Get Tailscale authentication URL with QR code.
+
+    Args:
+        regenerate: If True, logout first to force a new auth URL
+    """
     try:
-        # Try to get status first (shows login URL if logged out)
-        exit_code, stdout, stderr = await exec_in_container("tailscale status")
-
-        output = stdout + stderr
-        logger.info(f"Tailscale status output: {output}")
-
-        # Extract URL from status output (appears when logged out)
-        url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
-
-        if not url_match:
-            # Status didn't have URL - try running tailscale up
-            # Note: This will print the URL and exit since we're not interactive
-            exit_code, stdout, stderr = await exec_in_container("sh -c 'timeout 5 tailscale up || true'")
+        # If regenerate requested, force a fresh authentication
+        if regenerate:
+            logger.info("Regenerating auth URL - forcing re-authentication")
+            # Use --force-reauth to get a completely new auth URL
+            exit_code, stdout, stderr = await exec_in_container("tailscale up --force-reauth --timeout=5s")
             output = stdout + stderr
-            logger.info(f"Tailscale up output: {output}")
-
+            logger.info(f"Tailscale up --force-reauth output: {output}")
             url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
+        else:
+            # Try to get status first (shows login URL if logged out)
+            exit_code, stdout, stderr = await exec_in_container("tailscale status")
+
+            output = stdout + stderr
+            logger.info(f"Tailscale status output: {output}")
+
+            # Extract URL from status output (appears when logged out)
+            url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
+
+            if not url_match:
+                # Status didn't have URL - use tailscale login which prints URL and exits
+                # Unlike 'tailscale up', 'tailscale login' doesn't block waiting for auth
+                exit_code, stdout, stderr = await exec_in_container("tailscale login")
+                output = stdout + stderr
+                logger.info(f"Tailscale login output: {output}")
+
+                url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
 
         if not url_match:
             raise HTTPException(status_code=500, detail=f"Could not extract auth URL. Output: {output}")
@@ -1209,29 +1223,40 @@ async def provision_cert_in_container(
 async def configure_tailscale_serve(
     config: TailscaleConfig,
     current_user: User = Depends(get_current_user)
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Configure Tailscale serve for routing.
 
     Sets up base routes: /api/* and /auth/* to backend, /* to frontend.
     Uses the tailscale_serve helper module for dynamic route management.
+    Also saves the Tailscale configuration to disk.
     """
     try:
         from src.services.tailscale_serve import configure_base_routes, get_serve_status
 
+        # Save configuration to disk first
+        config_data = config.model_dump()
+        with open(TAILSCALE_CONFIG_FILE, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False)
+        logger.info(f"Tailscale configuration saved to {TAILSCALE_CONFIG_FILE}")
+
         # Configure base routes for this environment
         success = configure_base_routes()
 
+        # Get the current serve status to return actual routes
+        status = get_serve_status() or ""
+
         if success:
-            status = get_serve_status() or "Routes configured"
             return {
                 "status": "configured",
                 "message": "Tailscale serve configured successfully",
-                "routes": status
+                "routes": status,
+                "hostname": config.hostname
             }
         else:
             return {
                 "status": "partial",
-                "message": "Some routes may have failed to configure"
+                "message": "Some routes may have failed to configure",
+                "routes": status
             }
 
     except Exception as e:

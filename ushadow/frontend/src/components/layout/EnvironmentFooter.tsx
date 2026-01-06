@@ -1,4 +1,4 @@
-import { Layers } from 'lucide-react'
+import { Layers, Mail } from 'lucide-react'
 import { getColorClasses } from './EnvironmentBanner'
 import { useTheme } from '../../contexts/ThemeContext'
 
@@ -45,6 +45,21 @@ export default function EnvironmentFooter() {
             <Layers className={`h-4 w-4 ${showEnvIndicator ? text : ''}`} />
             <span className={showEnvIndicator ? text : ''}>Ushadow v0.1.0</span>
           </div>
+          <span className={showEnvIndicator ? text : ''} style={{ opacity: 0.4 }}>•</span>
+          <a
+            href="https://buttondown.com/thestumonkey"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center space-x-1.5 px-2.5 py-1 rounded-md transition-all hover:opacity-80"
+            style={{
+              backgroundColor: isDark ? 'var(--primary-600)' : 'var(--primary-500)',
+              color: 'white',
+            }}
+            data-testid="newsletter-signup-link"
+          >
+            <Mail className="h-3.5 w-3.5" />
+            <span className="font-medium">Get Updates</span>
+          </a>
         </div>
       </div>
     </footer>

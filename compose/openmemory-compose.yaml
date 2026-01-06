@@ -9,7 +9,7 @@ x-ushadow:
   namespace: openmemory
   # Infra services to start before this compose (from docker-compose.infra.yml)
   # To enable graph mode, add "neo4j" to infra_services and uncomment NEO4J_* env vars below
-  infra_services: ["qdrant"]
+  infra_services: ["qdrant", "neo4j"]
   mem0:
     display_name: "OpenMemory"
     description: "Vector memory API with MCP support for persistent AI context"
@@ -22,8 +22,9 @@ x-ushadow:
 
 services:
   mem0:
-    image: ghcr.io/ushadow-io/u-mem0-api:${OPENMEMORY_IMAGE_TAG:-latest}
+    image: ghcr.io/ushadow-io/mem0-api:${OPENMEMORY_IMAGE_TAG:-latest}
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0
+    pull_policy: always
     # Requires qdrant from infra (started via infra_services in x-ushadow)
     ports:
       - "${OPENMEMORY_PORT:-8765}:8765"
@@ -43,10 +44,10 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
 
       # Neo4j (for graph memory) - FEATURE FLAG: uncomment to enable graph mode
-      # - NEO4J_URI=${NEO4J_URI:-neo4j://neo4j:7687}
-      # - NEO4J_USER=${NEO4J_USER:-neo4j}
-      # - NEO4J_PASSWORD=${NEO4J_PASSWORD:-ushadow123}
-      # - NEO4J_DB=${NEO4J_DB:-neo4j}
+      - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - NEO4J_DB=${NEO4J_DB:-neo4j}
       - USER=${USER:-user@example.com}
     volumes:
       - mem0_data:/app/data
