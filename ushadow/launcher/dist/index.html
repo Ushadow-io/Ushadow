@@ -729,6 +729,44 @@
       display: none;
     }
 
+    /* Refresh button */
+    .refresh-btn {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #252530;
+      border: 1px solid #3d3d4a;
+      color: #a1a1aa;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      z-index: 100;
+    }
+
+    .refresh-btn:hover {
+      background: #2d2d3a;
+      color: #f4f4f5;
+      transform: scale(1.05);
+    }
+
+    .refresh-btn:active {
+      transform: scale(0.95);
+    }
+
+    .refresh-btn.spinning svg {
+      animation: spin 1s linear infinite;
+    }
+
+    .refresh-btn svg {
+      width: 24px;
+      height: 24px;
+    }
+
   </style>
 </head>
 <body>
@@ -818,6 +856,15 @@
     </div>
   </div>
 
+  <!-- Floating Refresh Button -->
+  <button class="refresh-btn" id="refresh-btn" data-testid="refresh-btn" title="Refresh status">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="23 4 23 10 17 10"></polyline>
+      <polyline points="1 20 1 14 7 14"></polyline>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+    </svg>
+  </button>
+
 
   <script>
     // Wait for Tauri API to be ready
@@ -854,11 +901,51 @@
     const launchBtn = document.getElementById('launch-btn');
     const createEnvBtn = document.getElementById('create-env-btn');
     const twoColumn = document.querySelector('.two-column');
+    const refreshBtn = document.getElementById('refresh-btn');
 
     // Show error
     function showError(message) {
       errorBanner.textContent = message;
       errorBanner.classList.remove('hidden');
+    }
+
+    // Detect platform
+    async function getPlatform() {
+      try {
+        // Try to use Tauri's OS detection
+        const osType = await invoke('get_os_type');
+        return osType;
+      } catch (err) {
+        // Fallback to user agent detection
+        const ua = navigator.userAgent.toLowerCase();
+        if (ua.indexOf('win') > -1) return 'windows';
+        if (ua.indexOf('mac') > -1) return 'macos';
+        if (ua.indexOf('linux') > -1) return 'linux';
+        return 'unknown';
+      }
+    }
+
+    // Get platform-specific installation URLs
+    function getInstallUrls(platform) {
+      const urls = {
+        docker: {
+          macos: 'https://docs.docker.com/desktop/install/mac-install/',
+          windows: 'https://docs.docker.com/desktop/install/windows-install/',
+          linux: 'https://docs.docker.com/engine/install/',
+          unknown: 'https://docs.docker.com/get-docker/'
+        },
+        tailscale: {
+          macos: 'https://tailscale.com/download/mac',
+          windows: 'https://tailscale.com/download/windows',
+          linux: 'https://tailscale.com/download/linux',
+          unknown: 'https://tailscale.com/download'
+        }
+      };
+
+      return {
+        docker: urls.docker[platform] || urls.docker.unknown,
+        tailscale: urls.tailscale[platform] || urls.tailscale.unknown
+      };
     }
 
     // Detect project root
@@ -1394,12 +1481,15 @@
 
       isStarting = true;
       launchBtn.disabled = true;
-      setButtonLoading(launchBtn, true, 'Launching...', '🚀 Launch Ushadow');
+      setButtonLoading(launchBtn, true, 'Checking prerequisites...', '🚀 Launch Ushadow');
 
       log('🚀 Starting Ushadow launch sequence...');
 
+      // Detect platform for correct install URLs
+      const platform = await getPlatform();
+
       try {
-        // Animate launch container hiding and drawer showing
+        // Animate to show two-column layout with prerequisites
         launchContainer.classList.add('hiding');
         await new Promise(resolve => setTimeout(resolve, 300));
 
@@ -1414,7 +1504,10 @@
           twoColumn.classList.remove('showing');
         }, 500);
 
-        // Step 1: Check prerequisites
+        // Expand prerequisites section to show progress
+        prereqSection.classList.remove('collapsed');
+
+        // Step 1: Check and install prerequisites
         log('Step 1/3: Checking prerequisites...');
         const prereqStatusEl = prereqSection.querySelector('.prereq-status');
         if (prereqStatusEl) {
@@ -1422,23 +1515,80 @@
           prereqStatusEl.className = 'prereq-status';
         }
 
-        const prereqsOk = await checkPrerequisites();
+        await checkPrerequisites();
 
         console.log('Prerequisites check result:', prerequisites);
 
-        if (!prerequisites?.docker_running) {
-          log('Error: Docker is not running. Please start Docker Desktop.', 'error');
-          showError('Docker is not running. Please start Docker Desktop and try again.');
-          isStarting = false;
-          setButtonLoading(launchBtn, false, 'Launching...', '🚀 Launch Ushadow');
-          launchBtn.disabled = false;
+        // Get platform-specific install URLs
+        const installUrls = getInstallUrls(platform);
 
-          // Reset UI
-          launchContainer.classList.remove('hidden');
-          twoColumn.classList.add('hidden');
-          twoColumn.classList.remove('showing');
-          return;
+        // If Docker is not installed, open installer and wait
+        if (!prerequisites?.docker_installed) {
+          log('Docker is not installed. Opening Docker installer for ' + platform + '...', 'error');
+          prereqStatusEl.textContent = 'Installing Docker...';
+          prereqStatusEl.className = 'prereq-status warning';
+
+          // Open platform-specific Docker download page
+          await invoke('open_browser', { url: installUrls.docker });
+
+          if (platform === 'linux') {
+            log('⏳ Please install Docker using your package manager, then start the Docker service.');
+            log('   Ubuntu/Debian: sudo apt-get install docker.io && sudo systemctl start docker');
+            log('   Fedora: sudo dnf install docker && sudo systemctl start docker');
+            log('   Then this will continue automatically...');
+          } else {
+            log('⏳ Please install Docker Desktop and start it, then this will continue automatically...');
+          }
+
+          // Poll for Docker installation (check every 5 seconds)
+          while (!prerequisites?.docker_installed || !prerequisites?.docker_running) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            await checkPrerequisites();
+
+            if (prerequisites?.docker_installed && !prerequisites?.docker_running) {
+              log('Docker installed! Waiting for Docker to start...');
+              prereqStatusEl.textContent = 'Starting Docker...';
+            }
+          }
+
+          log('✅ Docker is now running!');
+        } else if (!prerequisites?.docker_running) {
+          log('Docker is installed but not running. Please start Docker...', 'error');
+          prereqStatusEl.textContent = 'Starting Docker...';
+          prereqStatusEl.className = 'prereq-status warning';
+
+          if (platform === 'linux') {
+            log('⏳ Please start Docker service: sudo systemctl start docker');
+          } else {
+            log('⏳ Please start Docker Desktop...');
+          }
+
+          // Poll for Docker to start
+          while (!prerequisites?.docker_running) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            await checkPrerequisites();
+          }
+
+          log('✅ Docker is now running!');
         }
+
+        // Check Tailscale (optional but recommended)
+        if (!prerequisites?.tailscale_installed) {
+          log('Tailscale is not installed (optional). Opening installer for ' + platform + '...', 'warning');
+          await invoke('open_browser', { url: installUrls.tailscale });
+          log('You can install Tailscale later for remote access.');
+        }
+
+        // Prerequisites satisfied!
+        prereqStatusEl.textContent = 'All ready';
+        prereqStatusEl.className = 'prereq-status';
+
+        // Auto-collapse prerequisites after success
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        prereqSection.classList.add('collapsed');
+
+        // Continue with launch
+        setButtonLoading(launchBtn, true, 'Launching...', '🚀 Launch Ushadow');
 
         // Step 2: Start infrastructure
         log('Step 2/3: Starting infrastructure...');
@@ -1736,6 +1886,26 @@
 
     createEnvBtn.addEventListener('click', createNewEnvironment);
 
+    // Manual refresh handler
+    async function manualRefresh() {
+      if (refreshBtn.classList.contains('spinning')) return;
+
+      refreshBtn.classList.add('spinning');
+      log('Manual refresh triggered');
+
+      try {
+        await checkPrerequisites();
+        await checkContainerStatus();
+        log('Refresh complete');
+      } catch (err) {
+        log('Refresh failed: ' + err, 'error');
+      } finally {
+        refreshBtn.classList.remove('spinning');
+      }
+    }
+
+    refreshBtn.addEventListener('click', manualRefresh);
+
     console.log('All event listeners attached successfully');
 
     // Listen for tray events
@@ -1760,8 +1930,9 @@
           log('Launch button disabled - Docker not running');
         }
 
-        // Poll status every 10 seconds
-        setInterval(checkContainerStatus, 10000);
+        // Poll status every 60 seconds (reduced from 10s to minimize resource usage)
+        // Use the manual refresh button for immediate updates
+        setInterval(checkContainerStatus, 60000);
       } catch (err) {
         log('Initialization failed: ' + err, 'error');
         console.error('Init error:', err);

@@ -6,7 +6,7 @@
 mod commands;
 mod models;
 
-use commands::{AppState, check_prerequisites, discover_environments,
+use commands::{AppState, check_prerequisites, get_os_type, discover_environments,
     start_containers, stop_containers, get_container_status,
     check_backend_health, check_webui_health, open_browser, set_project_root,
     create_environment};
@@ -89,6 +89,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             check_prerequisites,
+            get_os_type,
             set_project_root,
             start_containers,
             stop_containers,

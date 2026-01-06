@@ -27,11 +27,12 @@ release-test:
 	@echo "🧪 Test Release Mode"
 	@echo "Building for current platform only..."
 	@VERSION=$$(./scripts/version.sh get) && \
-	PLATFORM=$$(uname -s | tr '[:upper:]' '[:lower:]') && \
+	OS=$$(uname -s | tr '[:upper:]' '[:lower:]') && \
+	PLATFORM=$$(if [ "$$OS" = "darwin" ]; then echo "macos"; else echo "$$OS"; fi) && \
 	echo "Version: $$VERSION" && \
 	echo "Platform: $$PLATFORM" && \
 	gh workflow run launcher-release.yml \
-		--ref $$(git branch --show-current) \
+		--ref main \
 		-f version="$$VERSION" \
 		-f platforms="$$PLATFORM" \
 		-f draft=true \
