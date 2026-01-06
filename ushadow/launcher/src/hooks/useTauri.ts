@@ -5,7 +5,11 @@ export interface Prerequisites {
   docker_installed: boolean
   docker_running: boolean
   tailscale_installed: boolean
+  tailscale_connected: boolean
   git_installed: boolean
+  docker_version: string | null
+  tailscale_version: string | null
+  git_version: string | null
 }
 
 export interface UshadowEnvironment {
@@ -55,7 +59,7 @@ export const tauri = {
   // Project management
   getDefaultProjectDir: () => invoke<string>('get_default_project_dir'),
   setProjectRoot: (path: string) => invoke<void>('set_project_root', { path }),
-  checkProjectDir: (path: string) => invoke<{ exists: boolean; has_ushadow: boolean }>('check_project_dir', { path }),
+  checkProjectDir: (path: string) => invoke<{ path: string | null; exists: boolean; is_valid_repo: boolean }>('check_project_dir', { path }),
   cloneUshadowRepo: (parentDir: string) => invoke<string>('clone_ushadow_repo', { parentDir }),
   updateUshadowRepo: (projectDir: string) => invoke<string>('update_ushadow_repo', { projectDir }),
 
@@ -67,6 +71,7 @@ export const tauri = {
   // Environment management
   discoverEnvironments: () => invoke<Discovery>('discover_environments'),
   createEnvironment: (name: string, mode?: 'dev' | 'prod') => invoke<string>('create_environment', { name, mode }),
+  checkPorts: () => invoke<[boolean, boolean, number]>('check_ports'),
   startEnvironment: (envName: string) => invoke<string>('start_environment', { envName }),
   stopEnvironment: (envName: string) => invoke<string>('stop_environment', { envName }),
 
@@ -97,6 +102,7 @@ export const tauri = {
 
   // Utilities
   openBrowser: (url: string) => invoke<void>('open_browser', { url }),
+  focusWindow: () => invoke<void>('focus_window'),
 }
 
 export default tauri

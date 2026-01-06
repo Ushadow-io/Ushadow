@@ -2,16 +2,17 @@ use super::utils::silent_command;
 use std::process::Command;
 
 /// Check if Homebrew is installed (macOS)
+/// Uses bash login shell to ensure shell profile is sourced and PATH includes brew
 #[cfg(target_os = "macos")]
 pub fn check_brew_installed() -> bool {
-    Command::new("brew")
-        .args(["--version"])
+    Command::new("bash")
+        .args(["-l", "-c", "brew --version"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-/// Get the brew executable path
+/// Get the brew executable path for this system
 #[cfg(target_os = "macos")]
 pub fn get_brew_path() -> String {
     "brew".to_string()
@@ -319,9 +320,9 @@ pub fn get_default_project_dir() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            return Ok(format!("{}/repos", home));
+            return Ok(home);
         }
-        Ok("/Users/Shared/repos".to_string())
+        Ok("/Users/Shared".to_string())
     }
 
     #[cfg(target_os = "linux")]

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { Trash2, ChevronDown, ChevronUp } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Trash2, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react'
 
 export type LogLevel = 'info' | 'warning' | 'error' | 'success' | 'step'
 
@@ -20,6 +20,7 @@ interface LogPanelProps {
 export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: LogPanelProps) {
   const logAreaRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
+  const [copied, setCopied] = useState(false)
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -37,6 +38,34 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
     }
   }
 
+  // Copy all logs to clipboard
+  const handleCopy = async () => {
+    const text = logs.map(entry => {
+      const time = entry.timestamp.toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+      const icons: Record<LogLevel, string> = {
+        info: '',
+        warning: '⚠️ ',
+        error: '❌ ',
+        success: '✅ ',
+        step: '→ ',
+      }
+      return `[${time}] ${icons[entry.level]}${entry.message}`
+    }).join('\n')
+
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy logs:', err)
+    }
+  }
+
   return (
     <div className="bg-surface-800 rounded-lg flex flex-col overflow-hidden" data-testid="log-panel">
       {/* Header - entire bar is clickable */}
@@ -51,14 +80,24 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
           </span>
         )}
         <span className="text-sm font-medium text-text-secondary">Activity Log</span>
-        <button
-          onClick={(e) => { e.stopPropagation(); onClear() }}
-          className="absolute right-3 p-1.5 rounded hover:bg-surface-600 transition-colors text-text-muted hover:text-text-primary"
-          title="Clear logs"
-          data-testid="clear-logs-button"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <div className="absolute right-3 flex gap-1">
+          <button
+            onClick={(e) => { e.stopPropagation(); handleCopy() }}
+            className="p-1.5 rounded hover:bg-surface-600 transition-colors text-text-muted hover:text-text-primary"
+            title="Copy logs"
+            data-testid="copy-logs-button"
+          >
+            {copied ? <Check className="w-4 h-4 text-success-400" /> : <Copy className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onClear() }}
+            className="p-1.5 rounded hover:bg-surface-600 transition-colors text-text-muted hover:text-text-primary"
+            title="Clear logs"
+            data-testid="clear-logs-button"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Log Area - animated collapse */}
@@ -84,6 +123,8 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
 }
 
 function LogLine({ entry }: { entry: LogEntry }) {
+  const [copied, setCopied] = useState(false)
+
   const colors: Record<LogLevel, string> = {
     info: 'text-text-secondary',
     warning: 'text-warning-400',
@@ -107,10 +148,26 @@ function LogLine({ entry }: { entry: LogEntry }) {
     second: '2-digit',
   })
 
+  const handleClick = async () => {
+    const text = `[${time}] ${icons[entry.level]}${entry.message}`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
   return (
-    <div className={`${colors[entry.level]} break-words py-0.5`}>
+    <div
+      onClick={handleClick}
+      className={`${colors[entry.level]} break-words py-0.5 cursor-pointer hover:bg-surface-700/50 rounded px-1 -mx-1 transition-colors ${copied ? 'bg-success-400/20' : ''}`}
+      title="Click to copy"
+    >
       <span className="text-text-muted opacity-60">[{time}]</span>{' '}
       {icons[entry.level]}{entry.message}
+      {copied && <span className="ml-2 text-success-400 text-[10px]">copied!</span>}
     </div>
   )
 }
