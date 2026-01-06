@@ -27,14 +27,13 @@ pub fn set_project_root(path: String, state: State<AppState>) -> Result<(), Stri
     Ok(())
 }
 
-/// Start Docker containers
+/// Start shared infrastructure containers
 #[tauri::command]
-pub async fn start_containers(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, String> {
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    // Start infrastructure
     let infra_output = silent_command("docker")
         .args([
             "compose",
@@ -52,23 +51,173 @@ pub async fn start_containers(state: State<'_, AppState>) -> Result<String, Stri
         return Err(format!("Infrastructure failed: {}", stderr));
     }
 
-    let mut running = state.containers_running.lock().map_err(|e| e.to_string())?;
-    *running = true;
-
     Ok("Infrastructure started".to_string())
 }
 
-/// Stop Docker containers
+/// Stop shared infrastructure containers
 #[tauri::command]
-pub async fn stop_containers(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn stop_infrastructure(state: State<'_, AppState>) -> Result<String, String> {
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    // Stop infra containers
     let output = silent_command("docker")
         .args(["compose", "-p", "infra", "down"])
         .current_dir(&project_root)
+        .output()
+        .map_err(|e| format!("Failed to stop infrastructure: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Stop failed: {}", stderr));
+    }
+
+    Ok("Infrastructure stopped".to_string())
+}
+
+/// Restart shared infrastructure containers
+#[tauri::command]
+pub async fn restart_infrastructure(state: State<'_, AppState>) -> Result<String, String> {
+    let root = state.project_root.lock().map_err(|e| e.to_string())?;
+    let project_root = root.clone().ok_or("Project root not set")?;
+    drop(root);
+
+    // Stop first
+    let _ = silent_command("docker")
+        .args(["compose", "-p", "infra", "down"])
+        .current_dir(&project_root)
+        .output();
+
+    // Start again
+    let output = silent_command("docker")
+        .args([
+            "compose",
+            "-f", "compose/docker-compose.infra.yml",
+            "-p", "infra",
+            "--profile", "infra",
+            "up", "-d",
+        ])
+        .current_dir(&project_root)
+        .output()
+        .map_err(|e| format!("Failed to restart infrastructure: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Restart failed: {}", stderr));
+    }
+
+    Ok("Infrastructure restarted".to_string())
+}
+
+/// Start a specific environment by name
+#[tauri::command]
+pub async fn start_environment(_state: State<'_, AppState>, env_name: String) -> Result<String, String> {
+    // Find all stopped containers for this environment by name pattern
+    let pattern = if env_name == "default" {
+        "ushadow-".to_string()
+    } else {
+        format!("ushadow-{}-", env_name)
+    };
+
+    // Get matching stopped container names
+    let output = silent_command("docker")
+        .args(["ps", "-a", "--filter", "status=exited", "--format", "{{.Names}}"])
+        .output()
+        .map_err(|e| format!("Failed to list containers: {}", e))?;
+
+    if !output.status.success() {
+        return Err("Failed to list containers".to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let containers: Vec<&str> = stdout
+        .lines()
+        .filter(|name| {
+            if env_name == "default" {
+                name.starts_with(&pattern) && 
+                (*name == "ushadow-backend" || *name == "ushadow-webui" || 
+                 *name == "ushadow-frontend" || *name == "ushadow-worker" ||
+                 *name == "ushadow-tailscale" ||
+                 name.starts_with("ushadow-backend-") || name.starts_with("ushadow-webui-") ||
+                 name.starts_with("ushadow-frontend-") || name.starts_with("ushadow-worker-") ||
+                 name.starts_with("ushadow-tailscale-"))
+            } else {
+                name.starts_with(&pattern)
+            }
+        })
+        .collect();
+
+    if containers.is_empty() {
+        return Ok(format!("No stopped containers found for environment '{}'", env_name));
+    }
+
+    // Start all matching containers
+    let mut start_args = vec!["start"];
+    start_args.extend(containers.iter().copied());
+
+    let output = silent_command("docker")
+        .args(&start_args)
+        .output()
+        .map_err(|e| format!("Failed to start containers: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Start failed: {}", stderr));
+    }
+
+    Ok(format!("Environment '{}' started ({} containers)", env_name, containers.len()))
+}
+
+/// Stop a specific environment by name
+#[tauri::command]
+pub async fn stop_environment(_state: State<'_, AppState>, env_name: String) -> Result<String, String> {
+    // Find all containers for this environment by name pattern
+    let pattern = if env_name == "default" {
+        // Default env uses ushadow-backend, ushadow-webui pattern
+        "ushadow-".to_string()
+    } else {
+        format!("ushadow-{}-", env_name)
+    };
+
+    // Get matching container names
+    let output = silent_command("docker")
+        .args(["ps", "-a", "--format", "{{.Names}}"])
+        .output()
+        .map_err(|e| format!("Failed to list containers: {}", e))?;
+
+    if !output.status.success() {
+        return Err("Failed to list containers".to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let containers: Vec<&str> = stdout
+        .lines()
+        .filter(|name| {
+            if env_name == "default" {
+                // Match ushadow-backend, ushadow-webui but NOT ushadow-envname-*
+                name.starts_with(&pattern) && !name.contains("-backend-") && 
+                (*name == "ushadow-backend" || *name == "ushadow-webui" || 
+                 *name == "ushadow-frontend" || *name == "ushadow-worker" ||
+                 *name == "ushadow-tailscale" ||
+                 name.starts_with("ushadow-backend-") || name.starts_with("ushadow-webui-") ||
+                 name.starts_with("ushadow-frontend-") || name.starts_with("ushadow-worker-") ||
+                 name.starts_with("ushadow-tailscale-"))
+            } else {
+                name.starts_with(&pattern)
+            }
+        })
+        .collect();
+
+    if containers.is_empty() {
+        return Ok(format!("No containers found for environment '{}'", env_name));
+    }
+
+    // Stop all matching containers
+    let mut stop_args = vec!["stop"];
+    stop_args.extend(containers.iter().copied());
+
+    let output = silent_command("docker")
+        .args(&stop_args)
         .output()
         .map_err(|e| format!("Failed to stop containers: {}", e))?;
 
@@ -77,10 +226,19 @@ pub async fn stop_containers(state: State<'_, AppState>) -> Result<String, Strin
         return Err(format!("Stop failed: {}", stderr));
     }
 
-    let mut running = state.containers_running.lock().map_err(|e| e.to_string())?;
-    *running = false;
+    Ok(format!("Environment '{}' stopped ({} containers)", env_name, containers.len()))
+}
 
-    Ok("Containers stopped".to_string())
+/// Legacy: Start Docker containers (starts infra)
+#[tauri::command]
+pub async fn start_containers(state: State<'_, AppState>) -> Result<String, String> {
+    start_infrastructure(state).await
+}
+
+/// Legacy: Stop Docker containers (stops infra)
+#[tauri::command]
+pub async fn stop_containers(state: State<'_, AppState>) -> Result<String, String> {
+    stop_infrastructure(state).await
 }
 
 /// Get container status
@@ -209,30 +367,36 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
 
 
-/// Create a new environment using go.sh
+/// Create a new environment using start-dev.sh
 #[tauri::command]
-pub async fn create_environment(state: State<'_, AppState>, name: Option<String>) -> Result<String, String> {
+pub async fn create_environment(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    let env_name = name.unwrap_or_else(|| "default".to_string());
+    // Check if start-dev.sh exists
+    let script_path = std::path::Path::new(&project_root).join("start-dev.sh");
+    if !script_path.exists() {
+        return Err(format!("start-dev.sh not found in {}. Make sure you're pointing to a valid Ushadow repository.", project_root));
+    }
 
-    // Run go.sh with --no-auto-open to prevent browser opening
-    let output = silent_command("./go.sh")
-        .args(["--no-auto-open"])
+    // Run start-dev.sh in quick mode with environment name set via ENV_NAME
+    let output = silent_command("bash")
+        .args(["start-dev.sh", "--quick"])
         .current_dir(&project_root)
-        .env("ENV_NAME", &env_name)
+        .env("ENV_NAME", &name)
+        .env("USHADOW_NO_BROWSER", "1")  // Custom env var we can check in script
         .output()
-        .map_err(|e| format!("Failed to run go.sh: {}", e))?;
+        .map_err(|e| format!("Failed to run start-dev.sh: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("go.sh failed: {}", stderr));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
+        return Err(format!("Failed to start environment: {}", error_msg.lines().last().unwrap_or(&error_msg)));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(format!("Environment '{}' created: {}", env_name, stdout))
+    Ok(format!("Environment '{}' started", name))
 }
 
 #[cfg(test)]

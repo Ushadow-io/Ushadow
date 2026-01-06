@@ -3,26 +3,40 @@
   "version": "0.2.5",
   "description": "Ushadow Desktop Launcher",
   "private": true,
+  "type": "module",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:strict": "tsc && vite build",
+    "preview": "vite preview",
     "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "build:debug": "tauri build --debug",
-    "build:macos": "tauri build --target universal-apple-darwin",
-    "build:windows": "tauri build --target x86_64-pc-windows-msvc",
-    "build:linux": "tauri build --target x86_64-unknown-linux-gnu",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:debug": "tauri build --debug",
+    "tauri:build:macos": "tauri build --target universal-apple-darwin",
+    "tauri:build:windows": "tauri build --target x86_64-pc-windows-msvc",
+    "tauri:build:linux": "tauri build --target x86_64-unknown-linux-gnu",
     "icons": "tauri icon src-tauri/icons/app-icon.png",
-    "version": "0.2.5",
-    "version:get": "./scripts/version.sh get",
-    "version:bump": "./scripts/version.sh bump",
-    "release": "./scripts/release.sh",
-    "release:build": "./scripts/build.sh current",
-    "release:full": "./scripts/release.sh full"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^1.5.11"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
-    "@tauri-apps/api": "^1.5.3"
+    "@tauri-apps/api": "^1.5.3",
+    "lucide-react": "^0.446.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.11",
+    "@types/react": "^18.3.9",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.0",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
   }
 }

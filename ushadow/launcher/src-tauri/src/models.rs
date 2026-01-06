@@ -48,6 +48,8 @@ pub struct UshadowEnvironment {
     pub webui_port: Option<u16>,
     pub running: bool,
     pub tailscale_active: bool,
+    pub containers: Vec<String>,
+    pub path: Option<String>,
 }
 
 /// Infrastructure service status

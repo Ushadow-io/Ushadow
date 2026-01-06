@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use crate::models::{DiscoveryResult, InfraService, UshadowEnvironment};
 use super::prerequisites::{check_docker, check_tailscale};
 use super::utils::silent_command;
@@ -11,7 +11,14 @@ const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("qdrant", "Qdrant"),
 ];
 
-/// Discover running Ushadow environments and infrastructure
+/// Environment container info
+struct EnvContainerInfo {
+    backend_port: Option<u16>,
+    containers: Vec<String>,
+    has_running: bool,
+}
+
+/// Discover Ushadow environments and infrastructure (running and stopped)
 #[tauri::command]
 pub async fn discover_environments() -> Result<DiscoveryResult, String> {
     // Check prerequisites
@@ -30,9 +37,9 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
         });
     }
 
-    // Get all Docker containers
+    // Get ALL Docker containers (including stopped with -a)
     let output = silent_command("docker")
-        .args(["ps", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}"])
+        .args(["ps", "-a", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}"])
         .output()
         .map_err(|e| format!("Failed to get containers: {}", e))?;
 
@@ -43,8 +50,8 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut infrastructure = Vec::new();
-    let mut env_backends: Vec<(String, u16)> = Vec::new();
     let mut found_infra: HashSet<String> = HashSet::new();
+    let mut env_map: HashMap<String, EnvContainerInfo> = HashMap::new();
 
     // Parse Docker ps output
     for line in stdout.lines() {
@@ -78,31 +85,47 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
             }
         }
 
-        // Check Ushadow environment backends
-        if name.contains("backend") && name.starts_with("ushadow") && !name.contains("chronicle") {
-            let env_name = if name == "ushadow-backend" {
-                "default".to_string()
-            } else {
-                name.trim_start_matches("ushadow-")
-                    .trim_end_matches("-backend")
-                    .to_string()
-            };
+        // Check Ushadow environment containers (backend, webui, etc.)
+        if name.starts_with("ushadow") && !name.contains("chronicle") {
+            // Extract environment name from container name
+            // Patterns: ushadow-backend, ushadow-webui, ushadow-{env}-backend, ushadow-{env}-webui
+            let env_name = extract_env_name(name);
 
-            if let Some(ref port_str) = ports {
-                if let Some(port) = extract_port(port_str) {
-                    if is_running {
-                        env_backends.push((env_name, port));
+            let entry = env_map.entry(env_name.clone()).or_insert(EnvContainerInfo {
+                backend_port: None,
+                containers: Vec::new(),
+                has_running: false,
+            });
+
+            // Add container to the list
+            entry.containers.push(name.to_string());
+
+            if is_running {
+                entry.has_running = true;
+            }
+
+            // Extract backend port if this is the backend container
+            if name.contains("backend") && is_running {
+                if let Some(ref port_str) = ports {
+                    if let Some(port) = extract_port(port_str) {
+                        entry.backend_port = Some(port);
                     }
                 }
             }
         }
     }
 
-    // Build environment list with Tailscale URLs
+    // Build environment list
     let mut environments = Vec::new();
-    for (env_name, backend_port) in env_backends {
-        let color = env_name.clone();
-        let tailscale_url = get_tailscale_url(backend_port);
+    for (env_name, info) in env_map {
+        let backend_port = info.backend_port.unwrap_or(8000);
+        let running = info.has_running;
+
+        let tailscale_url = if running {
+            get_tailscale_url(backend_port)
+        } else {
+            None
+        };
         let tailscale_active = tailscale_url.is_some();
 
         let webui_port = if backend_port >= 8000 {
@@ -118,16 +141,21 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
         };
 
         environments.push(UshadowEnvironment {
-            name: env_name,
-            color,
+            name: env_name.clone(),
+            color: env_name,
             localhost_url,
             tailscale_url,
             backend_port,
             webui_port,
-            running: true,
+            running,
             tailscale_active,
+            containers: info.containers,
+            path: None, // Path discovery not yet implemented
         });
     }
+
+    // Sort environments by name
+    environments.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(DiscoveryResult {
         infrastructure,
@@ -135,6 +163,43 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
         docker_ok,
         tailscale_ok,
     })
+}
+
+/// Extract environment name from container name
+fn extract_env_name(container_name: &str) -> String {
+    // Remove "ushadow-" prefix
+    let without_prefix = container_name.trim_start_matches("ushadow-");
+
+    // Known suffixes to strip (service types and docker compose suffixes)
+    let suffixes = ["-backend", "-webui", "-frontend", "-worker", "-tailscale", "-1"];
+
+    let mut name = without_prefix.to_string();
+    
+    // Keep stripping suffixes until no more match (handles cases like "red-backend-1")
+    loop {
+        let mut changed = false;
+        for suffix in suffixes {
+            if name.ends_with(suffix) {
+                name = name.trim_end_matches(suffix).to_string();
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // If empty or just numbers, default to "default"
+    if name.is_empty() || name.chars().all(|c| c.is_numeric() || c == '-') {
+        return "default".to_string();
+    }
+
+    // Handle case where name is just a service type (i.e., ushadow-backend)
+    if name == "backend" || name == "webui" || name == "frontend" || name == "worker" || name == "tailscale" {
+        return "default".to_string();
+    }
+
+    name
 }
 
 /// Extract port from Docker ports string
@@ -224,5 +289,39 @@ mod tests {
         println!("Found {} infra, {} environments",
             discovery.infrastructure.len(),
             discovery.environments.len());
+    }
+
+    #[test]
+    fn test_extract_env_name_basic() {
+        assert_eq!(extract_env_name("ushadow-red-backend"), "red");
+        assert_eq!(extract_env_name("ushadow-red-webui"), "red");
+        assert_eq!(extract_env_name("ushadow-red-frontend"), "red");
+    }
+
+    #[test]
+    fn test_extract_env_name_tailscale() {
+        // This was the bug: red-tailscale was being treated as separate environment
+        assert_eq!(extract_env_name("ushadow-red-tailscale"), "red");
+    }
+
+    #[test]
+    fn test_extract_env_name_with_compose_suffix() {
+        // Docker compose adds -1 suffix
+        assert_eq!(extract_env_name("ushadow-red-backend-1"), "red");
+        assert_eq!(extract_env_name("ushadow-red-tailscale-1"), "red");
+    }
+
+    #[test]
+    fn test_extract_env_name_default() {
+        // Containers without env name should be "default"
+        assert_eq!(extract_env_name("ushadow-backend"), "default");
+        assert_eq!(extract_env_name("ushadow-webui"), "default");
+        assert_eq!(extract_env_name("ushadow-tailscale"), "default");
+    }
+
+    #[test]
+    fn test_extract_env_name_complex() {
+        assert_eq!(extract_env_name("ushadow-my-env-backend-1"), "my-env");
+        assert_eq!(extract_env_name("ushadow-production-worker"), "production");
     }
 }
