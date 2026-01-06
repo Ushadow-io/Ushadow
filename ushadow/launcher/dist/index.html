@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ushadow</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background-color: #0f0f13;
+      color: #f4f4f5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 900px;
+      width: 100%;
+    }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    @media (max-width: 700px) {
+      .two-column {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .logo h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #4ade80 0%, #a855f7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+
+    .logo p {
+      color: #71717a;
+      font-size: 0.9rem;
+    }
+
+    .card {
+      background: #1a1a21;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      border: 1px solid #3d3d4a;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: #f4f4f5;
+    }
+
+    .check-item {
+      display: flex;
+      align-items: center;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid #2d2d3a;
+    }
+
+    .check-item:last-child {
+      border-bottom: none;
+    }
+
+    .check-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 0.75rem;
+      font-size: 0.8rem;
+    }
+
+    .check-icon.success { background: #4ade80; color: #0f0f13; }
+    .check-icon.error { background: #f87171; color: #0f0f13; }
+    .check-icon.pending { background: #52525b; animation: pulse 1.5s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .check-info {
+      flex: 1;
+    }
+
+    .check-name {
+      font-weight: 500;
+      color: #f4f4f5;
+    }
+
+    .check-version {
+      font-size: 0.75rem;
+      color: #71717a;
+    }
+
+    .check-action {
+      margin-left: auto;
+    }
+
+    .check-action a {
+      color: #4ade80;
+      text-decoration: none;
+      font-size: 0.85rem;
+    }
+
+    .check-action a:hover {
+      text-decoration: underline;
+    }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 1rem;
+      background: #252530;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #52525b;
+    }
+
+    .status-dot.running { background: #4ade80; animation: pulse 2s infinite; }
+    .status-dot.stopped { background: #f87171; }
+    .status-dot.starting { background: #fbbf24; animation: pulse 0.5s infinite; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+      width: 100%;
+    }
+
+    .btn-primary {
+      background: #4ade80;
+      color: #0f0f13;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: #86efac;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(74, 222, 128, 0.4);
+    }
+
+    .btn-secondary {
+      background: #252530;
+      color: #f4f4f5;
+      border: 1px solid #3d3d4a;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: #2d2d3a;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .btn-group .btn {
+      flex: 1;
+    }
+
+    .log-area {
+      background: #0f0f13;
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.75rem;
+      max-height: 150px;
+      overflow-y: auto;
+      color: #4ade80;
+      border: 1px solid #3d3d4a;
+    }
+
+    .log-area .error { color: #f87171; }
+    .log-area .info { color: #60a5fa; }
+
+    .hidden { display: none; }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.5rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error-banner {
+      background: rgba(248, 113, 113, 0.1);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      color: #fca5a5;
+      font-size: 0.875rem;
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .padlock-btn {
+      background: #252530;
+      border: 1px solid #3d3d4a;
+      border-radius: 8px;
+      padding: 0.5rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .padlock-btn:hover {
+      background: #2d2d3a;
+      border-color: #52525b;
+    }
+
+    .padlock-btn.secure {
+      background: rgba(74, 222, 128, 0.1);
+      border-color: rgba(74, 222, 128, 0.3);
+    }
+
+    .padlock-btn.secure:hover {
+      background: rgba(74, 222, 128, 0.2);
+    }
+
+    .padlock-icon {
+      width: 24px;
+      height: 24px;
+      color: #fbbf24;
+    }
+
+    .padlock-btn.secure .padlock-icon {
+      color: #4ade80;
+    }
+
+    .footer {
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid #3d3d4a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.75rem;
+      color: #71717a;
+    }
+
+    .footer-url {
+      font-family: 'Monaco', 'Menlo', monospace;
+      color: #a1a1aa;
+    }
+
+    .footer-url.secure {
+      color: #4ade80;
+    }
+
+    .services-list {
+      margin: 1rem 0;
+      padding: 0;
+    }
+
+    .service-item {
+      display: flex;
+      align-items: center;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #2d2d3a;
+      font-size: 0.85rem;
+    }
+
+    .service-item:last-child {
+      border-bottom: none;
+    }
+
+    .service-icon {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 0.75rem;
+      background: #52525b;
+    }
+
+    .service-icon.running { background: #4ade80; }
+    .service-icon.stopped { background: #f87171; }
+    .service-icon.starting { background: #fbbf24; animation: pulse 0.5s infinite; }
+
+    .service-name {
+      flex: 1;
+      color: #a1a1aa;
+    }
+
+    .service-status {
+      font-size: 0.75rem;
+      color: #71717a;
+    }
+
+    .env-badge {
+      display: inline-block;
+      background: rgba(168, 85, 247, 0.2);
+      color: #a855f7;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-left: 0.5rem;
+    }
+
+    /* Environment Cards */
+    .env-card {
+      background: #1a1a21;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      border: 2px solid #3d3d4a;
+      transition: all 0.2s;
+    }
+
+    .env-card:hover {
+      border-color: #52525b;
+      transform: translateY(-2px);
+    }
+
+    .env-card.running {
+      border-color: currentColor;
+      border-opacity: 0.5;
+    }
+
+    .env-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .env-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 2s infinite;
+    }
+
+    .env-name {
+      font-weight: 600;
+      font-size: 1.1rem;
+      text-transform: capitalize;
+    }
+
+    .env-urls {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.8rem;
+      font-family: 'Monaco', 'Menlo', monospace;
+    }
+
+    .env-url {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #a1a1aa;
+    }
+
+    .env-url a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .env-url a:hover {
+      color: #f4f4f5;
+      text-decoration: underline;
+    }
+
+    .env-url-label {
+      color: #71717a;
+      font-size: 0.7rem;
+      min-width: 60px;
+    }
+
+    .env-url-icon {
+      width: 14px;
+      height: 14px;
+      opacity: 0.6;
+    }
+
+    .env-actions {
+      margin-top: 0.75rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .env-open-btn {
+      flex: 1;
+      padding: 0.5rem 1rem;
+      background: #252530;
+      color: #f4f4f5;
+      border: 1px solid;
+      border-color: currentColor;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .env-open-btn:hover {
+      background: #2d2d3a;
+      transform: translateY(-1px);
+    }
+
+    .env-open-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .env-icon-btn {
+      padding: 0.5rem;
+      background: #252530;
+      color: #71717a;
+      border: 1px solid #3d3d4a;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 38px;
+    }
+
+    .env-icon-btn:hover {
+      background: #2d2d3a;
+      color: #a1a1aa;
+    }
+
+    .env-icon-btn.secure {
+      color: #4ade80;
+      background: rgba(74, 222, 128, 0.1);
+      border-color: rgba(74, 222, 128, 0.3);
+    }
+
+    .env-icon-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Color mappings for environments */
+    .env-color-blue { color: #60a5fa; }
+    .env-color-purple { color: #a855f7; }
+    .env-color-green { color: #4ade80; }
+    .env-color-red { color: #f87171; }
+    .env-color-orange { color: #fb923c; }
+    .env-color-yellow { color: #fbbf24; }
+    .env-color-pink { color: #f472b6; }
+    .env-color-cyan { color: #22d3ee; }
+    .env-color-teal { color: #2dd4bf; }
+    .env-color-indigo { color: #818cf8; }
+    .env-color-default { color: #a1a1aa; }
+
+    /* No environments message */
+    .no-envs {
+      text-align: center;
+      color: #71717a;
+      padding: 2rem;
+      font-size: 0.9rem;
+    }
+
+    .column-header {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #71717a;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #3d3d4a;
+    }
+
+    /* Collapsible prerequisites */
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+
+    .card-header h2 {
+      margin-bottom: 0;
+    }
+
+    .card-toggle {
+      background: none;
+      border: none;
+      color: #71717a;
+      cursor: pointer;
+      padding: 0.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+    }
+
+    .card-toggle:hover {
+      color: #a1a1aa;
+    }
+
+    .card-toggle svg {
+      width: 16px;
+      height: 16px;
+      transition: transform 0.2s;
+    }
+
+    .card.collapsed .card-toggle svg {
+      transform: rotate(-90deg);
+    }
+
+    .card-content {
+      overflow: hidden;
+      transition: max-height 0.3s ease-out, opacity 0.2s;
+      max-height: 500px;
+      opacity: 1;
+    }
+
+    .card.collapsed .card-content {
+      max-height: 0;
+      opacity: 0;
+      padding-top: 0;
+    }
+
+    #prerequisites-section.collapsed .card-toggle svg {
+      transform: rotate(-90deg);
+    }
+
+    #prerequisites-section .card-content {
+      overflow: hidden;
+      transition: max-height 0.3s ease-out, opacity 0.2s;
+      max-height: 500px;
+      opacity: 1;
+    }
+
+    #prerequisites-section.collapsed .card-content {
+      max-height: 0;
+      opacity: 0;
+      margin-top: 0 !important;
+    }
+
+    .prereq-status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: #4ade80;
+    }
+
+    .prereq-status.warning {
+      color: #fbbf24;
+    }
+
+    .prereq-status.error {
+      color: #f87171;
+    }
+
+    /* Launch Button */
+    .launch-btn {
+      padding: 1.5rem 2rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #4ade80 0%, #a855f7 100%);
+      color: #0f0f13;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s;
+      width: 100%;
+      margin: 2rem 0;
+      box-shadow: 0 8px 24px rgba(74, 222, 128, 0.3);
+    }
+
+    .launch-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(74, 222, 128, 0.4);
+    }
+
+    .launch-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .launch-container {
+      grid-column: 1 / -1;
+      text-align: center;
+      transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+    }
+
+    .launch-container.hiding {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+
+    .launch-message {
+      color: #71717a;
+      margin-bottom: 1rem;
+      font-size: 1rem;
+    }
+
+    .create-env-btn {
+      background: #a855f7;
+      color: #f4f4f5;
+    }
+
+    .create-env-btn:hover:not(:disabled) {
+      background: #c084fc;
+    }
+
+    /* Drawer animation */
+    .two-column {
+      transition: opacity 0.4s ease-out, transform 0.4s ease-out;
+      transform-origin: top;
+    }
+
+    .two-column.hidden {
+      display: none;
+      opacity: 0;
+      transform: scaleY(0.9) translateY(-20px);
+    }
+
+    .two-column.showing {
+      display: grid;
+      animation: slideDown 0.5s ease-out forwards;
+    }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: scaleY(0.9) translateY(-20px);
+      }
+      to {
+        opacity: 1;
+        transform: scaleY(1) translateY(0);
+      }
+    }
+
+    .card {
+      transition: opacity 0.3s ease-out;
+    }
+
+    .card.creating {
+      opacity: 0.7;
+    }
+
+    .creating-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      background: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      animation: pulse 1.5s infinite;
+      width: 100%;
+      margin-top: 1rem;
+    }
+
+    .creating-badge .spinner {
+      margin: 0;
+    }
+
+    .btn.hidden {
+      display: none;
+    }
+
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <img src="logo.png" alt="Ushadow" style="height: 80px;" />
+      <h1>Ushadow</h1>
+      <p>Desktop Launcher</p>
+    </div>
+
+    <!-- Error Banner (hidden by default) -->
+    <div class="error-banner hidden" id="error-banner"></div>
+
+    <!-- Launch Container (shown when nothing is running) -->
+    <div class="launch-container hidden" id="launch-container">
+      <p class="launch-message">Ready to get started with Ushadow?</p>
+      <button class="btn launch-btn" id="launch-btn" data-testid="launch-btn">
+        🚀 Launch Ushadow
+      </button>
+      <p class="launch-message" style="font-size: 0.85rem; margin-top: 1rem;">This will start infrastructure and create your first environment</p>
+    </div>
+
+    <!-- Two-Column Layout -->
+    <div class="two-column">
+      <!-- Left Column: Infrastructure -->
+      <div class="card" id="infra-card">
+        <!-- Prerequisites Section (Collapsible) -->
+        <div id="prerequisites-section">
+          <div class="card-header" id="prereq-header">
+            <h2 style="font-size: 0.9rem; margin: 0;">Prerequisites</h2>
+            <button class="card-toggle" id="prereq-toggle">
+              <span class="prereq-status" id="prereq-status"></span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+          </div>
+          <div class="card-content" id="prereq-content" style="margin-top: 0.5rem;">
+            <div class="check-item" id="docker-check">
+              <div class="check-icon pending" data-icon>?</div>
+              <div class="check-info">
+                <div class="check-name">Docker</div>
+                <div class="check-version" data-version>Checking...</div>
+              </div>
+              <div class="check-action" data-action></div>
+            </div>
+            <div class="check-item" id="tailscale-check">
+              <div class="check-icon pending" data-icon>?</div>
+              <div class="check-info">
+                <div class="check-name">Tailscale</div>
+                <div class="check-version" data-version>Checking...</div>
+              </div>
+              <div class="check-action" data-action></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="column-header" style="margin-top: 1rem;">Shared Infrastructure</div>
+        <div id="infra-list" class="services-list"></div>
+        <button class="btn btn-primary" id="toggle-infra-btn" style="margin-top: 1rem; width: 100%;" disabled>
+          Start Infrastructure
+        </button>
+      </div>
+
+      <!-- Right Column: Ushadow Environments -->
+      <div class="card" id="envs-card">
+        <div class="column-header">Ushadow Environments</div>
+        <div id="envs-list">
+          <div class="no-envs">Scanning for environments...</div>
+        </div>
+        <button class="btn btn-primary create-env-btn hidden" id="create-env-btn" style="margin-top: 1rem; width: 100%;">
+          + Create Environment
+        </button>
+      </div>
+    </div>
+
+    <!-- Log Card -->
+    <div class="card" id="log-card">
+      <h2>Log</h2>
+      <div class="log-area" id="log-area"></div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <span id="footer-status">Launcher v0.1.0</span>
+      <span id="footer-url"></span>
+    </div>
+  </div>
+
+
+  <script>
+    // Wait for Tauri API to be ready
+    document.addEventListener('DOMContentLoaded', async function() {
+      // Check if Tauri is available
+      if (!window.__TAURI__) {
+        document.getElementById('error-banner').textContent = 'Tauri API not available. Make sure you are running in the Tauri app.';
+        document.getElementById('error-banner').classList.remove('hidden');
+        return;
+      }
+
+      const { invoke } = window.__TAURI__.tauri;
+      const { listen } = window.__TAURI__.event;
+
+    // State
+    let projectRoot = null;
+    let prerequisites = null;
+    let isStarting = false;
+
+    // Elements
+    const errorBanner = document.getElementById('error-banner');
+    const dockerCheck = document.getElementById('docker-check');
+    const tailscaleCheck = document.getElementById('tailscale-check');
+    const toggleInfraBtn = document.getElementById('toggle-infra-btn');
+    const logCard = document.getElementById('log-card');
+    const logArea = document.getElementById('log-area');
+    const footerUrl = document.getElementById('footer-url');
+    const infraList = document.getElementById('infra-list');
+    const envsList = document.getElementById('envs-list');
+    const prereqSection = document.getElementById('prerequisites-section');
+    const prereqHeader = document.getElementById('prereq-header');
+    const prereqStatus = document.getElementById('prereq-status');
+    const launchContainer = document.getElementById('launch-container');
+    const launchBtn = document.getElementById('launch-btn');
+    const createEnvBtn = document.getElementById('create-env-btn');
+    const twoColumn = document.querySelector('.two-column');
+
+    // Show error
+    function showError(message) {
+      errorBanner.textContent = message;
+      errorBanner.classList.remove('hidden');
+    }
+
+    // Detect project root
+    async function detectProjectRoot() {
+      try {
+        // For development, hardcode the path
+        // In production, this would come from app resources
+        projectRoot = '/Users/stu/repos/worktrees/ushadow/blue';
+        await invoke('set_project_root', { path: projectRoot });
+        log('Project root set to: ' + projectRoot);
+      } catch (err) {
+        showError('Failed to set project root: ' + err);
+        throw err;
+      }
+    }
+
+    // Update check item UI using safe DOM methods
+    function updateCheckItem(element, success, version, installUrl, installText) {
+      const icon = element.querySelector('[data-icon]');
+      const versionEl = element.querySelector('[data-version]');
+      const actionEl = element.querySelector('[data-action]');
+
+      icon.className = 'check-icon ' + (success ? 'success' : 'error');
+      icon.textContent = success ? '✓' : '✗';
+      versionEl.textContent = version || (success ? 'Installed' : 'Not found');
+
+      // Clear existing action content safely
+      while (actionEl.firstChild) {
+        actionEl.removeChild(actionEl.firstChild);
+      }
+
+      // Add install link if needed
+      if (installUrl && installText) {
+        const link = document.createElement('a');
+        link.href = installUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = installText;
+        actionEl.appendChild(link);
+      } else if (installText) {
+        actionEl.textContent = installText;
+      }
+    }
+
+    // Toggle prerequisites section collapse
+    function togglePrereqSection() {
+      prereqSection.classList.toggle('collapsed');
+    }
+
+    // Update prerequisites status badge
+    function updatePrereqStatusBadge(allPassed, dockerOk, tailscaleOk) {
+      if (allPassed) {
+        prereqStatus.textContent = 'All passed';
+        prereqStatus.className = 'prereq-status';
+      } else if (dockerOk) {
+        prereqStatus.textContent = 'Tailscale missing';
+        prereqStatus.className = 'prereq-status warning';
+      } else {
+        prereqStatus.textContent = 'Action required';
+        prereqStatus.className = 'prereq-status error';
+      }
+    }
+
+    // Check prerequisites
+    async function checkPrerequisites() {
+      try {
+        log('Checking prerequisites...');
+        prerequisites = await invoke('check_prerequisites');
+        log('Prerequisites result: Docker=' + prerequisites.docker_installed + ', Tailscale=' + prerequisites.tailscale_installed);
+
+        // Update Docker UI
+        const dockerOk = prerequisites.docker_installed && prerequisites.docker_running;
+        updateCheckItem(
+          dockerCheck,
+          dockerOk,
+          prerequisites.docker_version,
+          !prerequisites.docker_installed ? 'https://docker.com/products/docker-desktop' : null,
+          !prerequisites.docker_installed ? 'Install' : (!prerequisites.docker_running ? 'Start Docker Desktop' : null)
+        );
+
+        // Update Tailscale UI (considered optional - only warn, don't block)
+        const tailscaleOk = prerequisites.tailscale_installed;
+        updateCheckItem(
+          tailscaleCheck,
+          tailscaleOk,
+          prerequisites.tailscale_version,
+          !prerequisites.tailscale_installed ? 'https://tailscale.com/download' : null,
+          !prerequisites.tailscale_installed ? 'Install (optional)' : null
+        );
+
+        // Enable toggle button if Docker is ready
+        const canStart = dockerOk;
+        toggleInfraBtn.disabled = !canStart;
+
+        // Update status badge and auto-collapse if Docker is working
+        const allPassed = dockerOk && tailscaleOk;
+        updatePrereqStatusBadge(allPassed, dockerOk, tailscaleOk);
+
+        // Auto-collapse if Docker is OK (main requirement)
+        if (dockerOk && !prereqSection.classList.contains('collapsed')) {
+          prereqSection.classList.add('collapsed');
+        }
+
+        return canStart;
+      } catch (err) {
+        log('Error checking prerequisites: ' + err, 'error');
+        showError('Failed to check prerequisites: ' + err);
+        return false;
+      }
+    }
+
+    // Render infrastructure services list
+    function renderInfraList(infrastructure) {
+      log('Rendering ' + (infrastructure ? infrastructure.length : 0) + ' infra services');
+      console.log('Infra data:', infrastructure);
+
+      // Clear existing
+      while (infraList.firstChild) {
+        infraList.removeChild(infraList.firstChild);
+      }
+
+      if (!infrastructure || infrastructure.length === 0) {
+        const noServices = document.createElement('div');
+        noServices.className = 'no-envs';
+        noServices.textContent = 'No infrastructure services running';
+        infraList.appendChild(noServices);
+        return;
+      }
+
+      infrastructure.forEach(function(service) {
+        const item = document.createElement('div');
+        item.className = 'service-item';
+
+        const icon = document.createElement('div');
+        icon.className = 'service-icon ' + (service.running ? 'running' : 'stopped');
+
+        const name = document.createElement('span');
+        name.className = 'service-name';
+        name.textContent = service.display_name;
+
+        const statusEl = document.createElement('span');
+        statusEl.className = 'service-status';
+        statusEl.textContent = service.running ? 'Running' : 'Stopped';
+
+        item.appendChild(icon);
+        item.appendChild(name);
+        item.appendChild(statusEl);
+        infraList.appendChild(item);
+      });
+    }
+
+    // Get color class for environment
+    function getEnvColorClass(color) {
+      const validColors = ['blue', 'purple', 'green', 'red', 'orange', 'yellow', 'pink', 'cyan', 'teal', 'indigo'];
+      return validColors.includes(color.toLowerCase()) ? 'env-color-' + color.toLowerCase() : 'env-color-default';
+    }
+
+    // Render environment cards
+    function renderEnvironments(environments) {
+      log('Rendering ' + (environments ? environments.length : 0) + ' environments');
+      console.log('Environments data:', environments);
+
+      // Clear existing
+      while (envsList.firstChild) {
+        envsList.removeChild(envsList.firstChild);
+      }
+
+      if (!environments || environments.length === 0) {
+        const noEnvs = document.createElement('div');
+        noEnvs.className = 'no-envs';
+        noEnvs.textContent = 'No Ushadow environments running';
+        envsList.appendChild(noEnvs);
+
+        // Show create environment button
+        createEnvBtn.classList.remove('hidden');
+        return;
+      }
+
+      // Hide create environment button when envs exist
+      createEnvBtn.classList.add('hidden');
+
+      environments.forEach(function(env) {
+        const card = document.createElement('div');
+        const colorClass = getEnvColorClass(env.color);
+        card.className = 'env-card running ' + colorClass;
+        card.setAttribute('data-testid', 'env-card-' + env.name);
+
+        // Header with dot and name
+        const header = document.createElement('div');
+        header.className = 'env-header';
+
+        const dot = document.createElement('div');
+        dot.className = 'env-dot';
+
+        const name = document.createElement('span');
+        name.className = 'env-name';
+        name.textContent = env.name;
+
+        header.appendChild(dot);
+        header.appendChild(name);
+        card.appendChild(header);
+
+        // URLs section
+        const urls = document.createElement('div');
+        urls.className = 'env-urls';
+
+        // Localhost URL
+        const localhostRow = document.createElement('div');
+        localhostRow.className = 'env-url';
+
+        const localhostLabel = document.createElement('span');
+        localhostLabel.className = 'env-url-label';
+        localhostLabel.textContent = 'Local:';
+
+        const localhostLink = document.createElement('a');
+        localhostLink.href = '#';
+        localhostLink.textContent = env.localhost_url;
+        localhostLink.onclick = function(e) {
+          e.preventDefault();
+          openInApp(env.localhost_url, env.name);
+        };
+
+        localhostRow.appendChild(localhostLabel);
+        localhostRow.appendChild(localhostLink);
+        urls.appendChild(localhostRow);
+
+        // Tailscale URL (if available)
+        if (env.tailscale_url) {
+          const tailscaleRow = document.createElement('div');
+          tailscaleRow.className = 'env-url';
+
+          const tailscaleLabel = document.createElement('span');
+          tailscaleLabel.className = 'env-url-label';
+          tailscaleLabel.textContent = 'Tailscale:';
+
+          const tailscaleLink = document.createElement('a');
+          tailscaleLink.href = '#';
+          tailscaleLink.textContent = env.tailscale_url.replace('https://', '');
+          tailscaleLink.onclick = function(e) {
+            e.preventDefault();
+            openInApp(env.tailscale_url, env.name);
+          };
+
+          tailscaleRow.appendChild(tailscaleLabel);
+          tailscaleRow.appendChild(tailscaleLink);
+          urls.appendChild(tailscaleRow);
+        }
+
+        card.appendChild(urls);
+
+        // Actions: Open buttons and padlock
+        const actions = document.createElement('div');
+        actions.className = 'env-actions';
+
+        // Open in app button
+        const openAppBtn = document.createElement('button');
+        openAppBtn.className = 'env-open-btn';
+        openAppBtn.setAttribute('data-testid', 'env-open-app-' + env.name);
+        openAppBtn.onclick = function() {
+          openInApp(env.tailscale_url || env.localhost_url, env.name);
+        };
+
+        const appIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        appIcon.setAttribute('viewBox', '0 0 24 24');
+        appIcon.setAttribute('fill', 'none');
+        appIcon.setAttribute('stroke', 'currentColor');
+        appIcon.setAttribute('stroke-width', '2');
+        const appIconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        appIconPath.setAttribute('d', 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2');
+        appIcon.appendChild(appIconPath);
+        openAppBtn.appendChild(appIcon);
+        openAppBtn.appendChild(document.createTextNode('Open in App'));
+        actions.appendChild(openAppBtn);
+
+        // Open in browser button
+        const openBrowserBtn = document.createElement('button');
+        openBrowserBtn.className = 'env-open-btn';
+        openBrowserBtn.setAttribute('data-testid', 'env-open-browser-' + env.name);
+        openBrowserBtn.onclick = function() {
+          openInBrowser(env.tailscale_url || env.localhost_url);
+        };
+
+        const browserIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        browserIcon.setAttribute('viewBox', '0 0 24 24');
+        browserIcon.setAttribute('fill', 'none');
+        browserIcon.setAttribute('stroke', 'currentColor');
+        browserIcon.setAttribute('stroke-width', '2');
+        const browserCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        browserCircle.setAttribute('cx', '12');
+        browserCircle.setAttribute('cy', '12');
+        browserCircle.setAttribute('r', '10');
+        const browserLine1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        browserLine1.setAttribute('x1', '2');
+        browserLine1.setAttribute('y1', '12');
+        browserLine1.setAttribute('x2', '22');
+        browserLine1.setAttribute('y2', '12');
+        const browserPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        browserPath.setAttribute('d', 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z');
+        browserIcon.appendChild(browserCircle);
+        browserIcon.appendChild(browserLine1);
+        browserIcon.appendChild(browserPath);
+        openBrowserBtn.appendChild(browserIcon);
+        openBrowserBtn.appendChild(document.createTextNode('Browser'));
+        actions.appendChild(openBrowserBtn);
+
+        // Tailscale status padlock
+        const padlock = document.createElement('button');
+        padlock.className = 'env-icon-btn' + (env.tailscale_active ? ' secure' : '');
+        padlock.title = env.tailscale_active
+          ? 'Tailscale connected - Secure access available'
+          : 'Localhost only';
+        padlock.setAttribute('data-testid', 'env-padlock-' + env.name);
+
+        const padlockSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        padlockSvg.setAttribute('viewBox', '0 0 24 24');
+        padlockSvg.setAttribute('fill', 'none');
+        padlockSvg.setAttribute('stroke', 'currentColor');
+        padlockSvg.setAttribute('stroke-width', '2');
+
+        if (env.tailscale_active) {
+          // Locked padlock
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', '3');
+          rect.setAttribute('y', '11');
+          rect.setAttribute('width', '18');
+          rect.setAttribute('height', '11');
+          rect.setAttribute('rx', '2');
+          rect.setAttribute('ry', '2');
+          padlockSvg.appendChild(rect);
+
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', 'M7 11V7a5 5 0 0 1 10 0v4');
+          padlockSvg.appendChild(path);
+        } else {
+          // Unlocked padlock
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', '3');
+          rect.setAttribute('y', '11');
+          rect.setAttribute('width', '18');
+          rect.setAttribute('height', '11');
+          rect.setAttribute('rx', '2');
+          rect.setAttribute('ry', '2');
+          padlockSvg.appendChild(rect);
+
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', 'M7 11V7a5 5 0 0 1 9.9-1');
+          padlockSvg.appendChild(path);
+        }
+
+        padlock.appendChild(padlockSvg);
+        actions.appendChild(padlock);
+
+        card.appendChild(actions);
+        envsList.appendChild(card);
+      });
+    }
+
+    // Open URL in app window (navigate current window)
+    async function openInApp(url, envName) {
+      try {
+        console.log('Navigating to environment in app:', { url: url, envName: envName });
+        log('Opening ' + envName + ' in app...');
+
+        // Navigate the current window to the environment URL
+        window.location.href = url;
+      } catch (err) {
+        console.error('Failed to navigate to environment:', err);
+        log('Failed to navigate: ' + err, 'error');
+        // Fallback to browser
+        openInBrowser(url);
+      }
+    }
+
+    // Open URL in external browser
+    async function openInBrowser(url) {
+      try {
+        await invoke('open_browser', { url: url });
+        log('Opened in browser: ' + url);
+      } catch (err) {
+        log('Failed to open browser: ' + err, 'error');
+        // Last resort fallback
+        window.open(url, '_blank');
+      }
+    }
+
+    // Discover and render environments
+    async function discoverEnvironments() {
+      try {
+        log('Calling discover_environments...');
+        const discovery = await invoke('discover_environments');
+        log('Discovery result: ' + JSON.stringify(discovery));
+        console.log('Discovery:', discovery);
+
+        // Check if anything is running
+        const runningInfra = discovery.infrastructure.filter(function(s) { return s.running; }).length;
+        const infraRunning = runningInfra > 0;
+        const hasEnvs = discovery.environments && discovery.environments.length > 0;
+
+        // Show/hide launch button vs two-column layout
+        if (!infraRunning && !hasEnvs) {
+          // Nothing running - show big launch button
+          launchContainer.classList.remove('hidden');
+          twoColumn.classList.add('hidden');
+
+          // Enable launch button if Docker is running
+          if (prerequisites?.docker_running) {
+            launchBtn.disabled = false;
+            log('Launch container shown - button enabled (Docker running)');
+          } else {
+            launchBtn.disabled = true;
+            log('Launch container shown - button disabled (Docker not running)');
+          }
+        } else {
+          // Something running - show normal UI
+          launchContainer.classList.add('hidden');
+          twoColumn.classList.remove('hidden');
+        }
+
+        // Render infrastructure
+        renderInfraList(discovery.infrastructure);
+
+        // Update toggle button based on infrastructure
+        if (infraRunning) {
+          toggleInfraBtn.textContent = 'Stop Infrastructure';
+          toggleInfraBtn.classList.remove('btn-primary');
+          toggleInfraBtn.classList.add('btn-secondary');
+          toggleInfraBtn.disabled = false;
+        } else {
+          toggleInfraBtn.textContent = 'Start Infrastructure';
+          toggleInfraBtn.classList.remove('btn-secondary');
+          toggleInfraBtn.classList.add('btn-primary');
+          toggleInfraBtn.disabled = !prerequisites?.docker_running;
+        }
+
+        // Render environments
+        renderEnvironments(discovery.environments);
+
+        return discovery;
+      } catch (err) {
+        log('Error discovering environments: ' + err, 'error');
+        console.error('Discovery error:', err);
+        return { infrastructure: [], environments: [] };
+      }
+    }
+
+    // Legacy function for backward compatibility
+    async function checkContainerStatus() {
+      return discoverEnvironments();
+    }
+
+    // Log message
+    function log(message, type = 'info') {
+      const line = document.createElement('div');
+      line.className = type;
+      const timestamp = new Date().toLocaleTimeString();
+      line.textContent = '[' + timestamp + '] ' + message;
+      logArea.appendChild(line);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    // Set button loading state
+    function setButtonLoading(button, isLoading, loadingText, normalText) {
+      while (button.firstChild) {
+        button.removeChild(button.firstChild);
+      }
+
+      if (isLoading) {
+        const spinner = document.createElement('div');
+        spinner.className = 'spinner';
+        button.appendChild(spinner);
+        button.appendChild(document.createTextNode(loadingText));
+      } else {
+        button.textContent = normalText;
+      }
+    }
+
+    // Show creating status in UI (replaces button)
+    function showCreatingStatus(section, message) {
+      // Find and hide the button
+      const button = section.querySelector('.btn');
+      if (button) {
+        button.classList.add('hidden');
+      }
+
+      // Remove existing badge
+      const existingBadge = section.querySelector('.creating-badge');
+      if (existingBadge) {
+        existingBadge.remove();
+      }
+
+      // Add creating badge with spinner
+      const badge = document.createElement('div');
+      badge.className = 'creating-badge';
+
+      const spinner = document.createElement('div');
+      spinner.className = 'spinner';
+
+      const text = document.createTextNode(message);
+
+      badge.appendChild(spinner);
+      badge.appendChild(text);
+
+      // Insert after the services list or at the end
+      section.appendChild(badge);
+      section.classList.add('creating');
+    }
+
+    // Remove creating status and restore button
+    function hideCreatingStatus(section) {
+      const badge = section.querySelector('.creating-badge');
+      if (badge) {
+        badge.remove();
+      }
+
+      // Show the button again
+      const button = section.querySelector('.btn');
+      if (button) {
+        button.classList.remove('hidden');
+      }
+
+      section.classList.remove('creating');
+    }
+
+    // Launch Ushadow (full setup)
+    async function launchUshadow() {
+      console.log('Launch button clicked!');
+      log('🚀 Launch button clicked');
+
+      if (isStarting) {
+        log('Already starting, please wait...', 'info');
+        return;
+      }
+
+      isStarting = true;
+      launchBtn.disabled = true;
+      setButtonLoading(launchBtn, true, 'Launching...', '🚀 Launch Ushadow');
+
+      log('🚀 Starting Ushadow launch sequence...');
+
+      try {
+        // Animate launch container hiding and drawer showing
+        launchContainer.classList.add('hiding');
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        launchContainer.classList.add('hidden');
+        launchContainer.classList.remove('hiding');
+
+        twoColumn.classList.remove('hidden');
+        twoColumn.classList.add('showing');
+
+        // Remove 'showing' class after animation completes
+        setTimeout(function() {
+          twoColumn.classList.remove('showing');
+        }, 500);
+
+        // Step 1: Check prerequisites
+        log('Step 1/3: Checking prerequisites...');
+        const prereqStatusEl = prereqSection.querySelector('.prereq-status');
+        if (prereqStatusEl) {
+          prereqStatusEl.textContent = 'Checking...';
+          prereqStatusEl.className = 'prereq-status';
+        }
+
+        const prereqsOk = await checkPrerequisites();
+
+        console.log('Prerequisites check result:', prerequisites);
+
+        if (!prerequisites?.docker_running) {
+          log('Error: Docker is not running. Please start Docker Desktop.', 'error');
+          showError('Docker is not running. Please start Docker Desktop and try again.');
+          isStarting = false;
+          setButtonLoading(launchBtn, false, 'Launching...', '🚀 Launch Ushadow');
+          launchBtn.disabled = false;
+
+          // Reset UI
+          launchContainer.classList.remove('hidden');
+          twoColumn.classList.add('hidden');
+          twoColumn.classList.remove('showing');
+          return;
+        }
+
+        // Step 2: Start infrastructure
+        log('Step 2/3: Starting infrastructure...');
+        const infraCard = document.getElementById('infra-card');
+
+        // Show placeholder services
+        const placeholderServices = [
+          { name: 'MongoDB', display_name: 'MongoDB', running: false },
+          { name: 'Redis', display_name: 'Redis', running: false },
+          { name: 'Neo4j', display_name: 'Neo4j', running: false },
+          { name: 'Qdrant', display_name: 'Qdrant', running: false }
+        ];
+        renderInfraList(placeholderServices);
+        showCreatingStatus(infraCard, 'Starting...');
+
+        const startResult = await invoke('start_containers');
+        log(startResult);
+
+        // Wait a bit for services to start and show progress
+        for (let i = 1; i <= 5; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          log('Starting infrastructure... (' + i + '/5)');
+
+          // Update service status to show starting animation
+          const serviceItems = infraList.querySelectorAll('.service-item');
+          serviceItems.forEach(function(item, index) {
+            if (index < i - 1) {
+              const icon = item.querySelector('.service-icon');
+              const statusEl = item.querySelector('.service-status');
+              if (icon && statusEl) {
+                icon.className = 'service-icon running';
+                statusEl.textContent = 'Running';
+              }
+            } else if (index === i - 1) {
+              const icon = item.querySelector('.service-icon');
+              const statusEl = item.querySelector('.service-status');
+              if (icon && statusEl) {
+                icon.className = 'service-icon starting';
+                statusEl.textContent = 'Starting...';
+              }
+            }
+          });
+        }
+
+        hideCreatingStatus(infraCard);
+        await discoverEnvironments();
+
+        // Step 3: Create default environment
+        log('Step 3/3: Creating default environment...');
+        const envsCard = document.getElementById('envs-card');
+
+        // Show placeholder environment
+        const placeholderEnv = {
+          name: 'default',
+          color: 'default',
+          localhost_url: 'http://localhost:3000',
+          backend_port: 8000,
+          running: false,
+          tailscale_active: false
+        };
+
+        // Clear and show creating message
+        while (envsList.firstChild) {
+          envsList.removeChild(envsList.firstChild);
+        }
+        const creating = document.createElement('div');
+        creating.className = 'no-envs';
+        creating.textContent = 'Creating default environment...';
+        envsList.appendChild(creating);
+
+        showCreatingStatus(envsCard, 'Creating...');
+
+        const envResult = await invoke('create_environment', { name: null });
+        log(envResult);
+
+        // Wait for environment to be ready
+        for (let i = 1; i <= 3; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          log('Creating environment... (' + i + '/3)');
+        }
+
+        hideCreatingStatus(envsCard);
+
+        // Poll for environment to be ready (with retries)
+        let defaultEnv = null;
+        for (let retry = 0; retry < 15; retry++) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          log('Checking if environment is ready... (' + (retry + 1) + '/15)');
+
+          const discovery = await discoverEnvironments();
+          if (discovery.environments && discovery.environments.length > 0) {
+            defaultEnv = discovery.environments[0];
+            log('✓ Environment detected: ' + defaultEnv.name);
+            break;
+          }
+        }
+
+        if (defaultEnv) {
+          // Verify we have a valid URL
+          const url = defaultEnv.localhost_url;
+          if (!url) {
+            log('⚠️ No URL available for environment. Skipping auto-open.', 'error');
+            return;
+          }
+
+          log('Environment URL: ' + url);
+
+          // Poll for web UI to be ready
+          log('Waiting for web UI to start...');
+          const webuiPort = defaultEnv.webui_port || 3000;
+          let webuiReady = false;
+
+          for (let attempt = 0; attempt < 20; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            log('Checking web UI health... (' + (attempt + 1) + '/20)');
+
+            try {
+              const healthy = await invoke('check_webui_health', { port: webuiPort });
+              if (healthy) {
+                webuiReady = true;
+                log('✓ Web UI is responding!');
+                break;
+              }
+            } catch (err) {
+              log('Web UI not ready yet...');
+            }
+          }
+
+          if (!webuiReady) {
+            log('⚠️ Web UI health check timed out, opening anyway...', 'warning');
+          }
+
+          log('✅ Ushadow launched successfully!');
+          log('Opening environment in app window...');
+
+          // Open the default environment in-app (NOT in browser)
+          try {
+            await openInApp(url, defaultEnv.name);
+            log('App window opened for: ' + defaultEnv.name);
+          } catch (err) {
+            log('Failed to open in app: ' + err, 'error');
+            showError('Failed to open environment: ' + err);
+          }
+        } else {
+          log('⚠️ Environment created but not detected after 30 seconds.', 'error');
+          showError('Environment created but not detected. Please check the logs.');
+        }
+
+      } catch (err) {
+        log('Failed to launch Ushadow: ' + err, 'error');
+        showError('Failed to launch Ushadow: ' + err);
+
+        // Clean up any creating badges
+        hideCreatingStatus(document.getElementById('infra-card'));
+        hideCreatingStatus(document.getElementById('envs-card'));
+      } finally {
+        isStarting = false;
+        setButtonLoading(launchBtn, false, 'Launching...', '🚀 Launch Ushadow');
+        await discoverEnvironments();
+      }
+    }
+
+    // Create new environment
+    async function createNewEnvironment() {
+      const envName = prompt('Enter environment name (or leave blank for "default"):');
+      if (envName === null) return; // User cancelled
+
+      createEnvBtn.disabled = true;
+      setButtonLoading(createEnvBtn, true, 'Creating...', '+ Create Environment');
+
+      log('Creating environment: ' + (envName || 'default'));
+
+      try {
+        const result = await invoke('create_environment', { name: envName || null });
+        log(result);
+
+        // Poll for environment to be ready (similar to launch flow)
+        log('Waiting for environment to be ready...');
+        let envDetected = false;
+
+        for (let retry = 0; retry < 15; retry++) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          log('Checking if environment is ready... (' + (retry + 1) + '/15)');
+
+          const discovery = await discoverEnvironments();
+          if (discovery.environments && discovery.environments.length > 0) {
+            envDetected = true;
+            log('✓ Environment detected and ready!');
+            break;
+          }
+        }
+
+        if (envDetected) {
+          log('✅ Environment created successfully!');
+          // Discovery will hide the button and show the environment
+        } else {
+          log('⚠️ Environment created but not detected yet.', 'warning');
+          // Re-enable button on timeout
+          setButtonLoading(createEnvBtn, false, 'Creating...', '+ Create Environment');
+          createEnvBtn.disabled = false;
+        }
+      } catch (err) {
+        log('Failed to create environment: ' + err, 'error');
+        showError('Failed to create environment: ' + err);
+        // Re-enable button on error
+        setButtonLoading(createEnvBtn, false, 'Creating...', '+ Create Environment');
+        createEnvBtn.disabled = false;
+      }
+    }
+
+    // Toggle infrastructure on/off
+    async function toggleInfrastructure() {
+      if (isStarting) return;
+
+      // Check current state
+      const discovery = await invoke('discover_environments');
+      const runningInfra = discovery.infrastructure.filter(function(s) { return s.running; }).length;
+      const infraRunning = runningInfra > 0;
+
+      if (infraRunning) {
+        // Stop infrastructure
+        isStarting = true;
+        toggleInfraBtn.disabled = true;
+        setButtonLoading(toggleInfraBtn, true, 'Stopping...', 'Stop Infrastructure');
+        statusText.textContent = 'Stopping infrastructure...';
+        log('Stopping infrastructure...');
+
+        try {
+          const result = await invoke('stop_containers');
+          log(result);
+        } catch (err) {
+          log('Failed to stop: ' + err, 'error');
+        } finally {
+          isStarting = false;
+          setButtonLoading(toggleInfraBtn, false, '', 'Stop Infrastructure');
+          await checkContainerStatus();
+        }
+      } else {
+        // Start infrastructure
+        isStarting = true;
+        toggleInfraBtn.disabled = true;
+        setButtonLoading(toggleInfraBtn, true, 'Starting...', 'Start Infrastructure');
+        statusDot.className = 'status-dot starting';
+        statusText.textContent = 'Starting infrastructure...';
+        log('Starting infrastructure...');
+
+        try {
+          const result = await invoke('start_containers');
+          log(result);
+          log('Infrastructure started! Waiting for services...');
+
+          // Poll for backend health
+          let attempts = 0;
+          const maxAttempts = 30;
+
+          const checkHealth = async () => {
+            attempts++;
+            // Default to port 8000 for health checks
+            const port = 8000;
+            const healthy = await invoke('check_backend_health', { port: port });
+
+            if (healthy) {
+              log('Backend is healthy!');
+              await checkContainerStatus();
+            } else if (attempts < maxAttempts) {
+              log('Waiting for backend... (' + attempts + '/' + maxAttempts + ')');
+              setTimeout(checkHealth, 2000);
+            } else {
+              log('Backend health check timed out', 'error');
+              await checkContainerStatus();
+            }
+          };
+
+          setTimeout(checkHealth, 3000);
+        } catch (err) {
+          log('Failed to start: ' + err, 'error');
+          statusDot.className = 'status-dot stopped';
+          statusText.textContent = 'Failed to start';
+        } finally {
+          isStarting = false;
+          setButtonLoading(toggleInfraBtn, false, '', 'Start Infrastructure');
+          await checkContainerStatus();
+        }
+      }
+    }
+
+    // Event listeners
+    toggleInfraBtn.addEventListener('click', toggleInfrastructure);
+    prereqHeader.addEventListener('click', togglePrereqSection);
+
+    launchBtn.addEventListener('click', function() {
+      console.log('Launch button click event fired!');
+      launchUshadow();
+    });
+
+    createEnvBtn.addEventListener('click', createNewEnvironment);
+
+    console.log('All event listeners attached successfully');
+
+    // Listen for tray events
+    listen('tray-start', () => toggleInfrastructure());
+    listen('tray-stop', () => toggleInfrastructure());
+
+    // Initialize
+    async function init() {
+      log('Initializing Ushadow Launcher...');
+
+      try {
+        await detectProjectRoot();
+        await checkPrerequisites();
+        await checkContainerStatus();
+
+        // Enable launch button after prerequisites check
+        if (prerequisites?.docker_running) {
+          launchBtn.disabled = false;
+          log('Launch button enabled - Docker is running');
+        } else {
+          launchBtn.disabled = true;
+          log('Launch button disabled - Docker not running');
+        }
+
+        // Poll status every 10 seconds
+        setInterval(checkContainerStatus, 10000);
+      } catch (err) {
+        log('Initialization failed: ' + err, 'error');
+        console.error('Init error:', err);
+      }
+    }
+
+    // Verify event listeners are attached
+    console.log('Launch button element:', launchBtn);
+    console.log('Event listener will be attached after DOMContentLoaded');
+
+    // Start initialization
+    init();
+    }); // End DOMContentLoaded
+  </script>
+</body>
+</html>
