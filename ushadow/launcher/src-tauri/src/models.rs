@@ -7,8 +7,18 @@ pub struct PrerequisiteStatus {
     pub docker_running: bool,
     pub tailscale_installed: bool,
     pub tailscale_connected: bool,
+    pub git_installed: bool,
     pub docker_version: Option<String>,
     pub tailscale_version: Option<String>,
+    pub git_version: Option<String>,
+}
+
+/// Project location status
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProjectStatus {
+    pub path: Option<String>,
+    pub exists: bool,
+    pub is_valid_repo: bool,
 }
 
 /// Container status

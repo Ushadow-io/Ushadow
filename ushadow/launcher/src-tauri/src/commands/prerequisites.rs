@@ -41,6 +41,30 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
     (installed, running, version)
 }
 
+/// Check if Git is installed
+pub fn check_git() -> (bool, Option<String>) {
+    // Mock mode for testing
+    if is_mock_mode() {
+        let installed = env::var("MOCK_GIT_INSTALLED").unwrap_or_default() == "true";
+        let version = if installed {
+            Some("git version 2.40.0 (MOCKED)".to_string())
+        } else {
+            None
+        };
+        return (installed, version);
+    }
+
+    let version_output = silent_command("git").args(["--version"]).output();
+
+    match version_output {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (true, Some(version))
+        }
+        _ => (false, None),
+    }
+}
+
 /// Check if Tailscale is installed and connected
 pub fn check_tailscale() -> (bool, bool, Option<String>) {
     // Mock mode for testing
@@ -85,14 +109,17 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
 pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
     let (docker_installed, docker_running, docker_version) = check_docker();
     let (tailscale_installed, tailscale_connected, tailscale_version) = check_tailscale();
+    let (git_installed, git_version) = check_git();
 
     Ok(PrerequisiteStatus {
         docker_installed,
         docker_running,
         tailscale_installed,
         tailscale_connected,
+        git_installed,
         docker_version,
         tailscale_version,
+        git_version,
     })
 }
 

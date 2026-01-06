@@ -10,7 +10,10 @@ use commands::{AppState, check_prerequisites, get_os_type, discover_environments
     start_containers, stop_containers, get_container_status,
     check_backend_health, check_webui_health, open_browser, set_project_root,
     create_environment, install_docker_via_brew, start_docker_desktop_macos,
-    start_docker_desktop_windows, start_docker_service_linux};
+    start_docker_desktop_windows, start_docker_service_linux,
+    // Project/repo management
+    get_default_project_dir, check_project_dir, clone_ushadow_repo,
+    update_ushadow_repo, install_git_windows, install_git_macos};
 use tauri::{
     CustomMenuItem, Manager, Menu, MenuItem, SystemTray,
     SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem, Submenu,
@@ -101,6 +104,13 @@ fn main() {
             start_docker_desktop_macos,
             start_docker_desktop_windows,
             start_docker_service_linux,
+            // Project/repo management
+            get_default_project_dir,
+            check_project_dir,
+            clone_ushadow_repo,
+            update_ushadow_repo,
+            install_git_windows,
+            install_git_macos,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

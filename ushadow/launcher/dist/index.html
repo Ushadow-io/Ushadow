@@ -821,6 +821,14 @@
               </div>
               <div class="check-action" data-action></div>
             </div>
+            <div class="check-item" id="git-check">
+              <div class="check-icon pending" data-icon>?</div>
+              <div class="check-info">
+                <div class="check-name">Git</div>
+                <div class="check-version" data-version>Checking...</div>
+              </div>
+              <div class="check-action" data-action></div>
+            </div>
           </div>
         </div>
 
@@ -889,6 +897,7 @@
     const errorBanner = document.getElementById('error-banner');
     const dockerCheck = document.getElementById('docker-check');
     const tailscaleCheck = document.getElementById('tailscale-check');
+    const gitCheck = document.getElementById('git-check');
     const toggleInfraBtn = document.getElementById('toggle-infra-btn');
     const logCard = document.getElementById('log-card');
     const logArea = document.getElementById('log-area');
@@ -940,27 +949,89 @@
           windows: 'https://tailscale.com/download/windows',
           linux: 'https://tailscale.com/download/linux',
           unknown: 'https://tailscale.com/download'
+        },
+        git: {
+          macos: 'https://git-scm.com/download/mac',
+          windows: 'https://git-scm.com/download/win',
+          linux: 'https://git-scm.com/download/linux',
+          unknown: 'https://git-scm.com/downloads'
         }
       };
 
       return {
         docker: urls.docker[platform] || urls.docker.unknown,
-        tailscale: urls.tailscale[platform] || urls.tailscale.unknown
+        tailscale: urls.tailscale[platform] || urls.tailscale.unknown,
+        git: urls.git[platform] || urls.git.unknown
       };
     }
 
-    // Detect project root
+    // Detect project root - checks for existing installation or prompts for location
     async function detectProjectRoot() {
       try {
-        // For development, hardcode the path
-        // In production, this would come from app resources
-        projectRoot = '/Users/stu/repos/worktrees/ushadow/blue';
-        await invoke('set_project_root', { path: projectRoot });
-        log('Project root set to: ' + projectRoot);
+        // Get the default project directory for this platform
+        const defaultDir = await invoke('get_default_project_dir');
+        log('Default project directory: ' + defaultDir);
+
+        // Check if the default directory has a valid Ushadow installation
+        const projectStatus = await invoke('check_project_dir', { path: defaultDir });
+        log('Project status: exists=' + projectStatus.exists + ', valid=' + projectStatus.is_valid_repo);
+
+        if (projectStatus.exists && projectStatus.is_valid_repo) {
+          // Valid installation found
+          projectRoot = defaultDir;
+          await invoke('set_project_root', { path: projectRoot });
+          log('Project root set to: ' + projectRoot);
+          return true;
+        }
+
+        // No valid installation - we'll need to clone during launch
+        // For now, just set the target directory
+        projectRoot = defaultDir;
+        log('No existing project found. Will clone to: ' + projectRoot);
+        return false;
       } catch (err) {
-        showError('Failed to set project root: ' + err);
-        throw err;
+        log('Error detecting project root: ' + err, 'error');
+        // Fall back to default
+        try {
+          projectRoot = await invoke('get_default_project_dir');
+          log('Using default project directory: ' + projectRoot);
+        } catch (e) {
+          // Last resort fallback
+          projectRoot = null;
+          log('Could not determine project directory', 'error');
+        }
+        return false;
       }
+    }
+
+    // Clone the Ushadow repository
+    async function cloneUshadowRepo(targetDir) {
+      log('Cloning Ushadow repository to ' + targetDir + '...');
+      try {
+        const result = await invoke('clone_ushadow_repo', { targetDir: targetDir });
+        log(result);
+        return true;
+      } catch (err) {
+        log('Clone failed: ' + err, 'error');
+        return false;
+      }
+    }
+
+    // Prompt user for project directory
+    async function promptForProjectDir() {
+      const defaultDir = await invoke('get_default_project_dir');
+      const userInput = prompt(
+        'Enter the directory where Ushadow should be installed:\n' +
+        '(Leave blank for default location)',
+        defaultDir
+      );
+
+      if (userInput === null) {
+        // User cancelled
+        return null;
+      }
+
+      return userInput.trim() || defaultDir;
     }
 
     // Update check item UI using safe DOM methods
@@ -1015,7 +1086,7 @@
       try {
         log('Checking prerequisites...');
         prerequisites = await invoke('check_prerequisites');
-        log('Prerequisites result: Docker=' + prerequisites.docker_installed + ', Tailscale=' + prerequisites.tailscale_installed);
+        log('Prerequisites result: Docker=' + prerequisites.docker_installed + ', Git=' + prerequisites.git_installed + ', Tailscale=' + prerequisites.tailscale_installed);
 
         // Update Docker UI
         const dockerOk = prerequisites.docker_installed && prerequisites.docker_running;
@@ -1025,6 +1096,16 @@
           prerequisites.docker_version,
           !prerequisites.docker_installed ? 'https://docker.com/products/docker-desktop' : null,
           !prerequisites.docker_installed ? 'Install' : (!prerequisites.docker_running ? 'Start Docker Desktop' : null)
+        );
+
+        // Update Git UI (required for cloning)
+        const gitOk = prerequisites.git_installed;
+        updateCheckItem(
+          gitCheck,
+          gitOk,
+          prerequisites.git_version,
+          !prerequisites.git_installed ? 'https://git-scm.com/downloads' : null,
+          !prerequisites.git_installed ? 'Install' : null
         );
 
         // Update Tailscale UI (considered optional - only warn, don't block)
@@ -1041,16 +1122,18 @@
         const canStart = dockerOk;
         toggleInfraBtn.disabled = !canStart;
 
-        // Update status badge and auto-collapse if Docker is working
-        const allPassed = dockerOk && tailscaleOk;
-        updatePrereqStatusBadge(allPassed, dockerOk, tailscaleOk);
+        // Update status badge and auto-collapse if all required are OK
+        // Git and Docker are required, Tailscale is optional
+        const requiredOk = dockerOk && gitOk;
+        const allPassed = requiredOk && tailscaleOk;
+        updatePrereqStatusBadge(allPassed, requiredOk, gitOk);
 
-        // Auto-collapse if Docker is OK (main requirement)
-        if (dockerOk && !prereqSection.classList.contains('collapsed')) {
+        // Auto-collapse if required prerequisites are OK
+        if (requiredOk && !prereqSection.classList.contains('collapsed')) {
           prereqSection.classList.add('collapsed');
         }
 
-        return canStart;
+        return requiredOk;
       } catch (err) {
         log('Error checking prerequisites: ' + err, 'error');
         showError('Failed to check prerequisites: ' + err);
@@ -1382,6 +1465,19 @@
         // Render environments
         renderEnvironments(discovery.environments);
 
+        // Enable/disable create environment button
+        // Only enable if prerequisites pass AND infrastructure is running
+        const canCreateEnv = prerequisites?.docker_running && infraRunning;
+        createEnvBtn.disabled = !canCreateEnv;
+
+        if (!canCreateEnv) {
+          if (!prerequisites?.docker_running) {
+            log('Create environment disabled: Docker not running');
+          } else if (!infraRunning) {
+            log('Create environment disabled: Infrastructure not running');
+          }
+        }
+
         return discovery;
       } catch (err) {
         log('Error discovering environments: ' + err, 'error');
@@ -1522,6 +1618,51 @@
         // Get platform-specific install URLs
         const installUrls = getInstallUrls(platform);
 
+        // If Git is not installed, install it first (required for cloning)
+        if (!prerequisites?.git_installed) {
+          log('Git is not installed. Installing for ' + platform + '...', 'error');
+          prereqStatusEl.textContent = 'Installing Git...';
+          prereqStatusEl.className = 'prereq-status warning';
+
+          if (platform === 'macos') {
+            // On macOS, Git is usually installed with Xcode CLI tools
+            try {
+              log('Attempting to install Git via Homebrew...');
+              const gitResult = await invoke('install_git_macos');
+              log(gitResult);
+            } catch (err) {
+              log('Homebrew Git installation failed: ' + err, 'warning');
+              log('Git may be available via Xcode CLI tools. Try: xcode-select --install');
+              await invoke('open_browser', { url: installUrls.git });
+            }
+          } else if (platform === 'windows') {
+            // On Windows, try winget first
+            try {
+              log('Attempting to install Git via winget...');
+              const gitResult = await invoke('install_git_windows');
+              log(gitResult);
+            } catch (err) {
+              log('Winget Git installation failed: ' + err, 'warning');
+              await invoke('open_browser', { url: installUrls.git });
+              log('⏳ Please install Git and restart the launcher...');
+            }
+          } else {
+            // Linux - open download page
+            await invoke('open_browser', { url: installUrls.git });
+            log('⏳ Please install Git using your package manager:');
+            log('   Ubuntu/Debian: sudo apt-get install git');
+            log('   Fedora: sudo dnf install git');
+          }
+
+          // Poll for Git installation (check every 5 seconds)
+          while (!prerequisites?.git_installed) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            await checkPrerequisites();
+          }
+
+          log('✅ Git is now installed!');
+        }
+
         // If Docker is not installed, open installer and wait
         if (!prerequisites?.docker_installed) {
           log('Docker is not installed. Installing for ' + platform + '...', 'error');
@@ -1645,6 +1786,60 @@
         // Auto-collapse prerequisites after success
         await new Promise(resolve => setTimeout(resolve, 1000));
         prereqSection.classList.add('collapsed');
+
+        // Step 1.5: Ensure Ushadow repository is set up
+        log('Checking Ushadow installation...');
+        setButtonLoading(launchBtn, true, 'Setting up...', '🚀 Launch Ushadow');
+
+        // Ensure we have a project directory path
+        if (!projectRoot) {
+          log('No project directory set, getting default...');
+          projectRoot = await invoke('get_default_project_dir');
+        }
+
+        // Check if we already have a valid project
+        const projectStatus = await invoke('check_project_dir', { path: projectRoot });
+
+        if (!projectStatus.exists || !projectStatus.is_valid_repo) {
+          log('Ushadow not found at: ' + projectRoot);
+
+          // Ask user if they want to use default location or choose another
+          const useDefault = confirm(
+            'Ushadow needs to be downloaded to your computer.\n\n' +
+            'Default location: ' + projectRoot + '\n\n' +
+            'Click OK to use this location, or Cancel to choose a different folder.'
+          );
+
+          if (!useDefault) {
+            const customDir = await promptForProjectDir();
+            if (customDir === null) {
+              throw new Error('Installation cancelled by user');
+            }
+            projectRoot = customDir;
+            log('Custom installation directory: ' + projectRoot);
+          }
+
+          // Clone the repository
+          log('Downloading Ushadow to: ' + projectRoot + '...');
+          prereqStatusEl.textContent = 'Downloading...';
+          prereqStatusEl.className = 'prereq-status starting';
+
+          const cloneSuccess = await cloneUshadowRepo(projectRoot);
+
+          if (!cloneSuccess) {
+            throw new Error('Failed to download Ushadow repository. Please check your internet connection and try again.');
+          }
+
+          log('Ushadow downloaded successfully!');
+          prereqStatusEl.textContent = 'Downloaded';
+          prereqStatusEl.className = 'prereq-status';
+        } else {
+          log('Found existing Ushadow installation at: ' + projectRoot);
+        }
+
+        // Set the project root in the backend
+        await invoke('set_project_root', { path: projectRoot });
+        log('Project root configured: ' + projectRoot);
 
         // Continue with launch
         setButtonLoading(launchBtn, true, 'Launching...', '🚀 Launch Ushadow');
