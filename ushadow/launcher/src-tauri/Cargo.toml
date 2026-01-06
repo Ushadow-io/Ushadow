@@ -1,6 +1,6 @@
 [package]
 name = "ushadow-launcher"
-version = "0.1.2"
+version = "0.1.3"
 description = "Ushadow Desktop Launcher"
 authors = ["Ushadow"]
 license = "MIT"
