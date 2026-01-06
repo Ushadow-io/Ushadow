@@ -4,9 +4,24 @@ use std::process::Command;
 /// Check if Homebrew is installed (macOS)
 #[cfg(target_os = "macos")]
 pub fn check_brew_installed() -> bool {
-    silent_command("brew").args(["--version"]).output()
-        .map(|out| out.status.success())
+    Command::new("brew")
+        .args(["--version"])
+        .output()
+        .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Get the brew executable path
+#[cfg(target_os = "macos")]
+pub fn get_brew_path() -> String {
+    "brew".to_string()
+}
+
+/// Create a brew command with the correct path for this system
+#[cfg(target_os = "macos")]
+fn brew_command() -> Command {
+    let brew_path = get_brew_path();
+    silent_command(&brew_path)
 }
 
 /// Install Homebrew (macOS)
@@ -18,17 +33,15 @@ pub async fn install_homebrew() -> Result<String, String> {
         return Ok("Homebrew is already installed".to_string());
     }
 
-    // The official Homebrew installation command
-    // We'll open Terminal and run the installer there so user can see progress and enter password
-    let install_script = r#"
-        tell application "Terminal"
-            activate
-            do script "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-        end tell
-    "#;
-
+    // Run the official Homebrew install script directly
+    // This opens an interactive terminal for the user to see progress and enter password
     let output = Command::new("osascript")
-        .args(["-e", install_script])
+        .args([
+            "-e", "tell application \"Terminal\"",
+            "-e", "activate",
+            "-e", "do script \"/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\"\"",
+            "-e", "end tell"
+        ])
         .output()
         .map_err(|e| format!("Failed to open Terminal: {}", e))?;
 
@@ -64,15 +77,20 @@ pub fn check_brew() -> bool {
 #[tauri::command]
 pub async fn install_docker_via_brew() -> Result<String, String> {
     if !check_brew_installed() {
-        return Err("Homebrew is not installed. Please install from https://brew.sh".to_string());
+        return Err("Homebrew is not installed".to_string());
     }
+
+    let brew_path = get_brew_path();
 
     // Use osascript to run brew with administrator privileges
     // This will show the native macOS password dialog
-    let script = r#"do shell script "brew install --cask docker" with administrator privileges"#;
+    let script = format!(
+        r#"do shell script "{} install --cask docker" with administrator privileges"#,
+        brew_path
+    );
 
     let output = Command::new("osascript")
-        .args(["-e", script])
+        .args(["-e", &script])
         .output()
         .map_err(|e| format!("Failed to run osascript: {}", e))?;
 
@@ -80,11 +98,12 @@ pub async fn install_docker_via_brew() -> Result<String, String> {
         Ok("Docker Desktop installed successfully via Homebrew".to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         // Check if user cancelled the password dialog
         if stderr.contains("User canceled") || stderr.contains("-128") {
             Err("Installation cancelled by user".to_string())
         } else {
-            Err(format!("Brew install failed: {}", stderr))
+            Err(format!("Brew install failed. stderr: {} stdout: {}", stderr, stdout))
         }
     }
 }
@@ -221,7 +240,7 @@ pub async fn install_tailscale_macos() -> Result<String, String> {
         return Err("Homebrew is not installed. Please install from https://brew.sh".to_string());
     }
 
-    let output = silent_command("brew")
+    let output = brew_command()
         .args(["install", "--cask", "tailscale"])
         .output()
         .map_err(|e| format!("Failed to run brew: {}", e))?;
@@ -300,9 +319,9 @@ pub fn get_default_project_dir() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            return Ok(format!("{}/Ushadow", home));
+            return Ok(format!("{}/repos", home));
         }
-        Ok("/Users/Shared/Ushadow".to_string())
+        Ok("/Users/Shared/repos".to_string())
     }
 
     #[cfg(target_os = "linux")]
@@ -466,7 +485,7 @@ pub async fn install_git_macos() -> Result<String, String> {
         return Err("Homebrew is not installed. Git may already be installed via Xcode CLI tools.".to_string());
     }
 
-    let output = silent_command("brew")
+    let output = brew_command()
         .args(["install", "git"])
         .output()
         .map_err(|e| format!("Failed to run brew: {}", e))?;
@@ -483,4 +502,41 @@ pub async fn install_git_macos() -> Result<String, String> {
 #[tauri::command]
 pub async fn install_git_macos() -> Result<String, String> {
     Err("macOS Git installation is only available on macOS".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_check_brew_installed() {
+        // This test verifies that brew detection works via PATH
+        let result = check_brew_installed();
+
+        // Verify by running the command directly
+        let expected = Command::new("brew")
+            .args(["--version"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        assert_eq!(result, expected,
+            "check_brew_installed() returned {} but expected {}",
+            result, expected
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_brew_command_works() {
+        // If brew is installed, verify we can run commands
+        if check_brew_installed() {
+            let output = Command::new("brew")
+                .args(["--version"])
+                .output();
+            assert!(output.is_ok(), "brew command should work");
+            assert!(output.unwrap().status.success(), "brew --version should succeed");
+        }
+    }
 }
