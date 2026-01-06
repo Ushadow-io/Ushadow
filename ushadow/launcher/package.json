@@ -1,6 +1,6 @@
 {
   "name": "ushadow-launcher",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Ushadow Desktop Launcher",
   "private": true,
   "scripts": {
@@ -12,7 +12,7 @@
     "build:windows": "tauri build --target x86_64-pc-windows-msvc",
     "build:linux": "tauri build --target x86_64-unknown-linux-gnu",
     "icons": "tauri icon src-tauri/icons/app-icon.png",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "version:get": "./scripts/version.sh get",
     "version:bump": "./scripts/version.sh bump",
     "release": "./scripts/release.sh",
