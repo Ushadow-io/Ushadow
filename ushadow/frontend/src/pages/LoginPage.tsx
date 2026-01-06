@@ -76,7 +76,7 @@ export default function LoginPage() {
       style={{ backgroundColor: 'var(--surface-900)' }}
       data-testid="login-page"
     >
-      <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8">
         {/* Decorative background blur circles - brand green and purple */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
           <div
@@ -89,35 +89,14 @@ export default function LoginPage() {
           ></div>
         </div>
 
-        <div className="max-w-md w-full space-y-8 relative z-10">
-          {/* Powered by Chronicle badge */}
-          <div className="text-center mb-6">
-            <a
-              href="https://github.com/chronicler-ai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors"
-              style={{
-                backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                border: '1px solid rgba(168, 85, 247, 0.3)',
-                color: 'var(--accent-300, #c4b5fd)',
-              }}
-              data-testid="chronicle-badge"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
-              </svg>
-              Powered with Chronicle
-            </a>
-          </div>
-
+        <div className="max-w-md w-full space-y-4 relative z-10">
           {/* Logo & Header */}
           <div className="text-center animate-fade-in">
-            <div className="mx-auto mb-8 transform transition-transform hover:scale-105">
+            <div className="mx-auto mb-3 transform transition-transform hover:scale-105">
               <img
                 src="/logo.png"
                 alt="uShadow Logo"
-                className="h-72 w-72 mx-auto object-contain drop-shadow-2xl"
+                className="h-32 w-32 mx-auto object-contain drop-shadow-2xl"
                 onError={(e) => {
                   // Fallback to icon if logo doesn't load
                   const target = e.target as HTMLImageElement;
@@ -133,8 +112,30 @@ export default function LoginPage() {
                 <Layers className="h-16 w-16 text-white" />
               </div>
             </div>
+
+            {/* Powered by Chronicle badge - moved below logo */}
+            <div className="mb-3">
+              <a
+                href="https://github.com/chronicler-ai"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-colors"
+                style={{
+                  backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                  border: '1px solid rgba(168, 85, 247, 0.3)',
+                  color: 'var(--accent-300, #c4b5fd)',
+                }}
+                data-testid="chronicle-badge"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                </svg>
+                Powered with Chronicle
+              </a>
+            </div>
+
             <h2
-              className="text-6xl font-bold tracking-tight mb-1"
+              className="text-4xl font-bold tracking-tight mb-1"
               style={{
                 background: 'linear-gradient(135deg, #4ade80 0%, #22c55e 50%, #a855f7 100%)',
                 WebkitBackgroundClip: 'text',
@@ -145,13 +146,13 @@ export default function LoginPage() {
               Ushadow
             </h2>
             <p
-              className="mt-3 text-base font-medium tracking-wide"
+              className="mt-2 text-sm font-medium tracking-wide"
               style={{ color: 'var(--text-secondary)' }}
             >
               AI Orchestration Platform
             </p>
             <p
-              className="mt-1 text-sm"
+              className="mt-1 text-xs"
               style={{ color: 'var(--text-muted)' }}
             >
               Sign in to your account
@@ -160,13 +161,13 @@ export default function LoginPage() {
 
           {/* Login Form */}
           <div
-            className="rounded-xl shadow-xl backdrop-blur-sm p-8 space-y-6 animate-slide-up"
+            className="rounded-xl shadow-xl backdrop-blur-sm p-6 space-y-4 animate-slide-up"
             style={{
               backgroundColor: 'var(--surface-800)',
               border: '1px solid var(--surface-500)',
             }}
           >
-            <form className="space-y-5" onSubmit={handleSubmit}>
+            <form className="space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <label
                   htmlFor="email"
