@@ -7,9 +7,11 @@ mod commands;
 mod models;
 
 use commands::{AppState, check_prerequisites, discover_environments,
+    discover_environments_with_config,
     start_containers, stop_containers, get_container_status,
     check_backend_health, check_webui_health, open_browser, set_project_root,
-    create_environment};
+    create_environment, list_worktrees, create_worktree, open_in_vscode,
+    remove_worktree};
 use tauri::{
     CustomMenuItem, Manager, Menu, MenuItem, SystemTray,
     SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem, Submenu,
@@ -97,7 +99,13 @@ fn main() {
             check_webui_health,
             open_browser,
             discover_environments,
+            discover_environments_with_config,
             create_environment,
+            // Worktree commands
+            list_worktrees,
+            create_worktree,
+            open_in_vscode,
+            remove_worktree,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

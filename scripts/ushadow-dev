@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# ushadow development environment manager
+# Wrapper script to run the dev_utils CLI
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+exec python3 "$REPO_ROOT/setup/dev_utils/cli.py" "$@"

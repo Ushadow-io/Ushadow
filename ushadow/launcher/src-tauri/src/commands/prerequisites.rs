@@ -50,11 +50,31 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
     (installed, connected, version)
 }
 
+/// Check if VS Code is installed
+pub fn check_vscode() -> bool {
+    Command::new("code")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if git is installed
+pub fn check_git() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Get full prerequisite status
 #[tauri::command]
 pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
     let (docker_installed, docker_running, docker_version) = check_docker();
     let (tailscale_installed, tailscale_connected, tailscale_version) = check_tailscale();
+    let vscode_installed = check_vscode();
+    let git_installed = check_git();
 
     Ok(PrerequisiteStatus {
         docker_installed,
@@ -63,6 +83,8 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
         tailscale_connected,
         docker_version,
         tailscale_version,
+        vscode_installed,
+        git_installed,
     })
 }
 

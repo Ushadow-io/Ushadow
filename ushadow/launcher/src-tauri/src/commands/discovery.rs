@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::process::Command;
-use crate::models::{DiscoveryResult, InfraService, UshadowEnvironment};
+use crate::models::{DiscoveryResult, InfraService, UshadowEnvironment, EnvironmentStatus, WorktreeInfo};
 use super::prerequisites::{check_docker, check_tailscale};
+use super::worktree::{list_worktrees, get_colors_for_name};
 
 /// Infrastructure service patterns
 const INFRA_PATTERNS: &[(&str, &str)] = &[
@@ -11,9 +12,18 @@ const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("qdrant", "Qdrant"),
 ];
 
-/// Discover running Ushadow environments and infrastructure
+/// Discover all Ushadow environments (worktrees + running containers)
 #[tauri::command]
 pub async fn discover_environments() -> Result<DiscoveryResult, String> {
+    discover_environments_with_config(None, None).await
+}
+
+/// Discover environments with configurable paths
+#[tauri::command]
+pub async fn discover_environments_with_config(
+    main_repo: Option<String>,
+    worktrees_dir: Option<String>,
+) -> Result<DiscoveryResult, String> {
     // Check prerequisites
     let (docker_installed, docker_running, _) = check_docker();
     let (tailscale_installed, tailscale_connected, _) = check_tailscale();
@@ -21,113 +31,151 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
     let docker_ok = docker_installed && docker_running;
     let tailscale_ok = tailscale_installed && tailscale_connected;
 
-    if !docker_ok {
-        return Ok(DiscoveryResult {
-            infrastructure: vec![],
-            environments: vec![],
-            docker_ok: false,
-            tailscale_ok,
-        });
+    // Default paths
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let main_repo = main_repo.unwrap_or_else(|| format!("{}/repos/ushadow", home));
+    let _worktrees_dir = worktrees_dir.unwrap_or_else(|| format!("{}/repos/worktrees/ushadow", home));
+
+    // Get worktrees first (source of truth for environments)
+    let worktrees = list_worktrees(main_repo.clone()).await.unwrap_or_default();
+
+    // Build a map of worktree name -> worktree info
+    let mut worktree_map: HashMap<String, WorktreeInfo> = HashMap::new();
+    for wt in worktrees {
+        worktree_map.insert(wt.name.clone(), wt);
     }
 
-    // Get all Docker containers
-    let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}"])
-        .output()
-        .map_err(|e| format!("Failed to get containers: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Docker command failed: {}", stderr));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Get running Docker containers if Docker is available
+    let mut running_backends: HashMap<String, (u16, Option<String>)> = HashMap::new(); // name -> (port, tailscale_url)
     let mut infrastructure = Vec::new();
-    let mut env_backends: Vec<(String, u16)> = Vec::new();
-    let mut found_infra: HashSet<String> = HashSet::new();
 
-    // Parse Docker ps output
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    if docker_ok {
+        let output = Command::new("docker")
+            .args(["ps", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}"])
+            .output()
+            .map_err(|e| format!("Failed to get containers: {}", e))?;
 
-        let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() < 2 {
-            continue;
-        }
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut found_infra: HashSet<String> = HashSet::new();
 
-        let name = parts[0].trim();
-        let status = parts[1].trim();
-        let ports = if parts.len() > 2 { Some(parts[2].trim().to_string()) } else { None };
-        let is_running = status.contains("Up");
-
-        // Check infrastructure services
-        for (pattern, display_name) in INFRA_PATTERNS {
-            if name == *pattern || name.ends_with(&format!("-{}", pattern)) || name.ends_with(&format!("-{}-1", pattern)) {
-                if !found_infra.contains(*pattern) {
-                    found_infra.insert(pattern.to_string());
-                    infrastructure.push(InfraService {
-                        name: pattern.to_string(),
-                        display_name: display_name.to_string(),
-                        running: is_running,
-                        ports: ports.clone(),
-                    });
+            for line in stdout.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
                 }
-            }
-        }
 
-        // Check Ushadow environment backends
-        if name.contains("backend") && name.starts_with("ushadow") && !name.contains("chronicle") {
-            let env_name = if name == "ushadow-backend" {
-                "default".to_string()
-            } else {
-                name.trim_start_matches("ushadow-")
-                    .trim_end_matches("-backend")
-                    .to_string()
-            };
+                let parts: Vec<&str> = line.split('|').collect();
+                if parts.len() < 2 {
+                    continue;
+                }
 
-            if let Some(ref port_str) = ports {
-                if let Some(port) = extract_port(port_str) {
-                    if is_running {
-                        env_backends.push((env_name, port));
+                let name = parts[0].trim();
+                let status = parts[1].trim();
+                let ports = if parts.len() > 2 { Some(parts[2].trim().to_string()) } else { None };
+                let is_running = status.contains("Up");
+
+                // Check infrastructure services
+                for (pattern, display_name) in INFRA_PATTERNS {
+                    if name == *pattern || name.ends_with(&format!("-{}", pattern)) || name.ends_with(&format!("-{}-1", pattern)) {
+                        if !found_infra.contains(*pattern) {
+                            found_infra.insert(pattern.to_string());
+                            infrastructure.push(InfraService {
+                                name: pattern.to_string(),
+                                display_name: display_name.to_string(),
+                                running: is_running,
+                                ports: ports.clone(),
+                            });
+                        }
+                    }
+                }
+
+                // Check Ushadow environment backends
+                if name.contains("backend") && name.starts_with("ushadow") && !name.contains("chronicle") {
+                    let env_name = if name == "ushadow-backend" {
+                        "default".to_string()
+                    } else {
+                        name.trim_start_matches("ushadow-")
+                            .trim_end_matches("-backend")
+                            .to_string()
+                    };
+
+                    if let Some(ref port_str) = ports {
+                        if let Some(port) = extract_port(port_str) {
+                            if is_running {
+                                let tailscale_url = get_tailscale_url(port);
+                                running_backends.insert(env_name, (port, tailscale_url));
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    // Build environment list with Tailscale URLs
+    // Build environment list from worktrees, enriched with Docker status
     let mut environments = Vec::new();
-    for (env_name, backend_port) in env_backends {
-        let color = env_name.clone();
-        let tailscale_url = get_tailscale_url(backend_port);
-        let tailscale_active = tailscale_url.is_some();
 
-        let webui_port = if backend_port >= 8000 {
-            Some(backend_port - 5000)
-        } else {
-            None
-        };
+    for (name, wt) in &worktree_map {
+        let (primary, _dark) = get_colors_for_name(name);
 
-        let localhost_url = if let Some(wp) = webui_port {
-            format!("http://localhost:{}", wp)
-        } else {
-            format!("http://localhost:{}", backend_port)
-        };
+        // Check if this environment has running containers
+        let (status, backend_port, webui_port, localhost_url, tailscale_url, tailscale_active) =
+            if let Some((port, ts_url)) = running_backends.get(name) {
+                let wp = if *port >= 8000 { Some(*port - 5000) } else { None };
+                let url = wp.map(|p| format!("http://localhost:{}", p))
+                    .unwrap_or_else(|| format!("http://localhost:{}", port));
+                (
+                    EnvironmentStatus::Running,
+                    Some(*port),
+                    wp,
+                    Some(url),
+                    ts_url.clone(),
+                    ts_url.is_some(),
+                )
+            } else {
+                (EnvironmentStatus::Available, None, None, None, None, false)
+            };
 
         environments.push(UshadowEnvironment {
-            name: env_name,
-            color,
+            name: name.clone(),
+            color: primary,
+            path: Some(wt.path.clone()),
+            branch: Some(wt.branch.clone()),
+            status,
             localhost_url,
             tailscale_url,
             backend_port,
             webui_port,
-            running: true,
             tailscale_active,
         });
     }
+
+    // Also add running environments that aren't worktrees (e.g., "default")
+    for (name, (port, ts_url)) in &running_backends {
+        if !worktree_map.contains_key(name) {
+            let (primary, _dark) = get_colors_for_name(name);
+            let wp = if *port >= 8000 { Some(*port - 5000) } else { None };
+            let url = wp.map(|p| format!("http://localhost:{}", p))
+                .unwrap_or_else(|| format!("http://localhost:{}", port));
+
+            environments.push(UshadowEnvironment {
+                name: name.clone(),
+                color: primary,
+                path: None,
+                branch: None,
+                status: EnvironmentStatus::Running,
+                localhost_url: Some(url),
+                tailscale_url: ts_url.clone(),
+                backend_port: Some(*port),
+                webui_port: wp,
+                tailscale_active: ts_url.is_some(),
+            });
+        }
+    }
+
+    // Sort by name
+    environments.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(DiscoveryResult {
         infrastructure,

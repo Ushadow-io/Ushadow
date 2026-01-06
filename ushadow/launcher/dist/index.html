@@ -398,6 +398,28 @@
       font-weight: 600;
       font-size: 1.1rem;
       text-transform: capitalize;
+      flex: 1;
+    }
+
+    .env-status-badge {
+      font-size: 0.65rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .env-status-badge.running {
+      background: rgba(74, 222, 128, 0.15);
+      color: #4ade80;
+    }
+    .env-status-badge.available {
+      background: rgba(113, 113, 122, 0.15);
+      color: #a1a1aa;
+    }
+    .env-status-badge.stopped {
+      background: rgba(248, 113, 113, 0.15);
+      color: #f87171;
     }
 
     .env-urls {
@@ -501,6 +523,28 @@
       height: 16px;
     }
 
+    /* VS Code button */
+    .env-vscode-btn {
+      background: #0078d4;
+      color: white;
+      border-color: #0078d4;
+    }
+    .env-vscode-btn:hover {
+      background: #1e8fe6;
+      border-color: #1e8fe6;
+    }
+
+    /* Start button */
+    .env-start-btn {
+      background: #059669;
+      color: white;
+      border-color: #059669;
+    }
+    .env-start-btn:hover {
+      background: #10b981;
+      border-color: #10b981;
+    }
+
     /* Color mappings for environments */
     .env-color-blue { color: #60a5fa; }
     .env-color-purple { color: #a855f7; }
@@ -508,11 +552,68 @@
     .env-color-red { color: #f87171; }
     .env-color-orange { color: #fb923c; }
     .env-color-yellow { color: #fbbf24; }
+    .env-color-gold { color: #DAA520; }
     .env-color-pink { color: #f472b6; }
     .env-color-cyan { color: #22d3ee; }
     .env-color-teal { color: #2dd4bf; }
     .env-color-indigo { color: #818cf8; }
+    .env-color-coral { color: #ff7f50; }
+    .env-color-emerald { color: #50c878; }
+    .env-color-amber { color: #ffbf00; }
     .env-color-default { color: #a1a1aa; }
+
+    /* Environment status styles */
+    .env-card.available {
+      border-color: #3d3d4a;
+      opacity: 0.8;
+    }
+    .env-card.available .env-dot {
+      background: #52525b;
+      animation: none;
+    }
+    .env-card.stopped {
+      border-color: #52525b;
+      opacity: 0.7;
+    }
+    .env-card.stopped .env-dot {
+      background: #71717a;
+      animation: none;
+    }
+    .env-status {
+      font-size: 0.7rem;
+      color: #71717a;
+      margin-left: auto;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .env-branch {
+      font-size: 0.75rem;
+      color: #71717a;
+      font-family: 'Monaco', 'Menlo', monospace;
+      margin-bottom: 0.5rem;
+    }
+    .env-btn-small {
+      padding: 0.4rem 0.75rem;
+      background: #252530;
+      color: #f4f4f5;
+      border: 1px solid #3d3d4a;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+    .env-btn-small:hover {
+      background: #2d2d3a;
+      border-color: #52525b;
+    }
+    .env-btn-small svg {
+      width: 14px;
+      height: 14px;
+    }
 
     /* No environments message */
     .no-envs {
@@ -1012,8 +1113,57 @@
 
     // Get color class for environment
     function getEnvColorClass(color) {
-      const validColors = ['blue', 'purple', 'green', 'red', 'orange', 'yellow', 'pink', 'cyan', 'teal', 'indigo'];
-      return validColors.includes(color.toLowerCase()) ? 'env-color-' + color.toLowerCase() : 'env-color-default';
+      const validColors = ['blue', 'purple', 'green', 'red', 'orange', 'yellow', 'gold', 'pink', 'cyan', 'teal', 'indigo', 'coral', 'emerald', 'amber'];
+      // Handle hex colors by extracting the name
+      const colorName = color.startsWith('#') ? 'default' : color.toLowerCase();
+      return validColors.includes(colorName) ? 'env-color-' + colorName : 'env-color-default';
+    }
+
+    // Get status class for environment
+    function getEnvStatusClass(status) {
+      switch(status) {
+        case 'Running': return 'running';
+        case 'Stopped': return 'stopped';
+        case 'Partial': return 'running';
+        case 'Available':
+        default: return 'available';
+      }
+    }
+
+    // Open environment in VS Code
+    async function openVSCode(path) {
+      try {
+        await invoke('open_in_vscode', { path: path });
+        log('Opened VS Code for: ' + path);
+      } catch (err) {
+        log('Failed to open VS Code: ' + err, 'error');
+        showError('Failed to open VS Code: ' + err);
+      }
+    }
+
+    // Start environment containers
+    async function startEnvironment(name, path) {
+      try {
+        log('Starting environment: ' + name);
+        // Show starting status in the card
+        const card = document.querySelector('[data-testid="env-card-' + name + '"]');
+        if (card) {
+          const statusBadge = card.querySelector('.env-status-badge');
+          if (statusBadge) {
+            statusBadge.textContent = 'Starting...';
+            statusBadge.className = 'env-status-badge running';
+          }
+        }
+        await invoke('start_containers', { projectRoot: path });
+        log('Started environment: ' + name);
+        // Refresh the environment list to show updated status
+        await discoverEnvironments();
+      } catch (err) {
+        log('Failed to start environment: ' + err, 'error');
+        showError('Failed to start ' + name + ': ' + err);
+        // Refresh to restore original status
+        await discoverEnvironments();
+      }
     }
 
     // Render environment cards
@@ -1029,7 +1179,7 @@
       if (!environments || environments.length === 0) {
         const noEnvs = document.createElement('div');
         noEnvs.className = 'no-envs';
-        noEnvs.textContent = 'No Ushadow environments running';
+        noEnvs.textContent = 'No Ushadow environments found';
         envsList.appendChild(noEnvs);
 
         // Show create environment button
@@ -1037,16 +1187,18 @@
         return;
       }
 
-      // Hide create environment button when envs exist
-      createEnvBtn.classList.add('hidden');
+      // Always show create button - users can create new environments anytime
+      createEnvBtn.classList.remove('hidden');
 
       environments.forEach(function(env) {
         const card = document.createElement('div');
         const colorClass = getEnvColorClass(env.color);
-        card.className = 'env-card running ' + colorClass;
+        const statusClass = getEnvStatusClass(env.status);
+        const isRunning = env.status === 'Running' || env.status === 'Partial';
+        card.className = 'env-card ' + statusClass + ' ' + colorClass;
         card.setAttribute('data-testid', 'env-card-' + env.name);
 
-        // Header with dot and name
+        // Header with dot, name, and status badge
         const header = document.createElement('div');
         header.className = 'env-header';
 
@@ -1057,159 +1209,235 @@
         name.className = 'env-name';
         name.textContent = env.name;
 
+        // Status badge
+        const statusBadge = document.createElement('span');
+        statusBadge.className = 'env-status-badge ' + statusClass;
+        statusBadge.textContent = env.status || 'Available';
+        statusBadge.setAttribute('data-testid', 'env-status-' + env.name);
+
         header.appendChild(dot);
         header.appendChild(name);
+        header.appendChild(statusBadge);
         card.appendChild(header);
 
-        // URLs section
-        const urls = document.createElement('div');
-        urls.className = 'env-urls';
+        // Branch info (if available)
+        if (env.branch) {
+          const branchInfo = document.createElement('div');
+          branchInfo.className = 'env-branch';
+          branchInfo.setAttribute('data-testid', 'env-branch-' + env.name);
 
-        // Localhost URL
-        const localhostRow = document.createElement('div');
-        localhostRow.className = 'env-url';
+          const branchIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          branchIcon.setAttribute('viewBox', '0 0 24 24');
+          branchIcon.setAttribute('fill', 'none');
+          branchIcon.setAttribute('stroke', 'currentColor');
+          branchIcon.setAttribute('stroke-width', '2');
+          branchIcon.setAttribute('width', '14');
+          branchIcon.setAttribute('height', '14');
+          const branchPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          branchPath.setAttribute('d', 'M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9');
+          branchIcon.appendChild(branchPath);
 
-        const localhostLabel = document.createElement('span');
-        localhostLabel.className = 'env-url-label';
-        localhostLabel.textContent = 'Local:';
-
-        const localhostLink = document.createElement('a');
-        localhostLink.href = '#';
-        localhostLink.textContent = env.localhost_url;
-        localhostLink.onclick = function(e) {
-          e.preventDefault();
-          openInApp(env.localhost_url, env.name);
-        };
-
-        localhostRow.appendChild(localhostLabel);
-        localhostRow.appendChild(localhostLink);
-        urls.appendChild(localhostRow);
-
-        // Tailscale URL (if available)
-        if (env.tailscale_url) {
-          const tailscaleRow = document.createElement('div');
-          tailscaleRow.className = 'env-url';
-
-          const tailscaleLabel = document.createElement('span');
-          tailscaleLabel.className = 'env-url-label';
-          tailscaleLabel.textContent = 'Tailscale:';
-
-          const tailscaleLink = document.createElement('a');
-          tailscaleLink.href = '#';
-          tailscaleLink.textContent = env.tailscale_url.replace('https://', '');
-          tailscaleLink.onclick = function(e) {
-            e.preventDefault();
-            openInApp(env.tailscale_url, env.name);
-          };
-
-          tailscaleRow.appendChild(tailscaleLabel);
-          tailscaleRow.appendChild(tailscaleLink);
-          urls.appendChild(tailscaleRow);
+          branchInfo.appendChild(branchIcon);
+          branchInfo.appendChild(document.createTextNode(' ' + env.branch));
+          card.appendChild(branchInfo);
         }
 
-        card.appendChild(urls);
+        // URLs section (only if running with URLs)
+        if (isRunning && env.localhost_url) {
+          const urls = document.createElement('div');
+          urls.className = 'env-urls';
 
-        // Actions: Open buttons and padlock
+          // Localhost URL
+          const localhostRow = document.createElement('div');
+          localhostRow.className = 'env-url';
+
+          const localhostLabel = document.createElement('span');
+          localhostLabel.className = 'env-url-label';
+          localhostLabel.textContent = 'Local:';
+
+          const localhostLink = document.createElement('a');
+          localhostLink.href = '#';
+          localhostLink.textContent = env.localhost_url;
+          localhostLink.onclick = function(e) {
+            e.preventDefault();
+            openInApp(env.localhost_url, env.name);
+          };
+
+          localhostRow.appendChild(localhostLabel);
+          localhostRow.appendChild(localhostLink);
+          urls.appendChild(localhostRow);
+
+          // Tailscale URL (if available)
+          if (env.tailscale_url) {
+            const tailscaleRow = document.createElement('div');
+            tailscaleRow.className = 'env-url';
+
+            const tailscaleLabel = document.createElement('span');
+            tailscaleLabel.className = 'env-url-label';
+            tailscaleLabel.textContent = 'Tailscale:';
+
+            const tailscaleLink = document.createElement('a');
+            tailscaleLink.href = '#';
+            tailscaleLink.textContent = env.tailscale_url.replace('https://', '');
+            tailscaleLink.onclick = function(e) {
+              e.preventDefault();
+              openInApp(env.tailscale_url, env.name);
+            };
+
+            tailscaleRow.appendChild(tailscaleLabel);
+            tailscaleRow.appendChild(tailscaleLink);
+            urls.appendChild(tailscaleRow);
+          }
+
+          card.appendChild(urls);
+        }
+
+        // Actions section
         const actions = document.createElement('div');
         actions.className = 'env-actions';
 
-        // Open in app button
-        const openAppBtn = document.createElement('button');
-        openAppBtn.className = 'env-open-btn';
-        openAppBtn.setAttribute('data-testid', 'env-open-app-' + env.name);
-        openAppBtn.onclick = function() {
-          openInApp(env.tailscale_url || env.localhost_url, env.name);
-        };
+        // VS Code button (always show if path exists)
+        if (env.path) {
+          const vscodeBtn = document.createElement('button');
+          vscodeBtn.className = 'env-open-btn env-vscode-btn';
+          vscodeBtn.setAttribute('data-testid', 'env-vscode-' + env.name);
+          vscodeBtn.onclick = function() {
+            openVSCode(env.path);
+          };
 
-        const appIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        appIcon.setAttribute('viewBox', '0 0 24 24');
-        appIcon.setAttribute('fill', 'none');
-        appIcon.setAttribute('stroke', 'currentColor');
-        appIcon.setAttribute('stroke-width', '2');
-        const appIconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        appIconPath.setAttribute('d', 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2');
-        appIcon.appendChild(appIconPath);
-        openAppBtn.appendChild(appIcon);
-        openAppBtn.appendChild(document.createTextNode('Open in App'));
-        actions.appendChild(openAppBtn);
-
-        // Open in browser button
-        const openBrowserBtn = document.createElement('button');
-        openBrowserBtn.className = 'env-open-btn';
-        openBrowserBtn.setAttribute('data-testid', 'env-open-browser-' + env.name);
-        openBrowserBtn.onclick = function() {
-          openInBrowser(env.tailscale_url || env.localhost_url);
-        };
-
-        const browserIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        browserIcon.setAttribute('viewBox', '0 0 24 24');
-        browserIcon.setAttribute('fill', 'none');
-        browserIcon.setAttribute('stroke', 'currentColor');
-        browserIcon.setAttribute('stroke-width', '2');
-        const browserCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        browserCircle.setAttribute('cx', '12');
-        browserCircle.setAttribute('cy', '12');
-        browserCircle.setAttribute('r', '10');
-        const browserLine1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        browserLine1.setAttribute('x1', '2');
-        browserLine1.setAttribute('y1', '12');
-        browserLine1.setAttribute('x2', '22');
-        browserLine1.setAttribute('y2', '12');
-        const browserPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        browserPath.setAttribute('d', 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z');
-        browserIcon.appendChild(browserCircle);
-        browserIcon.appendChild(browserLine1);
-        browserIcon.appendChild(browserPath);
-        openBrowserBtn.appendChild(browserIcon);
-        openBrowserBtn.appendChild(document.createTextNode('Browser'));
-        actions.appendChild(openBrowserBtn);
-
-        // Tailscale status padlock
-        const padlock = document.createElement('button');
-        padlock.className = 'env-icon-btn' + (env.tailscale_active ? ' secure' : '');
-        padlock.title = env.tailscale_active
-          ? 'Tailscale connected - Secure access available'
-          : 'Localhost only';
-        padlock.setAttribute('data-testid', 'env-padlock-' + env.name);
-
-        const padlockSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        padlockSvg.setAttribute('viewBox', '0 0 24 24');
-        padlockSvg.setAttribute('fill', 'none');
-        padlockSvg.setAttribute('stroke', 'currentColor');
-        padlockSvg.setAttribute('stroke-width', '2');
-
-        if (env.tailscale_active) {
-          // Locked padlock
-          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          rect.setAttribute('x', '3');
-          rect.setAttribute('y', '11');
-          rect.setAttribute('width', '18');
-          rect.setAttribute('height', '11');
-          rect.setAttribute('rx', '2');
-          rect.setAttribute('ry', '2');
-          padlockSvg.appendChild(rect);
-
-          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          path.setAttribute('d', 'M7 11V7a5 5 0 0 1 10 0v4');
-          padlockSvg.appendChild(path);
-        } else {
-          // Unlocked padlock
-          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          rect.setAttribute('x', '3');
-          rect.setAttribute('y', '11');
-          rect.setAttribute('width', '18');
-          rect.setAttribute('height', '11');
-          rect.setAttribute('rx', '2');
-          rect.setAttribute('ry', '2');
-          padlockSvg.appendChild(rect);
-
-          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          path.setAttribute('d', 'M7 11V7a5 5 0 0 1 9.9-1');
-          padlockSvg.appendChild(path);
+          const vscodeIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          vscodeIcon.setAttribute('viewBox', '0 0 24 24');
+          vscodeIcon.setAttribute('fill', 'none');
+          vscodeIcon.setAttribute('stroke', 'currentColor');
+          vscodeIcon.setAttribute('stroke-width', '2');
+          const vscodePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          vscodePath.setAttribute('d', 'M16 3l4 2v14l-4 2L4 12l12-9zM8 8l-4 4 4 4M12 8v8');
+          vscodeIcon.appendChild(vscodePath);
+          vscodeBtn.appendChild(vscodeIcon);
+          vscodeBtn.appendChild(document.createTextNode('VS Code'));
+          actions.appendChild(vscodeBtn);
         }
 
-        padlock.appendChild(padlockSvg);
-        actions.appendChild(padlock);
+        // Running environment buttons
+        if (isRunning && env.localhost_url) {
+          // Open in app button
+          const openAppBtn = document.createElement('button');
+          openAppBtn.className = 'env-open-btn';
+          openAppBtn.setAttribute('data-testid', 'env-open-app-' + env.name);
+          openAppBtn.onclick = function() {
+            openInApp(env.tailscale_url || env.localhost_url, env.name);
+          };
+
+          const appIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          appIcon.setAttribute('viewBox', '0 0 24 24');
+          appIcon.setAttribute('fill', 'none');
+          appIcon.setAttribute('stroke', 'currentColor');
+          appIcon.setAttribute('stroke-width', '2');
+          const appIconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          appIconPath.setAttribute('d', 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2');
+          appIcon.appendChild(appIconPath);
+          openAppBtn.appendChild(appIcon);
+          openAppBtn.appendChild(document.createTextNode('Open in App'));
+          actions.appendChild(openAppBtn);
+
+          // Open in browser button
+          const openBrowserBtn = document.createElement('button');
+          openBrowserBtn.className = 'env-open-btn';
+          openBrowserBtn.setAttribute('data-testid', 'env-open-browser-' + env.name);
+          openBrowserBtn.onclick = function() {
+            openInBrowser(env.tailscale_url || env.localhost_url);
+          };
+
+          const browserIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          browserIcon.setAttribute('viewBox', '0 0 24 24');
+          browserIcon.setAttribute('fill', 'none');
+          browserIcon.setAttribute('stroke', 'currentColor');
+          browserIcon.setAttribute('stroke-width', '2');
+          const browserCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          browserCircle.setAttribute('cx', '12');
+          browserCircle.setAttribute('cy', '12');
+          browserCircle.setAttribute('r', '10');
+          const browserLine1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          browserLine1.setAttribute('x1', '2');
+          browserLine1.setAttribute('y1', '12');
+          browserLine1.setAttribute('x2', '22');
+          browserLine1.setAttribute('y2', '12');
+          const browserPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          browserPath.setAttribute('d', 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z');
+          browserIcon.appendChild(browserCircle);
+          browserIcon.appendChild(browserLine1);
+          browserIcon.appendChild(browserPath);
+          openBrowserBtn.appendChild(browserIcon);
+          openBrowserBtn.appendChild(document.createTextNode('Browser'));
+          actions.appendChild(openBrowserBtn);
+
+          // Tailscale status padlock
+          const padlock = document.createElement('button');
+          padlock.className = 'env-icon-btn' + (env.tailscale_active ? ' secure' : '');
+          padlock.title = env.tailscale_active
+            ? 'Tailscale connected - Secure access available'
+            : 'Localhost only';
+          padlock.setAttribute('data-testid', 'env-padlock-' + env.name);
+
+          const padlockSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          padlockSvg.setAttribute('viewBox', '0 0 24 24');
+          padlockSvg.setAttribute('fill', 'none');
+          padlockSvg.setAttribute('stroke', 'currentColor');
+          padlockSvg.setAttribute('stroke-width', '2');
+
+          if (env.tailscale_active) {
+            // Locked padlock
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', '3');
+            rect.setAttribute('y', '11');
+            rect.setAttribute('width', '18');
+            rect.setAttribute('height', '11');
+            rect.setAttribute('rx', '2');
+            rect.setAttribute('ry', '2');
+            padlockSvg.appendChild(rect);
+
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', 'M7 11V7a5 5 0 0 1 10 0v4');
+            padlockSvg.appendChild(path);
+          } else {
+            // Unlocked padlock
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', '3');
+            rect.setAttribute('y', '11');
+            rect.setAttribute('width', '18');
+            rect.setAttribute('height', '11');
+            rect.setAttribute('rx', '2');
+            rect.setAttribute('ry', '2');
+            padlockSvg.appendChild(rect);
+
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', 'M7 11V7a5 5 0 0 1 9.9-1');
+            padlockSvg.appendChild(path);
+          }
+
+          padlock.appendChild(padlockSvg);
+          actions.appendChild(padlock);
+        } else if (!isRunning && env.path) {
+          // Start button for stopped/available environments
+          const startBtn = document.createElement('button');
+          startBtn.className = 'env-open-btn env-start-btn';
+          startBtn.setAttribute('data-testid', 'env-start-' + env.name);
+          startBtn.onclick = function() {
+            startEnvironment(env.name, env.path);
+          };
+
+          const startIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          startIcon.setAttribute('viewBox', '0 0 24 24');
+          startIcon.setAttribute('fill', 'none');
+          startIcon.setAttribute('stroke', 'currentColor');
+          startIcon.setAttribute('stroke-width', '2');
+          const startPath = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          startPath.setAttribute('points', '5 3 19 12 5 21 5 3');
+          startIcon.appendChild(startPath);
+          startBtn.appendChild(startIcon);
+          startBtn.appendChild(document.createTextNode('Start'));
+          actions.appendChild(startBtn);
+        }
 
         card.appendChild(actions);
         envsList.appendChild(card);
