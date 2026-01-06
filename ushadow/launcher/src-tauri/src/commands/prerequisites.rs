@@ -1,9 +1,9 @@
-use std::process::Command;
 use crate::models::PrerequisiteStatus;
+use super::utils::silent_command;
 
 /// Check if Docker is installed and running
 pub fn check_docker() -> (bool, bool, Option<String>) {
-    let version_output = Command::new("docker").args(["--version"]).output();
+    let version_output = silent_command("docker").args(["--version"]).output();
 
     let (installed, version) = match version_output {
         Ok(output) if output.status.success() => {
@@ -17,7 +17,7 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
         return (false, false, None);
     }
 
-    let info_output = Command::new("docker").args(["info"]).output();
+    let info_output = silent_command("docker").args(["info"]).output();
     let running = matches!(info_output, Ok(output) if output.status.success());
 
     (installed, running, version)
@@ -25,7 +25,7 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
 
 /// Check if Tailscale is installed and connected
 pub fn check_tailscale() -> (bool, bool, Option<String>) {
-    let version_output = Command::new("tailscale").args(["--version"]).output();
+    let version_output = silent_command("tailscale").args(["--version"]).output();
 
     let (installed, version) = match version_output {
         Ok(output) if output.status.success() => {
@@ -44,7 +44,7 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
         return (false, false, None);
     }
 
-    let status_output = Command::new("tailscale").args(["status"]).output();
+    let status_output = silent_command("tailscale").args(["status"]).output();
     let connected = matches!(status_output, Ok(output) if output.status.success());
 
     (installed, connected, version)
@@ -64,6 +64,22 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
         docker_version,
         tailscale_version,
     })
+}
+
+/// Get OS type for platform-specific instructions
+#[tauri::command]
+pub fn get_os_type() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    return Ok("macos".to_string());
+
+    #[cfg(target_os = "windows")]
+    return Ok("windows".to_string());
+
+    #[cfg(target_os = "linux")]
+    return Ok("linux".to_string());
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    return Ok("unknown".to_string());
 }
 
 #[cfg(test)]

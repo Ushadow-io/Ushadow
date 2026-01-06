@@ -2,6 +2,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
+use super::utils::silent_command;
 
 /// Application state
 pub struct AppState {
@@ -34,7 +35,7 @@ pub async fn start_containers(state: State<'_, AppState>) -> Result<String, Stri
     drop(root);
 
     // Start infrastructure
-    let infra_output = Command::new("docker")
+    let infra_output = silent_command("docker")
         .args([
             "compose",
             "-f", "compose/docker-compose.infra.yml",
@@ -65,7 +66,7 @@ pub async fn stop_containers(state: State<'_, AppState>) -> Result<String, Strin
     drop(root);
 
     // Stop infra containers
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args(["compose", "-p", "infra", "down"])
         .current_dir(&project_root)
         .output()
@@ -99,7 +100,7 @@ pub fn get_container_status(state: State<AppState>) -> Result<ContainerStatus, S
     };
     drop(root);
 
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args(["compose", "ps", "--format", "{{.Name}}\t{{.Status}}\t{{.Ports}}"])
         .current_dir(&project_root)
         .output()
@@ -143,7 +144,7 @@ pub fn get_container_status(state: State<AppState>) -> Result<ContainerStatus, S
 pub async fn check_backend_health(port: u16) -> Result<bool, String> {
     let url = format!("http://localhost:{}/health", port);
 
-    let output = Command::new("curl")
+    let output = silent_command("curl")
         .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2", &url])
         .output();
 
@@ -161,7 +162,7 @@ pub async fn check_backend_health(port: u16) -> Result<bool, String> {
 pub async fn check_webui_health(port: u16) -> Result<bool, String> {
     let url = format!("http://localhost:{}", port);
 
-    let output = Command::new("curl")
+    let output = silent_command("curl")
         .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2", &url])
         .output();
 
@@ -218,7 +219,7 @@ pub async fn create_environment(state: State<'_, AppState>, name: Option<String>
     let env_name = name.unwrap_or_else(|| "default".to_string());
 
     // Run go.sh with --no-auto-open to prevent browser opening
-    let output = Command::new("./go.sh")
+    let output = silent_command("./go.sh")
         .args(["--no-auto-open"])
         .current_dir(&project_root)
         .env("ENV_NAME", &env_name)
