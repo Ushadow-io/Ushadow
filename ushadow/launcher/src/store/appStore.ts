@@ -50,7 +50,7 @@ export const useAppStore = create<AppState>()(
       // Defaults
       dryRunMode: false,
       showDevTools: false,
-      appMode: 'dev',
+      appMode: 'quick',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
 

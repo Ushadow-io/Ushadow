@@ -38,10 +38,24 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
 
     // Fallback: check known Docker paths directly (for fresh installs)
     if !installed {
+        #[cfg(target_os = "macos")]
         let known_paths = [
-            "/usr/local/bin/docker",           // macOS Docker Desktop
+            "/usr/local/bin/docker",           // macOS Docker Desktop (Intel)
             "/opt/homebrew/bin/docker",        // Homebrew on Apple Silicon
             "/Applications/Docker.app/Contents/Resources/bin/docker", // Docker.app direct
+        ];
+
+        #[cfg(target_os = "windows")]
+        let known_paths = [
+            "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe", // Docker Desktop
+            "C:\\ProgramData\\DockerDesktop\\version-bin\\docker.exe",      // Alternative location
+        ];
+
+        #[cfg(target_os = "linux")]
+        let known_paths = [
+            "/usr/bin/docker",         // Standard package manager install
+            "/usr/local/bin/docker",   // Manual install
+            "/snap/bin/docker",        // Snap install
         ];
 
         for path in known_paths {
@@ -135,9 +149,24 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
         return (false, false, None);
     }
 
-    let status_output = shell_command("tailscale status")
+    // Check if connected by trying to get Tailscale IP
+    // This is more reliable than just checking exit code
+    let ip_output = shell_command("tailscale ip -4")
         .output();
-    let connected = matches!(status_output, Ok(output) if output.status.success());
+
+    let connected = match ip_output {
+        Ok(output) if output.status.success() => {
+            let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // Valid Tailscale IPs start with 100.x.x.x
+            !ip.is_empty() && ip.starts_with("100.")
+        }
+        _ => {
+            // Fallback to status command
+            let status_output = shell_command("tailscale status")
+                .output();
+            matches!(status_output, Ok(output) if output.status.success() && !output.stdout.is_empty())
+        }
+    };
 
     (installed, connected, version)
 }

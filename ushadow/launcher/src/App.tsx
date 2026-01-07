@@ -1036,7 +1036,7 @@ function App() {
                   creatingEnvs={creatingEnvs}
                   onStart={handleStartEnv}
                   onStop={handleStopEnv}
-                  onCreate={() => setShowNewEnvDialog(true)}
+                  onCreate={handleQuickLaunch}
                   onOpenInApp={handleOpenInApp}
                   onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
                   loadingEnv={loadingEnv}
