@@ -1,0 +1,5 @@
+# Setup Script Dependencies
+# These are installed on the HOST machine to run the setup scripts
+
+# YAML parsing for secrets.yaml management
+pyyaml>=6.0.2

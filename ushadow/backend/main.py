@@ -30,6 +30,8 @@ from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
 from src.config.omegaconf_settings import get_settings_store
+from src.utils.telemetry import TelemetryClient
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +39,13 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Version and telemetry configuration
+BACKEND_VERSION = "0.1.0"
+TELEMETRY_ENDPOINT = os.environ.get(
+    "TELEMETRY_ENDPOINT",
+    "https://ushadow-telemetry.your-subdomain.workers.dev"
+)
 
 
 class HealthCheckFilter(logging.Filter):
@@ -88,6 +97,21 @@ async def lifespan(app: FastAPI):
     set_feature_flag_service(feature_flag_service)
     await feature_flag_service.startup()
     logger.info("✓ Feature flags initialized")
+
+    # Send telemetry ping (non-blocking)
+    def send_telemetry():
+        try:
+            telemetry_client = TelemetryClient(
+                endpoint=TELEMETRY_ENDPOINT,
+                app_version=BACKEND_VERSION
+            )
+            success = telemetry_client.send_ping()
+            if success:
+                logger.info("✓ Telemetry ping sent")
+        except Exception as e:
+            logger.debug(f"Telemetry failed (non-critical): {e}")
+
+    threading.Thread(target=send_telemetry, daemon=True).start()
 
     # Initialize MongoDB connection
     client = AsyncIOMotorClient(mongodb_uri)
