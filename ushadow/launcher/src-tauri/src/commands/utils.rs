@@ -19,15 +19,22 @@ pub fn silent_command(program: &str) -> Command {
     }
 }
 
-/// Create a shell command that works cross-platform
-/// On Windows: uses cmd /c
-/// On macOS/Linux: uses bash -l -c (login shell to load PATH)
+/// Create a shell command that works cross-platform with proper environment loading
+///
+/// On Windows: uses PowerShell which properly loads both System and User PATH
+/// On macOS/Linux: uses the user's default shell ($SHELL) with login flag to load profile
+///
+/// This ensures we can find programs installed by package managers (Homebrew, Chocolatey, etc.)
+/// that add themselves to user's PATH but may not be in the system PATH yet.
 pub fn shell_command(command: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/c", command]);
+        // Use PowerShell for better environment variable handling
+        // -NoProfile: Skip loading profile for speed (environment vars are still loaded)
+        // -Command: Execute the command
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-Command", command]);
         // CREATE_NO_WINDOW = 0x08000000
         cmd.creation_flags(0x08000000);
         return cmd;
@@ -35,7 +42,15 @@ pub fn shell_command(command: &str) -> Command {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let mut cmd = Command::new("bash");
+        use std::env;
+
+        // Use the user's actual shell (zsh, bash, fish, etc.)
+        // Fall back to sh if $SHELL is not set (POSIX standard)
+        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+        let mut cmd = Command::new(shell);
+        // -l: login shell (loads ~/.zprofile, ~/.bash_profile, etc.)
+        // -c: run this command and exit
         cmd.args(["-l", "-c", command]);
         return cmd;
     }
