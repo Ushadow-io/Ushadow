@@ -3,7 +3,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
-use super::utils::silent_command;
+use super::utils::{silent_command, shell_command};
 
 /// Check if a port is available for binding
 fn is_port_available(port: u16) -> bool {
@@ -165,9 +165,17 @@ pub async fn restart_infrastructure(state: State<'_, AppState>) -> Result<String
 
 /// Start a specific environment by name
 #[tauri::command]
-pub async fn start_environment(_state: State<'_, AppState>, env_name: String) -> Result<String, String> {
+pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> Result<String, String> {
+    eprintln!("DEBUG: start_environment called for env_name = {}", env_name);
+    
+    let root = state.project_root.lock().map_err(|e| e.to_string())?;
+    let project_root = root.clone().ok_or("Project root not set")?;
+    drop(root);
+    
+    eprintln!("DEBUG: project_root from state = {}", project_root);
+
     // Find all stopped containers for this environment by name pattern
-    let pattern = if env_name == "default" {
+    let pattern = if env_name == "default" || env_name == "ushadow" {
         "ushadow-".to_string()
     } else {
         format!("ushadow-{}-", env_name)
@@ -187,7 +195,7 @@ pub async fn start_environment(_state: State<'_, AppState>, env_name: String) ->
     let containers: Vec<&str> = stdout
         .lines()
         .filter(|name| {
-            if env_name == "default" {
+            if env_name == "default" || env_name == "ushadow" {
                 name.starts_with(&pattern) && 
                 (*name == "ushadow-backend" || *name == "ushadow-webui" || 
                  *name == "ushadow-frontend" || *name == "ushadow-worker" ||
@@ -201,11 +209,157 @@ pub async fn start_environment(_state: State<'_, AppState>, env_name: String) ->
         })
         .collect();
 
+    // If no stopped containers found, check if ANY containers exist for this env
     if containers.is_empty() {
-        return Ok(format!("No stopped containers found for environment '{}'", env_name));
+        // Check for running containers
+        let output = silent_command("docker")
+            .args(["ps", "--format", "{{.Names}}"])
+            .output()
+            .map_err(|e| format!("Failed to list running containers: {}", e))?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let running: Vec<&str> = stdout
+                .lines()
+                .filter(|name| {
+                    if env_name == "default" || env_name == "ushadow" {
+                        name.starts_with(&pattern)
+                    } else {
+                        name.starts_with(&pattern)
+                    }
+                })
+                .collect();
+
+            if !running.is_empty() {
+                return Ok(format!("Environment '{}' is already running ({} containers)", env_name, running.len()));
+            }
+        }
+
+        // No containers exist - need to build and create them
+        // Check if .env file exists to determine if this is a fresh setup
+        let env_file = std::path::Path::new(&project_root).join(".env");
+        
+        eprintln!("DEBUG: project_root = {}", project_root);
+        eprintln!("DEBUG: .env file exists = {}", env_file.exists());
+        
+        if !env_file.exists() {
+            // Fresh setup - run setup/run.py to initialize
+            let setup_script = std::path::Path::new(&project_root).join("setup").join("run.py");
+            eprintln!("DEBUG: setup script path = {:?}", setup_script);
+            eprintln!("DEBUG: setup script exists = {}", setup_script.exists());
+            
+            if !setup_script.exists() {
+                return Err(format!("No containers found for '{}' and setup/run.py not found in {}. Cannot build environment.", env_name, project_root));
+            }
+
+            eprintln!("DEBUG: Running setup from directory: {}", project_root);
+            
+            // Find available ports (default: 8000 for backend, 3000 for webui)
+            let (backend_port, webui_port) = find_available_ports(8000, 3000);
+            let port_offset = backend_port - 8000;
+            
+            eprintln!("DEBUG: Using port_offset = {}", port_offset);
+
+            // First, ensure Python dependencies are installed
+            eprintln!("DEBUG: Installing Python dependencies...");
+            let pip_output = shell_command("pip3 install pyyaml")
+                .current_dir(&project_root)
+                .output()
+                .map_err(|e| format!("Failed to install dependencies: {}", e))?;
+
+            if !pip_output.status.success() {
+                let pip_err = String::from_utf8_lossy(&pip_output.stderr);
+                eprintln!("WARNING: pip install failed: {}", pip_err);
+            }
+
+            // Run setup/run.py --quick --prod --skip-admin
+            let output = shell_command("python3 setup/run.py --quick --prod --skip-admin")
+                .current_dir(&project_root)
+                .env("ENV_NAME", &env_name)
+                .env("PORT_OFFSET", port_offset.to_string())
+                .output()
+                .map_err(|e| format!("Failed to run setup: {}", e))?;
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            eprintln!("DEBUG: setup script stdout:\n{}", stdout);
+            eprintln!("DEBUG: setup script stderr:\n{}", stderr);
+
+            if !output.status.success() {
+                let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
+                return Err(format!("Failed to initialize environment: {}", error_msg.lines().last().unwrap_or(&error_msg)));
+            }
+
+            // Open browser to registration page
+            let url = format!("http://localhost:{}/register", webui_port);
+            eprintln!("DEBUG: Opening browser to {}", url);
+            if let Err(e) = open::that(&url) {
+                eprintln!("WARNING: Could not open browser: {}", e);
+            }
+
+            return Ok(format!("Environment '{}' initialized and started", env_name));
+        } else {
+            // .env exists - just need to start containers (they may have been deleted)
+            // Check if containers were deleted - if so, need to rebuild
+            let go_script = std::path::Path::new(&project_root).join("go.sh");
+            eprintln!("DEBUG: go.sh path = {:?}", go_script);
+            eprintln!("DEBUG: go.sh exists = {}", go_script.exists());
+            
+            if !go_script.exists() {
+                return Err(format!("No containers found for '{}' and go.sh not found in {}. Cannot build environment.", env_name, project_root));
+            }
+
+            eprintln!("DEBUG: Running go.sh from directory: {}", project_root);
+
+            // First, ensure Python dependencies are installed
+            eprintln!("DEBUG: Installing Python dependencies...");
+            let pip_output = shell_command("pip3 install pyyaml")
+                .current_dir(&project_root)
+                .output()
+                .map_err(|e| format!("Failed to install dependencies: {}", e))?;
+
+            if !pip_output.status.success() {
+                let pip_err = String::from_utf8_lossy(&pip_output.stderr);
+                eprintln!("WARNING: pip install failed: {}", pip_err);
+            }
+
+            // Run go.sh to rebuild containers
+            let output = shell_command("./go.sh")
+                .current_dir(&project_root)
+                .output()
+                .map_err(|e| format!("Failed to run go.sh: {}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
+                return Err(format!("Failed to build containers: {}", error_msg.lines().last().unwrap_or(&error_msg)));
+            }
+
+            // Read webui port from .env file
+            let webui_port = std::fs::read_to_string(&env_file)
+                .ok()
+                .and_then(|content| {
+                    content.lines()
+                        .find(|line| line.starts_with("WEBUI_PORT="))
+                        .and_then(|line| line.split('=').nth(1))
+                        .and_then(|port| port.parse::<u16>().ok())
+                })
+                .unwrap_or(3000);
+
+            // Open browser to registration page
+            let url = format!("http://localhost:{}/register", webui_port);
+            eprintln!("DEBUG: Opening browser to {}", url);
+            if let Err(e) = open::that(&url) {
+                eprintln!("WARNING: Could not open browser: {}", e);
+            }
+
+            return Ok(format!("Environment '{}' rebuilt and started", env_name));
+        }
     }
 
-    // Start all matching containers
+    // Containers exist and are stopped - start them
     let mut start_args = vec!["start"];
     start_args.extend(containers.iter().copied());
 
@@ -226,8 +380,8 @@ pub async fn start_environment(_state: State<'_, AppState>, env_name: String) ->
 #[tauri::command]
 pub async fn stop_environment(_state: State<'_, AppState>, env_name: String) -> Result<String, String> {
     // Find all containers for this environment by name pattern
-    let pattern = if env_name == "default" {
-        // Default env uses ushadow-backend, ushadow-webui pattern
+    let pattern = if env_name == "default" || env_name == "ushadow" {
+        // Default/ushadow env uses ushadow-backend, ushadow-webui pattern
         "ushadow-".to_string()
     } else {
         format!("ushadow-{}-", env_name)
@@ -247,7 +401,7 @@ pub async fn stop_environment(_state: State<'_, AppState>, env_name: String) -> 
     let containers: Vec<&str> = stdout
         .lines()
         .filter(|name| {
-            if env_name == "default" {
+            if env_name == "default" || env_name == "ushadow" {
                 // Match ushadow-backend, ushadow-webui but NOT ushadow-envname-*
                 name.starts_with(&pattern) && !name.contains("-backend-") && 
                 (*name == "ushadow-backend" || *name == "ushadow-webui" || 

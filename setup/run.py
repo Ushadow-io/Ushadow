@@ -366,7 +366,7 @@ def main():
     parser.add_argument("--dev", action="store_true", help="Development mode with hot-reload")
     parser.add_argument("--prod", action="store_true", help="Production mode")
     parser.add_argument("--skip-admin", action="store_true", help="Skip admin creation (use web wizard)")
-    parser.add_argument("--no-auto-open", action="store_true", help="Don't automatically open browser")
+    parser.add_argument("--open-browser", action="store_true", help="Automatically open browser to registration page")
     parser.add_argument("--reset", action="store_true", help="Reset configuration")
     # Simple compose operations (read DEV_MODE from .env)
     parser.add_argument("--up", action="store_true", help="Start containers (no rebuild)")
@@ -512,7 +512,7 @@ def main():
     wait_and_open(
         config["backend_port"],
         config["webui_port"],
-        open_browser=args.quick and not args.no_auto_open
+        open_browser=args.open_browser
     )
 
 if __name__ == "__main__":

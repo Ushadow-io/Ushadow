@@ -406,6 +406,7 @@ function App() {
 
   // Environment handlers
   const handleStartEnv = async (envName: string) => {
+    console.log(`DEBUG: handleStartEnv called for ${envName}`)
     setLoadingEnv(envName)
     log(`Starting ${envName}...`, 'step')
 
@@ -461,11 +462,14 @@ function App() {
           }
         })
       } else {
+        console.log(`DEBUG: Calling tauri.startEnvironment(${envName})`)
         const result = await tauri.startEnvironment(envName)
+        console.log(`DEBUG: tauri.startEnvironment returned: ${result}`)
         log(result, 'success')
         await refreshDiscovery()
       }
     } catch (err) {
+      console.error(`DEBUG: handleStartEnv caught error:`, err)
       log(`Failed to start ${envName}: ${err}`, 'error')
       // Update creating env to error state
       setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
@@ -683,11 +687,16 @@ function App() {
 
   // Quick launch (for quick mode)
   const handleQuickLaunch = async () => {
+    console.log('DEBUG: handleQuickLaunch started')
     setIsLaunching(true)
-    // Switch to dev mode to show install progress
+
+    // Switch to dev mode immediately to show progress
     setAppMode('dev')
     setLogExpanded(true)
-    log('Starting quick launch...', 'step')
+    log('🚀 Starting Ushadow quick launch...', 'step')
+
+    // Give UI a brief moment to render
+    await new Promise(r => setTimeout(r, 50))
 
     try {
       const failedInstalls: string[] = []
@@ -714,9 +723,15 @@ function App() {
         }
       }
 
-      // Step 2: Check all prerequisites
-      let prereqs = getEffectivePrereqs(await refreshPrerequisites())
-      if (!prereqs) throw new Error('Failed to check prerequisites')
+      // Step 2: Use existing prerequisites (already checked on app load)
+      log('Verifying prerequisites...', 'step')
+      let prereqs = getEffectivePrereqs(prerequisites)
+      if (!prereqs) {
+        // Only refresh if we don't have cached data
+        prereqs = getEffectivePrereqs(await refreshPrerequisites())
+        if (!prereqs) throw new Error('Failed to check prerequisites')
+      }
+      log('✓ Prerequisites verified', 'success')
 
       // Step 3: Install missing prerequisites (don't stop on failure)
       if (!prereqs.git_installed) {
@@ -788,24 +803,44 @@ function App() {
       }
 
       // Step 5: Clone if needed
+      log('Checking project directory...', 'step')
       const status = await tauri.checkProjectDir(projectRoot)
       if (!status.is_valid_repo) {
         await handleClone(projectRoot)
+      } else {
+        log('✓ Project directory ready', 'success')
       }
 
-      // Step 6: Start infrastructure (postgres, redis, etc.)
-      log('Starting infrastructure...', 'step')
-      if (dryRunMode) {
-        log('[DRY RUN] Would start infrastructure', 'warning')
-        await new Promise(r => setTimeout(r, 1000))
-        log('[DRY RUN] Infrastructure started', 'success')
+      // Step 6: Start infrastructure (postgres, redis, etc.) - only if needed
+      log('Checking infrastructure...', 'step')
+      // Use cached discovery first (fast), only refresh if needed
+      let infraRunning = discovery?.infrastructure.every(svc => svc.running) ?? false
+
+      if (infraRunning) {
+        log('✓ Infrastructure already running', 'success')
       } else {
-        const infraResult = await tauri.startInfrastructure()
-        log(infraResult, 'success')
+        // Re-check to be sure (in case cache is stale)
+        const currentDiscovery = await tauri.discoverEnvironments()
+        infraRunning = currentDiscovery.infrastructure.every(svc => svc.running)
+
+        if (infraRunning) {
+          log('✓ Infrastructure already running', 'success')
+        } else {
+          log('Starting infrastructure...', 'step')
+          if (dryRunMode) {
+            log('[DRY RUN] Would start infrastructure', 'warning')
+            await new Promise(r => setTimeout(r, 1000))
+            log('[DRY RUN] Infrastructure started', 'success')
+          } else {
+            const infraResult = await tauri.startInfrastructure()
+            log(infraResult, 'success')
+          }
+        }
       }
       await refreshDiscovery()
 
       // Step 7: Start ushadow environment
+      log('Starting Ushadow environment...', 'step')
       await handleStartEnv('ushadow')
 
       if (failedInstalls.length > 0) {
@@ -814,6 +849,7 @@ function App() {
         log('Quick launch complete!', 'success')
       }
     } catch (err) {
+      console.error('DEBUG: handleQuickLaunch caught error:', err)
       log(`Quick launch failed: ${err}`, 'error')
     } finally {
       setIsLaunching(false)
@@ -933,7 +969,11 @@ function App() {
             <button
               onClick={handleQuickLaunch}
               disabled={isLaunching}
-              className="px-12 py-4 rounded-xl bg-gradient-brand hover:opacity-90 disabled:opacity-50 transition-all font-semibold text-lg flex items-center gap-3"
+              className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
+                isLaunching 
+                  ? 'bg-surface-600 cursor-not-allowed' 
+                  : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
+              }`}
               data-testid="quick-launch-button"
             >
               {isLaunching ? (

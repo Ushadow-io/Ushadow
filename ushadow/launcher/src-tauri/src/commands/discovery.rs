@@ -189,14 +189,14 @@ fn extract_env_name(container_name: &str) -> String {
         }
     }
 
-    // If empty or just numbers, default to "default"
+    // If empty or just numbers, default to "ushadow"
     if name.is_empty() || name.chars().all(|c| c.is_numeric() || c == '-') {
-        return "default".to_string();
+        return "ushadow".to_string();
     }
 
     // Handle case where name is just a service type (i.e., ushadow-backend)
     if name == "backend" || name == "webui" || name == "frontend" || name == "worker" || name == "tailscale" {
-        return "default".to_string();
+        return "ushadow".to_string();
     }
 
     name
