@@ -168,11 +168,13 @@ $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 if ($dockerCmd) {
     # Quick check if already running
     try {
-        $result = & docker info 2>&1
+        $null = & docker info 2>&1
         if ($LASTEXITCODE -eq 0) {
             $dockerRunning = $true
         }
-    } catch {}
+    } catch {
+        # Ignore errors - Docker might not be running yet
+    }
 }
 
 if (-not $dockerRunning) {
@@ -180,19 +182,25 @@ if (-not $dockerRunning) {
     $dockerPath = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
     if (Test-Path $dockerPath) {
         Write-Host "  Starting Docker Desktop..." -ForegroundColor Yellow
-        Start-Process $dockerPath
+        try {
+            Start-Process $dockerPath -ErrorAction SilentlyContinue
+        } catch {
+            Write-Warn "Could not start Docker Desktop automatically. Please start it manually."
+        }
         Write-Host "  Waiting for Docker to start (this may take 30-60 seconds)..." -ForegroundColor Yellow
 
         # Wait up to 90 seconds
         for ($i = 0; $i -lt 18; $i++) {
             Start-Sleep -Seconds 5
             try {
-                $result = & docker info 2>&1
+                $null = & docker info 2>&1
                 if ($LASTEXITCODE -eq 0) {
                     $dockerRunning = $true
                     break
                 }
-            } catch {}
+            } catch {
+                # Ignore errors - Docker is still starting
+            }
             Write-Host "    Still waiting... ($($i * 5 + 5) seconds)" -ForegroundColor Gray
         }
     }
