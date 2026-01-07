@@ -77,7 +77,7 @@ export default function LoginPage() {
       style={{ backgroundColor: 'var(--surface-900)' }}
       data-testid="login-page"
     >
-      <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8">
         {/* Decorative background blur circles - brand green and purple */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
           <div
@@ -95,13 +95,13 @@ export default function LoginPage() {
 
           {/* Login Form */}
           <div
-            className="rounded-xl shadow-xl backdrop-blur-sm p-8 space-y-6 animate-slide-up"
+            className="rounded-xl shadow-xl backdrop-blur-sm p-6 space-y-4 animate-slide-up"
             style={{
               backgroundColor: 'var(--surface-800)',
               border: '1px solid var(--surface-500)',
             }}
           >
-            <form className="space-y-5" onSubmit={handleSubmit}>
+            <form className="space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <label
                   htmlFor="email"

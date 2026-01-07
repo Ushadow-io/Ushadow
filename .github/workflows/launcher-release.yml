@@ -1,0 +1,318 @@
+name: Launcher Release
+
+on:
+  # Manual release only - no auto-release on push
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+      release_name:
+        description: 'Release name (e.g., "Bug Fix Update")'
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: 'Platforms to build'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - macos
+          - windows
+          - linux
+          - macos,windows
+          - macos,linux
+          - windows,linux
+      draft:
+        description: 'Create as draft release'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  LAUNCHER_DIR: ushadow/launcher
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      release_name: ${{ steps.get_version.outputs.release_name }}
+      build_macos: ${{ steps.check_platforms.outputs.build_macos }}
+      build_windows: ${{ steps.check_platforms.outputs.build_windows }}
+      build_linux: ${{ steps.check_platforms.outputs.build_linux }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version and release info
+        id: get_version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RELEASE_NAME: ${{ inputs.release_name }}
+        run: |
+          # Validate version format
+          if ! echo "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: Invalid version format. Use semver (e.g., 1.0.0)"
+            exit 1
+          fi
+          VERSION="$INPUT_VERSION"
+          if [ -n "$INPUT_RELEASE_NAME" ]; then
+            RELEASE_NAME="$INPUT_RELEASE_NAME"
+          else
+            RELEASE_NAME="v$VERSION"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Check platforms to build
+        id: check_platforms
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
+        run: |
+          if [ "$PLATFORMS" = "all" ] || [[ "$PLATFORMS" == *"macos"* ]]; then
+            echo "build_macos=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_macos=false" >> $GITHUB_OUTPUT
+          fi
+          if [ "$PLATFORMS" = "all" ] || [[ "$PLATFORMS" == *"windows"* ]]; then
+            echo "build_windows=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_windows=false" >> $GITHUB_OUTPUT
+          fi
+          if [ "$PLATFORMS" = "all" ] || [[ "$PLATFORMS" == *"linux"* ]]; then
+            echo "build_linux=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_linux=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify dist directory exists
+        run: |
+          if [ ! -d "$LAUNCHER_DIR/dist" ]; then
+            echo "Error: dist directory not found at $LAUNCHER_DIR/dist"
+            echo "The dist/ folder must be committed to the repository"
+            exit 1
+          fi
+          if [ ! -f "$LAUNCHER_DIR/dist/index.html" ]; then
+            echo "Error: dist/index.html not found"
+            exit 1
+          fi
+          echo "✓ dist directory found with required files"
+          ls -lh "$LAUNCHER_DIR/dist/"
+
+  build-macos:
+    needs: prepare
+    if: needs.prepare.outputs.build_macos == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ env.LAUNCHER_DIR }}/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: npm ci
+
+      - name: Verify dist directory
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: |
+          echo "Checking dist directory..."
+          ls -lh dist/
+          if [ ! -f "dist/index.html" ]; then
+            echo "Error: dist/index.html not found"
+            exit 1
+          fi
+
+      - name: Build Tauri app (Universal)
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: npm run tauri:build:macos
+
+      - name: Find and upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: ${{ env.LAUNCHER_DIR }}/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  build-windows:
+    needs: prepare
+    if: needs.prepare.outputs.build_windows == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ env.LAUNCHER_DIR }}/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: npm ci
+
+      - name: Verify dist directory
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        shell: bash
+        run: |
+          echo "Checking dist directory..."
+          ls -lh dist/
+          if [ ! -f "dist/index.html" ]; then
+            echo "Error: dist/index.html not found"
+            exit 1
+          fi
+
+      - name: Build Tauri app
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: npm run tauri:build
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: ${{ env.LAUNCHER_DIR }}/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Upload NSIS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: ${{ env.LAUNCHER_DIR }}/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: ignore
+
+  build-linux:
+    needs: prepare
+    if: needs.prepare.outputs.build_linux == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ env.LAUNCHER_DIR }}/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install dependencies
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: npm ci
+
+      - name: Verify dist directory
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: |
+          echo "Checking dist directory..."
+          ls -lh dist/
+          if [ ! -f "dist/index.html" ]; then
+            echo "Error: dist/index.html not found"
+            exit 1
+          fi
+
+      - name: Build Tauri app
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: npm run tauri:build
+
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: ${{ env.LAUNCHER_DIR }}/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: ${{ env.LAUNCHER_DIR }}/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: ignore
+
+  create-release:
+    needs: [prepare, build-macos, build-windows, build-linux]
+    if: |
+      always() &&
+      (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') &&
+      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') &&
+      (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') &&
+      (needs.build-macos.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Display artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lhR artifacts/
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRAFT_FLAG: ${{ inputs.draft && '--draft' || '' }}
+        run: |
+          gh release create "launcher-v$VERSION" \
+            --title "Ushadow Launcher - $RELEASE_NAME" \
+            $DRAFT_FLAG \
+            --notes "## Ushadow Launcher $RELEASE_NAME
+
+          ### Downloads
+
+          | Platform | File | Notes |
+          |----------|------|-------|
+          | macOS | \`.dmg\` | Universal binary (Intel + Apple Silicon) |
+          | Windows | \`.msi\` or \`.exe\` | Windows 10+ required |
+          | Linux | \`.deb\` or \`.AppImage\` | Requires Docker and Tailscale |
+
+          ### Requirements
+
+          - Docker Desktop (or Docker Engine on Linux)
+          - Tailscale (for network connectivity)"
+
+      - name: Upload all artifacts to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Upload all files from artifacts directory
+          find artifacts/ -type f \( -name "*.dmg" -o -name "*.msi" -o -name "*.exe" -o -name "*.deb" -o -name "*.AppImage" \) | while read file; do
+            echo "Uploading $(basename "$file")..."
+            gh release upload "launcher-v$VERSION" "$file" --clobber
+          done
+          echo "✓ All artifacts uploaded successfully"
