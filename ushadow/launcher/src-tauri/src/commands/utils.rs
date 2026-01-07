@@ -19,6 +19,28 @@ pub fn silent_command(program: &str) -> Command {
     }
 }
 
+/// Create a shell command that works cross-platform
+/// On Windows: uses cmd /c
+/// On macOS/Linux: uses bash -l -c (login shell to load PATH)
+pub fn shell_command(command: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", command]);
+        // CREATE_NO_WINDOW = 0x08000000
+        cmd.creation_flags(0x08000000);
+        return cmd;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = Command::new("bash");
+        cmd.args(["-l", "-c", command]);
+        return cmd;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

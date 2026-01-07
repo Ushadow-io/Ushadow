@@ -1,13 +1,12 @@
-use super::utils::silent_command;
+use super::utils::{silent_command, shell_command};
 use std::process::Command;
 
 /// Check if Homebrew is installed (macOS)
-/// Tries login shell first, then falls back to known paths
+/// Uses 'which brew' to find brew anywhere, with fallback to known paths
 #[cfg(target_os = "macos")]
 pub fn check_brew_installed() -> bool {
     // Try login shell first (silent to avoid window flash)
-    if silent_command("bash")
-        .args(["-l", "-c", "brew --version"])
+    if shell_command("brew --version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -15,16 +14,42 @@ pub fn check_brew_installed() -> bool {
         return true;
     }
 
-    // Fallback: check known Homebrew paths directly (for fresh installs)
+    // Fallback: try to find brew's actual location via which
+    if let Ok(output) = shell_command("which brew")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() && std::path::Path::new(&path).exists() {
+                // Verify it's executable
+                if silent_command(&path)
+                    .args(["--version"])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Last resort: try known paths directly (for fresh .pkg installs where shell profile not loaded)
     let known_paths = [
         "/opt/homebrew/bin/brew",      // Apple Silicon
         "/usr/local/bin/brew",          // Intel Mac
-        "/home/linuxbrew/.linuxbrew/bin/brew", // Linux
     ];
 
     for path in known_paths {
         if std::path::Path::new(path).exists() {
-            return true;
+            if silent_command(path)
+                .args(["--version"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return true;
+            }
         }
     }
 
@@ -32,8 +57,58 @@ pub fn check_brew_installed() -> bool {
 }
 
 /// Get the brew executable path for this system
+/// Returns full path if brew isn't in PATH (e.g., after fresh .pkg install)
 #[cfg(target_os = "macos")]
 pub fn get_brew_path() -> String {
+    // First check if brew is in PATH
+    if shell_command("brew --version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return "brew".to_string();
+    }
+
+    // Try to find brew's actual location via which
+    if let Ok(output) = shell_command("which brew")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() && std::path::Path::new(&path).exists() {
+                // Verify it works
+                if silent_command(&path)
+                    .args(["--version"])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+                {
+                    return path;
+                }
+            }
+        }
+    }
+
+    // Fall back to known paths
+    let known_paths = [
+        "/opt/homebrew/bin/brew",      // Apple Silicon
+        "/usr/local/bin/brew",          // Intel Mac
+    ];
+
+    for path in known_paths {
+        if std::path::Path::new(path).exists() {
+            if silent_command(path)
+                .args(["--version"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return path.to_string();
+            }
+        }
+    }
+
+    // Last resort fallback
     "brew".to_string()
 }
 
@@ -45,7 +120,7 @@ fn brew_command() -> Command {
 }
 
 /// Install Homebrew (macOS)
-/// Opens Terminal to run the official Homebrew installer script
+/// Downloads and opens the official Homebrew .pkg installer
 #[cfg(target_os = "macos")]
 #[tauri::command]
 pub async fn install_homebrew() -> Result<String, String> {
@@ -53,23 +128,38 @@ pub async fn install_homebrew() -> Result<String, String> {
         return Ok("Homebrew is already installed".to_string());
     }
 
-    // Run the official Homebrew install script directly
-    // This opens an interactive terminal for the user to see progress and enter password
-    let output = Command::new("osascript")
-        .args([
-            "-e", "tell application \"Terminal\"",
-            "-e", "activate",
-            "-e", "do script \"/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\"\"",
-            "-e", "end tell"
-        ])
+    // Download the official Homebrew .pkg installer
+    let pkg_url = "https://github.com/Homebrew/brew/releases/download/5.0.9/Homebrew-5.0.9.pkg";
+    let tmp_dir = std::env::temp_dir();
+    let pkg_path = tmp_dir.join("Homebrew-5.0.9.pkg");
+
+    // Download the pkg file
+    let response = reqwest::get(pkg_url)
+        .await
+        .map_err(|e| format!("Failed to download Homebrew installer: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to download Homebrew installer: HTTP {}", response.status()));
+    }
+
+    let bytes = response.bytes()
+        .await
+        .map_err(|e| format!("Failed to read installer data: {}", e))?;
+
+    std::fs::write(&pkg_path, bytes)
+        .map_err(|e| format!("Failed to save installer: {}", e))?;
+
+    // Open the .pkg file with the default installer
+    let output = Command::new("open")
+        .arg(&pkg_path)
         .output()
-        .map_err(|e| format!("Failed to open Terminal: {}", e))?;
+        .map_err(|e| format!("Failed to open installer: {}", e))?;
 
     if output.status.success() {
-        Ok("Homebrew installer opened in Terminal. Please follow the prompts to complete installation.".to_string())
+        Ok(format!("Homebrew installer opened. Please follow the prompts to complete installation. The installer may require administrator access."))
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Failed to start Homebrew installation: {}", stderr))
+        Err(format!("Failed to open Homebrew installer: {}", stderr))
     }
 }
 

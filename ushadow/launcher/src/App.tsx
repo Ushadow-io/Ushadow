@@ -186,13 +186,8 @@ function App() {
       await refreshPrerequisites()
       const disc = await refreshDiscovery()
 
-      // Auto-start quick launch if project root was already configured but no environments exist
-      if (!isFirstTimeSetup && disc && disc.environments.length === 0) {
-        log('No environments found - starting quick launch...', 'step')
-        setShouldAutoLaunch(true)
-      } else {
-        log('Ready', 'success')
-      }
+      // Don't auto-start - let user choose when to launch
+      log('Ready', 'success')
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

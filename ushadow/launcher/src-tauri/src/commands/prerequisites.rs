@@ -1,5 +1,5 @@
 use crate::models::PrerequisiteStatus;
-use super::utils::silent_command;
+use super::utils::{silent_command, shell_command};
 use std::env;
 
 /// Check if we're in mock mode
@@ -25,8 +25,7 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
     }
 
     // Try login shell first (silent to avoid window flash on Windows)
-    let version_output = silent_command("bash")
-        .args(["-l", "-c", "docker --version"])
+    let version_output = shell_command("docker --version")
         .output();
 
     let (mut installed, mut version, mut docker_path) = match version_output {
@@ -65,8 +64,7 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
 
     // Check if Docker daemon is running
     let info_output = if docker_path == "docker" {
-        silent_command("bash")
-            .args(["-l", "-c", "docker info"])
+        shell_command("docker info")
             .output()
     } else {
         silent_command(&docker_path).arg("info").output()
@@ -90,8 +88,7 @@ pub fn check_git() -> (bool, Option<String>) {
         return (installed, version);
     }
 
-    let version_output = silent_command("bash")
-        .args(["-l", "-c", "git --version"])
+    let version_output = shell_command("git --version")
         .output();
 
     match version_output {
@@ -118,8 +115,7 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
         return (installed, connected, version);
     }
 
-    let version_output = silent_command("bash")
-        .args(["-l", "-c", "tailscale --version"])
+    let version_output = shell_command("tailscale --version")
         .output();
 
     let (installed, version) = match version_output {
@@ -139,8 +135,7 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
         return (false, false, None);
     }
 
-    let status_output = silent_command("bash")
-        .args(["-l", "-c", "tailscale status"])
+    let status_output = shell_command("tailscale status")
         .output();
     let connected = matches!(status_output, Ok(output) if output.status.success());
 
@@ -162,8 +157,7 @@ pub fn check_python() -> (bool, Option<String>) {
     }
 
     // Try python3 first (recommended)
-    let version_output = silent_command("bash")
-        .args(["-l", "-c", "python3 --version"])
+    let version_output = shell_command("python3 --version")
         .output();
 
     match version_output {
@@ -173,8 +167,7 @@ pub fn check_python() -> (bool, Option<String>) {
         }
         _ => {
             // Fallback to python (might be Python 2)
-            let version_output = silent_command("bash")
-                .args(["-l", "-c", "python --version"])
+            let version_output = shell_command("python --version")
                 .output();
 
             match version_output {
