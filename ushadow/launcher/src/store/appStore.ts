@@ -9,6 +9,7 @@ export interface SpoofedPrerequisites {
   docker_running: boolean | null
   tailscale_installed: boolean | null
   homebrew_installed: boolean | null
+  python_installed: boolean | null
 }
 
 interface AppState {
@@ -40,6 +41,7 @@ const defaultSpoofedPrereqs: SpoofedPrerequisites = {
   docker_running: null,
   tailscale_installed: null,
   homebrew_installed: null,
+  python_installed: null,
 }
 
 export const useAppStore = create<AppState>()(

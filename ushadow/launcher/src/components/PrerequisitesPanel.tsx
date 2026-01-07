@@ -6,8 +6,9 @@ interface PrerequisitesPanelProps {
   prerequisites: Prerequisites | null
   platform: string
   isInstalling: boolean
+  installingItem: string | null
   brewInstalled: boolean | null
-  onInstall: (item: 'git' | 'docker' | 'tailscale' | 'homebrew') => void
+  onInstall: (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => void
   onStartDocker: () => void
 }
 
@@ -15,6 +16,7 @@ export function PrerequisitesPanel({
   prerequisites,
   platform,
   isInstalling,
+  installingItem,
   brewInstalled,
   onInstall,
   onStartDocker,
@@ -23,8 +25,8 @@ export function PrerequisitesPanel({
 
   const getOverallStatus = () => {
     if (!prerequisites) return 'checking'
-    const { docker_installed, docker_running, git_installed } = prerequisites
-    if (docker_installed && docker_running && git_installed) return 'ready'
+    const { docker_installed, docker_running, git_installed, python_installed } = prerequisites
+    if (docker_installed && docker_running && git_installed && python_installed) return 'ready'
     return 'action-needed'
   }
 
@@ -48,6 +50,22 @@ export function PrerequisitesPanel({
       {/* Content */}
       {expanded && (
         <div className="px-4 pb-4 space-y-3" data-testid="prerequisites-list">
+          {/* Homebrew (macOS only) */}
+          {platform === 'macos' && (
+            <>
+              <p className="text-xs text-text-muted mb-1">Package Manager</p>
+              <PrereqItem
+                label="Homebrew"
+                installed={brewInstalled}
+                showInstall={brewInstalled === false}
+                onInstall={() => onInstall('homebrew')}
+                isInstalling={isInstalling}
+                installing={installingItem === 'homebrew'}
+              />
+              <div className="pt-2 border-t border-surface-600 mb-2" />
+            </>
+          )}
+
           {/* Git */}
           <PrereqItem
             label="Git"
@@ -55,6 +73,17 @@ export function PrerequisitesPanel({
             showInstall={!prerequisites?.git_installed}
             onInstall={() => onInstall('git')}
             isInstalling={isInstalling}
+            installing={installingItem === 'git'}
+          />
+
+          {/* Python */}
+          <PrereqItem
+            label="Python 3"
+            installed={prerequisites?.python_installed ?? null}
+            showInstall={!prerequisites?.python_installed}
+            onInstall={() => onInstall('python')}
+            isInstalling={isInstalling}
+            installing={installingItem === 'python'}
           />
 
           {/* Docker */}
@@ -67,6 +96,7 @@ export function PrerequisitesPanel({
             onInstall={() => onInstall('docker')}
             onStart={onStartDocker}
             isInstalling={isInstalling}
+            installing={installingItem === 'docker'}
           />
 
           {/* Tailscale */}
@@ -77,21 +107,8 @@ export function PrerequisitesPanel({
             showInstall={!prerequisites?.tailscale_installed}
             onInstall={() => onInstall('tailscale')}
             isInstalling={isInstalling}
+            installing={installingItem === 'tailscale'}
           />
-
-          {/* Homebrew (macOS only) */}
-          {platform === 'macos' && (
-            <div className="pt-2 border-t border-surface-600">
-              <p className="text-xs text-text-muted mb-2">Package Manager</p>
-              <PrereqItem
-                label="Homebrew"
-                installed={brewInstalled}
-                showInstall={brewInstalled === false}
-                onInstall={() => onInstall('homebrew')}
-                isInstalling={isInstalling}
-              />
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -132,6 +149,7 @@ interface PrereqItemProps {
   onInstall?: () => void
   onStart?: () => void
   isInstalling?: boolean
+  installing?: boolean  // True when this specific item is being installed
 }
 
 function PrereqItem({
@@ -144,6 +162,7 @@ function PrereqItem({
   onInstall,
   onStart,
   isInstalling,
+  installing,
 }: PrereqItemProps) {
   const getIcon = () => {
     if (installed === null) {
@@ -162,15 +181,20 @@ function PrereqItem({
 
   const getStatus = () => {
     if (installed === null) return 'Checking...'
-    if (!installed) return optional ? 'Not installed (optional)' : 'Not installed'
+    if (!installed) return optional ? '(optional)' : ''
     if (running === false) return 'Not running'
     return running === undefined ? 'Installed' : 'Running'
   }
 
   return (
-    <div className="flex items-center justify-between py-1" data-testid={`prereq-${label.toLowerCase()}`}>
+    <div
+      className={`flex items-center justify-between py-1 px-2 -mx-2 rounded transition-all ${
+        installing ? 'bg-primary-500/10 ring-1 ring-primary-500/30 animate-pulse' : ''
+      }`}
+      data-testid={`prereq-${label.toLowerCase()}`}
+    >
       <div className="flex items-center gap-2">
-        {getIcon()}
+        {installing ? <Loader2 className="w-4 h-4 text-primary-400 animate-spin" /> : getIcon()}
         <span className="text-sm">{label}</span>
       </div>
       <div className="flex items-center gap-2">
@@ -179,7 +203,7 @@ function PrereqItem({
           <button
             onClick={onInstall}
             disabled={isInstalling}
-            className="text-xs px-2 py-1 rounded bg-primary-500/20 text-primary-400 hover:bg-primary-500/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+            className="text-xs px-2 py-1 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50 flex items-center gap-1"
             data-testid={`install-${label.toLowerCase()}`}
           >
             <Download className="w-3 h-3" />

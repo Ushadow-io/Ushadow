@@ -47,9 +47,19 @@ export function DevToolsPanel() {
       <div className="mt-3 space-y-2">
         <p className="text-xs text-text-muted">Spoof Prerequisites:</p>
         <SpoofControl
+          label="Homebrew"
+          value={spoofedPrereqs.homebrew_installed}
+          onChange={(v) => setSpoofedPrereq('homebrew_installed', v)}
+        />
+        <SpoofControl
           label="Git"
           value={spoofedPrereqs.git_installed}
           onChange={(v) => setSpoofedPrereq('git_installed', v)}
+        />
+        <SpoofControl
+          label="Python 3"
+          value={spoofedPrereqs.python_installed}
+          onChange={(v) => setSpoofedPrereq('python_installed', v)}
         />
         <SpoofControl
           label="Docker Installed"
@@ -65,11 +75,6 @@ export function DevToolsPanel() {
           label="Tailscale"
           value={spoofedPrereqs.tailscale_installed}
           onChange={(v) => setSpoofedPrereq('tailscale_installed', v)}
-        />
-        <SpoofControl
-          label="Homebrew"
-          value={spoofedPrereqs.homebrew_installed}
-          onChange={(v) => setSpoofedPrereq('homebrew_installed', v)}
         />
       </div>
     </div>

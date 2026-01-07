@@ -7,9 +7,11 @@ export interface Prerequisites {
   tailscale_installed: boolean
   tailscale_connected: boolean
   git_installed: boolean
+  python_installed: boolean
   docker_version: string | null
   tailscale_version: string | null
   git_version: string | null
+  python_version: string | null
 }
 
 export interface UshadowEnvironment {
@@ -60,7 +62,7 @@ export const tauri = {
   getDefaultProjectDir: () => invoke<string>('get_default_project_dir'),
   setProjectRoot: (path: string) => invoke<void>('set_project_root', { path }),
   checkProjectDir: (path: string) => invoke<{ path: string | null; exists: boolean; is_valid_repo: boolean }>('check_project_dir', { path }),
-  cloneUshadowRepo: (parentDir: string) => invoke<string>('clone_ushadow_repo', { parentDir }),
+  cloneUshadowRepo: (targetDir: string) => invoke<string>('clone_ushadow_repo', { targetDir }),
   updateUshadowRepo: (projectDir: string) => invoke<string>('update_ushadow_repo', { projectDir }),
 
   // Infrastructure management

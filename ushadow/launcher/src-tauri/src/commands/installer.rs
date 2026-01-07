@@ -2,14 +2,33 @@ use super::utils::silent_command;
 use std::process::Command;
 
 /// Check if Homebrew is installed (macOS)
-/// Uses bash login shell to ensure shell profile is sourced and PATH includes brew
+/// Tries login shell first, then falls back to known paths
 #[cfg(target_os = "macos")]
 pub fn check_brew_installed() -> bool {
-    Command::new("bash")
+    // Try login shell first (silent to avoid window flash)
+    if silent_command("bash")
         .args(["-l", "-c", "brew --version"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // Fallback: check known Homebrew paths directly (for fresh installs)
+    let known_paths = [
+        "/opt/homebrew/bin/brew",      // Apple Silicon
+        "/usr/local/bin/brew",          // Intel Mac
+        "/home/linuxbrew/.linuxbrew/bin/brew", // Linux
+    ];
+
+    for path in known_paths {
+        if std::path::Path::new(path).exists() {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Get the brew executable path for this system

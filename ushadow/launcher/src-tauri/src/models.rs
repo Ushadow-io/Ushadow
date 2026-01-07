@@ -8,9 +8,11 @@ pub struct PrerequisiteStatus {
     pub tailscale_installed: bool,
     pub tailscale_connected: bool,
     pub git_installed: bool,
+    pub python_installed: bool,
     pub docker_version: Option<String>,
     pub tailscale_version: Option<String>,
     pub git_version: Option<String>,
+    pub python_version: Option<String>,
 }
 
 /// Project location status

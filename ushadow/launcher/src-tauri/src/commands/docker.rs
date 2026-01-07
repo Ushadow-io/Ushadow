@@ -418,8 +418,9 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", &url])
+        // Use silent_command to avoid console window flash
+        silent_command("cmd")
+            .args(["/C", "start", "", &url])  // Empty string prevents window title issue
             .spawn()
             .map_err(|e| e.to_string())?;
     }

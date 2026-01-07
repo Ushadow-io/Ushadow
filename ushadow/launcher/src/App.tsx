@@ -32,7 +32,10 @@ function App() {
   const [discovery, setDiscovery] = useState<Discovery | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [isInstalling, setIsInstalling] = useState(false)
+  const [installingItem, setInstallingItem] = useState<string | null>(null)
   const [isLaunching, setIsLaunching] = useState(false)
+  const [loadingInfra, setLoadingInfra] = useState(false)
+  const [loadingEnv, setLoadingEnv] = useState<string | null>(null)
   const [showProjectDialog, setShowProjectDialog] = useState(false)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [brewInstalled, setBrewInstalled] = useState<boolean | null>(null)
@@ -75,6 +78,12 @@ function App() {
       docker_installed: spoofedPrereqs.docker_installed ?? real.docker_installed,
       docker_running: spoofedPrereqs.docker_running ?? real.docker_running,
       tailscale_installed: spoofedPrereqs.tailscale_installed ?? real.tailscale_installed,
+      tailscale_connected: real.tailscale_connected,
+      python_installed: spoofedPrereqs.python_installed ?? real.python_installed,
+      docker_version: real.docker_version,
+      tailscale_version: real.tailscale_version,
+      git_version: real.git_version,
+      python_version: real.python_version,
     }
   }, [spoofedPrereqs])
 
@@ -89,6 +98,7 @@ function App() {
         log(`$ docker --version → ${prereqs.docker_version || 'not found'}`)
         log(`$ docker info → ${prereqs.docker_running ? 'running' : 'not running'}`)
         log(`$ git --version → ${prereqs.git_version || 'not found'}`)
+        log(`$ python3 --version → ${prereqs.python_version || 'not found'}`)
         log(`$ tailscale --version → ${prereqs.tailscale_version || 'not found'}`)
       }
 
@@ -123,6 +133,16 @@ function App() {
     const currentPlatform = osOverride || platform
     if (currentPlatform !== 'macos') return true
     try {
+      // Check for spoofed value first (for dry run mode)
+      if (spoofedPrereqs.homebrew_installed !== undefined) {
+        const installed = spoofedPrereqs.homebrew_installed
+        setBrewInstalled(installed)
+        if (!silent) {
+          log(`$ brew --version → ${installed ? 'installed' : 'not found'}`)
+        }
+        return installed
+      }
+
       const installed = await tauri.checkBrew()
       setBrewInstalled(installed)
       if (!silent) {
@@ -135,7 +155,7 @@ function App() {
       }
       return false
     }
-  }, [platform, log])
+  }, [platform, log, spoofedPrereqs.homebrew_installed])
 
   // Initialize
   useEffect(() => {
@@ -195,24 +215,64 @@ function App() {
   }, [refreshPrerequisites, refreshDiscovery])
 
   // Install handlers
-  const handleInstall = async (item: 'git' | 'docker' | 'tailscale' | 'homebrew') => {
+  const handleInstall = async (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => {
     setIsInstalling(true)
+    setInstallingItem(item)
     log(`Installing ${item}...`, 'step')
 
     try {
       if (dryRunMode) {
-        log(`[DRY RUN] Would install ${item}`, 'warning')
+        // Show what would be executed
+        let command = ''
+        if (platform === 'macos') {
+          switch (item) {
+            case 'homebrew':
+              command = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+              break
+            case 'git':
+              command = 'brew install git'
+              break
+            case 'python':
+              command = 'brew install python3'
+              break
+            case 'docker':
+              command = 'brew install --cask docker'
+              break
+            case 'tailscale':
+              command = 'brew install --cask tailscale'
+              break
+          }
+        } else if (platform === 'windows') {
+          switch (item) {
+            case 'git':
+              command = 'winget install Git.Git'
+              break
+            case 'docker':
+              command = 'winget install Docker.DockerDesktop'
+              break
+            case 'tailscale':
+              command = 'winget install Tailscale.Tailscale'
+              break
+          }
+        }
+
+        log(`[DRY RUN] Would execute: ${command}`, 'warning')
+        log(`[DRY RUN] Simulating installation (waiting 1.5s)...`, 'info')
         await new Promise(r => setTimeout(r, 1500)) // Simulate
-        log(`[DRY RUN] ${item} installation simulated`, 'success')
+
         // Auto-spoof success so UI updates
         const spoofKey = item === 'homebrew' ? 'homebrew_installed'
           : item === 'git' ? 'git_installed'
           : item === 'docker' ? 'docker_installed'
+          : item === 'python' ? 'python_installed'
           : 'tailscale_installed'
+        log(`[DRY RUN] Spoofing state: ${spoofKey} = true`, 'info')
         setSpoofedPrereq(spoofKey, true)
         if (item === 'docker') {
+          log(`[DRY RUN] Spoofing state: docker_running = true`, 'info')
           setSpoofedPrereq('docker_running', true)
         }
+        log(`[DRY RUN] ${item} installation simulated successfully`, 'success')
       } else {
         let result: string
         switch (item) {
@@ -224,6 +284,21 @@ function App() {
               ? await tauri.installGitMacos()
               : await tauri.installGitWindows()
             break
+          case 'python':
+            if (platform === 'macos') {
+              if (!brewInstalled) {
+                log('Homebrew required first', 'warning')
+                return
+              }
+              log('Installing Python 3 via Homebrew...', 'step')
+              result = 'Python 3 can be installed via: brew install python3\nPlease run this command in your terminal.'
+            } else if (platform === 'windows') {
+              result = 'Please download Python 3 from https://www.python.org/downloads/'
+            } else {
+              result = 'Please install Python 3 using your system package manager (e.g., apt, yum)'
+            }
+            log(result, 'warning')
+            return
           case 'docker':
             if (platform === 'macos') {
               if (!brewInstalled) {
@@ -251,20 +326,33 @@ function App() {
       log(`Failed to install ${item}: ${err}`, 'error')
     } finally {
       setIsInstalling(false)
+      setInstallingItem(null)
     }
   }
 
   const handleStartDocker = async () => {
     setIsInstalling(true)
+    setInstallingItem('docker')
     log('Starting Docker...', 'step')
 
     try {
       if (dryRunMode) {
-        log('[DRY RUN] Would start Docker', 'warning')
+        let command = ''
+        if (platform === 'macos') {
+          command = 'open -a Docker'
+        } else if (platform === 'windows') {
+          command = 'Start-Process "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe"'
+        } else {
+          command = 'systemctl start docker'
+        }
+
+        log(`[DRY RUN] Would execute: ${command}`, 'warning')
+        log(`[DRY RUN] Simulating Docker startup (waiting 1.5s)...`, 'info')
         await new Promise(r => setTimeout(r, 1500))
-        log('[DRY RUN] Docker start simulated', 'success')
-        // Auto-spoof success so UI updates
+
+        log(`[DRY RUN] Spoofing state: docker_running = true`, 'info')
         setSpoofedPrereq('docker_running', true)
+        log(`[DRY RUN] Docker start simulated successfully`, 'success')
       } else {
         if (platform === 'macos') {
           await tauri.startDockerDesktopMacos()
@@ -280,12 +368,13 @@ function App() {
       log(`Failed to start Docker: ${err}`, 'error')
     } finally {
       setIsInstalling(false)
+      setInstallingItem(null)
     }
   }
 
   // Infrastructure handlers
   const handleStartInfra = async () => {
-    setIsInstalling(true)
+    setLoadingInfra(true)
     log('Starting infrastructure...', 'step')
 
     try {
@@ -301,12 +390,12 @@ function App() {
     } catch (err) {
       log(`Failed to start infrastructure: ${err}`, 'error')
     } finally {
-      setIsInstalling(false)
+      setLoadingInfra(false)
     }
   }
 
   const handleStopInfra = async () => {
-    setIsInstalling(true)
+    setLoadingInfra(true)
     log('Stopping infrastructure...', 'step')
 
     try {
@@ -322,12 +411,12 @@ function App() {
     } catch (err) {
       log(`Failed to stop infrastructure: ${err}`, 'error')
     } finally {
-      setIsInstalling(false)
+      setLoadingInfra(false)
     }
   }
 
   const handleRestartInfra = async () => {
-    setIsInstalling(true)
+    setLoadingInfra(true)
     log('Restarting infrastructure...', 'step')
 
     try {
@@ -343,50 +432,114 @@ function App() {
     } catch (err) {
       log(`Failed to restart infrastructure: ${err}`, 'error')
     } finally {
-      setIsInstalling(false)
+      setLoadingInfra(false)
     }
   }
 
   // Environment handlers
   const handleStartEnv = async (envName: string) => {
-    setIsInstalling(true)
+    setLoadingEnv(envName)
     log(`Starting ${envName}...`, 'step')
+
+    // Add to creating list to show starting feedback
+    setCreatingEnvs(prev => [...prev, { name: envName, status: 'starting' }])
 
     try {
       if (dryRunMode) {
         log(`[DRY RUN] Would start ${envName}`, 'warning')
+        log(`[DRY RUN] Simulating container startup (waiting 2s)...`, 'info')
         await new Promise(r => setTimeout(r, 2000))
-        log(`[DRY RUN] ${envName} start simulated`, 'success')
+        log(`[DRY RUN] ${envName} start simulated successfully`, 'success')
+
+        // In dry run mode, add a mock environment to discovery if it doesn't exist
+        setDiscovery(prev => {
+          // Initialize empty discovery if null
+          if (!prev) {
+            prev = {
+              infrastructure: [],
+              environments: [],
+              docker_ok: true,
+              tailscale_ok: false,
+            }
+          }
+
+          const exists = prev.environments.find(e => e.name === envName)
+          if (exists) {
+            // Just mark it as running
+            return {
+              ...prev,
+              environments: prev.environments.map(e =>
+                e.name === envName ? { ...e, running: true } : e
+              )
+            }
+          } else {
+            // Create a mock environment
+            const mockEnv = {
+              name: envName,
+              color: envName,
+              localhost_url: `http://localhost:8000`,
+              tailscale_url: null,
+              backend_port: 8000,
+              webui_port: 3000,
+              running: true,
+              tailscale_active: false,
+              containers: ['backend', 'webui', 'postgres', 'redis'],
+              path: projectRoot,
+            }
+            return {
+              ...prev,
+              environments: [...prev.environments, mockEnv]
+            }
+          }
+        })
       } else {
         const result = await tauri.startEnvironment(envName)
         log(result, 'success')
+        await refreshDiscovery()
       }
-      await refreshDiscovery()
     } catch (err) {
       log(`Failed to start ${envName}: ${err}`, 'error')
+      // Update creating env to error state
+      setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
     } finally {
-      setIsInstalling(false)
+      setLoadingEnv(null)
+      // Remove from creating list after a short delay (to show completion)
+      setTimeout(() => {
+        setCreatingEnvs(prev => prev.filter(e => e.name !== envName))
+      }, 500)
     }
   }
 
   const handleStopEnv = async (envName: string) => {
-    setIsInstalling(true)
+    setLoadingEnv(envName)
     log(`Stopping ${envName}...`, 'step')
 
     try {
       if (dryRunMode) {
         log(`[DRY RUN] Would stop ${envName}`, 'warning')
+        log(`[DRY RUN] Simulating container shutdown (waiting 1s)...`, 'info')
         await new Promise(r => setTimeout(r, 1000))
-        log(`[DRY RUN] ${envName} stop simulated`, 'success')
+        log(`[DRY RUN] ${envName} stop simulated successfully`, 'success')
+
+        // In dry run mode, mark environment as not running
+        setDiscovery(prev => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            environments: prev.environments.map(e =>
+              e.name === envName ? { ...e, running: false } : e
+            )
+          }
+        })
       } else {
         const result = await tauri.stopEnvironment(envName)
         log(result, 'success')
+        await refreshDiscovery()
       }
-      await refreshDiscovery()
     } catch (err) {
       log(`Failed to stop ${envName}: ${err}`, 'error')
     } finally {
-      setIsInstalling(false)
+      setLoadingEnv(null)
     }
   }
 
@@ -526,7 +679,13 @@ function App() {
 
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
-      await refreshDiscovery()
+      const disc = await refreshDiscovery()
+
+      // Auto-switch to quick mode if no environments exist after setup
+      if (disc && disc.environments.length === 0) {
+        setAppMode('quick')
+        log('No environments found - ready for quick launch', 'step')
+      }
     } catch (err) {
       log(`Failed to setup project: ${err}`, 'error')
     } finally {
@@ -542,7 +701,13 @@ function App() {
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
       log('Project linked', 'success')
-      await refreshDiscovery()
+      const disc = await refreshDiscovery()
+
+      // Auto-switch to quick mode if no environments exist after link
+      if (disc && disc.environments.length === 0) {
+        setAppMode('quick')
+        log('No environments found - ready for quick launch', 'step')
+      }
     } catch (err) {
       log(`Failed to link: ${err}`, 'error')
     }
@@ -557,37 +722,117 @@ function App() {
     log('Starting quick launch...', 'step')
 
     try {
-      // Check prerequisites
-      const prereqs = getEffectivePrereqs(await refreshPrerequisites())
-      if (!prereqs) throw new Error('Failed to check prerequisites')
+      const failedInstalls: string[] = []
 
-      // Install missing items
-      if (!prereqs.git_installed) {
-        await handleInstall('git')
-      }
-      if (!prereqs.docker_installed) {
-        await handleInstall('docker')
-      }
-      if (!prereqs.docker_running) {
-        await handleStartDocker()
-        // Wait for Docker
-        for (let i = 0; i < 30; i++) {
-          await new Promise(r => setTimeout(r, 2000))
-          const check = getEffectivePrereqs(await refreshPrerequisites())
-          if (check?.docker_running) break
+      // Step 1: On macOS, ensure Homebrew is installed first (required for other tools)
+      if (platform === 'macos') {
+        const brewCheck = await checkBrew(false)
+        if (!brewCheck) {
+          log('Homebrew not found - installing first (required for other tools)...', 'step')
+          await handleInstall('homebrew')
+
+          // Wait for state to propagate
+          await new Promise(r => setTimeout(r, 100))
+
+          // Verify installation
+          const brewInstalled = await checkBrew(false)
+          if (!brewInstalled) {
+            log('⚠️  Homebrew installation command completed, but detection failed', 'warning')
+            log('You may need to restart your terminal or run the post-install steps', 'info')
+            failedInstalls.push('Homebrew')
+          } else {
+            log('✓ Homebrew installed and detected successfully', 'success')
+          }
         }
       }
 
-      // Clone if needed
+      // Step 2: Check all prerequisites
+      let prereqs = getEffectivePrereqs(await refreshPrerequisites())
+      if (!prereqs) throw new Error('Failed to check prerequisites')
+
+      // Step 3: Install missing prerequisites (don't stop on failure)
+      if (!prereqs.git_installed) {
+        await handleInstall('git')
+        await new Promise(r => setTimeout(r, 100))
+        prereqs = getEffectivePrereqs(await refreshPrerequisites())
+        if (!prereqs?.git_installed) {
+          log('⚠️  Git installation command completed, but detection failed', 'warning')
+          failedInstalls.push('Git')
+        } else {
+          log('✓ Git installed and detected successfully', 'success')
+        }
+      }
+
+      if (!prereqs.python_installed) {
+        await handleInstall('python')
+        await new Promise(r => setTimeout(r, 100))
+        prereqs = getEffectivePrereqs(await refreshPrerequisites())
+        if (!prereqs?.python_installed) {
+          log('⚠️  Python installation command completed, but detection failed', 'warning')
+          failedInstalls.push('Python')
+        } else {
+          log('✓ Python installed and detected successfully', 'success')
+        }
+      }
+
+      if (!prereqs.docker_installed) {
+        await handleInstall('docker')
+        await new Promise(r => setTimeout(r, 100))
+        prereqs = getEffectivePrereqs(await refreshPrerequisites())
+        if (!prereqs?.docker_installed) {
+          log('⚠️  Docker installation command completed, but detection failed', 'warning')
+          failedInstalls.push('Docker')
+        } else {
+          log('✓ Docker installed and detected successfully', 'success')
+        }
+      }
+
+      // Step 4: Start Docker if needed
+      if (prereqs.docker_installed && !prereqs.docker_running) {
+        await handleStartDocker()
+        if (dryRunMode) {
+          // In dry run, just wait for state to propagate
+          await new Promise(r => setTimeout(r, 100))
+          prereqs = getEffectivePrereqs(await refreshPrerequisites())
+        } else {
+          // In real mode, wait for Docker to start (max 60 seconds)
+          let dockerRunning = false
+          for (let i = 0; i < 30; i++) {
+            await new Promise(r => setTimeout(r, 2000))
+            const check = getEffectivePrereqs(await refreshPrerequisites())
+            if (check?.docker_running) {
+              dockerRunning = true
+              break
+            }
+          }
+          if (!dockerRunning) {
+            log('⚠️  Docker failed to start - please start Docker Desktop manually', 'warning')
+            failedInstalls.push('Docker (start)')
+          }
+          prereqs = getEffectivePrereqs(await refreshPrerequisites())
+        }
+      }
+
+      // Report any failures
+      if (failedInstalls.length > 0) {
+        log(`Installation issues detected: ${failedInstalls.join(', ')}`, 'warning')
+        log('You can manually install these and refresh, or continue if not critical', 'info')
+      }
+
+      // Step 5: Clone if needed
       const status = await tauri.checkProjectDir(projectRoot)
       if (!status.is_valid_repo) {
         await handleClone(projectRoot)
       }
 
-      // Start default environment
+      // Step 6: Start default environment
       await handleStartEnv('default')
 
-      log('Quick launch complete!', 'success')
+      if (failedInstalls.length > 0) {
+        log('Quick launch completed with warnings', 'warning')
+      } else {
+        log('Quick launch complete!', 'success')
+      }
     } catch (err) {
       log(`Quick launch failed: ${err}`, 'error')
     } finally {
@@ -689,6 +934,23 @@ function App() {
                 Automatically install prerequisites and start Ushadow
               </p>
             </div>
+
+            {/* Installation Path Display */}
+            <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
+              <FolderOpen className="w-4 h-4 text-text-muted" />
+              <span className="text-text-muted">Installation:</span>
+              <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
+                {projectRoot || 'Not set'}
+              </span>
+              <button
+                onClick={() => setShowProjectDialog(true)}
+                className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
+                title="Change installation location"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             <button
               onClick={handleQuickLaunch}
               disabled={isLaunching}
@@ -711,17 +973,17 @@ function App() {
         ) : (
           /* Dev Mode - Two column layout */
           <div className="h-full flex flex-col gap-4">
-            {/* Repository Settings Bar */}
+            {/* Ushadow Installation Settings Bar */}
             <div className="flex items-center gap-3 px-3 py-2 bg-surface-800 rounded-lg" data-testid="repo-settings-bar">
               <FolderOpen className="w-4 h-4 text-text-muted flex-shrink-0" />
-              <span className="text-xs text-text-muted">Repository:</span>
+              <span className="text-xs text-text-muted">Ushadow installation:</span>
               <span className="text-sm text-text-secondary truncate flex-1" title={projectRoot}>
                 {projectRoot || 'Not set'}
               </span>
               <button
                 onClick={() => setShowProjectDialog(true)}
                 className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
-                title="Change repository location"
+                title="Change installation location"
                 data-testid="edit-repo-button"
               >
                 <Pencil className="w-4 h-4" />
@@ -735,6 +997,7 @@ function App() {
                 prerequisites={effectivePrereqs}
                 platform={platform}
                 isInstalling={isInstalling}
+                installingItem={installingItem}
                 brewInstalled={effectiveBrewInstalled}
                 onInstall={handleInstall}
                 onStartDocker={handleStartDocker}
@@ -744,7 +1007,7 @@ function App() {
                 onStart={handleStartInfra}
                 onStop={handleStopInfra}
                 onRestart={handleRestartInfra}
-                isLoading={isInstalling}
+                isLoading={loadingInfra}
               />
             </div>
 
@@ -758,7 +1021,7 @@ function App() {
                   onCreate={() => setShowNewEnvDialog(true)}
                   onOpenInApp={handleOpenInApp}
                   onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
-                  isLoading={isInstalling}
+                  loadingEnv={loadingEnv}
                 />
               </div>
             </div>

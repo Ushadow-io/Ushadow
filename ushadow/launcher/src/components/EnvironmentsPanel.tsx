@@ -19,7 +19,7 @@ interface EnvironmentsPanelProps {
   onCreate: () => void
   onOpenInApp: (env: UshadowEnvironment) => void
   onDismissError?: (name: string) => void
-  isLoading: boolean
+  loadingEnv: string | null
 }
 
 export function EnvironmentsPanel({
@@ -30,7 +30,7 @@ export function EnvironmentsPanel({
   onCreate,
   onOpenInApp,
   onDismissError,
-  isLoading,
+  loadingEnv,
 }: EnvironmentsPanelProps) {
   const [activeTab, setActiveTab] = useState<'running' | 'detected'>('running')
 
@@ -104,7 +104,7 @@ export function EnvironmentsPanel({
                 onStart={() => onStart(env.name)}
                 onStop={() => onStop(env.name)}
                 onOpenInApp={() => onOpenInApp(env)}
-                isLoading={isLoading}
+                isLoading={loadingEnv === env.name}
               />
             ))}
           </div>
@@ -121,7 +121,7 @@ export function EnvironmentsPanel({
                 onStart={() => onStart(env.name)}
                 onStop={() => onStop(env.name)}
                 onOpenInApp={() => onOpenInApp(env)}
-                isLoading={isLoading}
+                isLoading={loadingEnv === env.name}
               />
             ))}
           </div>
@@ -289,15 +289,15 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, isLoading 
           )}
         </div>
 
-        {/* Open in App - only when running */}
+        {/* Open in App - prominent when running */}
         {environment.running && (
           <button
             onClick={onOpenInApp}
-            className="p-1.5 rounded bg-primary-500/20 text-primary-400 hover:bg-primary-500/30 transition-colors"
-            title="Open in App"
+            className="px-3 py-1.5 rounded-lg bg-primary-500 text-white hover:bg-primary-600 transition-colors flex items-center gap-1.5 font-medium shadow-sm"
             data-testid={`open-in-app-${environment.name}`}
           >
             <AppWindow className="w-4 h-4" />
+            <span className="text-sm">Open</span>
           </button>
         )}
 

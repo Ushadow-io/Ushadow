@@ -21,22 +21,31 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
   const logAreaRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const [copied, setCopied] = useState(false)
+  const [viewMode, setViewMode] = useState<'state' | 'detail'>('state')
 
-  // Auto-scroll to bottom when new logs arrive
+  // Auto-scroll to top when new logs arrive (since most recent is at top)
   useEffect(() => {
     if (logAreaRef.current && autoScrollRef.current) {
-      logAreaRef.current.scrollTop = logAreaRef.current.scrollHeight
+      logAreaRef.current.scrollTop = 0
     }
   }, [logs])
 
-  // Detect if user scrolled up (disable auto-scroll)
+  // Detect if user scrolled down (disable auto-scroll)
   const handleScroll = () => {
     if (logAreaRef.current) {
-      const { scrollTop, scrollHeight, clientHeight } = logAreaRef.current
-      // If user is within 50px of bottom, enable auto-scroll
-      autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 50
+      const { scrollTop } = logAreaRef.current
+      // If user is within 50px of top, enable auto-scroll
+      autoScrollRef.current = scrollTop < 50
     }
   }
+
+  // Filter logs based on view mode
+  const filteredLogs = viewMode === 'state'
+    ? logs.filter(log => log.level !== 'info') // State view: hide info logs
+    : logs // Detail view: show all logs
+
+  // Reverse logs to show most recent at top
+  const displayLogs = [...filteredLogs].reverse()
 
   // Copy all logs to clipboard
   const handleCopy = async () => {
@@ -100,6 +109,34 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
         </div>
       </div>
 
+      {/* Tabs */}
+      {expanded && (
+        <div className="flex gap-1 px-3 pb-2 bg-surface-700/50">
+          <button
+            onClick={() => setViewMode('state')}
+            className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
+              viewMode === 'state'
+                ? 'bg-surface-600 text-text-primary'
+                : 'text-text-muted hover:text-text-secondary'
+            }`}
+            data-testid="log-tab-state"
+          >
+            State
+          </button>
+          <button
+            onClick={() => setViewMode('detail')}
+            className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
+              viewMode === 'detail'
+                ? 'bg-surface-600 text-text-primary'
+                : 'text-text-muted hover:text-text-secondary'
+            }`}
+            data-testid="log-tab-detail"
+          >
+            Detail
+          </button>
+        </div>
+      )}
+
       {/* Log Area - animated collapse */}
       <div
         className="transition-all duration-300 ease-in-out overflow-hidden"
@@ -111,10 +148,10 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
           className="overflow-y-auto p-3 font-mono text-xs leading-relaxed max-h-[200px] border-t border-surface-700 select-text"
           data-testid="log-area"
         >
-          {logs.length === 0 ? (
+          {displayLogs.length === 0 ? (
             <p className="text-text-muted text-center">No activity yet...</p>
           ) : (
-            logs.map((entry) => <LogLine key={entry.id} entry={entry} />)
+            displayLogs.map((entry) => <LogLine key={entry.id} entry={entry} />)
           )}
         </div>
       </div>
