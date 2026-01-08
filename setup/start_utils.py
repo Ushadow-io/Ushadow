@@ -1,7 +1,7 @@
 """
-Startup utilities for Chronicle scripts.
+Startup utilities for Ushadow scripts.
 
-Shared startup orchestration functions for go.sh and quick-start.sh.
+Shared startup orchestration functions for go.sh and dev.sh.
 Handles infrastructure startup, health checks, and service coordination.
 """
 
@@ -17,13 +17,13 @@ from docker_utils import DockerNetworkManager
 
 def ensure_networks() -> bool:
     """
-    Ensure chronicle-network and infra-network exist.
+    Ensure ushadow-network and infra-network exist.
 
     Returns:
         True if both networks exist/created, False otherwise
     """
     try:
-        results = DockerNetworkManager.ensure_chronicle_networks()
+        results = DockerNetworkManager.ensure_networks()
         return all(results.values())
     except Exception as e:
         print(f"Warning: Could not create networks: {e}", file=sys.stderr)
