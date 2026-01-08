@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { tauri, type Prerequisites, type Discovery } from './hooks/useTauri'
 import { useAppStore } from './store/appStore'
+import { useWindowFocus } from './hooks/useWindowFocus'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
@@ -42,6 +43,9 @@ function App() {
   const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
+
+  // Window focus detection for smart polling
+  const isWindowFocused = useWindowFocus()
 
   const logIdRef = useRef(0)
   const lastStateRef = useRef<string>('')
@@ -156,10 +160,14 @@ function App() {
         await tauri.setProjectRoot(projectRoot)
       }
 
+      // Check prerequisites immediately (system-wide, no project needed)
       await refreshPrerequisites()
-      const disc = await refreshDiscovery()
 
-      // Don't auto-start - let user choose when to launch
+      // Only run discovery if we have a valid project root
+      if (!isFirstTimeSetup) {
+        await refreshDiscovery()
+      }
+
       log('Ready', 'success')
     }
     init()
@@ -173,14 +181,27 @@ function App() {
     }
   }, [shouldAutoLaunch, isLaunching]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Polling (less frequent, only logs on change)
+  // Smart polling with multiple safeguards
   useEffect(() => {
+    // Don't poll if window is not focused (save CPU/battery)
+    if (!isWindowFocused) {
+      return
+    }
+
+    // CRITICAL: Don't poll if no project is configured yet
+    // This prevents docker discovery from running on first launch
+    if (!projectRoot) {
+      return
+    }
+
+    // Set up periodic polling
     const interval = setInterval(() => {
       refreshPrerequisites(true)
       refreshDiscovery(true)
-    }, 30000) // 30 seconds
+    }, 60000) // 60 seconds - reduced from 30s for better performance
+
     return () => clearInterval(interval)
-  }, [refreshPrerequisites, refreshDiscovery])
+  }, [refreshPrerequisites, refreshDiscovery, isWindowFocused, projectRoot])
 
   // Install handlers
   const handleInstall = async (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => {
@@ -617,14 +638,47 @@ function App() {
     }
   }
 
-  // Project setup handlers
-  const handleClone = async (path: string) => {
+  // Project setup handler - just saves the path, doesn't clone yet
+  const handleProjectSetup = async (path: string) => {
     setShowProjectDialog(false)
-    setIsLaunching(true)
 
     try {
+      // Save the project root
+      await tauri.setProjectRoot(path)
+      setProjectRoot(path)
+      log(`Installation path set to ${path}`, 'success')
+
+      // Check if repo already exists
+      const status = await tauri.checkProjectDir(path)
+
+      if (status.exists && status.is_valid_repo) {
+        // Existing repo found - run discovery
+        log('Found existing Ushadow repository', 'info')
+        const disc = await refreshDiscovery()
+
+        // Auto-switch to quick mode if no environments exist
+        if (disc && disc.environments.length === 0) {
+          setAppMode('quick')
+          log('Ready for quick launch', 'step')
+        }
+      } else {
+        // Repo doesn't exist - will be cloned when user presses Launch
+        setAppMode('quick')
+        log('Press Launch to install Ushadow', 'step')
+      }
+    } catch (err) {
+      log(`Failed to set installation path: ${err}`, 'error')
+    }
+  }
+
+  const handleClone = async (path: string) => {
+    try {
+      console.log('DEBUG handleClone: Starting clone for path:', path)
+      console.log('DEBUG handleClone: dryRunMode =', dryRunMode)
+      
       // Check if repo already exists at this location
       const status = await tauri.checkProjectDir(path)
+      console.log('DEBUG handleClone: checkProjectDir status =', status)
 
       if (status.exists && status.is_valid_repo) {
         // Repo exists - pull latest instead of cloning
@@ -644,24 +698,18 @@ function App() {
           await new Promise(r => setTimeout(r, 2000))
           log('[DRY RUN] Clone simulated', 'success')
         } else {
+          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path)
           const result = await tauri.cloneUshadowRepo(path)
+          console.log('DEBUG handleClone: Clone result from Rust:', result)
           log(result, 'success')
         }
       }
 
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
-      const disc = await refreshDiscovery()
-
-      // Auto-switch to quick mode if no environments exist after setup
-      if (disc && disc.environments.length === 0) {
-        setAppMode('quick')
-        log('No environments found - ready for quick launch', 'step')
-      }
     } catch (err) {
-      log(`Failed to setup project: ${err}`, 'error')
-    } finally {
-      setIsLaunching(false)
+      log(`Clone failed: ${err}`, 'error')
+      throw err
     }
   }
 
@@ -1062,8 +1110,7 @@ function App() {
         isOpen={showProjectDialog}
         defaultPath={projectRoot}
         onClose={() => setShowProjectDialog(false)}
-        onClone={handleClone}
-        onLink={handleLink}
+        onSetup={handleProjectSetup}
       />
 
       {/* New Environment Dialog */}
