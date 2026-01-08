@@ -195,9 +195,8 @@ ushadow uses a dual-layer configuration system:
 │                                                 │
 │  YAML files (config/)                           │
 │      ├── config.defaults.yaml (shipped)         │
-│      ├── default-services.yaml (shipped)        │
 │      ├── secrets.yaml (gitignored)              │
-│      └── config_settings.yaml (gitignored)      │
+│      └── config.overrides.yaml (gitignored)     │
 │      ↓                                          │
 │  SettingsStore (OmegaConf)                      │
 │      → API keys, provider selection, prefs      │
