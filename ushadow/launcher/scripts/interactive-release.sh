@@ -193,20 +193,18 @@ confirm_and_release() {
 
     git tag -a "$tag" -m "$RELEASE_NAME"
 
-    # 5. Push tag (triggers GitHub Actions)
+    # 5. Push tag to GitHub
     echo -e "${YELLOW}→ Pushing tag to GitHub...${NC}"
     git push origin "$tag"
 
-    # 6. Trigger GitHub Actions workflow (if not all platforms, use workflow_dispatch)
-    if [ "$PLATFORMS" != "all" ]; then
-        echo -e "${YELLOW}→ Triggering GitHub Actions for selected platforms...${NC}"
-        gh workflow run launcher-release.yml \
-            --repo "$GITHUB_REPO" \
-            -f version="$NEW_VERSION" \
-            -f platforms="$PLATFORMS" \
-            -f release_name="$RELEASE_NAME" \
-            -f draft=false
-    fi
+    # 6. Trigger GitHub Actions workflow
+    echo -e "${YELLOW}→ Triggering GitHub Actions workflow...${NC}"
+    gh workflow run launcher-release.yml \
+        --repo "$GITHUB_REPO" \
+        -f version="$NEW_VERSION" \
+        -f platforms="$PLATFORMS" \
+        -f release_name="$RELEASE_NAME" \
+        -f draft=false
 
     echo ""
     echo -e "${GREEN}╭─────────────────────────────────────────╮${NC}"
