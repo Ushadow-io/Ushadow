@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import { chronicleAuthApi, getChronicleBaseUrl } from '../services/chronicleApi'
+import { chronicleAuthApi } from '../services/chronicleApi'
 import { useChronicleRecording, ChronicleRecordingReturn } from '../hooks/useChronicleRecording'
 
 interface ChronicleContextType {
@@ -7,7 +7,6 @@ interface ChronicleContextType {
   isConnected: boolean
   isCheckingConnection: boolean
   connectionError: string | null
-  chronicleUrl: string
 
   // Connection actions
   checkConnection: () => Promise<boolean>
@@ -23,7 +22,6 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [isCheckingConnection, setIsCheckingConnection] = useState(true)
   const [connectionError, setConnectionError] = useState<string | null>(null)
-  const [chronicleUrl, setChronicleUrl] = useState(getChronicleBaseUrl())
 
   // Lift recording hook to context level
   const recording = useChronicleRecording()
@@ -42,7 +40,6 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
       // Verify the token is still valid
       await chronicleAuthApi.getMe()
       setIsConnected(true)
-      setChronicleUrl(getChronicleBaseUrl())
       return true
     } catch (error: any) {
       console.log('Chronicle connection check failed:', error)
@@ -98,7 +95,6 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
         isConnected,
         isCheckingConnection,
         connectionError,
-        chronicleUrl,
         checkConnection,
         disconnect,
         recording
