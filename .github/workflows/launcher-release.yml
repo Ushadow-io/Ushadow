@@ -49,6 +49,8 @@ jobs:
       build_linux: ${{ steps.check_platforms.outputs.build_linux }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: launcher-v${{ inputs.version }}
 
       - name: Get version and release info
         id: get_version
@@ -111,6 +113,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: launcher-v${{ needs.prepare.outputs.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -155,6 +159,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: launcher-v${{ needs.prepare.outputs.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -205,6 +211,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: launcher-v${{ needs.prepare.outputs.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -272,6 +280,8 @@ jobs:
       RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: launcher-v${{ needs.prepare.outputs.version }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

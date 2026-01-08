@@ -1,4 +1,5 @@
 use std::process::Command;
+use std::path::{Path, PathBuf};
 
 /// Create a new Command that won't open a console window on Windows.
 /// This is essential for background polling commands that shouldn't flash windows.
@@ -54,6 +55,22 @@ pub fn shell_command(command: &str) -> Command {
         cmd.args(["-l", "-c", command]);
         return cmd;
     }
+}
+
+/// Expand ~ in paths to the user's home directory
+/// Example: ~/ushadow -> /Users/username/ushadow
+pub fn expand_tilde(path: &str) -> String {
+    if path.starts_with("~/") || path == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return path.replacen("~", &home, 1);
+        }
+        // Windows fallback
+        #[cfg(target_os = "windows")]
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            return path.replacen("~", &userprofile, 1);
+        }
+    }
+    path.to_string()
 }
 
 #[cfg(test)]

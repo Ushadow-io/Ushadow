@@ -4,7 +4,8 @@
 
 .PHONY: help up down restart logs build clean test go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
-        chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev
+        chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
+        release
 
 # Read .env for display purposes only (actual logic is in run.py)
 -include .env
@@ -58,6 +59,10 @@ help:
 	@echo "  make clean-cache  - Remove Python cache files"
 	@echo "  make reset        - Full reset (stop all, remove volumes, clean)"
 	@echo "  make reset-tailscale - Reset Tailscale (container, state, certs)"
+	@echo ""
+	@echo "Launcher release:"
+	@echo "  make release VERSION=x.y.z [PLATFORMS=all] [DRAFT=true]"
+	@echo "                    - Build, commit, and trigger GitHub release workflow"
 
 # Quick start - runs go.sh
 go:
@@ -296,3 +301,37 @@ env-info:
 	@echo "WEBUI_PORT: $${WEBUI_PORT:-3000}"
 	@echo "CHRONICLE_PORT: $${CHRONICLE_PORT:-8000}"
 	@echo "MONGODB_DATABASE: $${MONGODB_DATABASE:-ushadow}"
+
+# Launcher release - triggers GitHub Actions workflow
+# Usage: make release VERSION=0.4.2 [PLATFORMS=macos] [DRAFT=true] [RELEASE_NAME="Bug Fixes"]
+release:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION is required"; \
+		echo "Usage: make release VERSION=0.4.2 [PLATFORMS=macos,windows,linux] [DRAFT=true] [RELEASE_NAME='Bug Fixes']"; \
+		exit 1; \
+	fi
+	@echo "🚀 Triggering launcher release workflow..."
+	@echo "   Version: $(VERSION)"
+	@echo "   Platforms: $${PLATFORMS:-all}"
+	@echo "   Draft: $${DRAFT:-false}"
+	@echo "   Release Name: $${RELEASE_NAME:-v$(VERSION)}"
+	@echo ""
+	@echo "📦 Building frontend dist..."
+	@cd ushadow/launcher && npm run build
+	@echo "✅ Frontend built"
+	@echo ""
+	@echo "🔄 Committing dist folder (required for GitHub Actions)..."
+	@git add -f ushadow/launcher/dist
+	@git commit -m "chore(launcher): build dist for release v$(VERSION)" || true
+	@git push origin HEAD
+	@echo ""
+	@echo "🎬 Triggering GitHub Actions workflow..."
+	@gh workflow run launcher-release.yml \
+		-f version=$(VERSION) \
+		-f platforms=$${PLATFORMS:-all} \
+		-f draft=$${DRAFT:-false} \
+		$${RELEASE_NAME:+-f release_name="$$RELEASE_NAME"}
+	@echo ""
+	@echo "✅ Release workflow triggered!"
+	@echo "   View progress: gh run list --workflow=launcher-release.yml"
+	@echo "   Or visit: https://github.com/$$(git config --get remote.origin.url | sed 's/.*github.com[:/]\(.*\)\.git/\1/')/actions"

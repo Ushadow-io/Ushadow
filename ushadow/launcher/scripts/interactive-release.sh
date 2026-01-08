@@ -178,7 +178,12 @@ confirm_and_release() {
             ushadow/launcher/src-tauri/Cargo.toml
     git commit -m "chore(launcher): release v$NEW_VERSION" || true
 
-    # 3. Create and push tag
+    # 3. Push version bump commit to current branch
+    echo -e "${YELLOW}→ Pushing version bump to remote...${NC}"
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    git push origin "$CURRENT_BRANCH"
+
+    # 4. Create and push tag
     local tag="launcher-v$NEW_VERSION"
     echo -e "${YELLOW}→ Creating tag $tag...${NC}"
 
@@ -188,11 +193,11 @@ confirm_and_release() {
 
     git tag -a "$tag" -m "$RELEASE_NAME"
 
-    # 4. Push tag (triggers GitHub Actions)
+    # 5. Push tag (triggers GitHub Actions)
     echo -e "${YELLOW}→ Pushing tag to GitHub...${NC}"
     git push origin "$tag"
 
-    # 5. Trigger GitHub Actions workflow (if not all platforms, use workflow_dispatch)
+    # 6. Trigger GitHub Actions workflow (if not all platforms, use workflow_dispatch)
     if [ "$PLATFORMS" != "all" ]; then
         echo -e "${YELLOW}→ Triggering GitHub Actions for selected platforms...${NC}"
         gh workflow run launcher-release.yml \

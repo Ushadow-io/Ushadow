@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use crate::models::{DiscoveryResult, InfraService, UshadowEnvironment};
 use super::prerequisites::{check_docker, check_tailscale};
-use super::utils::silent_command;
+use super::utils::shell_command;
 
 /// Infrastructure service patterns
 const INFRA_PATTERNS: &[(&str, &str)] = &[
@@ -38,8 +38,8 @@ pub async fn discover_environments() -> Result<DiscoveryResult, String> {
     }
 
     // Get ALL Docker containers (including stopped with -a)
-    let output = silent_command("docker")
-        .args(["ps", "-a", "--format", "{{.Names}}|{{.Status}}|{{.Ports}}"])
+    // Use shell_command to properly load user's PATH (docker might be in Homebrew path)
+    let output = shell_command("docker ps -a --format '{{.Names}}|{{.Status}}|{{.Ports}}'")
         .output()
         .map_err(|e| format!("Failed to get containers: {}", e))?;
 
@@ -221,8 +221,8 @@ fn extract_port(ports_str: &str) -> Option<u16> {
 fn get_tailscale_url(port: u16) -> Option<String> {
     let url = format!("http://localhost:{}/api/unodes/leader/info", port);
 
-    let output = silent_command("curl")
-        .args(["-s", "--connect-timeout", "1", "--max-time", "2", &url])
+    // Use shell_command to properly load user's PATH
+    let output = shell_command(&format!("curl -s --connect-timeout 1 --max-time 2 '{}'", url))
         .output()
         .ok()?;
 

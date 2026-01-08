@@ -88,17 +88,10 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    let infra_output = silent_command("docker")
-        .args([
-            "compose",
-            "-f", "compose/docker-compose.infra.yml",
-            "-p", "infra",
-            "--profile", "infra",
-            "up", "-d",
-        ])
+    let infra_output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
         .current_dir(&project_root)
         .output()
-        .map_err(|e| format!("Failed to start infrastructure: {}", e))?;
+        .map_err(|e| format!("Failed to start infrastructure (docker not found or not executable): {}", e))?;
 
     if !infra_output.status.success() {
         let stderr = String::from_utf8_lossy(&infra_output.stderr);
@@ -115,11 +108,10 @@ pub async fn stop_infrastructure(state: State<'_, AppState>) -> Result<String, S
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    let output = silent_command("docker")
-        .args(["compose", "-p", "infra", "down"])
+    let output = shell_command("docker compose -p infra down")
         .current_dir(&project_root)
         .output()
-        .map_err(|e| format!("Failed to stop infrastructure: {}", e))?;
+        .map_err(|e| format!("Failed to stop infrastructure (docker not found or not executable): {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -137,23 +129,15 @@ pub async fn restart_infrastructure(state: State<'_, AppState>) -> Result<String
     drop(root);
 
     // Stop first
-    let _ = silent_command("docker")
-        .args(["compose", "-p", "infra", "down"])
+    let _ = shell_command("docker compose -p infra down")
         .current_dir(&project_root)
         .output();
 
     // Start again
-    let output = silent_command("docker")
-        .args([
-            "compose",
-            "-f", "compose/docker-compose.infra.yml",
-            "-p", "infra",
-            "--profile", "infra",
-            "up", "-d",
-        ])
+    let output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
         .current_dir(&project_root)
         .output()
-        .map_err(|e| format!("Failed to restart infrastructure: {}", e))?;
+        .map_err(|e| format!("Failed to restart infrastructure (docker not found or not executable): {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -182,191 +166,160 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
     };
 
     // Get matching stopped container names
-    let output = silent_command("docker")
-        .args(["ps", "-a", "--filter", "status=exited", "--format", "{{.Names}}"])
+    let output = shell_command("docker ps -a --filter status=exited --format '{{.Names}}'")
         .output()
-        .map_err(|e| format!("Failed to list containers: {}", e))?;
+        .map_err(|e| format!("Failed to list containers (docker not found or not executable): {}", e))?;
 
     if !output.status.success() {
         return Err("Failed to list containers".to_string());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("DEBUG: All stopped containers:\n{}", stdout);
+
     let containers: Vec<&str> = stdout
         .lines()
         .filter(|name| {
             if env_name == "default" || env_name == "ushadow" {
-                name.starts_with(&pattern) && 
-                (*name == "ushadow-backend" || *name == "ushadow-webui" || 
-                 *name == "ushadow-frontend" || *name == "ushadow-worker" ||
-                 *name == "ushadow-tailscale" ||
-                 name.starts_with("ushadow-backend-") || name.starts_with("ushadow-webui-") ||
-                 name.starts_with("ushadow-frontend-") || name.starts_with("ushadow-worker-") ||
-                 name.starts_with("ushadow-tailscale-"))
+                // For default env, match ushadow-{service} or ushadow-{service}-{number}
+                // but NOT ushadow-{envname}-{service}
+                if !name.starts_with(&pattern) {
+                    return false;
+                }
+
+                // Check if this is a default env container by checking if it matches known services
+                let after_prefix = &name[pattern.len()..];
+                let services = ["backend", "webui", "frontend", "worker", "tailscale"];
+
+                services.iter().any(|service| {
+                    after_prefix == *service || after_prefix.starts_with(&format!("{}-", service))
+                })
             } else {
                 name.starts_with(&pattern)
             }
         })
         .collect();
 
+    eprintln!("DEBUG: Matched stopped containers for '{}': {:?}", env_name, containers);
+
     // If no stopped containers found, check if ANY containers exist for this env
     if containers.is_empty() {
         // Check for running containers
-        let output = silent_command("docker")
-            .args(["ps", "--format", "{{.Names}}"])
+        let output = shell_command("docker ps --format '{{.Names}}'")
             .output()
-            .map_err(|e| format!("Failed to list running containers: {}", e))?;
+            .map_err(|e| format!("Failed to list running containers (docker not found or not executable): {}", e))?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            eprintln!("DEBUG: All running containers:\n{}", stdout);
+
             let running: Vec<&str> = stdout
                 .lines()
                 .filter(|name| {
                     if env_name == "default" || env_name == "ushadow" {
-                        name.starts_with(&pattern)
+                        // For default env, match ushadow-{service} or ushadow-{service}-{number}
+                        // but NOT ushadow-{envname}-{service}
+                        if !name.starts_with(&pattern) {
+                            return false;
+                        }
+
+                        // Check if this is a default env container by checking if it matches known services
+                        let after_prefix = &name[pattern.len()..];
+                        let services = ["backend", "webui", "frontend", "worker", "tailscale"];
+
+                        services.iter().any(|service| {
+                            after_prefix == *service || after_prefix.starts_with(&format!("{}-", service))
+                        })
                     } else {
                         name.starts_with(&pattern)
                     }
                 })
                 .collect();
 
+            eprintln!("DEBUG: Matched running containers for '{}': {:?}", env_name, running);
+
             if !running.is_empty() {
+                eprintln!("DEBUG: Environment already running, returning early");
                 return Ok(format!("Environment '{}' is already running ({} containers)", env_name, running.len()));
             }
         }
 
         // No containers exist - need to build and create them
-        // Check if .env file exists to determine if this is a fresh setup
-        let env_file = std::path::Path::new(&project_root).join(".env");
-        
-        eprintln!("DEBUG: project_root = {}", project_root);
-        eprintln!("DEBUG: .env file exists = {}", env_file.exists());
-        
-        if !env_file.exists() {
-            // Fresh setup - run setup/run.py to initialize
-            let setup_script = std::path::Path::new(&project_root).join("setup").join("run.py");
-            eprintln!("DEBUG: setup script path = {:?}", setup_script);
-            eprintln!("DEBUG: setup script exists = {}", setup_script.exists());
-            
-            if !setup_script.exists() {
-                return Err(format!("No containers found for '{}' and setup/run.py not found in {}. Cannot build environment.", env_name, project_root));
-            }
+        eprintln!("DEBUG: No containers found (stopped or running), running setup");
 
-            eprintln!("DEBUG: Running setup from directory: {}", project_root);
-            
-            // Find available ports (default: 8000 for backend, 3000 for webui)
-            let (backend_port, webui_port) = find_available_ports(8000, 3000);
-            let port_offset = backend_port - 8000;
-            
-            eprintln!("DEBUG: Using port_offset = {}", port_offset);
+        // Find available ports (default: 8000 for backend, 3000 for webui)
+        let (backend_port, _webui_port) = find_available_ports(8000, 3000);
+        let port_offset = backend_port - 8000;
 
-            // First, ensure Python dependencies are installed
-            eprintln!("DEBUG: Installing Python dependencies...");
-            let pip_output = shell_command("pip3 install pyyaml")
-                .current_dir(&project_root)
-                .output()
-                .map_err(|e| format!("Failed to install dependencies: {}", e))?;
+        eprintln!("DEBUG: ========== RUNNING SETUP ==========");
+        eprintln!("DEBUG: Working directory: {}", project_root);
+        eprintln!("DEBUG: ENV_NAME={}, PORT_OFFSET={}", env_name, port_offset);
 
-            if !pip_output.status.success() {
-                let pip_err = String::from_utf8_lossy(&pip_output.stderr);
-                eprintln!("WARNING: pip install failed: {}", pip_err);
-            }
-
-            // Run setup/run.py --quick --prod --skip-admin
-            let output = shell_command("python3 setup/run.py --quick --prod --skip-admin")
-                .current_dir(&project_root)
-                .env("ENV_NAME", &env_name)
-                .env("PORT_OFFSET", port_offset.to_string())
-                .output()
-                .map_err(|e| format!("Failed to run setup: {}", e))?;
-
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            eprintln!("DEBUG: setup script stdout:\n{}", stdout);
-            eprintln!("DEBUG: setup script stderr:\n{}", stderr);
-
-            if !output.status.success() {
-                let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
-                return Err(format!("Failed to initialize environment: {}", error_msg.lines().last().unwrap_or(&error_msg)));
-            }
-
-            // Open browser to registration page
-            let url = format!("http://localhost:{}/register", webui_port);
-            eprintln!("DEBUG: Opening browser to {}", url);
-            if let Err(e) = open::that(&url) {
-                eprintln!("WARNING: Could not open browser: {}", e);
-            }
-
-            return Ok(format!("Environment '{}' initialized and started", env_name));
+        // Install uv if needed
+        let install_script = if cfg!(target_os = "windows") {
+            std::path::Path::new(&project_root).join("scripts/install-uv.ps1")
         } else {
-            // .env exists - just need to start containers (they may have been deleted)
-            // Check if containers were deleted - if so, need to rebuild
-            let go_script = std::path::Path::new(&project_root).join("go.sh");
-            eprintln!("DEBUG: go.sh path = {:?}", go_script);
-            eprintln!("DEBUG: go.sh exists = {}", go_script.exists());
-            
-            if !go_script.exists() {
-                return Err(format!("No containers found for '{}' and go.sh not found in {}. Cannot build environment.", env_name, project_root));
+            std::path::Path::new(&project_root).join("scripts/install-uv.sh")
+        };
+
+        if install_script.exists() {
+            eprintln!("DEBUG: Running uv installer: {:?}", install_script);
+            let install_output = if cfg!(target_os = "windows") {
+                shell_command("powershell")
+                    .args(["-ExecutionPolicy", "Bypass", "-File", install_script.to_str().unwrap()])
+                    .current_dir(&project_root)
+                    .output()
+            } else {
+                shell_command("bash")
+                    .arg(install_script.to_str().unwrap())
+                    .current_dir(&project_root)
+                    .output()
+            };
+
+            match install_output {
+                Ok(out) if !out.status.success() => {
+                    eprintln!("WARNING: uv installer exited with non-zero status, continuing anyway");
+                }
+                Err(e) => {
+                    eprintln!("WARNING: Failed to run uv installer: {}, continuing anyway", e);
+                }
+                _ => {}
             }
-
-            eprintln!("DEBUG: Running go.sh from directory: {}", project_root);
-
-            // First, ensure Python dependencies are installed
-            eprintln!("DEBUG: Installing Python dependencies...");
-            let pip_output = shell_command("pip3 install pyyaml")
-                .current_dir(&project_root)
-                .output()
-                .map_err(|e| format!("Failed to install dependencies: {}", e))?;
-
-            if !pip_output.status.success() {
-                let pip_err = String::from_utf8_lossy(&pip_output.stderr);
-                eprintln!("WARNING: pip install failed: {}", pip_err);
-            }
-
-            // Run go.sh to rebuild containers
-            let output = shell_command("./go.sh")
-                .current_dir(&project_root)
-                .output()
-                .map_err(|e| format!("Failed to run go.sh: {}", e))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
-                return Err(format!("Failed to build containers: {}", error_msg.lines().last().unwrap_or(&error_msg)));
-            }
-
-            // Read webui port from .env file
-            let webui_port = std::fs::read_to_string(&env_file)
-                .ok()
-                .and_then(|content| {
-                    content.lines()
-                        .find(|line| line.starts_with("WEBUI_PORT="))
-                        .and_then(|line| line.split('=').nth(1))
-                        .and_then(|port| port.parse::<u16>().ok())
-                })
-                .unwrap_or(3000);
-
-            // Open browser to registration page
-            let url = format!("http://localhost:{}/register", webui_port);
-            eprintln!("DEBUG: Opening browser to {}", url);
-            if let Err(e) = open::that(&url) {
-                eprintln!("WARNING: Could not open browser: {}", e);
-            }
-
-            return Ok(format!("Environment '{}' rebuilt and started", env_name));
         }
+
+        // Run setup with uv
+        eprintln!("DEBUG: Running: uv run --with pyyaml setup/run.py --quick --prod --skip-admin");
+        let output = shell_command("uv")
+            .args(["run", "--with", "pyyaml", "setup/run.py", "--quick", "--prod", "--skip-admin"])
+            .current_dir(&project_root)
+            .env("ENV_NAME", &env_name)
+            .env("PORT_OFFSET", port_offset.to_string())
+            .output()
+            .map_err(|e| format!("Failed to run setup (uv not found or not executable): {}", e))?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        eprintln!("DEBUG: setup stdout:\n{}", stdout);
+        eprintln!("DEBUG: setup stderr:\n{}", stderr);
+
+        if !output.status.success() {
+            let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
+            return Err(format!("Failed to initialize environment: {}", error_msg.lines().last().unwrap_or(&error_msg)));
+        }
+
+        return Ok(format!("Environment '{}' initialized and started", env_name));
     }
 
-    // Containers exist and are stopped - start them
-    let mut start_args = vec!["start"];
-    start_args.extend(containers.iter().copied());
+    // Containers exist and are stopped - just start them
+    eprintln!("DEBUG: Found stopped containers: {:?}", containers);
 
-    let output = silent_command("docker")
-        .args(&start_args)
+    let container_names = containers.join(" ");
+    let start_command = format!("docker start {}", container_names);
+
+    let output = shell_command(&start_command)
         .output()
-        .map_err(|e| format!("Failed to start containers: {}", e))?;
+        .map_err(|e| format!("Failed to start containers (docker not found or not executable): {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -388,10 +341,9 @@ pub async fn stop_environment(_state: State<'_, AppState>, env_name: String) -> 
     };
 
     // Get matching container names
-    let output = silent_command("docker")
-        .args(["ps", "-a", "--format", "{{.Names}}"])
+    let output = shell_command("docker ps -a --format '{{.Names}}'")
         .output()
-        .map_err(|e| format!("Failed to list containers: {}", e))?;
+        .map_err(|e| format!("Failed to list containers (docker not found or not executable): {}", e))?;
 
     if !output.status.success() {
         return Err("Failed to list containers".to_string());
@@ -402,14 +354,19 @@ pub async fn stop_environment(_state: State<'_, AppState>, env_name: String) -> 
         .lines()
         .filter(|name| {
             if env_name == "default" || env_name == "ushadow" {
-                // Match ushadow-backend, ushadow-webui but NOT ushadow-envname-*
-                name.starts_with(&pattern) && !name.contains("-backend-") && 
-                (*name == "ushadow-backend" || *name == "ushadow-webui" || 
-                 *name == "ushadow-frontend" || *name == "ushadow-worker" ||
-                 *name == "ushadow-tailscale" ||
-                 name.starts_with("ushadow-backend-") || name.starts_with("ushadow-webui-") ||
-                 name.starts_with("ushadow-frontend-") || name.starts_with("ushadow-worker-") ||
-                 name.starts_with("ushadow-tailscale-"))
+                // For default env, match ushadow-{service} or ushadow-{service}-{number}
+                // but NOT ushadow-{envname}-{service}
+                if !name.starts_with(&pattern) {
+                    return false;
+                }
+
+                // Check if this is a default env container by checking if it matches known services
+                let after_prefix = &name[pattern.len()..];
+                let services = ["backend", "webui", "frontend", "worker", "tailscale"];
+
+                services.iter().any(|service| {
+                    after_prefix == *service || after_prefix.starts_with(&format!("{}-", service))
+                })
             } else {
                 name.starts_with(&pattern)
             }
@@ -421,13 +378,12 @@ pub async fn stop_environment(_state: State<'_, AppState>, env_name: String) -> 
     }
 
     // Stop all matching containers
-    let mut stop_args = vec!["stop"];
-    stop_args.extend(containers.iter().copied());
+    let container_names = containers.join(" ");
+    let stop_command = format!("docker stop {}", container_names);
 
-    let output = silent_command("docker")
-        .args(&stop_args)
+    let output = shell_command(&stop_command)
         .output()
-        .map_err(|e| format!("Failed to stop containers: {}", e))?;
+        .map_err(|e| format!("Failed to stop containers (docker not found or not executable): {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -466,11 +422,10 @@ pub fn get_container_status(state: State<AppState>) -> Result<ContainerStatus, S
     };
     drop(root);
 
-    let output = silent_command("docker")
-        .args(["compose", "ps", "--format", "{{.Name}}\t{{.Status}}\t{{.Ports}}"])
+    let output = shell_command("docker compose ps --format '{{.Name}}\t{{.Status}}\t{{.Ports}}'")
         .current_dir(&project_root)
         .output()
-        .map_err(|e| format!("Failed to get status: {}", e))?;
+        .map_err(|e| format!("Failed to get status (docker not found or not executable): {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut services = Vec::new();
