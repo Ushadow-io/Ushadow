@@ -1,8 +1,8 @@
 """
-Docker Utilities for Chronicle Setup
+Docker Utilities for Ushadow Setup
 
 Provides network management and other Docker-related utilities
-for Chronicle's infrastructure setup scripts.
+for Ushadow's infrastructure setup scripts.
 """
 
 import subprocess
@@ -12,16 +12,16 @@ from typing import Dict, List
 
 
 class DockerNetworkManager:
-    """Manages Docker networks for Chronicle infrastructure."""
+    """Manages Docker networks for ushadow infrastructure."""
 
-    # Chronicle uses two logical networks
+    # Ushadow uses two logical networks
     NETWORKS = {
-        "chronicle-network": {
-            "description": "Main Chronicle application network",
+        "ushadow-network": {
+            "description": "Main Ushadow application network",
             "driver": "bridge"
         },
         "infra-network": {
-            "description": "Shared infrastructure network (MongoDB, Redis, Qdrant, Neo4j)",
+            "description": "Shared infrastructure network (MongoDB, Redis, Qdrant)",
             "driver": "bridge"
         }
     }
@@ -89,11 +89,11 @@ class DockerNetworkManager:
             return False
 
     @classmethod
-    def ensure_chronicle_networks(cls) -> Dict[str, bool]:
+    def ensure_networks(cls) -> Dict[str, bool]:
         """
-        Ensure all required Chronicle networks exist.
+        Ensure all required Ushadow networks exist.
 
-        Creates both chronicle-network and infra-network if they don't exist.
+        Creates both ushadow-network and infra-network if they don't exist.
 
         Returns:
             Dict mapping network names to success status
@@ -105,6 +105,15 @@ class DockerNetworkManager:
             results[network_name] = cls.create_network(network_name, driver)
 
         return results
+
+    @classmethod
+    def ensure_chronicle_networks(cls) -> Dict[str, bool]:
+        """
+        DEPRECATED: Use ensure_networks() instead.
+
+        Kept for backward compatibility.
+        """
+        return cls.ensure_networks()
 
     @staticmethod
     def list_networks() -> List[Dict[str, str]]:

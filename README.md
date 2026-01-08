@@ -49,6 +49,9 @@ ushadow is an AI orchestration platform that provides a unified dashboard and AP
 
 - Docker & Docker Compose
 - Git
+- Python 3.12+ (optional for local development - will be auto-installed via uv)
+
+**Note:** The startup scripts will automatically install `uv` (Python package manager) if not present. No manual Python setup required!
 
 ### Installation
 
@@ -62,10 +65,11 @@ cd Ushadow
 2. **Run quickstart script**
 
 ```bash
-./quickstart.sh
+./go.sh
 ```
 
 This script will:
+- Auto-install uv (Python package manager) if not present
 - Generate secure credentials
 - Configure multi-worktree support (if needed)
 - Set up Docker networks
@@ -73,6 +77,11 @@ This script will:
 - Start Chronicle backend
 - Start ushadow application
 - Display access URLs and credentials
+
+**For development mode with hot-reload:**
+```bash
+./dev.sh
+```
 
 3. **Access ushadow Dashboard**
 
@@ -211,13 +220,39 @@ ushadow uses a dual-layer configuration system:
 
 ### Local Development
 
+#### Option 1: Using Make (Recommended)
+
+```bash
+# Install all dependencies (Python + Node.js)
+make install
+
+# Run tests
+make test
+
+# Run linters
+make lint
+
+# Format code
+make format
+```
+
+#### Option 2: Manual Setup
+
 **Backend:**
 
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+cd ushadow/backend
+
+# Install uv if not present (macOS, Linux, WSL)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows (PowerShell)
+# powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Install dependencies (uv is 10-100x faster than pip!)
+uv pip install -r requirements.txt
+
+# Run backend
 uvicorn main:app --reload --port 8080
 ```
 
@@ -229,16 +264,24 @@ npm install
 npm run dev
 ```
 
+**Note on Python Version:**
+- Backend requires Python 3.12+
+- uv can install and manage Python versions for you
+- The `.python-version` file ensures consistency across environments
+
 ### Running Tests
 
 ```bash
 # Backend tests
-cd backend
+cd ushadow/backend
 pytest
 
 # Frontend tests
 cd frontend
 npm test
+
+# Or use Make commands
+make test
 ```
 
 ## Docker Commands

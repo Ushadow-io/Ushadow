@@ -48,7 +48,7 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant
-    profiles: ["memory","qdrant"]
+    profiles: ["memory","qdrant","infra"]
     ports:
       - "6333:6333"  # HTTP
       - "6334:6334"  # gRPC

@@ -224,19 +224,26 @@ health:
 
 # Development commands
 install:
-	cd backend && pip install -r requirements.txt
+	@echo "📦 Installing dependencies..."
+	@if command -v uv > /dev/null 2>&1; then \
+		cd ushadow/backend && uv pip install -r requirements.txt; \
+	else \
+		echo "⚠️  uv not found, using pip (slower). Run: ./scripts/install-uv.sh"; \
+		cd ushadow/backend && pip install -r requirements.txt; \
+	fi
 	cd frontend && npm install
+	@echo "✅ Dependencies installed"
 
 test:
-	cd backend && pytest
+	cd ushadow/backend && pytest
 	cd frontend && npm test
 
 lint:
-	cd backend && ruff check .
+	cd ushadow/backend && ruff check .
 	cd frontend && npm run lint
 
 format:
-	cd backend && ruff format .
+	cd ushadow/backend && ruff format .
 	cd frontend && npm run format
 
 # Cleanup commands

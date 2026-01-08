@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Setup utilities for Chronicle quickstart script.
-Provides port checking, Redis database validation, Docker network management,
+Setup utilities for Ushadow quickstart script.
+Provides port checking, Redis database validation, secrets management,
 and other setup helpers.
 """
 
@@ -126,7 +126,7 @@ def get_redis_db_env_marker(db_num: int, container_name: str = "redis") -> Optio
         # Get environment marker
         result = subprocess.run(
             ["docker", "exec", container_name, "redis-cli", "-n", str(db_num),
-             "GET", "chronicle:env:name"],
+             "GET", "ushadow:env:name"],
             capture_output=True,
             text=True,
             timeout=5
@@ -178,7 +178,7 @@ def set_redis_db_env_marker(db_num: int, env_name: str, container_name: str = "r
         # Set environment marker (no expiration)
         result = subprocess.run(
             ["docker", "exec", container_name, "redis-cli", "-n", str(db_num),
-             "SET", "chronicle:env:name", env_name],
+             "SET", "ushadow:env:name", env_name],
             capture_output=True,
             text=True,
             timeout=5
