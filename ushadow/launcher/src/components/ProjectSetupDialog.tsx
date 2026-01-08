@@ -1,32 +1,46 @@
 import { useState } from 'react'
-import { Folder, Download, Link, X } from 'lucide-react'
+import { Folder, X } from 'lucide-react'
+import { dialog } from '@tauri-apps/api'
 
 interface ProjectSetupDialogProps {
   isOpen: boolean
   defaultPath: string
   onClose: () => void
-  onClone: (path: string) => void
-  onLink: (path: string) => void
+  onSetup: (path: string) => void
 }
 
 export function ProjectSetupDialog({
   isOpen,
   defaultPath,
   onClose,
-  onClone,
-  onLink,
+  onSetup,
 }: ProjectSetupDialogProps) {
-  const [path, setPath] = useState(defaultPath)
-  const [mode, setMode] = useState<'clone' | 'link'>('clone')
+  const [parentPath, setParentPath] = useState<string | null>(null)
+
+  // Calculate the full install path (parent + /ushadow)
+  const fullInstallPath = parentPath ? `${parentPath}/ushadow` : null
 
   if (!isOpen) return null
 
-  const handleSubmit = () => {
-    if (mode === 'clone') {
-      onClone(path)
-    } else {
-      onLink(path)
+  const handleSelectFolder = async () => {
+    const selected = await dialog.open({
+      directory: true,
+      multiple: false,
+      defaultPath: parentPath || defaultPath || undefined,
+      title: 'Choose where to install Ushadow',
+    })
+
+    if (selected && typeof selected === 'string') {
+      setParentPath(selected)
     }
+  }
+
+  const handleSubmit = () => {
+    if (!fullInstallPath) {
+      return
+    }
+    // Send the full path with /ushadow appended
+    onSetup(fullInstallPath)
   }
 
   return (
@@ -34,7 +48,7 @@ export function ProjectSetupDialog({
       <div className="bg-surface-800 rounded-xl p-6 w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Setup Ushadow Project</h2>
+          <h2 className="text-lg font-semibold">Choose Installation Location</h2>
           <button
             onClick={onClose}
             className="p-1 rounded hover:bg-surface-700 transition-colors"
@@ -43,46 +57,37 @@ export function ProjectSetupDialog({
           </button>
         </div>
 
-        {/* Mode Selection */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <ModeButton
-            icon={Download}
-            label="Clone New"
-            description="Download fresh copy"
-            active={mode === 'clone'}
-            onClick={() => setMode('clone')}
-          />
-          <ModeButton
-            icon={Link}
-            label="Link Existing"
-            description="Use existing folder"
-            active={mode === 'link'}
-            onClick={() => setMode('link')}
-          />
-        </div>
+        {/* Description */}
+        <p className="text-sm text-text-secondary mb-4">
+          Select a parent folder. Ushadow will be installed in a subfolder called <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">ushadow</code>.
+        </p>
 
-        {/* Path Input */}
-        <div className="mb-4">
-          <label className="block text-sm text-text-secondary mb-2">
-            {mode === 'clone' ? 'Clone to folder:' : 'Existing Ushadow folder:'}
-          </label>
-          <div className="flex gap-2">
-            <div className="flex-1 flex items-center gap-2 bg-surface-700 rounded-lg px-3 py-2">
-              <Folder className="w-4 h-4 text-text-muted" />
-              <input
-                type="text"
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                className="flex-1 bg-transparent outline-none text-sm"
-                placeholder={mode === 'clone' ? '~/ushadow' : '~/existing/ushadow'}
-                data-testid="project-path-input"
-              />
+        {/* Folder Picker */}
+        <div className="mb-6 space-y-3">
+          <button
+            onClick={handleSelectFolder}
+            className="w-full flex items-center gap-3 bg-surface-700 hover:bg-surface-600 rounded-lg px-4 py-3 transition-colors"
+            data-testid="select-folder-button"
+          >
+            <Folder className="w-5 h-5 text-primary-400" />
+            <div className="flex-1 text-left">
+              {parentPath ? (
+                <>
+                  <p className="text-xs text-text-muted mb-1">Parent folder:</p>
+                  <p className="text-sm font-medium truncate">{parentPath}</p>
+                </>
+              ) : (
+                <p className="text-sm text-text-secondary">Click to choose parent folder...</p>
+              )}
             </div>
-          </div>
-          {mode === 'clone' && (
-            <p className="text-xs text-text-muted mt-2">
-              Will clone to: {path}/ushadow
-            </p>
+          </button>
+
+          {/* Show full install path after selection */}
+          {fullInstallPath && (
+            <div className="bg-primary-500/10 border border-primary-500/30 rounded-lg px-4 py-3">
+              <p className="text-xs text-primary-400 mb-1">Ushadow will be installed at:</p>
+              <p className="text-sm font-mono text-primary-300 break-all">{fullInstallPath}</p>
+            </div>
           )}
         </div>
 
@@ -96,42 +101,18 @@ export function ProjectSetupDialog({
           </button>
           <button
             onClick={handleSubmit}
-            className="flex-1 py-2 rounded-lg bg-gradient-brand hover:opacity-90 transition-opacity font-medium"
+            disabled={!fullInstallPath}
+            className={`flex-1 py-2 rounded-lg font-medium transition-opacity ${
+              !fullInstallPath
+                ? 'bg-surface-600 text-text-muted cursor-not-allowed opacity-50'
+                : 'bg-gradient-brand hover:opacity-90'
+            }`}
             data-testid="project-setup-submit"
           >
-            {mode === 'clone' ? 'Clone & Setup' : 'Link Project'}
+            Continue
           </button>
         </div>
       </div>
     </div>
-  )
-}
-
-function ModeButton({
-  icon: Icon,
-  label,
-  description,
-  active,
-  onClick,
-}: {
-  icon: typeof Download
-  label: string
-  description: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`p-4 rounded-lg text-left transition-all ${
-        active
-          ? 'bg-primary-500/20 border-2 border-primary-500'
-          : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-      }`}
-    >
-      <Icon className={`w-5 h-5 mb-2 ${active ? 'text-primary-400' : 'text-text-muted'}`} />
-      <p className="font-medium text-sm">{label}</p>
-      <p className="text-xs text-text-muted">{description}</p>
-    </button>
   )
 }

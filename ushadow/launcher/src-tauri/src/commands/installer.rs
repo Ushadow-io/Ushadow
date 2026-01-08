@@ -425,9 +425,9 @@ pub fn get_default_project_dir() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            return Ok(home);
+            return Ok(format!("{}/ushadow", home));
         }
-        Ok("/Users/Shared".to_string())
+        Ok("/Users/Shared/ushadow".to_string())
     }
 
     #[cfg(target_os = "linux")]
@@ -474,7 +474,30 @@ pub fn check_project_dir(path: String) -> Result<ProjectStatus, String> {
 /// Clone the Ushadow repository
 #[tauri::command]
 pub async fn clone_ushadow_repo(target_dir: String) -> Result<String, String> {
-    let target_path = Path::new(&target_dir);
+    use super::permissions::check_path_permissions;
+    use super::utils::expand_tilde;
+
+    // Expand ~ to home directory
+    let expanded_dir = expand_tilde(&target_dir);
+    let target_path = Path::new(&expanded_dir);
+
+    // STEP 1: Check permissions BEFORE attempting anything (use expanded path)
+    let (permissions_ok, error_msg, suggestion) = check_path_permissions(&expanded_dir);
+    if !permissions_ok {
+        let mut err = error_msg.unwrap_or_else(|| "Permission denied".to_string());
+        if let Some(sug) = suggestion {
+            err.push_str(&format!("\n\n{}", sug));
+        }
+        return Err(err);
+    }
+
+    // STEP 2: Check if directory already exists
+    if target_path.exists() {
+        // If it exists and has content, don't try to clone
+        if target_path.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+            return Err(format!("Directory {} already exists and is not empty", target_dir));
+        }
+    }
 
     // Create parent directory if it doesn't exist
     if let Some(parent) = target_path.parent() {
@@ -490,12 +513,25 @@ pub async fn clone_ushadow_repo(target_dir: String) -> Result<String, String> {
         .output()
         .map_err(|e| format!("Failed to run git clone: {}", e))?;
 
-    if output.status.success() {
-        Ok(format!("Successfully cloned Ushadow to {}", target_dir))
-    } else {
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Git clone failed: {}", stderr))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Git clone failed: {}. stdout: {}", stderr, stdout));
     }
+
+    // Verify the clone actually worked by checking for .git directory
+    let git_dir = target_path.join(".git");
+    if !git_dir.exists() {
+        return Err(format!("Clone reported success but .git directory not found at {}", target_dir));
+    }
+
+    // Verify key Ushadow files exist
+    let go_sh = target_path.join("go.sh");
+    if !go_sh.exists() {
+        return Err(format!("Clone completed but go.sh not found - may not be a valid Ushadow repo"));
+    }
+
+    Ok(format!("Successfully cloned Ushadow to {}", target_dir))
 }
 
 /// Update an existing Ushadow repository safely (stash, pull, stash pop)

@@ -17,7 +17,7 @@ use commands::{AppState, check_prerequisites, get_os_type, discover_environments
     install_homebrew, check_brew,
     install_docker_windows, install_tailscale_windows, install_tailscale_macos,
     // Project/repo management
-    get_default_project_dir, check_project_dir, clone_ushadow_repo,
+    get_default_project_dir, check_project_dir, check_install_path, clone_ushadow_repo,
     update_ushadow_repo, install_git_windows, install_git_macos};
 use tauri::{
     CustomMenuItem, Manager, Menu, MenuItem, SystemTray,
@@ -129,6 +129,7 @@ fn main() {
             // Project/repo management
             get_default_project_dir,
             check_project_dir,
+            check_install_path,
             clone_ushadow_repo,
             update_ushadow_repo,
             install_git_windows,

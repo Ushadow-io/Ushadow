@@ -186,15 +186,25 @@ pub fn check_python() -> (bool, Option<String>) {
     }
 
     // Try python3 first (recommended)
+    eprintln!("DEBUG: Checking python3 with shell_command");
     let version_output = shell_command("python3 --version")
         .output();
 
     match version_output {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            eprintln!("DEBUG: python3 found - {}", version);
+
+            // Also check the location
+            if let Ok(which_out) = shell_command("which python3").output() {
+                let python_path = String::from_utf8_lossy(&which_out.stdout).trim().to_string();
+                eprintln!("DEBUG: python3 path: {}", python_path);
+            }
+
             (true, Some(version))
         }
         _ => {
+            eprintln!("DEBUG: python3 not found, trying 'python' command");
             // Fallback to python (might be Python 2)
             let version_output = shell_command("python --version")
                 .output();
