@@ -24,6 +24,8 @@ import aiohttp
 from aiohttp import web
 import docker
 from docker.errors import DockerException, NotFound, ImageNotFound
+from telemetry import TelemetryClient
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +44,10 @@ NODE_HOSTNAME = os.environ.get("NODE_HOSTNAME", platform.node())
 TAILSCALE_IP = os.environ.get("TAILSCALE_IP", "")
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
 MANAGER_PORT = int(os.environ.get("MANAGER_PORT", "8444"))
+TELEMETRY_ENDPOINT = os.environ.get(
+    "TELEMETRY_ENDPOINT",
+    "https://ushadow-telemetry.your-subdomain.workers.dev"
+)
 
 
 class UshadowManager:
@@ -70,6 +76,21 @@ class UshadowManager:
         logger.info(f"Leader URL: {self.leader_url}")
         logger.info(f"Tailscale IP: {self.tailscale_ip}")
         logger.info(f"API Port: {MANAGER_PORT}")
+
+        # Send telemetry ping (non-blocking)
+        def send_telemetry():
+            try:
+                telemetry_client = TelemetryClient(
+                    endpoint=TELEMETRY_ENDPOINT,
+                    app_version=f"manager-{MANAGER_VERSION}"
+                )
+                success = telemetry_client.send_ping()
+                if success:
+                    logger.info("✓ Telemetry ping sent")
+            except Exception as e:
+                logger.debug(f"Telemetry failed (non-critical): {e}")
+
+        threading.Thread(target=send_telemetry, daemon=True).start()
 
         # Initialize Docker client
         try:
