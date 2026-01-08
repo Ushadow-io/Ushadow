@@ -1,7 +1,7 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home } from 'lucide-react'
-import { LayoutDashboard, Network, Flag, Wand2, FlaskConical, Cloud, Sparkles, Shield, Mic, MicOff, CheckCircle2, Loader2 } from 'lucide-react'
+import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
@@ -58,6 +58,7 @@ export default function Layout() {
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
     { path: '/services', label: 'Services', icon: Server },
+    { path: '/instances', label: 'Instances', icon: Layers },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),

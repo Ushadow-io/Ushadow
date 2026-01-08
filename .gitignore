@@ -150,6 +150,10 @@ backend/config.yml
 config/overrides.yaml  # legacy, migrated to config_settings.yaml
 config/config_settings.yaml
 config/secrets.yaml
+config/instances.yaml
+config/wiring.yaml
+ushadow/backend/src/config/instances.yaml
+ushadow/backend/src/config/wiring.yaml
 
 # Frontend local environment (dev overrides)
 frontend/.env.local
