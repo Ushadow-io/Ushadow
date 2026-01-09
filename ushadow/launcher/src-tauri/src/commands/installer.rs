@@ -413,11 +413,15 @@ const USHADOW_REPO_URL: &str = "https://github.com/Ushadow-io/ushadow.git";
 /// Get default project directory based on platform
 #[tauri::command]
 pub fn get_default_project_dir() -> Result<String, String> {
+    use std::path::PathBuf;
+
     #[cfg(target_os = "windows")]
     {
         // Windows: Use user's home directory
         if let Ok(userprofile) = std::env::var("USERPROFILE") {
-            return Ok(format!("{}\\Ushadow", userprofile));
+            let mut path = PathBuf::from(userprofile);
+            path.push("Ushadow");
+            return Ok(path.to_string_lossy().to_string());
         }
         Ok("C:\\Ushadow".to_string())
     }
@@ -425,7 +429,9 @@ pub fn get_default_project_dir() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            return Ok(format!("{}/ushadow", home));
+            let mut path = PathBuf::from(home);
+            path.push("ushadow");
+            return Ok(path.to_string_lossy().to_string());
         }
         Ok("/Users/Shared/ushadow".to_string())
     }
@@ -433,7 +439,9 @@ pub fn get_default_project_dir() -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            return Ok(format!("{}/Ushadow", home));
+            let mut path = PathBuf::from(home);
+            path.push("Ushadow");
+            return Ok(path.to_string_lossy().to_string());
         }
         Ok("/opt/Ushadow".to_string())
     }

@@ -88,17 +88,31 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    // Create Docker networks using Python script (same logic as run.py)
-    let network_output = shell_command("uv")
-        .args(["run", "--with", "pyyaml", "setup/start_utils.py", "ensure-networks"])
-        .current_dir(&project_root)
-        .output()
-        .map_err(|e| format!("Failed to create networks (uv not found): {}", e))?;
+    // Create Docker networks directly (don't require uv/Python)
+    let networks = vec!["ushadow-network", "infra-network"];
+    for network in networks {
+        // Check if network exists
+        let check_output = shell_command("docker")
+            .args(&["network", "inspect", network])
+            .output();
 
-    if !network_output.status.success() {
-        let stderr = String::from_utf8_lossy(&network_output.stderr);
-        eprintln!("WARNING: Network creation had issues: {}", stderr);
-        // Continue anyway - networks might already exist
+        let network_exists = check_output.is_ok() && check_output.unwrap().status.success();
+
+        if !network_exists {
+            // Create network
+            let create_output = shell_command("docker")
+                .args(&["network", "create", network])
+                .output()
+                .map_err(|e| format!("Failed to create network {}: {}", network, e))?;
+
+            if !create_output.status.success() {
+                let stderr = String::from_utf8_lossy(&create_output.stderr);
+                // Ignore if network already exists (race condition)
+                if !stderr.contains("already exists") {
+                    eprintln!("WARNING: Failed to create network {}: {}", network, stderr);
+                }
+            }
+        }
     }
 
     let infra_output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
