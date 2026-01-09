@@ -350,7 +350,7 @@ async def save_config(
 # Certificate Provisioning
 # ============================================================================
 
-CERTS_DIR = Path("/config/certs")
+CERTS_DIR = Path("/config/SECRETS/certs")
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "/app"))
 
 
@@ -573,11 +573,20 @@ async def test_connection(
 # ============================================================================
 
 async def exec_in_container(command: str) -> tuple[int, str, str]:
-    """Execute command in Tailscale container"""
+    """Execute command in Tailscale container.
+
+    Args:
+        command: Command to execute. Can include pipes and shell operators.
+    """
     try:
         container_name = get_tailscale_container_name()
         container = docker_client.containers.get(container_name)
-        result = container.exec_run(command, demux=True)
+        # If command contains pipes or shell operators, wrap in sh -c
+        if '|' in command or '&&' in command or '||' in command or '>' in command or '<' in command:
+            cmd = ['/bin/sh', '-c', command]
+        else:
+            cmd = command
+        result = container.exec_run(cmd, demux=True)
 
         # Handle both tuple and non-tuple results
         if isinstance(result, tuple):
@@ -766,6 +775,126 @@ async def get_mobile_connection_qr(
         )
 
 
+@router.post("/container/clear-auth")
+async def clear_tailscale_auth(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
+    """Clear local Tailscale authentication state.
+
+    This does a complete local cleanup:
+    1. Logs out from Tailscale locally
+    2. Stops and removes the container
+    3. Deletes the state volume (clears all cached auth)
+
+    Note: The machine will still appear in your Tailscale admin panel
+    until you manually delete it at https://login.tailscale.com/admin/machines
+    """
+    try:
+        container_name = get_tailscale_container_name()
+        volume_name = get_tailscale_volume_name()
+
+        # Step 1: Try to logout from Tailscale first (removes from admin panel)
+        try:
+            container = docker_client.containers.get(container_name)
+            if container.status == 'running':
+                logger.info("Logging out from Tailscale...")
+                result = container.exec_run("tailscale logout", demux=False)
+
+                # Decode output
+                output = result.output.decode() if result.output else ""
+                logger.info(f"Logout exit code: {result.exit_code}")
+                logger.info(f"Logout output: {output}")
+
+                if result.exit_code == 0:
+                    logger.info("Successfully logged out from Tailscale")
+                else:
+                    logger.warning(f"Logout command returned non-zero exit code: {result.exit_code}, output: {output}")
+            else:
+                logger.info(f"Container status is {container.status}, starting it to logout...")
+                container.start()
+                await asyncio.sleep(2)  # Wait for container to start
+
+                result = container.exec_run("tailscale logout", demux=False)
+                output = result.output.decode() if result.output else ""
+                logger.info(f"Logout after start - exit code: {result.exit_code}, output: {output}")
+        except docker.errors.NotFound:
+            logger.info("Container not found, skipping logout step")
+        except Exception as e:
+            logger.warning(f"Could not logout from Tailscale: {e}", exc_info=True)
+
+        # Step 2: Stop and remove container (force removal to ensure it's gone)
+        container_removed = False
+        try:
+            container = docker_client.containers.get(container_name)
+            logger.info(f"Stopping container {container_name}...")
+            container.stop(timeout=5)
+            logger.info(f"Removing container {container_name}...")
+            container.remove(force=True)  # Force removal
+            logger.info("Container removed successfully")
+            container_removed = True
+        except docker.errors.NotFound:
+            logger.info("Container not found, skipping removal")
+            container_removed = True  # Not existing is same as removed
+        except Exception as e:
+            logger.error(f"FAILED to remove container: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to remove container: {str(e)}")
+
+        # Give Docker a moment to release the volume
+        await asyncio.sleep(1)
+
+        # Step 3: Delete the volume (this clears all auth state)
+        try:
+            volume = docker_client.volumes.get(volume_name)
+            logger.info(f"Removing volume {volume_name}...")
+            volume.remove(force=True)  # Force removal
+            logger.info("Volume removed successfully - all auth state cleared")
+        except docker.errors.NotFound:
+            logger.info("Volume not found, already cleared")
+        except Exception as e:
+            # Volume might still be in use - try via docker CLI
+            logger.warning(f"Could not remove volume via API: {e}, trying docker CLI...")
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["docker", "volume", "rm", "-f", volume_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    logger.info("Volume removed via docker CLI")
+                else:
+                    logger.error(f"Failed to remove volume via CLI: {result.stderr}")
+                    return {
+                        "status": "partial",
+                        "message": f"Logged out and removed container, but volume still exists. Manual cleanup: docker volume rm -f {volume_name}"
+                    }
+            except Exception as cli_err:
+                logger.error(f"CLI removal also failed: {cli_err}")
+                return {
+                    "status": "partial",
+                    "message": f"Logged out and removed container, but volume still exists. Manual cleanup: docker volume rm -f {volume_name}"
+                }
+
+        # Step 4: Delete the Tailscale config file (contains hostname)
+        try:
+            if TAILSCALE_CONFIG_FILE.exists():
+                logger.info(f"Removing Tailscale config file {TAILSCALE_CONFIG_FILE}...")
+                TAILSCALE_CONFIG_FILE.unlink()
+                logger.info("Config file removed")
+        except Exception as e:
+            logger.warning(f"Could not remove config file: {e}")
+
+        return {
+            "status": "success",
+            "message": "Local authentication cleared. To complete removal, manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines"
+        }
+
+    except Exception as e:
+        logger.error(f"Error clearing Tailscale auth: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to clear auth: {str(e)}")
+
+
 @router.post("/container/start")
 async def start_tailscale_container(
     current_user: User = Depends(get_current_user)
@@ -814,8 +943,9 @@ async def start_tailscale_container(
             env_network = None
             try:
                 env_network = docker_client.networks.get(env_network_name)
+                logger.info(f"Connecting to environment network: {env_network_name}")
             except docker.errors.NotFound:
-                logger.warning(f"Environment network '{env_network_name}' not found - will only use infra-network")
+                logger.debug(f"Environment network '{env_network_name}' not found - using infra-network only")
 
             # Create volume if it doesn't exist (per-environment)
             try:
@@ -850,7 +980,7 @@ async def start_tailscale_container(
                 },
                 volumes={
                     volume_name: {"bind": "/var/lib/tailscale", "mode": "rw"},
-                    f"{PROJECT_ROOT}/config/certs": {"bind": "/certs", "mode": "rw"},
+                    f"{PROJECT_ROOT}/config/SECRETS/certs": {"bind": "/certs", "mode": "rw"},
                     f"{PROJECT_ROOT}/config": {"bind": "/config", "mode": "ro"},
                 },
                 cap_add=["NET_ADMIN", "NET_RAW"],
@@ -868,7 +998,21 @@ async def start_tailscale_container(
                     logger.warning(f"Failed to connect to environment network: {e}")
 
             logger.info(f"Tailscale container '{container_name}' created with hostname '{ts_hostname}': {container.id}")
-            await asyncio.sleep(2)  # Give it time to start
+
+            # Wait for tailscaled to be ready before returning
+            # This prevents "container exists but daemon not ready" issues
+            logger.info("Waiting for tailscaled daemon to initialize...")
+            for attempt in range(15):  # Try for up to 15 seconds
+                try:
+                    # Quick check if daemon is responding
+                    test_result = container.exec_run("timeout 1 tailscale status 2>&1 || true", demux=False)
+                    if test_result.exit_code == 0 or b"Logged out" in test_result.output:
+                        logger.info(f"Tailscaled ready after {attempt + 1}s")
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+
             return {
                 "status": "created",
                 "message": f"Tailscale container '{container_name}' created and started with hostname '{ts_hostname}'"
@@ -1094,13 +1238,23 @@ async def get_auth_url(
             url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
 
             if not url_match:
-                # Status didn't have URL - use tailscale login which prints URL and exits
-                # Unlike 'tailscale up', 'tailscale login' doesn't block waiting for auth
-                exit_code, stdout, stderr = await exec_in_container("tailscale login")
+                # Status didn't have URL - use tailscale up which prints URL
+                # The URL is generated immediately, but tailscale up waits for auth to complete
+                # Use short timeout (3s) since we only need the URL output, not auth completion
+                # exec_in_container will automatically wrap in sh -c for || and 2>&1
+                exit_code, stdout, stderr = await exec_in_container("tailscale up --timeout=3s 2>&1 || true")
                 output = stdout + stderr
-                logger.info(f"Tailscale login output: {output}")
+                logger.info(f"Tailscale up output: {output}")
 
-                url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
+                # Try multiple regex patterns to catch different log formats
+                # Pattern 1: "AuthURL is https://..."
+                url_match = re.search(r'AuthURL is (https://login\.tailscale\.com/[^\s]+)', output)
+                if not url_match:
+                    # Pattern 2: "Received auth URL: https://..."
+                    url_match = re.search(r'Received auth URL: (https://login\.tailscale\.com/[^\s]+)', output)
+                if not url_match:
+                    # Pattern 3: Plain URL in output
+                    url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
 
         if not url_match:
             raise HTTPException(status_code=500, detail=f"Could not extract auth URL. Output: {output}")
@@ -1150,6 +1304,100 @@ async def get_auth_url(
         raise HTTPException(status_code=500, detail=f"Failed to get auth URL: {str(e)}")
 
 
+@router.get("/container/tailnet-settings")
+async def get_tailnet_settings(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Check Tailscale tailnet settings like MagicDNS and HTTPS.
+
+    Returns information about which features are enabled and links to enable them.
+    """
+    try:
+        # Get status JSON to check MagicDNS
+        exit_code, stdout, stderr = await exec_in_container("tailscale status --json")
+
+        magic_dns_enabled = False
+        magic_dns_suffix = None
+
+        if exit_code == 0 and stdout.strip():
+            import json
+            status_data = json.loads(stdout)
+            magic_dns_suffix = status_data.get("MagicDNSSuffix")
+            magic_dns_enabled = bool(magic_dns_suffix)
+
+        # Check if HTTPS cert support is enabled using `tailscale cert`
+        # This gives a clear message if cert support is not enabled
+        https_enabled = None
+        https_error = None
+
+        exit_code, stdout, stderr = await exec_in_container("tailscale cert 2>&1")
+        output = stdout + stderr
+
+        if "not enabled" in output.lower() or "not configured" in output.lower():
+            https_enabled = False
+            https_error = "HTTPS cert support is not enabled/configured for your tailnet"
+        elif "usage:" in output.lower():
+            # Got usage message - cert support is enabled but no domain specified
+            https_enabled = True
+        else:
+            # Some other error occurred
+            https_enabled = None
+            https_error = output.strip() if output.strip() else "Unknown error checking HTTPS"
+
+        return {
+            "magic_dns": {
+                "enabled": magic_dns_enabled,
+                "suffix": magic_dns_suffix,
+                "admin_url": "https://login.tailscale.com/admin/dns"
+            },
+            "https_serve": {
+                "enabled": https_enabled,
+                "error": https_error,
+                "admin_url": "https://login.tailscale.com/admin/dns"
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error checking tailnet settings: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to check tailnet settings: {str(e)}")
+
+
+@router.post("/container/enable-https")
+async def enable_https_provisioning(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Enable HTTPS provisioning in Tailscale.
+
+    This must be run before provisioning certificates.
+    Enables HTTPS by setting a minimal HTTPS route.
+
+    See: https://tailscale.com/kb/1153/enabling-https
+    """
+    try:
+        # Enable HTTPS by setting up a basic HTTPS serve config
+        # Use port 443 for HTTPS (the --https=443 flag)
+        exit_code, stdout, stderr = await exec_in_container("tailscale serve --https=443 --bg localhost:8000")
+
+        if exit_code == 0:
+            logger.info("HTTPS provisioning enabled on port 443")
+            return {
+                "status": "enabled",
+                "message": "HTTPS provisioning enabled on port 443"
+            }
+        else:
+            logger.error(f"Failed to enable HTTPS provisioning: {stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to enable HTTPS: {stderr}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error enabling HTTPS provisioning: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to enable HTTPS: {str(e)}")
+
+
 @router.post("/container/provision-cert")
 async def provision_cert_in_container(
     hostname: str,
@@ -1172,7 +1420,7 @@ async def provision_cert_in_container(
         exit_code, stdout, stderr = await exec_in_container(cert_cmd)
 
         if exit_code == 0:
-            # Copy files from Tailscale container's /certs to backend's /config/certs
+            # Copy files from Tailscale container's /certs to backend's /config/SECRETS/certs
             container_name = get_tailscale_container_name()
             container = docker_client.containers.get(container_name)
 
@@ -1191,7 +1439,7 @@ async def provision_cert_in_container(
             with tarfile.open(fileobj=tar_stream) as tar:
                 key_content = tar.extractfile(f"{hostname}.key").read()
 
-            # Write to backend's config/certs
+            # Write to backend's config/SECRETS/certs
             with open(cert_file, 'wb') as f:
                 f.write(cert_content)
             with open(key_file, 'wb') as f:
@@ -1227,7 +1475,7 @@ async def configure_tailscale_serve(
     """Configure Tailscale serve for routing.
 
     Sets up base routes: /api/* and /auth/* to backend, /* to frontend.
-    Uses the tailscale_serve helper module for dynamic route management.
+    Enables HTTPS first, then configures routes.
     Also saves the Tailscale configuration to disk.
     """
     try:
@@ -1240,6 +1488,7 @@ async def configure_tailscale_serve(
         logger.info(f"Tailscale configuration saved to {TAILSCALE_CONFIG_FILE}")
 
         # Configure base routes for this environment
+        # This includes HTTPS on 443 and proper routing to backend/frontend containers
         success = configure_base_routes()
 
         # Get the current serve status to return actual routes

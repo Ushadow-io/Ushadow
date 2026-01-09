@@ -106,13 +106,21 @@ def get_tailscale_container_name() -> str:
 def exec_tailscale_command(command: str) -> tuple[int, str, str]:
     """Execute a tailscale command in the container.
 
+    Args:
+        command: Command to execute. Can include pipes and shell operators.
+
     Returns:
         Tuple of (exit_code, stdout, stderr)
     """
     container_name = get_tailscale_container_name()
     try:
         container = docker_client.containers.get(container_name)
-        result = container.exec_run(command, demux=True)
+        # If command contains pipes or shell operators, wrap in sh -c
+        if '|' in command or '&&' in command or '||' in command or '>' in command or '<' in command:
+            cmd = ['/bin/sh', '-c', command]
+        else:
+            cmd = command
+        result = container.exec_run(cmd, demux=True)
 
         exit_code = result.exit_code
         output = result.output

@@ -59,6 +59,7 @@ class ServeConfig:
             handlers[route.path] = {"Proxy": target}
 
         return {
+            "version": "alpha0",
             "TCP": {
                 "443": {
                     "HTTPS": True
@@ -280,9 +281,10 @@ def apply_serve_config(config: ServeConfig = None) -> bool:
     config_path = "/config/tailscale-serve.json"
     write_serve_config(config, config_path)
 
-    # Apply via set-raw reading from file
+    # Apply via set-config with file path
     # The file path is the same inside the container since /config is mounted
-    cmd = f"sh -c 'cat {config_path} | tailscale serve set-raw -'"
+    # Use --all to apply the full config (overwrites all services)
+    cmd = f"tailscale serve set-config --all {config_path}"
 
     exit_code, stdout, stderr = exec_tailscale_command(cmd)
 
@@ -310,12 +312,9 @@ def apply_serve_config_from_file(config_path: str = None) -> bool:
         logger.error(f"Config file not found: {config_path}")
         return False
 
-    # Read the config file and apply via set-raw
-    with open(config_path, 'r') as f:
-        json_content = f.read()
-
-    # Apply using cat to pipe the file content
-    cmd = f"sh -c 'cat {config_path} | tailscale serve set-raw -'"
+    # Apply via set-config with file path
+    # Use --all to apply the full config (overwrites all services)
+    cmd = f"tailscale serve set-config --all {config_path}"
 
     exit_code, stdout, stderr = exec_tailscale_command(cmd)
 

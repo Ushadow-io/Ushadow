@@ -39,7 +39,7 @@ ALGORITHM = "HS256"
 SECRET_KEY = config.get_sync("security.auth_secret_key")
 if not SECRET_KEY:
     raise ValueError(
-        "AUTH_SECRET_KEY not found in config/secrets.yaml. "
+        "AUTH_SECRET_KEY not found in config/SECRETS/secrets.yaml. "
         "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
     )
 
@@ -94,14 +94,14 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
     async def on_after_register(self, user: User, request: Optional[Request] = None):
         """Called after a user registers.
 
-        For admin users, writes credentials to secrets.yaml so dependent services
+        For admin users, writes credentials to config/SECRETS/secrets.yaml so dependent services
         (e.g., Chronicle) can create matching admin users with the same password hash.
         """
         logger.info(f"User {user.user_id} ({user.email}) has registered.")
 
-        # Write admin credentials to secrets.yaml for dependent services
+        # Write admin credentials to config/SECRETS/secrets.yaml for dependent services
         # TODO(USH-5): Align password dependencies - Chronicle and other services should
-        # read admin.password and admin.password_hash from secrets.yaml
+        # read admin.password and admin.password_hash from config/SECRETS/secrets.yaml
         # https://linear.app/ushadow/issue/USH-5/align-container-passwords
         if user.is_superuser:
             try:
@@ -113,9 +113,9 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
                         "password_hash": user.hashed_password,
                     }
                 })
-                logger.info(f"Saved admin credentials to secrets.yaml for {user.email}")
+                logger.info(f"Saved admin credentials to config/SECRETS/secrets.yaml for {user.email}")
             except Exception as e:
-                logger.error(f"Failed to save admin credentials to secrets.yaml: {e}")
+                logger.error(f"Failed to save admin credentials to config/SECRETS/secrets.yaml: {e}")
             finally:
                 self._pending_plaintext_password = None
 
@@ -336,13 +336,13 @@ def get_accessible_user_ids(user: User) -> list[str] | None:
 
 
 async def create_admin_user_if_needed():
-    """Create admin user during startup if explicitly configured in secrets.yaml.
+    """Create admin user during startup if explicitly configured in config/SECRETS/secrets.yaml.
 
-    Only creates if both admin.email and admin.password are set in secrets.yaml.
-    Writes password hash back to secrets.yaml for dependent services.
+    Only creates if both admin.email and admin.password are set in config/SECRETS/secrets.yaml.
+    Writes password hash back to config/SECRETS/secrets.yaml for dependent services.
     """
     if not ADMIN_EMAIL or not ADMIN_PASSWORD:
-        logger.info("Skipping admin user creation - credentials not configured in secrets.yaml")
+        logger.info("Skipping admin user creation - credentials not configured in config/SECRETS/secrets.yaml")
         return
 
     try:
@@ -372,9 +372,9 @@ async def create_admin_user_if_needed():
         admin_user = await user_manager.create(admin_create)
         logger.info(f"✅ Created admin user: {admin_user.email} (ID: {admin_user.id})")
 
-        # Write admin credentials to secrets.yaml for dependent services
+        # Write admin credentials to config/SECRETS/secrets.yaml for dependent services
         # TODO(USH-5): Align password dependencies - Chronicle and other services should
-        # read admin.password and admin.password_hash from secrets.yaml
+        # read admin.password and admin.password_hash from config/SECRETS/secrets.yaml
         # https://linear.app/ushadow/issue/USH-5/align-container-passwords
         try:
             settings = get_settings_store()
@@ -385,9 +385,9 @@ async def create_admin_user_if_needed():
                     "password_hash": admin_user.hashed_password,
                 }
             })
-            logger.info(f"Saved admin credentials to secrets.yaml for dependent services")
+            logger.info(f"Saved admin credentials to config/SECRETS/secrets.yaml for dependent services")
         except Exception as e:
-            logger.error(f"Failed to save admin credentials to secrets.yaml: {e}")
+            logger.error(f"Failed to save admin credentials to config/SECRETS/secrets.yaml: {e}")
 
     except Exception as e:
         logger.error(f"Failed to create admin user: {e}", exc_info=True)

@@ -43,8 +43,8 @@ def load_env() -> dict:
 
 
 def load_secrets() -> dict:
-    """Load secrets from config/secrets.yaml."""
-    secrets_file = Path(__file__).parent.parent / "config" / "secrets.yaml"
+    """Load secrets from config/SECRETS/secrets.yaml."""
+    secrets_file = Path(__file__).parent.parent / "config" / "SECRETS" / "secrets.yaml"
     if secrets_file.exists() and HAS_YAML:
         with open(secrets_file) as f:
             return yaml.safe_load(f) or {}
