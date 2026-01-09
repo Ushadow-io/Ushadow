@@ -108,11 +108,12 @@ def start_infrastructure(
 ) -> Tuple[bool, str]:
     """
     Start infrastructure using docker compose or existing containers.
-    
+
     Smart startup that:
-    1. Checks if containers exist but are stopped -> starts them
-    2. If containers don't exist -> creates them with docker compose
-    3. If already running -> does nothing
+    1. Ensures Docker networks exist
+    2. Checks if containers exist but are stopped -> starts them
+    3. If containers don't exist -> creates them with docker compose
+    4. If already running -> does nothing
 
     Args:
         compose_file: Path to compose file (default: compose/infrastructure-shared.yml)
@@ -123,6 +124,10 @@ def start_infrastructure(
         Tuple of (success: bool, message: str)
     """
     try:
+        # Ensure Docker networks exist before starting infrastructure
+        if not ensure_networks():
+            return False, "Failed to create required Docker networks (ushadow-network, infra-network)"
+
         # Check if infrastructure containers exist
         all_exist, existing = check_infrastructure_exists()
         
