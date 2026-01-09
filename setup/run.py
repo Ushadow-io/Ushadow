@@ -243,7 +243,11 @@ def read_dev_mode_from_env() -> bool:
 
 def compose_up(dev_mode: bool, build: bool = False) -> bool:
     """Start containers (optionally with rebuild)."""
-    ensure_networks()
+    # Ensure Docker networks exist
+    if not ensure_networks():
+        print_color(Colors.RED, "❌ Failed to create required Docker networks (ushadow-network, infra-network)")
+        print_color(Colors.YELLOW, "   Make sure Docker is running and you have permissions to create networks")
+        return False
 
     # Check/start infrastructure
     infra_running = check_infrastructure_running()

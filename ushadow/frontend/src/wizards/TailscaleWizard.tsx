@@ -359,21 +359,26 @@ export default function TailscaleWizard() {
         }
       }
 
-      const response = await tailscaleApi.provisionCertInContainer(hostname)
-      if (!response.data.provisioned) {
-        setMessage({ type: 'error', text: response.data.error || 'Failed to provision certificate' })
-        return false
-      }
+      // IMPORTANT: Configure HTTPS routes FIRST, before provisioning certificates
+      // Tailscale requires HTTPS to be configured before it can provision certs
 
       // Only try Caddy routing if feature flag is enabled
       if (caddyEnabled) {
-        setMessage({ type: 'info', text: 'Configuring routing through Caddy...' })
+        setMessage({ type: 'info', text: 'Configuring HTTPS routing through Caddy...' })
 
         // Try Caddy routing (supports /chronicle/* path routing)
-        // Pass hostname so CORS origins can be updated
         try {
           const caddyResponse = await tailscaleApi.configureCaddyRouting(hostname)
           if (caddyResponse.data.status === 'configured') {
+            // Caddy routing configured - now provision certificate
+            setMessage({ type: 'info', text: 'Provisioning SSL certificate...' })
+            const certResponse = await tailscaleApi.provisionCertInContainer(hostname)
+
+            if (!certResponse.data.provisioned) {
+              setMessage({ type: 'warning', text: certResponse.data.error || 'Certificate provisioning failed, but HTTPS routing is configured' })
+              // Continue anyway - cert might already exist or provision later
+            }
+
             setCertificateProvisioned(true)
             updateServiceStatus('tailscale', { configured: true, running: true })
             markPhaseComplete('tailscale')
@@ -389,25 +394,37 @@ export default function TailscaleWizard() {
       }
 
       // Use direct Tailscale Serve routes (default when Caddy disabled)
+      setMessage({ type: 'info', text: 'Configuring HTTPS routing...' })
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
-      if (serveResponse.data.status === 'configured' || serveResponse.data.status === 'skipped') {
-        // Store the configured routes for display
-        if (serveResponse.data.routes) {
-          setConfiguredRoutes(serveResponse.data.routes)
-        }
-        setCertificateProvisioned(true)
-        updateServiceStatus('tailscale', { configured: true, running: true })
-        markPhaseComplete('tailscale')
-        setMessage({ type: 'success', text: 'HTTPS access configured and ready!' })
-        return true
-      } else {
-        setMessage({ type: 'error', text: 'Failed to configure routing' })
+      if (serveResponse.data.status !== 'configured' && serveResponse.data.status !== 'skipped') {
+        setMessage({ type: 'error', text: 'Failed to configure HTTPS routing' })
         return false
       }
+
+      // Store the configured routes for display
+      if (serveResponse.data.routes) {
+        setConfiguredRoutes(serveResponse.data.routes)
+      }
+
+      // Now that HTTPS is configured, provision the certificate
+      setMessage({ type: 'info', text: 'Provisioning SSL certificate...' })
+      const response = await tailscaleApi.provisionCertInContainer(hostname)
+
+      if (!response.data.provisioned) {
+        // Warn but don't fail - cert might already exist or provision later
+        setMessage({ type: 'warning', text: response.data.error || 'Certificate provisioning failed, but HTTPS routing is configured. Certificate may be provisioned automatically.' })
+      } else {
+        setMessage({ type: 'success', text: 'HTTPS access configured and SSL certificate provisioned!' })
+      }
+
+      setCertificateProvisioned(true)
+      updateServiceStatus('tailscale', { configured: true, running: true })
+      markPhaseComplete('tailscale')
+      return true
     } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to provision certificate') })
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to configure HTTPS') })
       return false
     } finally {
       setLoading(false)
