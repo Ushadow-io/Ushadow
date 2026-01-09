@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Folder, X } from 'lucide-react'
 import { dialog } from '@tauri-apps/api'
+import { join } from '@tauri-apps/api/path'
 
 interface ProjectSetupDialogProps {
   isOpen: boolean
@@ -16,9 +17,16 @@ export function ProjectSetupDialog({
   onSetup,
 }: ProjectSetupDialogProps) {
   const [parentPath, setParentPath] = useState<string | null>(null)
+  const [fullInstallPath, setFullInstallPath] = useState<string | null>(null)
 
-  // Calculate the full install path (parent + /ushadow)
-  const fullInstallPath = parentPath ? `${parentPath}/ushadow` : null
+  // Calculate the full install path using cross-platform path joining
+  useEffect(() => {
+    if (parentPath) {
+      join(parentPath, 'ushadow').then(setFullInstallPath)
+    } else {
+      setFullInstallPath(null)
+    }
+  }, [parentPath])
 
   if (!isOpen) return null
 

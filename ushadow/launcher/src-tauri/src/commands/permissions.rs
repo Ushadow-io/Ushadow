@@ -210,8 +210,12 @@ pub fn check_install_path(path: String) -> PermissionCheckResult {
 
 /// Get a safe default installation path for the current user
 pub fn get_safe_install_path() -> String {
+    use std::path::PathBuf;
+
     if let Ok(home) = std::env::var("HOME") {
-        format!("{}/ushadow", home)
+        let mut path = PathBuf::from(home);
+        path.push("ushadow");
+        path.to_string_lossy().to_string()
     } else {
         // Fallback
         #[cfg(target_os = "windows")]
