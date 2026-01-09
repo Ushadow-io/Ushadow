@@ -61,7 +61,7 @@ print("✅ Removed " + result.deletedCount + " admin user(s). Remaining admins: 
 ' || echo "⚠️  MongoDB operation may have failed - check if container is running"
 
 echo ""
-echo "🗑️  Removing secrets.yaml..."
+echo "🗑️  Removing config/SECRETS/secrets.yaml..."
 if [ -f "config/SECRETS/secrets.yaml" ]; then
     rm "config/SECRETS/secrets.yaml"
     echo "   ✅ config/SECRETS/secrets.yaml removed"

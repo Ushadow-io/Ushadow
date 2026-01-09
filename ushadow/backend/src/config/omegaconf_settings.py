@@ -211,7 +211,7 @@ class SettingsStore:
 
         # File paths (merge order: defaults → secrets → overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
-        self.secrets_path = self.config_dir / "secrets.yaml"
+        self.secrets_path = self.config_dir / "SECRETS" / "secrets.yaml"
         self.overrides_path = self.config_dir / "config.overrides.yaml"
 
         self._cache: Optional[DictConfig] = None
