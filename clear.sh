@@ -16,7 +16,7 @@ fi
 echo ""
 echo "⚠️  WARNING: This will:"
 echo "   - Remove ALL admin users from the database"
-echo "   - Delete config/secrets.yaml (all API keys and credentials)"
+echo "   - Delete config/SECRETS/secrets.yaml (all API keys and credentials)"
 echo "   - Delete config/config.overrides.yaml (wizard state and service preferences)"
 echo "   - Allow you to run ./quick-start.sh for a fresh setup"
 echo ""
@@ -61,12 +61,12 @@ print("✅ Removed " + result.deletedCount + " admin user(s). Remaining admins: 
 ' || echo "⚠️  MongoDB operation may have failed - check if container is running"
 
 echo ""
-echo "🗑️  Removing secrets.yaml..."
-if [ -f "config/secrets.yaml" ]; then
-    rm "config/secrets.yaml"
-    echo "   ✅ config/secrets.yaml removed"
+echo "🗑️  Removing config/SECRETS/secrets.yaml..."
+if [ -f "config/SECRETS/secrets.yaml" ]; then
+    rm "config/SECRETS/secrets.yaml"
+    echo "   ✅ config/SECRETS/secrets.yaml removed"
 else
-    echo "   ℹ️  config/secrets.yaml not found (already clean)"
+    echo "   ℹ️  config/SECRETS/secrets.yaml not found (already clean)"
 fi
 
 echo ""

@@ -457,13 +457,13 @@ if __name__ == '__main__':
         print(json.dumps({'created': created}))
 
     elif cmd == 'ensure-secrets':
-        secrets_file = sys.argv[2] if len(sys.argv) > 2 else 'config/secrets.yaml'
+        secrets_file = sys.argv[2] if len(sys.argv) > 2 else 'config/SECRETS/secrets.yaml'
         created_new, secrets_data = ensure_secrets_yaml(secrets_file)
         print(json.dumps({'created_new': created_new, 'has_auth_key': bool(secrets_data.get('security', {}).get('auth_secret_key'))}))
 
     elif cmd == 'create-admin':
         backend_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8010
-        secrets_file = sys.argv[3] if len(sys.argv) > 3 else 'config/secrets.yaml'
+        secrets_file = sys.argv[3] if len(sys.argv) > 3 else 'config/SECRETS/secrets.yaml'
 
         # Load admin credentials from secrets.yaml
         if yaml is None:

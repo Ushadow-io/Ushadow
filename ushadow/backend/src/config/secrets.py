@@ -26,7 +26,7 @@ def get_auth_secret_key() -> str:
     key = get_settings_store().get_sync("security.auth_secret_key")
     if not key:
         raise ValueError(
-            "AUTH_SECRET_KEY not found in config/secrets.yaml. "
+            "AUTH_SECRET_KEY not found in config/SECRETS/secrets.yaml. "
             "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
         )
     return key

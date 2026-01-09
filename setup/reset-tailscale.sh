@@ -31,10 +31,10 @@ fi
 echo ""
 
 # Remove certificates
-if [ -d "config/certs" ]; then
+if [ -d "config/SECRETS/certs" ]; then
     echo "Removing Tailscale certificates..."
-    rm -f config/certs/*.ts.net.crt 2>/dev/null || true
-    rm -f config/certs/*.ts.net.key 2>/dev/null || true
+    rm -f config/SECRETS/certs/*.ts.net.crt 2>/dev/null || true
+    rm -f config/SECRETS/certs/*.ts.net.key 2>/dev/null || true
     echo "✓ Certificates removed"
 fi
 

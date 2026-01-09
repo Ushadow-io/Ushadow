@@ -116,7 +116,7 @@ def start_infrastructure(
     4. If already running -> does nothing
 
     Args:
-        compose_file: Path to compose file (default: compose/infrastructure-shared.yml)
+        compose_file: Path to compose file (str or Path object)
         project_name: Docker compose project name (default: infra)
         wait_seconds: Seconds to wait after starting (default: 3)
 
@@ -128,9 +128,12 @@ def start_infrastructure(
         if not ensure_networks():
             return False, "Failed to create required Docker networks (ushadow-network, infra-network)"
 
+        # Convert compose_file to Path object for consistent handling
+        compose_path = Path(compose_file)
+
         # Check if infrastructure containers exist
         all_exist, existing = check_infrastructure_exists()
-        
+
         if all_exist:
             # Containers exist, just start them
             started = []
@@ -153,17 +156,18 @@ def start_infrastructure(
                 time.sleep(wait_seconds)
 
             return True, f"Started existing infrastructure containers: {', '.join(started)}"
-        
+
         # Containers don't exist, create them with docker compose
         # Check if compose file exists
-        if not Path(compose_file).exists():
+        if not compose_path.exists():
             return False, f"Compose file not found: {compose_file}"
 
         # Create and start infrastructure
         # Note: Must include --profile flags since all services in infra compose have profiles
         # Only start core infra (mongo, redis) - memory services started separately when needed
+        # Use as_posix() for cross-platform file paths in docker compose
         result = subprocess.run(
-            ["docker", "compose", "-f", compose_file, "-p", project_name,
+            ["docker", "compose", "-f", str(compose_path.as_posix()), "-p", project_name,
              "--profile", "infra", "up", "-d"],
             capture_output=True,
             text=True,

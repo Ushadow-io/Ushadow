@@ -14,7 +14,6 @@ import os
 import sys
 import subprocess
 import time
-import json
 import getpass
 from pathlib import Path
 
@@ -31,9 +30,9 @@ APP_NAME = "ushadow"
 APP_DISPLAY_NAME = "Ushadow"
 DEFAULT_BACKEND_PORT = 8000
 DEFAULT_WEBUI_PORT = 3000
-INFRA_COMPOSE_FILE = "compose/docker-compose.infra.yml"
+INFRA_COMPOSE_FILE = PROJECT_ROOT / "compose" / "docker-compose.infra.yml"
 INFRA_PROJECT_NAME = "infra"
-APP_COMPOSE_FILE = "docker-compose.yml"
+APP_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 
 # Colors (ANSI escape codes, works on modern Windows too)
 class Colors:
@@ -137,7 +136,7 @@ def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_f
             print_color(Colors.BLUE, "🔍 Auto-finding available ports...")
             
             # Try incrementing port offset until we find available ports (max 100 attempts)
-            for attempt in range(100):
+            for _ in range(100):
                 port_offset += 10  # Increment by 10 to avoid nearby conflicts
                 backend_port = DEFAULT_BACKEND_PORT + port_offset
                 webui_port = DEFAULT_WEBUI_PORT + port_offset
@@ -227,8 +226,10 @@ DEV_MODE={'true' if dev_mode else 'false'}
 
 def get_compose_cmd(dev_mode: bool) -> list:
     """Get the base docker compose command with correct override file."""
-    override_file = "compose/overrides/dev-webui.yml" if dev_mode else "compose/overrides/prod-webui.yml"
-    return ["docker", "compose", "-f", APP_COMPOSE_FILE, "-f", override_file]
+    override_name = "dev-webui.yml" if dev_mode else "prod-webui.yml"
+    override_file = PROJECT_ROOT / "compose" / "overrides" / override_name
+    # Use as_posix() to get forward slashes on all platforms (docker compose accepts this)
+    return ["docker", "compose", "-f", str(APP_COMPOSE_FILE.as_posix()), "-f", str(override_file.as_posix())]
 
 
 def read_dev_mode_from_env() -> bool:
@@ -266,6 +267,7 @@ def compose_up(dev_mode: bool, build: bool = False) -> bool:
     if build:
         cmd.append("--build")
 
+    # Use native path format for cwd (subprocess handles it correctly)
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
         print_color(Colors.RED, "❌ Failed to start application")
@@ -317,7 +319,7 @@ def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
     print("   Waiting for backend to be healthy...")
     time.sleep(3)
 
-    healthy, elapsed = wait_for_backend_health(backend_port, timeout=60)
+    healthy, _ = wait_for_backend_health(backend_port, timeout=60)
 
     print()
     if healthy:
@@ -400,7 +402,7 @@ def main():
             sys.exit(0 if compose_up(dev_mode, build=False) else 1)
         elif args.build:
             # Ensure secrets before build
-            secrets_file = PROJECT_ROOT / "config" / "secrets.yaml"
+            secrets_file = PROJECT_ROOT / "config" / "SECRETS" / "secrets.yaml"
             ensure_secrets_yaml(str(secrets_file))
             sys.exit(0 if compose_up(dev_mode, build=True) else 1)
 
@@ -419,10 +421,12 @@ def main():
     # Configuration paths
     env_file = PROJECT_ROOT / ".env"
     config_dir = PROJECT_ROOT / "config"
-    secrets_file = config_dir / "secrets.yaml"
+    secrets_dir = config_dir / "SECRETS"
+    secrets_file = secrets_dir / "secrets.yaml"
 
-    # Ensure config directory exists
+    # Ensure config and secrets directories exist
     config_dir.mkdir(exist_ok=True)
+    secrets_dir.mkdir(exist_ok=True)
 
     # Always ensure secrets.yaml exists with auth keys
     created_new, secrets_data = ensure_secrets_yaml(str(secrets_file))

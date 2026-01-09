@@ -106,13 +106,21 @@ def get_tailscale_container_name() -> str:
 def exec_tailscale_command(command: str) -> tuple[int, str, str]:
     """Execute a tailscale command in the container.
 
+    Args:
+        command: Command to execute. Can include pipes and shell operators.
+
     Returns:
         Tuple of (exit_code, stdout, stderr)
     """
     container_name = get_tailscale_container_name()
     try:
         container = docker_client.containers.get(container_name)
-        result = container.exec_run(command, demux=True)
+        # If command contains pipes or shell operators, wrap in sh -c
+        if '|' in command or '&&' in command or '||' in command or '>' in command or '<' in command:
+            cmd = ['/bin/sh', '-c', command]
+        else:
+            cmd = command
+        result = container.exec_run(cmd, demux=True)
 
         exit_code = result.exit_code
         output = result.output
@@ -290,7 +298,7 @@ def configure_base_routes(
     backend_container: str = None,
     frontend_container: str = None,
     backend_port: int = 8000,
-    frontend_port: int = None  # Auto-detect from DEV_MODE
+    frontend_port: int = None
 ) -> bool:
     """Configure the base routes for an environment.
 
@@ -308,7 +316,7 @@ def configure_base_routes(
         backend_container: Backend container name (defaults to {env}-backend)
         frontend_container: Frontend container name (defaults to {env}-webui)
         backend_port: Backend internal port (default 8000)
-        frontend_port: Frontend internal port (auto-detect: 5173 for dev, 80 for prod)
+        frontend_port: Frontend internal port (always 5173 for webui container)
 
     Returns:
         True if all routes configured successfully
@@ -321,7 +329,10 @@ def configure_base_routes(
     if not frontend_container:
         frontend_container = f"{env_name}-webui"
 
-    # Auto-detect frontend port based on DEV_MODE
+    # Frontend webui container port depends on dev/prod mode
+    # Dev mode: Vite dev server on 5173
+    # Prod mode: nginx on 80
+    # (WEBUI_PORT env var is the external port mapping, not internal)
     if frontend_port is None:
         dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
         frontend_port = 5173 if dev_mode else 80

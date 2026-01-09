@@ -122,7 +122,7 @@ services:
   #     - TS_EXTRA_ARGS=--advertise-tags=tag:container
   #   volumes:
   #     - tailscale_state:/var/lib/tailscale
-  #     - ./config/certs:/certs
+  #     - ./config/SECRETS/certs:/certs
   #   cap_add:
   #     - NET_ADMIN
   #     - NET_RAW

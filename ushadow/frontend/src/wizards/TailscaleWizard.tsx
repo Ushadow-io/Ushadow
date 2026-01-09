@@ -12,8 +12,9 @@ import {
   Monitor,
   ExternalLink,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react'
-import { tailscaleApi, TailscaleConfig, ContainerStatus, AuthUrlResponse } from '../services/api'
+import { tailscaleApi, TailscaleConfig, ContainerStatus, AuthUrlResponse, TailnetSettings } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
@@ -99,6 +100,9 @@ export default function TailscaleWizard() {
   // Configured routes (returned from configure-serve)
   const [configuredRoutes, setConfiguredRoutes] = useState<string>('')
 
+  // Tailnet settings (MagicDNS, HTTPS)
+  const [tailnetSettings, setTailnetSettings] = useState<TailnetSettings | null>(null)
+
   // ============================================================================
   // Initial check on welcome step
   // ============================================================================
@@ -118,6 +122,26 @@ export default function TailscaleWizard() {
       checkContainerStatus()
     }
   }, [wizard.currentStep.id])
+
+  // ============================================================================
+  // Provision Step: Check Tailnet Settings
+  // ============================================================================
+
+  useEffect(() => {
+    if (wizard.currentStep.id === 'provision' && containerStatus?.authenticated) {
+      checkTailnetSettings()
+    }
+  }, [wizard.currentStep.id, containerStatus?.authenticated])
+
+  const checkTailnetSettings = async () => {
+    try {
+      const response = await tailscaleApi.getTailnetSettings()
+      setTailnetSettings(response.data)
+      console.log('Tailnet settings:', response.data)
+    } catch (err) {
+      console.error('Failed to check tailnet settings:', err)
+    }
+  }
 
   // ============================================================================
   // Complete Step: Update CORS origins
@@ -236,6 +260,16 @@ export default function TailscaleWizard() {
   const checkAuthStatus = async () => {
     try {
       const response = await tailscaleApi.getContainerStatus()
+
+      // Check if container exists and is running before trying to get auth URL
+      if (!response.data.exists || !response.data.running) {
+        setMessage({
+          type: 'error',
+          text: 'Tailscale container is not running. Please go back and start the container first.'
+        })
+        return
+      }
+
       if (response.data.authenticated) {
         setContainerStatus(response.data)
         setConfig(prev => ({ ...prev, hostname: response.data.hostname || '' }))
@@ -244,7 +278,10 @@ export default function TailscaleWizard() {
         loadAuthUrl()
       }
     } catch (err) {
-      loadAuthUrl()
+      setMessage({
+        type: 'error',
+        text: 'Failed to check container status. Please ensure Tailscale container is running.'
+      })
     }
   }
 
@@ -340,6 +377,131 @@ export default function TailscaleWizard() {
   }
 
   // ============================================================================
+  // Clear Authentication Component
+  // ============================================================================
+
+  const ClearAuthButton = ({
+    variant = 'link',
+    testId = 'clear-auth',
+    className = ''
+  }: {
+    variant?: 'link' | 'button'
+    testId?: string
+    className?: string
+  }) => {
+    if (variant === 'link') {
+      return (
+        <div className="space-y-2">
+          <button
+            onClick={clearAuthentication}
+            disabled={loading}
+            className={`text-sm text-red-600 dark:text-red-400 hover:underline flex items-center gap-2 ${className}`}
+            data-testid={testId}
+          >
+            <RefreshCw className="w-4 h-4" />
+            Clear Authentication & Restart
+          </button>
+          <a
+            href="https://login.tailscale.com/admin/machines"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-1"
+          >
+            Remove machine from admin console
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-2">
+        <button
+          onClick={clearAuthentication}
+          disabled={loading}
+          className={`btn-danger text-sm ${className}`}
+          data-testid={testId}
+          title="Remove machine from Tailscale and clear all authentication"
+        >
+          {loading ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          ) : (
+            <Trash2 className="w-4 h-4 mr-2" />
+          )}
+          Clear Auth
+        </button>
+        <a
+          href="https://login.tailscale.com/admin/machines"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-1"
+        >
+          Remove machine from admin console
+          <ExternalLink className="w-3 h-3" />
+        </a>
+      </div>
+    )
+  }
+
+  // ============================================================================
+  // Clear Authentication
+  // ============================================================================
+
+  const clearAuthentication = async () => {
+    const confirmed = window.confirm(
+      'This will clear local authentication and remove the container/volume.\n\n' +
+      'Note: You will need to manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines\n\n' +
+      'Continue?'
+    )
+    if (!confirmed) return
+
+    setLoading(true)
+    setMessage(null)
+
+    // Stop any ongoing polling immediately
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current)
+      pollTimeoutRef.current = null
+    }
+    setPollingAuth(false)
+
+    try {
+      const response = await tailscaleApi.clearAuth()
+
+      // Reset all state to fresh/unauthenticated
+      setContainerStatus({
+        exists: false,
+        running: false,
+        authenticated: false,
+        hostname: null,
+        ip_address: null
+      })
+      setAuthData(null)
+      setCertificateProvisioned(false)
+      setConfig(prev => ({ ...prev, hostname: '' }))
+      setCorsStatus({ updated: false, loading: false })
+
+      // Force a status check to ensure UI updates
+      setTimeout(async () => {
+        await checkContainerStatus()
+      }, 100)
+
+      setMessage({ type: 'success', text: response.data.message + ' Container and volume removed. Start fresh.' })
+
+      // Go back to start_container step
+      wizard.goTo('start_container')
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to clear authentication') })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ============================================================================
   // Certificate & Routing Setup
   // ============================================================================
 
@@ -359,66 +521,56 @@ export default function TailscaleWizard() {
         }
       }
 
-      // IMPORTANT: Configure HTTPS routes FIRST, before provisioning certificates
-      // Tailscale requires HTTPS to be configured before it can provision certs
-
-      // Only try Caddy routing if feature flag is enabled
-      if (caddyEnabled) {
-        setMessage({ type: 'info', text: 'Configuring HTTPS routing through Caddy...' })
-
-        // Try Caddy routing (supports /chronicle/* path routing)
-        try {
-          const caddyResponse = await tailscaleApi.configureCaddyRouting(hostname)
-          if (caddyResponse.data.status === 'configured') {
-            // Caddy routing configured - now provision certificate
-            setMessage({ type: 'info', text: 'Provisioning SSL certificate...' })
-            const certResponse = await tailscaleApi.provisionCertInContainer(hostname)
-
-            if (!certResponse.data.provisioned) {
-              setMessage({ type: 'warning', text: certResponse.data.error || 'Certificate provisioning failed, but HTTPS routing is configured' })
-              // Continue anyway - cert might already exist or provision later
-            }
-
-            setCertificateProvisioned(true)
-            updateServiceStatus('tailscale', { configured: true, running: true })
-            markPhaseComplete('tailscale')
-            const corsMsg = caddyResponse.data.cors_origin_added
-              ? ` CORS updated for ${caddyResponse.data.cors_origin_added}`
-              : ''
-            setMessage({ type: 'success', text: `HTTPS access configured with Caddy reverse proxy!${corsMsg}` })
-            return true
-          }
-        } catch (caddyErr) {
-          console.log('Caddy routing not available, falling back to direct Tailscale Serve')
-        }
-      }
-
-      // Use direct Tailscale Serve routes (default when Caddy disabled)
-      setMessage({ type: 'info', text: 'Configuring HTTPS routing...' })
+      // IMPORTANT: Enable HTTPS FIRST, then provision certs
+      // Step 1: Enable HTTPS (required for cert provisioning)
+      setMessage({ type: 'info', text: 'Enabling HTTPS on Tailscale...' })
       const finalConfig = { ...config, hostname }
-      const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
-      if (serveResponse.data.status !== 'configured' && serveResponse.data.status !== 'skipped') {
-        setMessage({ type: 'error', text: 'Failed to configure HTTPS routing' })
-        return false
+      try {
+        const serveResponse = await tailscaleApi.configureServe(finalConfig)
+
+        if (serveResponse.data.status !== 'configured') {
+          setMessage({ type: 'error', text: serveResponse.data.message || 'Failed to enable HTTPS' })
+          return false
+        }
+
+        // Store the configured routes for display
+        if (serveResponse.data.routes) {
+          setConfiguredRoutes(serveResponse.data.routes)
+        }
+      } catch (err: any) {
+        if (err.response?.status === 400) {
+          // Tailscale Serve not enabled - show helpful message
+          setMessage({
+            type: 'error',
+            text: err.response.data.detail || 'Tailscale Serve must be enabled on your tailnet. Check Tailscale admin console.'
+          })
+          return false
+        }
+        throw err
       }
 
-      // Store the configured routes for display
-      if (serveResponse.data.routes) {
-        setConfiguredRoutes(serveResponse.data.routes)
-      }
-
-      // Now that HTTPS is configured, provision the certificate
+      // Step 2: Provision the certificate (HTTPS is now enabled)
       setMessage({ type: 'info', text: 'Provisioning SSL certificate...' })
-      const response = await tailscaleApi.provisionCertInContainer(hostname)
-
-      if (!response.data.provisioned) {
-        // Warn but don't fail - cert might already exist or provision later
-        setMessage({ type: 'warning', text: response.data.error || 'Certificate provisioning failed, but HTTPS routing is configured. Certificate may be provisioned automatically.' })
-      } else {
-        setMessage({ type: 'success', text: 'HTTPS access configured and SSL certificate provisioned!' })
+      const certResponse = await tailscaleApi.provisionCertInContainer(hostname)
+      if (!certResponse.data.provisioned) {
+        const error = certResponse.data.error || ''
+        if (error.includes('does not support getting TLS certs')) {
+          setMessage({
+            type: 'warning',
+            text: 'Your Tailscale plan does not support HTTPS certificates. Upgrade your plan or enable in admin console.'
+          })
+        } else {
+          setMessage({ type: 'warning', text: error || 'Certificate provisioning failed' })
+        }
+        // Don't fail completely - HTTPS is enabled
       }
 
+      // Step 3: Recheck tailnet settings to update UI
+      await checkTailnetSettings()
+
+      // Step 4: Success!
+      setMessage({ type: 'success', text: 'HTTPS enabled! Certificate provisioning may require plan upgrade.' })
       setCertificateProvisioned(true)
       updateServiceStatus('tailscale', { configured: true, running: true })
       markPhaseComplete('tailscale')
@@ -573,6 +725,9 @@ export default function TailscaleWizard() {
               </div>
             </div>
           </div>
+
+          {/* Clear Auth button - only show if container exists */}
+          {containerStatus?.exists && <ClearAuthButton variant="button" testId="clear-auth-welcome" />}
         </div>
       )}
 
@@ -611,36 +766,41 @@ export default function TailscaleWizard() {
           )}
 
           {containerStatus?.running && (
-            <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg space-y-2">
-              <p className="text-sm text-green-800 dark:text-green-200">
-                Tailscale container is running and ready for authentication
-              </p>
-              {caddyEnabled && caddyRunning && (
-                <p className="text-sm text-green-700 dark:text-green-300">
-                  Caddy reverse proxy is active for multi-service routing
+            <div className="space-y-4">
+              <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg space-y-2">
+                <p className="text-sm text-green-800 dark:text-green-200">
+                  Tailscale container is running and ready for authentication
                 </p>
-              )}
-              {caddyEnabled && !caddyRunning && (
-                <button
-                  data-testid="start-caddy-only"
-                  onClick={async () => {
-                    setLoading(true)
-                    try {
-                      await tailscaleApi.startCaddy()
-                      await checkContainerStatus()
-                      setMessage({ type: 'success', text: 'Caddy started!' })
-                    } catch (err) {
-                      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to start Caddy') })
-                    } finally {
-                      setLoading(false)
-                    }
-                  }}
-                  disabled={loading}
-                  className="mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  {loading ? 'Starting...' : 'Start Caddy reverse proxy'}
-                </button>
-              )}
+                {caddyEnabled && caddyRunning && (
+                  <p className="text-sm text-green-700 dark:text-green-300">
+                    Caddy reverse proxy is active for multi-service routing
+                  </p>
+                )}
+                {caddyEnabled && !caddyRunning && (
+                  <button
+                    data-testid="start-caddy-only"
+                    onClick={async () => {
+                      setLoading(true)
+                      try {
+                        await tailscaleApi.startCaddy()
+                        await checkContainerStatus()
+                        setMessage({ type: 'success', text: 'Caddy started!' })
+                      } catch (err) {
+                        setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to start Caddy') })
+                      } finally {
+                        setLoading(false)
+                      }
+                    }}
+                    disabled={loading}
+                    className="mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {loading ? 'Starting...' : 'Start Caddy reverse proxy'}
+                  </button>
+                )}
+              </div>
+
+              {/* Clear Auth button */}
+              <ClearAuthButton variant="button" testId="clear-auth-start" />
             </div>
           )}
         </div>
@@ -747,15 +907,20 @@ export default function TailscaleWizard() {
           </div>
 
           {containerStatus?.authenticated ? (
-            <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg flex items-start gap-3">
-              <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm text-green-800 dark:text-green-200 font-semibold">
-                  Successfully Authenticated!
-                </p>
-                <p className="text-sm text-green-700 dark:text-green-300 mt-1">
-                  Your Tailscale hostname: <code className="font-mono">{containerStatus.hostname}</code>
-                </p>
+            <div className="space-y-4">
+              <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg flex items-start gap-3">
+                <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-green-800 dark:text-green-200 font-semibold">
+                    Successfully Authenticated!
+                  </p>
+                  <p className="text-sm text-green-700 dark:text-green-300 mt-1">
+                    Your Tailscale hostname: <code className="font-mono">{containerStatus.hostname}</code>
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-center">
+                <ClearAuthButton variant="button" testId="clear-auth-button-authenticated" />
               </div>
             </div>
           ) : loading ? (
@@ -831,6 +996,7 @@ export default function TailscaleWizard() {
                       )}
                       New QR Code
                     </button>
+                    <ClearAuthButton variant="button" testId="clear-auth-button" />
                   </div>
                 </div>
               )}
@@ -850,6 +1016,87 @@ export default function TailscaleWizard() {
               Setting up certificates and routing automatically
             </p>
           </div>
+
+          {/* Tailnet Settings Warnings */}
+          {tailnetSettings && (
+            <>
+              {!tailnetSettings.magic_dns.enabled && (
+                <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-1">
+                        MagicDNS Not Enabled
+                      </p>
+                      <p className="text-sm text-yellow-700 dark:text-yellow-300 mb-2">
+                        MagicDNS must be enabled on your tailnet for HTTPS to work. Enable it in your Tailscale admin console.
+                      </p>
+                      <a
+                        href={tailnetSettings.magic_dns.admin_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-sm font-medium text-yellow-800 dark:text-yellow-200 hover:underline"
+                      >
+                        Enable MagicDNS
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {tailnetSettings.https_serve.enabled === false && (
+                <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">
+                        HTTPS Certificates Not Enabled
+                      </p>
+                      <p className="text-sm text-yellow-700 dark:text-yellow-300 mb-3">
+                        To enable HTTPS certificates for your tailnet:
+                      </p>
+                      <div className="space-y-3">
+                        <div>
+                          <a
+                            href={tailnetSettings.https_serve.admin_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn-primary text-sm inline-flex items-center gap-2"
+                          >
+                            Open DNS Settings
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        </div>
+                        <ul className="text-sm text-yellow-700 dark:text-yellow-300 ml-4 space-y-2 list-disc">
+                          <li className="pl-2">Scroll down to the bottom of the page</li>
+                          <li className="pl-2">Click the "Enable HTTPS" button</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Recheck button - show if there are warnings */}
+          {tailnetSettings && (!tailnetSettings.magic_dns.enabled || tailnetSettings.https_serve.enabled === false) && (
+            <div className="flex justify-start">
+              <button
+                onClick={async () => {
+                  setLoading(true)
+                  await checkTailnetSettings()
+                  setLoading(false)
+                }}
+                disabled={loading}
+                className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 flex items-center gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                Recheck Settings
+              </button>
+            </div>
+          )}
 
           {certificateProvisioned ? (
             <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg flex items-start gap-3">

@@ -663,6 +663,19 @@ export interface AuthUrlResponse {
   qr_code_data: string
 }
 
+export interface TailnetSettings {
+  magic_dns: {
+    enabled: boolean
+    suffix: string | null
+    admin_url: string
+  }
+  https_serve: {
+    enabled: boolean | null
+    error: string | null
+    admin_url: string
+  }
+}
+
 // =============================================================================
 // Provider Types (capability-based service composition)
 // =============================================================================
@@ -1046,6 +1059,9 @@ export const tailscaleApi = {
       message: string
       details?: { tailscale: { status: string }; caddy: { status: string }; routing: { status: string } }
     }>('/api/tailscale/container/start-with-caddy'),
+  clearAuth: () => api.post<{ status: string; message: string }>('/api/tailscale/container/clear-auth'),
+  getTailnetSettings: () => api.get<TailnetSettings>('/api/tailscale/container/tailnet-settings'),
+  enableHttps: () => api.post<{ status: string; message: string }>('/api/tailscale/container/enable-https'),
   getAuthUrl: (regenerate: boolean = false) =>
     api.get<AuthUrlResponse>('/api/tailscale/container/auth-url', { params: { regenerate } }),
   provisionCertInContainer: (hostname: string) =>
