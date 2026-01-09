@@ -1,5 +1,5 @@
-import { AlertCircle, X } from 'lucide-react'
-import { useTheme } from '../contexts/ThemeContext'
+import { AlertCircle, AlertTriangle, Info } from 'lucide-react'
+import Modal from './Modal'
 
 interface ConfirmDialogProps {
   isOpen: boolean
@@ -22,100 +22,70 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  const { isDark } = useTheme()
-
-  if (!isOpen) return null
-
-  const variantStyles = {
+  const variantConfig = {
     danger: {
-      iconColor: '#f87171',
-      buttonBg: '#dc2626',
-      buttonHoverBg: '#b91c1c',
+      icon: AlertCircle,
+      iconClass: 'text-red-500',
+      buttonClass: 'bg-red-600 hover:bg-red-700 text-white',
     },
     warning: {
-      iconColor: '#fbbf24',
-      buttonBg: '#d97706',
-      buttonHoverBg: '#b45309',
+      icon: AlertTriangle,
+      iconClass: 'text-amber-500',
+      buttonClass: 'bg-amber-600 hover:bg-amber-700 text-white',
     },
     info: {
-      iconColor: '#4ade80',
-      buttonBg: '#4ade80',
-      buttonHoverBg: '#22c55e',
+      icon: Info,
+      iconClass: 'text-green-500',
+      buttonClass: 'bg-green-600 hover:bg-green-700 text-white',
     },
   }
 
-  const styles = variantStyles[variant]
+  const config = variantConfig[variant]
+  const IconComponent = config.icon
 
   return (
-    <div
-      id="confirm-dialog-overlay"
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={onCancel}
+    <Modal
+      isOpen={isOpen}
+      onClose={onCancel}
+      maxWidth="sm"
+      testId="confirm-dialog"
     >
-      <div
-        id="confirm-dialog"
-        className="rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
-        style={{
-          backgroundColor: isDark ? 'var(--surface-800)' : '#ffffff',
-          border: `1px solid ${isDark ? 'var(--surface-500)' : '#e4e4e7'}`,
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start gap-4">
-          <div className="flex-shrink-0" style={{ color: styles.iconColor }}>
-            <AlertCircle className="w-6 h-6" />
-          </div>
-          <div className="flex-1">
-            <h3
-              id="confirm-dialog-title"
-              className="text-lg font-semibold"
-              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
-            >
-              {title}
-            </h3>
-            <p
-              id="confirm-dialog-message"
-              className="mt-2 text-sm"
-              style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
-            >
-              {message}
-            </p>
-          </div>
-          <button
-            id="confirm-dialog-close"
-            onClick={onCancel}
-            className="flex-shrink-0 transition-colors"
-            style={{ color: isDark ? 'var(--surface-400)' : '#a1a1aa' }}
-          >
-            <X className="w-5 h-5" />
-          </button>
+      <div className="flex items-start gap-4">
+        <div className={`flex-shrink-0 ${config.iconClass}`}>
+          <IconComponent className="w-6 h-6" />
         </div>
-
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            id="confirm-dialog-cancel"
-            onClick={onCancel}
-            className="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-            style={{
-              backgroundColor: isDark ? 'var(--surface-600)' : '#e4e4e7',
-              color: isDark ? 'var(--text-primary)' : '#0f0f13',
-            }}
+        <div className="flex-1">
+          <h3
+            className="text-lg font-semibold text-neutral-900 dark:text-neutral-100"
+            data-testid="confirm-dialog-title"
           >
-            {cancelLabel}
-          </button>
-          <button
-            id="confirm-dialog-confirm"
-            onClick={onConfirm}
-            className="px-4 py-2 text-sm font-medium rounded-lg transition-colors text-white"
-            style={{
-              backgroundColor: styles.buttonBg,
-              color: variant === 'info' ? '#0f0f13' : '#ffffff',
-            }}
+            {title}
+          </h3>
+          <p
+            className="mt-2 text-sm text-neutral-600 dark:text-neutral-400"
+            data-testid="confirm-dialog-message"
           >
-            {confirmLabel}
-          </button>
+            {message}
+          </p>
         </div>
       </div>
-    </div>
+
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 text-sm font-medium rounded-lg transition-colors bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 hover:bg-neutral-300 dark:hover:bg-neutral-600"
+          data-testid="confirm-dialog-cancel"
+        >
+          {cancelLabel}
+        </button>
+        <button
+          onClick={onConfirm}
+          className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${config.buttonClass}`}
+          data-testid="confirm-dialog-confirm"
+        >
+          {confirmLabel}
+        </button>
+      </div>
+    </Modal>
   )
 }

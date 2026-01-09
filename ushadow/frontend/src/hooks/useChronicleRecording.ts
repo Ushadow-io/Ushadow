@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { getChronicleBaseUrl } from '../services/chronicleApi'
+import { getChronicleWebSocketUrl, getChronicleDirectUrl } from '../services/chronicleApi'
 import { getStorageKey } from '../utils/storage'
 import { useDualStreamRecording } from '../modules/dual-stream-audio/hooks/useDualStreamRecording'
 import { ChronicleWebSocketAdapter } from '../modules/dual-stream-audio/adapters/chronicleAdapter'
@@ -185,18 +185,22 @@ export const useChronicleRecording = (): ChronicleRecordingReturn => {
         connectionAttempts: prev.connectionAttempts + 1
       }))
 
-      const token = localStorage.getItem(getStorageKey('chronicle_token'))
+      // Chronicle uses unified auth with ushadow - same token works for both
+      const token = localStorage.getItem(getStorageKey('token'))
       if (!token) {
-        throw new Error('No Chronicle authentication token found')
+        throw new Error('No authentication token found - please log in to ushadow')
       }
 
       if (mode === 'dual-stream') {
         // ===== DUAL-STREAM MODE =====
         console.log('Starting dual-stream recording')
 
+        // Get Chronicle direct URL for WebSocket
+        const backendUrl = await getChronicleDirectUrl()
+
         // Create and connect adapter
         const adapter = new ChronicleWebSocketAdapter({
-          backendUrl: getChronicleBaseUrl(),
+          backendUrl,
           token,
           deviceName: 'ushadow-dual-stream',
           mode: 'dual-stream'
@@ -241,10 +245,8 @@ export const useChronicleRecording = (): ChronicleRecordingReturn => {
 
         // Connect WebSocket
         setLegacyStep('websocket')
-        const chronicleUrl = getChronicleBaseUrl()
-        const wsProtocol = chronicleUrl.startsWith('https') ? 'wss:' : 'ws:'
-        const host = chronicleUrl.replace(/^https?:\/\//, '')
-        const wsUrl = `${wsProtocol}//${host}/ws_pcm?token=${token}&device_name=ushadow-recorder`
+        const baseWsUrl = await getChronicleWebSocketUrl('/ws_pcm')
+        const wsUrl = `${baseWsUrl}?token=${token}&device_name=ushadow-recorder`
 
         const ws = await new Promise<WebSocket>((resolve, reject) => {
           const socket = new WebSocket(wsUrl)

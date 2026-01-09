@@ -109,6 +109,8 @@ class DiscoveredService:
     # From compose parsing
     image: Optional[str] = None
     requires: List[str] = field(default_factory=list)
+    optional: List[str] = field(default_factory=list)  # Optional capabilities
+    provides: Optional[str] = None  # Capability this service implements
     depends_on: List[str] = field(default_factory=list)
     profiles: List[str] = field(default_factory=list)
     ports: List[Dict[str, Any]] = field(default_factory=list)
@@ -265,6 +267,8 @@ class ComposeServiceRegistry:
                 compose_file=filepath,
                 image=service.image,
                 requires=service.requires,
+                optional=service.optional,
+                provides=service.provides,
                 depends_on=service.depends_on,
                 profiles=service.profiles,
                 ports=service.ports,

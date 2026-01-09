@@ -981,6 +981,189 @@ export const memoriesApi = {
   },
 }
 
+// =============================================================================
+// Instances API (templates, instances, wiring)
+// =============================================================================
+
+/** Template source - where the template was discovered from */
+export type TemplateSource = 'compose' | 'provider'
+
+/** Instance status */
+export type InstanceStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
+
+/** Template - discovered from compose or provider files */
+export interface Template {
+  id: string
+  source: TemplateSource
+  name: string
+  description?: string
+  requires: string[]
+  optional: string[]
+  provides?: string
+  config_schema: Array<{
+    key: string
+    type: string
+    label?: string
+    required?: boolean
+    default?: string
+    env_var?: string
+    settings_path?: string
+    has_value?: boolean  // Whether settings has a value
+    value?: string       // Current value (non-secrets only)
+  }>
+  compose_file?: string
+  service_name?: string
+  provider_file?: string
+  mode?: 'cloud' | 'local'
+  icon?: string
+  tags: string[]
+  configured: boolean  // Whether required config fields are set (for providers)
+  available: boolean   // Whether local service is running (for local providers)
+}
+
+/** Instance config values */
+export interface InstanceConfig {
+  values: Record<string, any>
+}
+
+/** Instance outputs after deployment */
+export interface InstanceOutputs {
+  access_url?: string
+  env_vars: Record<string, string>
+  capability_values: Record<string, any>
+}
+
+/** Instance - configured deployment of a template */
+export interface Instance {
+  id: string
+  template_id: string
+  name: string
+  description?: string
+  config: InstanceConfig
+  deployment_target?: string
+  status: InstanceStatus
+  outputs: InstanceOutputs
+  container_id?: string
+  container_name?: string
+  deployment_id?: string
+  created_at?: string
+  deployed_at?: string
+  updated_at?: string
+  error?: string
+}
+
+/** Instance summary for list views */
+export interface InstanceSummary {
+  id: string
+  template_id: string
+  name: string
+  status: InstanceStatus
+  provides?: string
+  deployment_target?: string
+  access_url?: string
+}
+
+/** Wiring connection between instances */
+export interface Wiring {
+  id: string
+  source_instance_id: string
+  source_capability: string
+  target_instance_id: string
+  target_capability: string
+  created_at?: string
+}
+
+/** Request to create an instance */
+export interface InstanceCreateRequest {
+  id: string
+  template_id: string
+  name: string
+  description?: string
+  config?: Record<string, any>
+  deployment_target?: string
+}
+
+/** Request to update an instance */
+export interface InstanceUpdateRequest {
+  name?: string
+  description?: string
+  config?: Record<string, any>
+  deployment_target?: string
+}
+
+/** Request to create wiring */
+export interface WiringCreateRequest {
+  source_instance_id: string
+  source_capability: string
+  target_instance_id: string
+  target_capability: string
+}
+
+export const instancesApi = {
+  // Templates
+  /** List all templates (compose services + providers) */
+  getTemplates: (source?: TemplateSource) =>
+    api.get<Template[]>('/api/instances/templates', { params: source ? { source } : {} }),
+
+  /** Get a template by ID */
+  getTemplate: (templateId: string) =>
+    api.get<Template>(`/api/instances/templates/${templateId}`),
+
+  // Instances
+  /** List all instances */
+  getInstances: () =>
+    api.get<InstanceSummary[]>('/api/instances'),
+
+  /** Get an instance by ID */
+  getInstance: (instanceId: string) =>
+    api.get<Instance>(`/api/instances/${instanceId}`),
+
+  /** Create a new instance */
+  createInstance: (data: InstanceCreateRequest) =>
+    api.post<Instance>('/api/instances', data),
+
+  /** Update an instance */
+  updateInstance: (instanceId: string, data: InstanceUpdateRequest) =>
+    api.put<Instance>(`/api/instances/${instanceId}`, data),
+
+  /** Delete an instance */
+  deleteInstance: (instanceId: string) =>
+    api.delete(`/api/instances/${instanceId}`),
+
+  /** Deploy/start an instance */
+  deployInstance: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/deploy`),
+
+  /** Undeploy/stop an instance */
+  undeployInstance: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/undeploy`),
+
+  // Wiring
+  /** List all wiring connections */
+  getWiring: () =>
+    api.get<Wiring[]>('/api/instances/wiring/all'),
+
+  /** Get default capability mappings */
+  getDefaults: () =>
+    api.get<Record<string, string>>('/api/instances/wiring/defaults'),
+
+  /** Set default instance for a capability */
+  setDefault: (capability: string, instanceId: string) =>
+    api.put(`/api/instances/wiring/defaults/${capability}`, null, { params: { instance_id: instanceId } }),
+
+  /** Create a wiring connection */
+  createWiring: (data: WiringCreateRequest) =>
+    api.post<Wiring>('/api/instances/wiring', data),
+
+  /** Delete a wiring connection */
+  deleteWiring: (wiringId: string) =>
+    api.delete(`/api/instances/wiring/${wiringId}`),
+
+  /** Get wiring for a specific instance */
+  getInstanceWiring: (instanceId: string) =>
+    api.get<Wiring[]>(`/api/instances/${instanceId}/wiring`),
+}
+
 export const graphApi = {
   /** Fetch graph data for visualization */
   fetchGraphData: async (
