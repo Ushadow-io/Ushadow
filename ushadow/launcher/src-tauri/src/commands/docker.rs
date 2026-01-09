@@ -5,6 +5,32 @@ use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
 use super::utils::{silent_command, shell_command};
 
+/// Find uv executable, checking common install locations on Windows
+/// Returns the path/command to use for running uv
+fn find_uv_executable() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let userprofile = std::env::var("USERPROFILE").unwrap_or_default();
+
+        let possible_paths = vec![
+            format!("{}\\Programs\\uv\\uv.exe", localappdata),
+            format!("{}\\.cargo\\bin\\uv.exe", userprofile),
+            "uv".to_string(), // Try PATH as fallback
+        ];
+
+        possible_paths.iter()
+            .find(|p| std::path::Path::new(p).exists() || p.as_str() == "uv")
+            .cloned()
+            .unwrap_or_else(|| "uv".to_string())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "uv".to_string()
+    }
+}
+
 /// Check if a port is available for binding
 fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
@@ -315,15 +341,19 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
             }
         }
 
+        // Find uv executable (handle Windows PATH not being updated)
+        let uv_cmd = find_uv_executable();
+        eprintln!("DEBUG: Using uv at: {}", uv_cmd);
+
         // Run setup with uv
-        eprintln!("DEBUG: Running: uv run --with pyyaml setup/run.py --quick --prod --skip-admin");
-        let output = shell_command("uv")
+        eprintln!("DEBUG: Running: {} run --with pyyaml setup/run.py --quick --prod --skip-admin", uv_cmd);
+        let output = shell_command(&uv_cmd)
             .args(["run", "--with", "pyyaml", "setup/run.py", "--quick", "--prod", "--skip-admin"])
             .current_dir(&project_root)
             .env("ENV_NAME", &env_name)
             .env("PORT_OFFSET", port_offset.to_string())
             .output()
-            .map_err(|e| format!("Failed to run setup (uv not found or not executable): {}", e))?;
+            .map_err(|e| format!("Failed to run setup (uv not found at '{}'. Try installing manually: https://docs.astral.sh/uv/getting-started/installation/): {}", uv_cmd, e))?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
