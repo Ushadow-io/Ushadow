@@ -2,7 +2,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:1420",
+    "devPath": "http://localhost:1421",
     "distDir": "../dist",
     "withGlobalTauri": false
   },
@@ -40,6 +40,9 @@
             "args": [{ "validator": "https?://.*" }]
           }
         ]
+      },
+      "path": {
+        "all": true
       },
       "process": {
         "all": false,

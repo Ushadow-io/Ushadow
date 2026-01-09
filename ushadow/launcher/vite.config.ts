@@ -14,7 +14,7 @@ export default defineConfig({
   },
   // Tauri expects a fixed port during development
   server: {
-    port: 1420,
+    port: 1421,
     strictPort: true,
   },
   // Build to dist folder for Tauri
