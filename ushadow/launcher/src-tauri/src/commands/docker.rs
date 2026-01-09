@@ -5,6 +5,32 @@ use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
 use super::utils::{silent_command, shell_command};
 
+/// Find uv executable, checking common install locations on Windows
+/// Returns the path/command to use for running uv
+fn find_uv_executable() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let userprofile = std::env::var("USERPROFILE").unwrap_or_default();
+
+        let possible_paths = vec![
+            format!("{}\\Programs\\uv\\uv.exe", localappdata),
+            format!("{}\\.cargo\\bin\\uv.exe", userprofile),
+            "uv".to_string(), // Try PATH as fallback
+        ];
+
+        possible_paths.iter()
+            .find(|p| std::path::Path::new(p).exists() || p.as_str() == "uv")
+            .cloned()
+            .unwrap_or_else(|| "uv".to_string())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "uv".to_string()
+    }
+}
+
 /// Check if a port is available for binding
 fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
@@ -88,9 +114,14 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
+    let mut log_messages = Vec::new();
+    log_messages.push("Creating Docker networks...".to_string());
+
     // Create Docker networks directly (don't require uv/Python)
     let networks = vec!["ushadow-network", "infra-network"];
     for network in networks {
+        log_messages.push(format!("Checking network: {}", network));
+
         // Check if network exists
         let check_output = shell_command("docker")
             .args(&["network", "inspect", network])
@@ -98,35 +129,62 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
 
         let network_exists = check_output.is_ok() && check_output.unwrap().status.success();
 
-        if !network_exists {
+        if network_exists {
+            log_messages.push(format!("✓ Network '{}' already exists", network));
+        } else {
+            log_messages.push(format!("Creating network: {}", network));
+
             // Create network
             let create_output = shell_command("docker")
                 .args(&["network", "create", network])
                 .output()
-                .map_err(|e| format!("Failed to create network {}: {}", network, e))?;
+                .map_err(|e| {
+                    let error_log = log_messages.join("\n");
+                    format!("{}\n\nFailed to create network {}: {}", error_log, network, e)
+                })?;
 
             if !create_output.status.success() {
                 let stderr = String::from_utf8_lossy(&create_output.stderr);
                 // Ignore if network already exists (race condition)
-                if !stderr.contains("already exists") {
-                    eprintln!("WARNING: Failed to create network {}: {}", network, stderr);
+                if stderr.contains("already exists") {
+                    log_messages.push(format!("✓ Network '{}' already exists (race condition)", network));
+                } else {
+                    log_messages.push(format!("⚠ Failed to create network {}: {}", network, stderr));
                 }
+            } else {
+                log_messages.push(format!("✓ Network '{}' created successfully", network));
             }
         }
     }
 
+    log_messages.push("Starting infrastructure containers...".to_string());
+    log_messages.push("Running: docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d".to_string());
+
     let infra_output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
         .current_dir(&project_root)
         .output()
-        .map_err(|e| format!("Failed to start infrastructure (docker not found or not executable): {}", e))?;
+        .map_err(|e| {
+            let error_log = log_messages.join("\n");
+            format!("{}\n\nFailed to start infrastructure (docker not found or not executable): {}", error_log, e)
+        })?;
 
-    if !infra_output.status.success() {
-        let stderr = String::from_utf8_lossy(&infra_output.stderr);
-        let stdout = String::from_utf8_lossy(&infra_output.stdout);
-        return Err(format!("Infrastructure failed to start:\n{}\n{}", stderr, stdout));
+    let stderr = String::from_utf8_lossy(&infra_output.stderr);
+    let stdout = String::from_utf8_lossy(&infra_output.stdout);
+
+    if !stdout.is_empty() {
+        log_messages.push(format!("Docker compose stdout:\n{}", stdout));
+    }
+    if !stderr.is_empty() {
+        log_messages.push(format!("Docker compose stderr:\n{}", stderr));
     }
 
-    Ok("Infrastructure started".to_string())
+    if !infra_output.status.success() {
+        let error_log = log_messages.join("\n");
+        return Err(format!("{}\n\nInfrastructure failed to start", error_log));
+    }
+
+    log_messages.push("✓ Infrastructure started successfully".to_string());
+    Ok(log_messages.join("\n"))
 }
 
 /// Stop shared infrastructure containers
@@ -279,9 +337,11 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
         let (backend_port, _webui_port) = find_available_ports(8000, 3000);
         let port_offset = backend_port - 8000;
 
-        eprintln!("DEBUG: ========== RUNNING SETUP ==========");
-        eprintln!("DEBUG: Working directory: {}", project_root);
-        eprintln!("DEBUG: ENV_NAME={}, PORT_OFFSET={}", env_name, port_offset);
+        let mut log_messages = Vec::new();
+
+        log_messages.push(format!("========== RUNNING SETUP =========="));
+        log_messages.push(format!("Working directory: {}", project_root));
+        log_messages.push(format!("ENV_NAME={}, PORT_OFFSET={}", env_name, port_offset));
 
         // Install uv if needed
         let install_script = if cfg!(target_os = "windows") {
@@ -290,14 +350,19 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
             std::path::Path::new(&project_root).join("scripts/install-uv.sh")
         };
 
+        log_messages.push(format!("Checking for uv install script at: {}", install_script.display()));
+
         if install_script.exists() {
-            eprintln!("DEBUG: Running uv installer: {:?}", install_script);
+            log_messages.push(format!("✓ Found install script, running: {}", install_script.display()));
+
             let install_output = if cfg!(target_os = "windows") {
+                log_messages.push(format!("Executing: powershell -ExecutionPolicy Bypass -File \"{}\"", install_script.display()));
                 shell_command("powershell")
                     .args(["-ExecutionPolicy", "Bypass", "-File", install_script.to_str().unwrap()])
                     .current_dir(&project_root)
                     .output()
             } else {
+                log_messages.push(format!("Executing: bash \"{}\"", install_script.display()));
                 shell_command("bash")
                     .arg(install_script.to_str().unwrap())
                     .current_dir(&project_root)
@@ -305,31 +370,64 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
             };
 
             match install_output {
-                Ok(out) if !out.status.success() => {
-                    eprintln!("WARNING: uv installer exited with non-zero status, continuing anyway");
+                Ok(out) => {
+                    let install_stdout = String::from_utf8_lossy(&out.stdout);
+                    let install_stderr = String::from_utf8_lossy(&out.stderr);
+
+                    if !install_stdout.is_empty() {
+                        log_messages.push(format!("uv installer stdout:\n{}", install_stdout));
+                    }
+                    if !install_stderr.is_empty() {
+                        log_messages.push(format!("uv installer stderr:\n{}", install_stderr));
+                    }
+
+                    if !out.status.success() {
+                        log_messages.push(format!("⚠ uv installer exited with status: {}", out.status));
+                    } else {
+                        log_messages.push(format!("✓ uv installer completed successfully"));
+                    }
                 }
                 Err(e) => {
-                    eprintln!("WARNING: Failed to run uv installer: {}, continuing anyway", e);
+                    log_messages.push(format!("⚠ Failed to run uv installer: {}", e));
                 }
-                _ => {}
             }
+        } else {
+            log_messages.push(format!("✗ Install script NOT found at: {}", install_script.display()));
+        }
+
+        // Find uv executable (handle Windows PATH not being updated)
+        let uv_cmd = find_uv_executable();
+        log_messages.push(format!("Looking for uv executable..."));
+        log_messages.push(format!("Using uv at: {}", uv_cmd));
+
+        // Check if uv actually exists
+        if uv_cmd != "uv" && !std::path::Path::new(&uv_cmd).exists() {
+            log_messages.push(format!("⚠ uv not found at: {}", uv_cmd));
         }
 
         // Run setup with uv
-        eprintln!("DEBUG: Running: uv run --with pyyaml setup/run.py --quick --prod --skip-admin");
-        let output = shell_command("uv")
+        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --quick --prod --skip-admin", uv_cmd));
+
+        let output = shell_command(&uv_cmd)
             .args(["run", "--with", "pyyaml", "setup/run.py", "--quick", "--prod", "--skip-admin"])
             .current_dir(&project_root)
             .env("ENV_NAME", &env_name)
             .env("PORT_OFFSET", port_offset.to_string())
             .output()
-            .map_err(|e| format!("Failed to run setup (uv not found or not executable): {}", e))?;
+            .map_err(|e| {
+                let error_log = log_messages.join("\n");
+                format!("{}\n\nFailed to run setup (uv not found at '{}'. Try installing manually: https://docs.astral.sh/uv/getting-started/installation/): {}", error_log, uv_cmd, e)
+            })?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        eprintln!("DEBUG: setup stdout:\n{}", stdout);
-        eprintln!("DEBUG: setup stderr:\n{}", stderr);
+        if !stdout.is_empty() {
+            log_messages.push(format!("Setup stdout:\n{}", stdout));
+        }
+        if !stderr.is_empty() {
+            log_messages.push(format!("Setup stderr:\n{}", stderr));
+        }
 
         if !output.status.success() {
             // Get the full error message, not just the last line
@@ -347,14 +445,17 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
                 &error_lines[..]
             };
 
+            let error_log = log_messages.join("\n");
             return Err(format!(
-                "Failed to initialize environment '{}'\n\nError output:\n{}",
+                "{}\n\nFailed to initialize environment '{}'\n\nError output:\n{}",
+                error_log,
                 env_name,
                 context_lines.join("\n")
             ));
         }
 
-        return Ok(format!("Environment '{}' initialized and started", env_name));
+        log_messages.push(format!("✓ Environment '{}' initialized and started", env_name));
+        return Ok(log_messages.join("\n"));
     }
 
     // Containers exist and are stopped - just start them

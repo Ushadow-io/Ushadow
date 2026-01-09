@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Folder, X } from 'lucide-react'
-import { dialog } from '@tauri-apps/api'
+import { Folder, X, CheckCircle } from 'lucide-react'
+import { dialog, invoke } from '@tauri-apps/api'
 import { join } from '@tauri-apps/api/path'
 
 interface ProjectSetupDialogProps {
@@ -8,6 +8,11 @@ interface ProjectSetupDialogProps {
   defaultPath: string
   onClose: () => void
   onSetup: (path: string) => void
+}
+
+interface ProjectStatus {
+  exists: boolean
+  is_valid_repo: boolean
 }
 
 export function ProjectSetupDialog({
@@ -18,24 +23,32 @@ export function ProjectSetupDialog({
 }: ProjectSetupDialogProps) {
   const [parentPath, setParentPath] = useState<string | null>(null)
   const [fullInstallPath, setFullInstallPath] = useState<string | null>(null)
+  const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
 
   // Calculate the full install path using cross-platform path joining
   useEffect(() => {
-    console.log('DEBUG: useEffect triggered, parentPath =', parentPath)
     if (parentPath) {
-      join(parentPath, 'ushadow').then((path) => {
-        console.log('DEBUG: join() returned:', path)
+      join(parentPath, 'ushadow').then(async (path) => {
         setFullInstallPath(path)
+
+        // Check if this path already has a ushadow repo
+        try {
+          const status = await invoke<ProjectStatus>('check_project_dir', { path })
+          setProjectStatus(status)
+        } catch (err) {
+          console.error('Failed to check project directory:', err)
+          setProjectStatus(null)
+        }
       })
     } else {
       setFullInstallPath(null)
+      setProjectStatus(null)
     }
   }, [parentPath])
 
   if (!isOpen) return null
 
   const handleSelectFolder = async () => {
-    console.log('DEBUG: Opening folder dialog...')
     const selected = await dialog.open({
       directory: true,
       multiple: false,
@@ -43,36 +56,24 @@ export function ProjectSetupDialog({
       title: 'Choose where to install Ushadow',
     })
 
-    console.log('DEBUG: Dialog returned:', selected, 'Type:', typeof selected)
     if (selected && typeof selected === 'string') {
-      console.log('DEBUG: Setting parentPath to:', selected)
       setParentPath(selected)
-    } else {
-      console.log('DEBUG: Selected value was not a string or was null')
     }
   }
 
   const handleSubmit = async () => {
-    console.log('DEBUG: handleSubmit called')
-    console.log('DEBUG: parentPath =', parentPath)
-    console.log('DEBUG: fullInstallPath =', fullInstallPath)
-
     if (!fullInstallPath && !parentPath) {
-      console.log('DEBUG: Early return - no paths set')
       return
     }
 
     // If fullInstallPath isn't ready yet, compute it now
     const pathToUse = fullInstallPath || (parentPath ? await join(parentPath, 'ushadow') : null)
 
-    console.log('DEBUG: pathToUse =', pathToUse)
     if (!pathToUse) {
-      console.log('DEBUG: Early return - pathToUse is null')
       return
     }
 
     // Send the full path with ushadow appended
-    console.log('DEBUG: Calling onSetup with:', pathToUse)
     onSetup(pathToUse)
   }
 
@@ -117,9 +118,29 @@ export function ProjectSetupDialog({
 
           {/* Show full install path after selection */}
           {fullInstallPath && (
-            <div className="bg-primary-500/10 border border-primary-500/30 rounded-lg px-4 py-3">
-              <p className="text-xs text-primary-400 mb-1">Ushadow will be installed at:</p>
-              <p className="text-sm font-mono text-primary-300 break-all">{fullInstallPath}</p>
+            <div className={`rounded-lg px-4 py-3 ${
+              projectStatus?.exists && projectStatus?.is_valid_repo
+                ? 'bg-green-500/10 border border-green-500/30'
+                : 'bg-primary-500/10 border border-primary-500/30'
+            }`}>
+              {projectStatus?.exists && projectStatus?.is_valid_repo ? (
+                <>
+                  <div className="flex items-center gap-2 mb-1">
+                    <CheckCircle className="w-4 h-4 text-green-400" />
+                    <p className="text-xs text-green-400">Existing Ushadow repository found:</p>
+                  </div>
+                  <p className="text-sm font-mono text-green-300 break-all">{fullInstallPath}</p>
+                  <p className="text-xs text-green-400/70 mt-2">Will link to this existing installation</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-primary-400 mb-1">Ushadow will be installed at:</p>
+                  <p className="text-sm font-mono text-primary-300 break-all">{fullInstallPath}</p>
+                  {projectStatus?.exists && !projectStatus?.is_valid_repo && (
+                    <p className="text-xs text-yellow-400 mt-2">Folder exists but is not a valid Ushadow repository</p>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -142,7 +163,7 @@ export function ProjectSetupDialog({
             }`}
             data-testid="project-setup-submit"
           >
-            Continue
+            {projectStatus?.exists && projectStatus?.is_valid_repo ? 'Link to Existing' : 'Continue'}
           </button>
         </div>
       </div>
