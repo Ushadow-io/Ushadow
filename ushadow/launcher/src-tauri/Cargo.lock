@@ -4250,7 +4250,7 @@ dependencies = [
 
 [[package]]
 name = "ushadow-launcher"
-version = "0.4.5"
+version = "0.4.13"
 dependencies = [
  "open 5.3.3",
  "reqwest",

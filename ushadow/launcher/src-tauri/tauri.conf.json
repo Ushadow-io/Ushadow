@@ -2,13 +2,13 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:1420",
+    "devPath": "http://localhost:1421",
     "distDir": "../dist",
     "withGlobalTauri": false
   },
   "package": {
     "productName": "Ushadow",
-    "version": "0.4.12"
+    "version": "0.4.13"
   },
   "tauri": {
     "allowlist": {
@@ -40,6 +40,9 @@
             "args": [{ "validator": "https?://.*" }]
           }
         ]
+      },
+      "path": {
+        "all": true
       },
       "process": {
         "all": false,

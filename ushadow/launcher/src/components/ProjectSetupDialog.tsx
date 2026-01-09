@@ -21,8 +21,12 @@ export function ProjectSetupDialog({
 
   // Calculate the full install path using cross-platform path joining
   useEffect(() => {
+    console.log('DEBUG: useEffect triggered, parentPath =', parentPath)
     if (parentPath) {
-      join(parentPath, 'ushadow').then(setFullInstallPath)
+      join(parentPath, 'ushadow').then((path) => {
+        console.log('DEBUG: join() returned:', path)
+        setFullInstallPath(path)
+      })
     } else {
       setFullInstallPath(null)
     }
@@ -31,6 +35,7 @@ export function ProjectSetupDialog({
   if (!isOpen) return null
 
   const handleSelectFolder = async () => {
+    console.log('DEBUG: Opening folder dialog...')
     const selected = await dialog.open({
       directory: true,
       multiple: false,
@@ -38,24 +43,36 @@ export function ProjectSetupDialog({
       title: 'Choose where to install Ushadow',
     })
 
+    console.log('DEBUG: Dialog returned:', selected, 'Type:', typeof selected)
     if (selected && typeof selected === 'string') {
+      console.log('DEBUG: Setting parentPath to:', selected)
       setParentPath(selected)
+    } else {
+      console.log('DEBUG: Selected value was not a string or was null')
     }
   }
 
   const handleSubmit = async () => {
+    console.log('DEBUG: handleSubmit called')
+    console.log('DEBUG: parentPath =', parentPath)
+    console.log('DEBUG: fullInstallPath =', fullInstallPath)
+
     if (!fullInstallPath && !parentPath) {
+      console.log('DEBUG: Early return - no paths set')
       return
     }
 
     // If fullInstallPath isn't ready yet, compute it now
     const pathToUse = fullInstallPath || (parentPath ? await join(parentPath, 'ushadow') : null)
 
+    console.log('DEBUG: pathToUse =', pathToUse)
     if (!pathToUse) {
+      console.log('DEBUG: Early return - pathToUse is null')
       return
     }
 
     // Send the full path with ushadow appended
+    console.log('DEBUG: Calling onSetup with:', pathToUse)
     onSetup(pathToUse)
   }
 
