@@ -43,12 +43,20 @@ export function ProjectSetupDialog({
     }
   }
 
-  const handleSubmit = () => {
-    if (!fullInstallPath) {
+  const handleSubmit = async () => {
+    if (!fullInstallPath && !parentPath) {
       return
     }
-    // Send the full path with /ushadow appended
-    onSetup(fullInstallPath)
+
+    // If fullInstallPath isn't ready yet, compute it now
+    const pathToUse = fullInstallPath || (parentPath ? await join(parentPath, 'ushadow') : null)
+
+    if (!pathToUse) {
+      return
+    }
+
+    // Send the full path with ushadow appended
+    onSetup(pathToUse)
   }
 
   return (
@@ -109,9 +117,9 @@ export function ProjectSetupDialog({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!fullInstallPath}
+            disabled={!parentPath}
             className={`flex-1 py-2 rounded-lg font-medium transition-opacity ${
-              !fullInstallPath
+              !parentPath
                 ? 'bg-surface-600 text-text-muted cursor-not-allowed opacity-50'
                 : 'bg-gradient-brand hover:opacity-90'
             }`}
