@@ -88,6 +88,19 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
+    // Create Docker networks using Python script (same logic as run.py)
+    let network_output = shell_command("uv")
+        .args(["run", "--with", "pyyaml", "setup/start_utils.py", "ensure-networks"])
+        .current_dir(&project_root)
+        .output()
+        .map_err(|e| format!("Failed to create networks (uv not found): {}", e))?;
+
+    if !network_output.status.success() {
+        let stderr = String::from_utf8_lossy(&network_output.stderr);
+        eprintln!("WARNING: Network creation had issues: {}", stderr);
+        // Continue anyway - networks might already exist
+    }
+
     let infra_output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
         .current_dir(&project_root)
         .output()
@@ -95,7 +108,8 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
 
     if !infra_output.status.success() {
         let stderr = String::from_utf8_lossy(&infra_output.stderr);
-        return Err(format!("Infrastructure failed: {}", stderr));
+        let stdout = String::from_utf8_lossy(&infra_output.stdout);
+        return Err(format!("Infrastructure failed to start:\n{}\n{}", stderr, stdout));
     }
 
     Ok("Infrastructure started".to_string())
@@ -304,8 +318,26 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
         eprintln!("DEBUG: setup stderr:\n{}", stderr);
 
         if !output.status.success() {
-            let error_msg = if !stderr.is_empty() { stderr.to_string() } else { stdout.to_string() };
-            return Err(format!("Failed to initialize environment: {}", error_msg.lines().last().unwrap_or(&error_msg)));
+            // Get the full error message, not just the last line
+            let error_msg = if !stderr.is_empty() {
+                stderr.to_string()
+            } else {
+                stdout.to_string()
+            };
+
+            // Show last 10 lines of error for better context
+            let error_lines: Vec<&str> = error_msg.lines().collect();
+            let context_lines = if error_lines.len() > 10 {
+                &error_lines[error_lines.len()-10..]
+            } else {
+                &error_lines[..]
+            };
+
+            return Err(format!(
+                "Failed to initialize environment '{}'\n\nError output:\n{}",
+                env_name,
+                context_lines.join("\n")
+            ));
         }
 
         return Ok(format!("Environment '{}' initialized and started", env_name));
