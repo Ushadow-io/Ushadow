@@ -163,6 +163,36 @@ eas device:create
 - Verify URLs don't have trailing slashes
 - Try both `ws://` and `wss://` for stream URL
 
+### Android: "SDK location not found"
+When running `npx expo run:android`, you may see:
+```
+SDK location not found. Define a valid SDK location with an ANDROID_HOME
+environment variable or by setting the sdk.dir path in your project's
+local.properties file
+```
+
+**Cause:** The Android build system (Gradle) can't find your Android SDK installation.
+
+**Fix:** Create `android/local.properties` with your SDK path:
+```bash
+# On macOS (typical Android Studio installation):
+echo "sdk.dir=$HOME/Library/Android/sdk" > android/local.properties
+
+# On Linux:
+echo "sdk.dir=$HOME/Android/Sdk" > android/local.properties
+
+# On Windows (Git Bash):
+echo "sdk.dir=C:\\Users\\YourUsername\\AppData\\Local\\Android\\Sdk" > android/local.properties
+```
+
+**Permanent fix:** Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
+```bash
+export ANDROID_HOME=$HOME/Library/Android/sdk  # macOS
+export PATH=$PATH:$ANDROID_HOME/platform-tools
+```
+
+**Note:** `local.properties` is gitignored because it contains machine-specific paths.
+
 ### Build fails
 ```bash
 # Clean and rebuild
