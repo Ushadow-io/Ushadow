@@ -13,7 +13,7 @@ fi
 
 echo "Installing uv..."
 
-# Detect OS
+# Detect OS for logging
 case "$(uname -s)" in
     Darwin*)
         echo "Detected macOS"
@@ -25,19 +25,20 @@ case "$(uname -s)" in
         echo "Detected Windows (Git Bash/MSYS)"
         ;;
     *)
-        echo "Unknown operating system: $(uname -s)"
-        echo "Please install uv manually: https://docs.astral.sh/uv/getting-started/installation/"
-        exit 1
+        echo "Detected: $(uname -s)"
         ;;
 esac
 
-# Install using official installer (works on macOS, Linux, WSL)
+# Use official one-liner installer
+echo "Running: curl -LsSf https://astral.sh/uv/install.sh | sh"
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Add to PATH for current session if not already there
+# Add to PATH for current session
+echo "Adding uv to PATH for current session..."
 export PATH="$HOME/.cargo/bin:$PATH"
 
 # Verify installation
+echo "Verifying installation..."
 if command -v uv &> /dev/null; then
     echo "✓ uv installed successfully: $(uv --version)"
     echo ""
@@ -45,5 +46,6 @@ if command -v uv &> /dev/null; then
     echo "  source \$HOME/.cargo/env"
 else
     echo "✗ uv installation may have failed. Please check the output above."
+    echo "Or install manually: https://docs.astral.sh/uv/getting-started/installation/"
     exit 1
 fi

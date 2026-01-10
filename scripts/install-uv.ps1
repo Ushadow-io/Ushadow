@@ -14,20 +14,26 @@ if ($uvCommand) {
 Write-Host "Installing uv..." -ForegroundColor Yellow
 
 try {
-    # Use official Windows installer
-    Write-Host "Downloading uv installer..."
-    Invoke-WebRequest -Uri "https://astral.sh/uv/install.ps1" -OutFile "$env:TEMP\uv-install.ps1"
-
-    Write-Host "Running installer..."
-    & powershell -ExecutionPolicy Bypass -File "$env:TEMP\uv-install.ps1"
-
-    # Clean up
-    Remove-Item "$env:TEMP\uv-install.ps1" -ErrorAction SilentlyContinue
+    # Use official one-liner installer
+    Write-Host "Running: irm https://astral.sh/uv/install.ps1 | iex"
+    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
 
     # Refresh environment variables for current session
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    Write-Host "Refreshing PATH..."
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+    # Combine paths safely, handling nulls
+    if ($machinePath -and $userPath) {
+        $env:Path = $machinePath + ";" + $userPath
+    } elseif ($machinePath) {
+        $env:Path = $machinePath
+    } elseif ($userPath) {
+        $env:Path = $userPath
+    }
 
     # Verify installation
+    Write-Host "Verifying installation..."
     $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
     if ($uvCommand) {
         Write-Host "✓ uv installed successfully: " -ForegroundColor Green -NoNewline
