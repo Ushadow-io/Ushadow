@@ -103,8 +103,11 @@ impl AppState {
 /// Set the project root directory
 #[tauri::command]
 pub fn set_project_root(path: String, state: State<AppState>) -> Result<(), String> {
+    use super::utils::normalize_path;
+
     let mut root = state.project_root.lock().map_err(|e| e.to_string())?;
-    *root = Some(path);
+    // Normalize path separators (critical on Windows where frontend sends forward slashes)
+    *root = Some(normalize_path(&path));
     Ok(())
 }
 
