@@ -83,14 +83,44 @@ eas build --profile preview --platform android
 
 #### Development (Recommended)
 ```bash
-# Connect your iOS device via USB
-# Trust your computer on the device
-
 npm install
 npx expo prebuild --platform ios
 cd ios && pod install && cd ..
 npx expo run:ios --device
 ```
+
+#### Running on Physical iPhone
+
+To run on a physical iPhone instead of the simulator, use the `--device` flag:
+
+```bash
+npx expo run:ios --device
+```
+
+This will show a list of connected devices. You can also specify the device name directly:
+
+```bash
+npx expo run:ios --device "iPhone Air"
+```
+
+**Prerequisites for physical device:**
+
+1. **Connect via USB** - Connect your iPhone to your Mac with a cable
+
+2. **Trust the computer** - On your iPhone, tap "Trust" when prompted with "Trust This Computer?"
+
+3. **Enable Developer Mode** (iOS 16+) - Go to **Settings → Privacy & Security → Developer Mode** and enable it. Your device will restart.
+
+4. **Apple Developer account** - Sign into Xcode with your Apple ID:
+   - Open Xcode → Settings → Accounts → Add your Apple ID
+
+5. **Code signing** - First build requires signing setup:
+   ```bash
+   open ios/*.xcworkspace
+   ```
+   In Xcode: Select your project → Signing & Capabilities → Select your Team
+
+After initial setup, subsequent builds with `npx expo run:ios --device` will work automatically.
 
 #### Distribution via TestFlight (Easiest for iOS)
 1. Apple Developer account ($99/year required)
