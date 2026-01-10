@@ -240,13 +240,15 @@ pub async fn restart_infrastructure(state: State<'_, AppState>) -> Result<String
 /// Start a specific environment by name
 #[tauri::command]
 pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> Result<String, String> {
-    eprintln!("DEBUG: start_environment called for env_name = {}", env_name);
-    
+    eprintln!("\n[start_env] ========================================");
+    eprintln!("[start_env] Starting environment: {}", env_name);
+    eprintln!("[start_env] ========================================");
+
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
-    
-    eprintln!("DEBUG: project_root from state = {}", project_root);
+
+    eprintln!("[start_env] Project root: {}", project_root);
 
     // Find all stopped containers for this environment by name pattern
     let pattern = if env_name == "default" || env_name == "ushadow" {
@@ -290,10 +292,11 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
         })
         .collect();
 
-    eprintln!("DEBUG: Matched stopped containers for '{}': {:?}", env_name, containers);
+    eprintln!("[start_env] Found {} stopped containers: {:?}", containers.len(), containers);
 
     // If no stopped containers found, check if ANY containers exist for this env
     if containers.is_empty() {
+        eprintln!("[start_env] No stopped containers, checking for running containers...");
         // Check for running containers
         let output = shell_command("docker ps --format '{{.Names}}'")
             .output()
@@ -326,16 +329,17 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
                 })
                 .collect();
 
-            eprintln!("DEBUG: Matched running containers for '{}': {:?}", env_name, running);
+            eprintln!("[start_env] Found {} running containers: {:?}", running.len(), running);
 
             if !running.is_empty() {
-                eprintln!("DEBUG: Environment already running, returning early");
-                return Ok(format!("Environment '{}' is already running ({} containers)", env_name, running.len()));
+                eprintln!("[start_env] Environment already running - nothing to do");
+                return Ok(format!("Environment '{}' is already running ({} containers: {})",
+                    env_name, running.len(), running.join(", ")));
             }
         }
 
         // No containers exist - need to build and create them
-        eprintln!("DEBUG: No containers found (stopped or running), running setup");
+        eprintln!("[start_env] No containers exist - initializing environment");
 
         // Find available ports (default: 8000 for backend, 3000 for webui)
         let (backend_port, _webui_port) = find_available_ports(8000, 3000);
@@ -463,21 +467,30 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
     }
 
     // Containers exist and are stopped - just start them
-    eprintln!("DEBUG: Found stopped containers: {:?}", containers);
+    eprintln!("[start_env] Found {} stopped containers: {:?}", containers.len(), containers);
 
     let container_names = containers.join(" ");
     let start_command = format!("docker start {}", container_names);
+    eprintln!("[start_env] Starting containers: {}", start_command);
 
     let output = shell_command(&start_command)
         .output()
         .map_err(|e| format!("Failed to start containers (docker not found or not executable): {}", e))?;
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("[start_env] Start result - stdout: {}, stderr: {}", stdout, stderr);
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Start failed: {}", stderr));
+        return Err(format!("Failed to start containers: {}", stderr));
     }
 
-    Ok(format!("Environment '{}' started ({} containers)", env_name, containers.len()))
+    let started: Vec<&str> = stdout.lines().collect();
+    Ok(format!("Environment '{}' started: {} containers ({})",
+        env_name,
+        started.len(),
+        started.join(", ")
+    ))
 }
 
 /// Stop a specific environment by name

@@ -19,8 +19,6 @@ export function PrerequisitesPanel({
   onInstall,
   onStartDocker,
 }: PrerequisitesPanelProps) {
-  const [expanded, setExpanded] = useState(true)
-
   const getOverallStatus = () => {
     if (!prerequisites) return 'checking'
     const { docker_installed, docker_running, git_installed, python_installed } = prerequisites
@@ -29,6 +27,8 @@ export function PrerequisitesPanel({
   }
 
   const status = getOverallStatus()
+  // Start collapsed if everything is ready (all green)
+  const [expanded, setExpanded] = useState(status !== 'ready')
 
   return (
     <div className="bg-surface-800 rounded-lg" data-testid="prerequisites-panel">
@@ -38,11 +38,11 @@ export function PrerequisitesPanel({
         className="w-full flex items-center justify-between p-4"
         data-testid="prerequisites-toggle"
       >
-        <span className="font-medium">Prerequisites</span>
         <div className="flex items-center gap-2">
-          <StatusBadge status={status} />
+          <span className="font-medium">Prerequisites</span>
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </div>
+        <StatusBadge status={status} />
       </button>
 
       {/* Content */}

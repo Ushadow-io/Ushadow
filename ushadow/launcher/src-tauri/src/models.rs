@@ -43,19 +43,38 @@ pub struct ServiceInfo {
     pub ports: Option<String>,
 }
 
+/// Environment status
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum EnvironmentStatus {
+    Running,
+    Partial,
+    Stopped,
+    Available,
+}
+
+/// Git worktree information
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: String,
+    pub name: String,
+}
+
 /// Discovered Ushadow environment
 #[derive(Serialize, Deserialize, Clone)]
 pub struct UshadowEnvironment {
     pub name: String,
     pub color: String,
-    pub localhost_url: String,
+    pub path: Option<String>,
+    pub branch: Option<String>,
+    pub status: EnvironmentStatus,
+    pub running: bool,  // For React frontend compatibility
+    pub localhost_url: Option<String>,
     pub tailscale_url: Option<String>,
-    pub backend_port: u16,
+    pub backend_port: Option<u16>,
     pub webui_port: Option<u16>,
-    pub running: bool,
     pub tailscale_active: bool,
     pub containers: Vec<String>,
-    pub path: Option<String>,
 }
 
 /// Infrastructure service status

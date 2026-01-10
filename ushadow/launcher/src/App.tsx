@@ -491,7 +491,18 @@ function App() {
         const result = await tauri.startEnvironment(envName)
         console.log(`DEBUG: tauri.startEnvironment returned: ${result}`)
         log(result, 'success')
-        await refreshDiscovery()
+
+        // Initial refresh
+        await refreshDiscovery(true)
+
+        // Continue polling in background to show container health updates
+        // Don't await this - let it run in background
+        ;(async () => {
+          for (let i = 0; i < 6; i++) {
+            await new Promise(r => setTimeout(r, 2000))
+            await refreshDiscovery(true)
+          }
+        })()
       }
     } catch (err) {
       console.error(`DEBUG: handleStartEnv caught error:`, err)
@@ -503,10 +514,11 @@ function App() {
       setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
     } finally {
       setLoadingEnv(null)
-      // Remove from creating list after a short delay (to show completion)
+      // Keep showing "starting" status longer while containers are coming up
+      // Remove after containers should be healthy (polling runs for ~12s)
       setTimeout(() => {
         setCreatingEnvs(prev => prev.filter(e => e.name !== envName))
-      }, 500)
+      }, 15000) // 15 seconds to allow containers to fully start
     }
   }
 
@@ -544,7 +556,7 @@ function App() {
     }
   }
 
-  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string; webui_port: number | null; backend_port: number }) => {
+  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null }) => {
     const url = env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
@@ -1098,7 +1110,7 @@ function App() {
                   creatingEnvs={creatingEnvs}
                   onStart={handleStartEnv}
                   onStop={handleStopEnv}
-                  onCreate={handleQuickLaunch}
+                  onCreate={() => setShowNewEnvDialog(true)}
                   onOpenInApp={handleOpenInApp}
                   onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
                   loadingEnv={loadingEnv}
