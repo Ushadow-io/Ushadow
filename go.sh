@@ -13,5 +13,8 @@ set -e
 # Install uv if needed
 bash scripts/install.sh
 
+# Generate secrets before starting (prevents race condition)
+bash scripts/generate-secrets.sh
+
 # Run with uv (automatically manages venv and dependencies)
 exec uv run --with pyyaml setup/run.py --quick --prod --skip-admin --open-browser "$@"

@@ -11,6 +11,7 @@ interface AuthContextType {
   isLoading: boolean
   isAdmin: boolean
   setupRequired: boolean | null  // null = checking, true/false = determined
+  backendError: string | null  // Backend configuration/startup error
   checkSetupStatus: () => Promise<boolean>
 }
 
@@ -21,6 +22,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(localStorage.getItem(getStorageKey('token')))
   const [isLoading, setIsLoading] = useState(true)
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null)
+  const [backendError, setBackendError] = useState<string | null>(null)
 
   // Check if user is admin
   const isAdmin = user?.is_superuser || false
@@ -31,10 +33,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await setupApi.getSetupStatus()
       const required = response.data.requires_setup
       setSetupRequired(required)
+      setBackendError(null)  // Clear any previous errors
       return required
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ AuthContext: Failed to check setup status:', error)
-      setSetupRequired(false)  // Assume setup not required on error to avoid blocking login
+
+      // Check if this is a backend configuration error (500) vs just connection failure
+      if (error.response?.status === 500) {
+        // Backend started but has configuration errors
+        const errorMessage = error.response?.data?.detail || 'Backend configuration error. Please check logs.'
+        setBackendError(errorMessage)
+        setSetupRequired(null)  // Keep checking state
+        return false
+      } else if (error.code === 'ERR_NETWORK') {
+        // Can't reach backend at all
+        setBackendError('Cannot connect to backend. Please ensure the backend is running.')
+        setSetupRequired(null)
+        return false
+      }
+
+      // Other errors - assume setup not required to avoid blocking
+      setSetupRequired(false)
       return false
     }
   }
@@ -119,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isLoading, isAdmin, setupRequired, checkSetupStatus }}>
+    <AuthContext.Provider value={{ user, token, login, logout, isLoading, isAdmin, setupRequired, backendError, checkSetupStatus }}>
       {children}
     </AuthContext.Provider>
   )

@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
-import { AuthProvider } from './contexts/AuthContext'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
@@ -25,6 +25,7 @@ import Layout from './components/layout/Layout'
 // Pages
 import RegistrationPage from './pages/RegistrationPage'
 import LoginPage from './pages/LoginPage'
+import ErrorPage from './pages/ErrorPage'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import ChroniclePage from './pages/ChroniclePage'
@@ -54,6 +55,13 @@ import ColorSystemPreview from './components/ColorSystemPreview'
 function AppContent() {
   // Set dynamic favicon based on environment
   useEnvironmentFavicon()
+
+  const { backendError, checkSetupStatus } = useAuth()
+
+  // Show error page if backend has configuration errors
+  if (backendError) {
+    return <ErrorPage error={backendError} onRetry={checkSetupStatus} />
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
