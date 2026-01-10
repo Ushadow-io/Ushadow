@@ -215,9 +215,9 @@ DEV_MODE={'true' if dev_mode else 'false'}
     # Ensure secrets.yaml exists
     created_new, _ = ensure_secrets_yaml(str(secrets_file))
     if created_new:
-        print_color(Colors.GREEN, "✅ Generated security keys in secrets.yaml")
+        print_color(Colors.GREEN, f"Secrets file written: ✅ {secrets_file}")
     else:
-        print_color(Colors.GREEN, "✅ Security keys already configured")
+        print(f"Secrets already configured: ✅ {secrets_file}")
 
     return {
         "backend_port": backend_port,
@@ -431,7 +431,9 @@ def main():
     # Always ensure secrets.yaml exists with auth keys
     created_new, secrets_data = ensure_secrets_yaml(str(secrets_file))
     if created_new:
-        print_color(Colors.GREEN, "✅ Generated security keys in secrets.yaml")
+        print_color(Colors.GREEN, f"Secrets file written: ✅ {secrets_file}")
+    else:
+        print(f"Secrets already configured: ✅ {secrets_file}")
 
     # Check for existing config
     use_existing = False
