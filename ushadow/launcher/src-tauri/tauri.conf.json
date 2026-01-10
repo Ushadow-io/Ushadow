@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Ushadow",
-    "version": "0.4.17"
+    "version": "0.4.18"
   },
   "tauri": {
     "allowlist": {
@@ -76,6 +76,23 @@
       "windows": {
         "webviewInstallMode": {
           "type": "downloadBootstrapper"
+        },
+        "wix": {
+          "skipWebviewInstall": false,
+          "license": false,
+          "enableElevatedUpdateTask": false,
+          "fragmentPaths": ["wix/no-shortcuts.wxs"],
+          "componentRefs": []
+        },
+        "nsis": {
+          "license": null,
+          "installerIcon": null,
+          "headerImage": null,
+          "sidebarImage": null,
+          "installMode": "currentUser",
+          "languages": ["en-US"],
+          "displayLanguageSelector": false,
+          "compression": "lzma"
         }
       },
       "deb": {
