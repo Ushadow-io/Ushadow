@@ -943,13 +943,23 @@ export default function TailscaleWizard() {
                       className="w-64 h-64"
                     />
                   </div>
-                  {/* Debug: show URL for verification */}
-                  <p className="text-xs text-gray-400 text-center font-mono break-all mt-2">
-                    {authData.auth_url.slice(-20)}
-                  </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
                     This will open the Tailscale login page where you can approve the device
                   </p>
+                  <div className="text-center pt-2 border-t border-gray-200 dark:border-gray-700">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      No phone nearby? Open the link directly:
+                    </p>
+                    <a
+                      href={authData.auth_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="auth-url-link"
+                      className="text-sm text-primary-600 dark:text-primary-400 hover:underline break-all"
+                    >
+                      {authData.auth_url}
+                    </a>
+                  </div>
                   {pollingAuth && (
                     <div className="flex items-center justify-center gap-2 text-primary-600 dark:text-primary-400">
                       <Loader2 className="w-4 h-4 animate-spin" />
