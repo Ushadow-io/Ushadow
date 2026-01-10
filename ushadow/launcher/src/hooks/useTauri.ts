@@ -29,6 +29,7 @@ export interface UshadowEnvironment {
   containers: string[]
   path: string | null
   branch: string | null
+  is_worktree: boolean
 }
 
 // Legacy alias for backward compatibility
@@ -78,7 +79,7 @@ export const tauri = {
   discoverEnvironments: () => invoke<Discovery>('discover_environments'),
   createEnvironment: (name: string, mode?: 'dev' | 'prod') => invoke<string>('create_environment', { name, mode }),
   checkPorts: () => invoke<[boolean, boolean, number]>('check_ports'),
-  startEnvironment: (envName: string) => invoke<string>('start_environment', { envName }),
+  startEnvironment: (envName: string, envPath?: string) => invoke<string>('start_environment', { envName, envPath }),
   stopEnvironment: (envName: string) => invoke<string>('stop_environment', { envName }),
 
   // Legacy (for compatibility)
@@ -113,7 +114,7 @@ export const tauri = {
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
   createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
     invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
-  openInVscode: (path: string) => invoke<void>('open_in_vscode', { path }),
+  openInVscode: (path: string, envName?: string) => invoke<void>('open_in_vscode', { path, envName }),
   removeWorktree: (mainRepo: string, name: string) => invoke<void>('remove_worktree', { mainRepo, name }),
 }
 

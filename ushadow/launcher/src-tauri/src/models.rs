@@ -73,6 +73,7 @@ pub struct UshadowEnvironment {
     pub webui_port: Option<u16>,
     pub tailscale_active: bool,
     pub containers: Vec<String>,
+    pub is_worktree: bool,  // True if this environment is a git worktree
 }
 
 /// Infrastructure service status

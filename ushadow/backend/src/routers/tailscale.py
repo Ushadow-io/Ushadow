@@ -968,7 +968,7 @@ async def start_tailscale_container(
                 environment={
                     "TS_STATE_DIR": "/var/lib/tailscale",
                     "TS_USERSPACE": "true",
-                    "TS_ACCEPT_DNS": "true",
+                    "TS_ACCEPT_DNS": "false",  # Disable DNS to avoid warnings in containerized environment
                     "TS_EXTRA_ARGS": "--advertise-tags=tag:container",
                     "TS_HOSTNAME": ts_hostname,  # Explicitly set Tailscale hostname
                     "TS_SERVE_CONFIG": "/config/tailscale-serve.json",

@@ -199,7 +199,7 @@ function LogLine({ entry }: { entry: LogEntry }) {
   return (
     <div
       onClick={handleClick}
-      className={`${colors[entry.level]} break-words py-0.5 cursor-pointer hover:bg-surface-700/50 rounded px-1 -mx-1 transition-colors ${copied ? 'bg-success-400/20' : ''}`}
+      className={`${colors[entry.level]} break-words whitespace-pre-wrap py-0.5 cursor-pointer hover:bg-surface-700/50 rounded px-1 -mx-1 transition-colors ${copied ? 'bg-success-400/20' : ''}`}
       title="Click to copy"
     >
       <span className="text-text-muted opacity-60">[{time}]</span>{' '}

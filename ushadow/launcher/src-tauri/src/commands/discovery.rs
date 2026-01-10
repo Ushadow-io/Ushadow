@@ -176,6 +176,7 @@ pub async fn discover_environments_with_config(
             webui_port,
             tailscale_active,
             containers,
+            is_worktree: true,
         });
     }
 
@@ -215,6 +216,7 @@ pub async fn discover_environments_with_config(
             webui_port: wp,
             tailscale_active,
             containers: info.containers,
+            is_worktree: false,
         });
     }
 
