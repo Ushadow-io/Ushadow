@@ -6,7 +6,8 @@ interface EnvironmentBannerProps {
 export const VALID_COLORS = [
   'red', 'blue', 'green', 'yellow', 'purple', 'pink', 'orange', 
   'amber', 'lime', 'emerald', 'teal', 'cyan', 'sky', 'indigo', 
-  'violet', 'fuchsia', 'rose'
+  
+, 'fuchsia', 'rose'
 ]
 
 // Helper to get color classes or default
