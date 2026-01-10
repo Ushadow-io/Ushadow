@@ -221,11 +221,14 @@ export default function MobileAppWizard() {
                 <div className="bg-black/30 rounded-lg p-3 font-mono text-sm">
                   <div className="text-gray-500"># Install dependencies</div>
                   <div className="text-indigo-300">cd ushadow/mobile && npm install</div>
-                  <div className="text-gray-500 mt-2"># Build and run on device</div>
-                  <div className="text-indigo-300">npx expo run:ios</div>
-                  <div className="text-gray-500"># or</div>
-                  <div className="text-indigo-300">npx expo run:android</div>
+                  <div className="text-gray-500 mt-2"># Build and run on iOS (auto-boots simulator)</div>
+                  <div className="text-indigo-300">npm run ios</div>
+                  <div className="text-gray-500 mt-2"># Build and run on Android</div>
+                  <div className="text-indigo-300">npm run android</div>
                 </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  The iOS script automatically checks for Xcode, boots a simulator if needed, and shows helpful error messages.
+                </p>
               </div>
 
               {/* Option 2: Android APK */}
