@@ -5,8 +5,10 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
+    "android": "./scripts/preflight-android.sh && expo run:android",
+    "android:skip-preflight": "expo run:android",
+    "ios": "./scripts/preflight-ios.sh && expo run:ios",
+    "ios:skip-preflight": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
     "postinstall": "patch-package"

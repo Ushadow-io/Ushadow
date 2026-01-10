@@ -216,16 +216,19 @@ export default function MobileAppWizard() {
                   </h3>
                 </div>
                 <p className="text-gray-400 text-sm mb-3">
-                  Full features including Bluetooth OMI device support. Requires a Mac for iOS or Android Studio for Android.
+                  Full features including Bluetooth OMI device support. The build scripts automatically check prerequisites and provide helpful error messages.
                 </p>
                 <div className="bg-black/30 rounded-lg p-3 font-mono text-sm">
                   <div className="text-gray-500"># Install dependencies</div>
                   <div className="text-indigo-300">cd ushadow/mobile && npm install</div>
-                  <div className="text-gray-500 mt-2"># Build and run on device</div>
-                  <div className="text-indigo-300">npx expo run:ios</div>
-                  <div className="text-gray-500"># or</div>
-                  <div className="text-indigo-300">npx expo run:android</div>
+                  <div className="text-gray-500 mt-2"># iOS (Mac only - auto-boots simulator)</div>
+                  <div className="text-indigo-300">npm run ios</div>
+                  <div className="text-gray-500 mt-2"># Android (any platform)</div>
+                  <div className="text-indigo-300">npm run android</div>
                 </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Scripts auto-check for required tools and will guide you if anything is missing.
+                </p>
               </div>
 
               {/* Option 2: Android APK */}
@@ -291,10 +294,28 @@ export default function MobileAppWizard() {
             </div>
 
             {/* Prerequisites Note */}
-            <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/30">
-              <p className="text-sm text-blue-300">
-                <strong>Prerequisites:</strong> Node.js 18+, and for development builds: Xcode (iOS) or Android Studio (Android).
-                See <code className="bg-black/30 px-1 rounded">ushadow/mobile/README.md</code> for detailed setup.
+            <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
+              <h3 className="text-sm font-medium text-blue-300 mb-2">Prerequisites for Development Builds:</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div className="space-y-1">
+                  <div className="text-blue-200 font-medium">iOS (Mac only)</div>
+                  <ul className="text-blue-300/80 space-y-0.5 list-disc list-inside">
+                    <li>Xcode (from App Store)</li>
+                    <li>iOS Simulator runtime</li>
+                    <li>Xcode Command Line Tools</li>
+                  </ul>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-blue-200 font-medium">Android (any platform)</div>
+                  <ul className="text-blue-300/80 space-y-0.5 list-disc list-inside">
+                    <li>Java JDK 17 (<code className="bg-black/30 px-1 rounded">brew install openjdk@17</code>)</li>
+                    <li>Android Studio + SDK</li>
+                    <li>Emulator or USB device</li>
+                  </ul>
+                </div>
+              </div>
+              <p className="text-xs text-blue-300/60 mt-2">
+                Run <code className="bg-black/30 px-1 rounded">npm run ios</code> or <code className="bg-black/30 px-1 rounded">npm run android</code> to see exactly what's missing.
               </p>
             </div>
           </div>
