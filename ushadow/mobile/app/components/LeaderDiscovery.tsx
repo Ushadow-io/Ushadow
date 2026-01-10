@@ -284,9 +284,17 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
         )}
       </TouchableOpacity>
 
-      <Text style={styles.helperText}>
-        Start your Ushadow server, then scan the QR code shown in the terminal or web dashboard
-      </Text>
+      <View style={styles.qrHelpBox}>
+        <Text style={styles.qrHelpTitle}>Where to find the QR code:</Text>
+        <Text style={styles.qrHelpText}>
+          1. Open your computer's browser{'\n'}
+          2. Go to: http://localhost:3000/wizard/mobile-app{'\n'}
+          3. Click "Next" to see the QR code
+        </Text>
+        <Text style={styles.qrHelpAlt}>
+          Or tap "Enter address manually" below if you know your server's IP
+        </Text>
+      </View>
 
       {/* Scanned Server Card - Show if available */}
       {scannedServer && renderScannedServer(scannedServer)}
@@ -415,6 +423,32 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing.md,
     marginBottom: spacing.xl,
+  },
+  qrHelpBox: {
+    backgroundColor: theme.backgroundHover,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xl,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.info.default,
+  },
+  qrHelpTitle: {
+    color: theme.textPrimary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  qrHelpText: {
+    color: theme.textSecondary,
+    fontSize: fontSize.sm,
+    lineHeight: 22,
+    marginBottom: spacing.md,
+  },
+  qrHelpAlt: {
+    color: theme.textMuted,
+    fontSize: fontSize.xs,
+    fontStyle: 'italic',
   },
   savedSection: {
     backgroundColor: theme.backgroundHover,
