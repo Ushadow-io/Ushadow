@@ -173,7 +173,7 @@ def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_f
         compose_project_name = APP_NAME
     else:
         mongodb_database = f"{APP_NAME}_{env_name}"
-        compose_project_name = f"{APP_NAME}-{env_name}"
+        compose_project_name = f"{APP_NAME}-{env_name.lower()}"
 
     # Generate .env content
     env_content = f"""# {APP_DISPLAY_NAME} Environment Configuration

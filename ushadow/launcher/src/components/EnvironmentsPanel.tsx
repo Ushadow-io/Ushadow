@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, FolderOpen, X, AlertCircle, GitBranch } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, FolderOpen, X, AlertCircle, GitBranch, GitMerge } from 'lucide-react'
 import type { UshadowEnvironment } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
@@ -34,8 +34,16 @@ export function EnvironmentsPanel({
 }: EnvironmentsPanelProps) {
   const [activeTab, setActiveTab] = useState<'running' | 'detected'>('running')
 
-  const runningEnvs = environments.filter(env => env.running)
-  const stoppedEnvs = environments.filter(env => !env.running)
+  // Sort environments: worktrees first, then reverse to show newest first
+  const sortedEnvironments = [...environments].sort((a, b) => {
+    // Worktrees come first
+    if (a.is_worktree && !b.is_worktree) return -1
+    if (!a.is_worktree && b.is_worktree) return 1
+    return 0
+  }).reverse()
+
+  const runningEnvs = sortedEnvironments.filter(env => env.running)
+  const stoppedEnvs = sortedEnvironments.filter(env => !env.running)
 
   return (
     <div className="bg-surface-800 rounded-lg p-4" data-testid="environments-panel">
@@ -248,7 +256,8 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, isLoading 
 
   const handleOpenVscode = () => {
     if (environment.path) {
-      tauri.openInVscode(environment.path)
+      // Pass environment name to setup VSCode colors
+      tauri.openInVscode(environment.path, environment.name)
     }
   }
 
@@ -272,6 +281,15 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, isLoading 
             <span className="text-sm font-semibold" style={{ color: environment.running ? colors.primary : '#888' }}>
               {environment.name}
             </span>
+            {environment.is_worktree && (
+              <span
+                className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                title="Git worktree environment"
+              >
+                <GitMerge className="w-3 h-3" />
+                <span>Worktree</span>
+              </span>
+            )}
             {environment.branch && (
               <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-surface-600/30 text-text-muted">
                 <GitBranch className="w-3 h-3" />

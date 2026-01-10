@@ -25,6 +25,7 @@ interface AppState {
 
   // Project settings
   projectRoot: string
+  worktreesDir: string
 
   // Actions
   setDryRunMode: (enabled: boolean) => void
@@ -33,6 +34,7 @@ interface AppState {
   setSpoofedPrereq: (key: keyof SpoofedPrerequisites, value: boolean | null) => void
   resetSpoofedPrereqs: () => void
   setProjectRoot: (path: string) => void
+  setWorktreesDir: (path: string) => void
 }
 
 const defaultSpoofedPrereqs: SpoofedPrerequisites = {
@@ -53,6 +55,7 @@ export const useAppStore = create<AppState>()(
       appMode: 'quick',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
+      worktreesDir: '',
 
       // Actions
       setDryRunMode: (enabled) => set({ dryRunMode: enabled }),
@@ -63,6 +66,7 @@ export const useAppStore = create<AppState>()(
       })),
       resetSpoofedPrereqs: () => set({ spoofedPrereqs: defaultSpoofedPrereqs }),
       setProjectRoot: (path) => set({ projectRoot: path }),
+      setWorktreesDir: (path) => set({ worktreesDir: path }),
     }),
     {
       name: 'ushadow-launcher-settings',
