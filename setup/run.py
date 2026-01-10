@@ -17,6 +17,16 @@ import time
 import getpass
 from pathlib import Path
 
+# Fix Windows console encoding to support Unicode
+if sys.platform == 'win32':
+    try:
+        # Try to set UTF-8 encoding for stdout/stderr
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass  # Fall back to default encoding
+
 # Add setup directory to path for imports
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
