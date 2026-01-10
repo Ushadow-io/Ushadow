@@ -14,6 +14,7 @@ fn find_uv_executable() -> String {
         let userprofile = std::env::var("USERPROFILE").unwrap_or_default();
 
         let possible_paths = vec![
+            format!("{}\\.local\\bin\\uv.exe", userprofile),  // Official installer location (first priority)
             format!("{}\\Programs\\uv\\uv.exe", localappdata),
             format!("{}\\.cargo\\bin\\uv.exe", userprofile),
             "uv".to_string(), // Try PATH as fallback
