@@ -1,0 +1,58 @@
+# Obsidian Vault Integration Provider
+# Implements the 'memory_source' capability by reading from local Obsidian vaults
+
+capability: memory_source
+
+providers:
+  - id: obsidian
+    name: "Obsidian Vault"
+    description: "Local Obsidian markdown knowledge base integration"
+    mode: local
+    integration_type: filesystem
+
+    # Implements memory_source capability
+    # Provides: source_path, sync_interval (defined in capabilities.yaml)
+    credentials:
+      source_path:
+        env_var: OBSIDIAN_VAULT_PATH
+        settings_path: integrations.obsidian.vault_path
+        label: "Vault Path"
+        description: "Full path to your Obsidian vault directory"
+        type: string
+        required: true
+
+      sync_interval:
+        env_var: OBSIDIAN_SYNC_INTERVAL
+        settings_path: integrations.obsidian.sync_interval
+        label: "Auto-Sync Interval (seconds)"
+        description: "How often to automatically sync (0 to disable auto-sync)"
+        type: integer
+        default: "21600"
+
+    # Memory mapping configuration (how to transform Obsidian data → memory format)
+    memory_mapping:
+      field_mappings:
+        - source_field: "frontmatter.title"
+          target_field: "title"
+          default_value: "{{filename}}"
+        - source_field: "body"
+          target_field: "content"
+        - source_field: "tags"
+          target_field: "tags"
+          transform: "split"
+        - source_field: "frontmatter.created"
+          target_field: "created_at"
+          transform: "date_format"
+        - source_field: "relative_path"
+          target_field: "source_id"
+      include_unmapped: true  # Include all frontmatter in metadata
+
+    ui:
+      icon: file-text
+      tags: ["integration", "memory_source", "filesystem", "markdown", "local"]
+      links:
+        docs: https://obsidian.md/
+        help: https://help.obsidian.md/
+
+    # No Docker deployment needed (filesystem integration)
+    # No dependencies (reads local files directly)
