@@ -32,12 +32,8 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
     setConnectionError(null)
 
     try {
-      if (!chronicleAuthApi.isAuthenticated()) {
-        setIsConnected(false)
-        return false
-      }
-
-      // Verify the token is still valid
+      // Auth is now handled automatically via ushadow proxy
+      // Just try to reach Chronicle - if it works, we're connected
       await chronicleAuthApi.getMe()
       setIsConnected(true)
       return true
@@ -46,9 +42,8 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
       setIsConnected(false)
 
       if (error.response?.status === 401) {
-        // Token expired, clear it
-        chronicleAuthApi.logout()
-        setConnectionError('Session expired')
+        // Auth failed - this is a ushadow auth issue, not Chronicle
+        setConnectionError('Authentication required')
       } else if (!error.response) {
         setConnectionError('Chronicle backend unreachable')
       } else {

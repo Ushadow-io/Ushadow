@@ -18,9 +18,14 @@ import {
   Trash2,
   PlayCircle,
   ArrowRight,
+  Activity,
+  Database,
+  Zap,
+  Clock,
 } from 'lucide-react'
 import {
   instancesApi,
+  integrationApi,
   settingsApi,
   servicesApi,
   Template,
@@ -378,6 +383,11 @@ export default function InstancesPage() {
   // Deploy/undeploy actions
   const [deployingInstance, setDeployingInstance] = useState<string | null>(null)
 
+  // Integration sync state
+  const [syncingInstance, setSyncingInstance] = useState<string | null>(null)
+  const [testingConnection, setTestingConnection] = useState<string | null>(null)
+  const [togglingAutoSync, setTogglingAutoSync] = useState<string | null>(null)
+
   const handleDeployInstance = async (instanceId: string) => {
     setDeployingInstance(instanceId)
     try {
@@ -411,6 +421,78 @@ export default function InstancesPage() {
       })
     } finally {
       setDeployingInstance(null)
+    }
+  }
+
+  // Integration actions
+  const handleTestConnection = async (instanceId: string) => {
+    setTestingConnection(instanceId)
+    try {
+      const response = await integrationApi.testConnection(instanceId)
+      setMessage({
+        type: response.data.success ? 'success' : 'error',
+        text: response.data.message,
+      })
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: getErrorMessage(error, 'Failed to test connection'),
+      })
+    } finally {
+      setTestingConnection(null)
+    }
+  }
+
+  const handleSyncNow = async (instanceId: string) => {
+    setSyncingInstance(instanceId)
+    try {
+      const response = await integrationApi.syncNow(instanceId)
+      if (response.data.success) {
+        setMessage({
+          type: 'success',
+          text: `Synced ${response.data.items_synced} items`,
+        })
+        // Reload instance details to show updated sync status
+        const res = await instancesApi.getInstance(instanceId)
+        setInstanceDetails((prev) => ({ ...prev, [instanceId]: res.data }))
+      } else {
+        setMessage({
+          type: 'error',
+          text: response.data.error || 'Sync failed',
+        })
+      }
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: getErrorMessage(error, 'Failed to sync'),
+      })
+    } finally {
+      setSyncingInstance(null)
+    }
+  }
+
+  const handleToggleAutoSync = async (instanceId: string, enable: boolean) => {
+    setTogglingAutoSync(instanceId)
+    try {
+      const response = enable
+        ? await integrationApi.enableAutoSync(instanceId)
+        : await integrationApi.disableAutoSync(instanceId)
+
+      setMessage({
+        type: response.data.success ? 'success' : 'error',
+        text: response.data.message,
+      })
+
+      // Reload instance details to show updated auto-sync status
+      const res = await instancesApi.getInstance(instanceId)
+      setInstanceDetails((prev) => ({ ...prev, [instanceId]: res.data }))
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: getErrorMessage(error, 'Failed to toggle auto-sync'),
+      })
+    } finally {
+      setTogglingAutoSync(null)
     }
   }
 
@@ -1202,6 +1284,163 @@ export default function InstancesPage() {
                           </div>
                         )}
 
+                        {/* Integration Sync UI - only shown for integrations */}
+                        {details.integration_type && (
+                          <div className="space-y-2 pt-2 border-t border-neutral-200 dark:border-neutral-700">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase tracking-wider text-neutral-400 flex items-center gap-1">
+                                <Database className="h-3 w-3" />
+                                Integration Sync
+                              </span>
+                              <span className="text-[10px] text-neutral-400 capitalize">
+                                {details.integration_type}
+                              </span>
+                            </div>
+
+                            {/* Sync Status */}
+                            <div className="flex items-center gap-2 py-1">
+                              <span className="text-neutral-500 dark:text-neutral-400 w-28 text-xs">
+                                Status:
+                              </span>
+                              <div className="flex-1 flex items-center gap-2">
+                                {details.last_sync_status === 'success' && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
+                                    <CheckCircle className="h-3 w-3" />
+                                    Success
+                                  </span>
+                                )}
+                                {details.last_sync_status === 'error' && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300">
+                                    <AlertCircle className="h-3 w-3" />
+                                    Error
+                                  </span>
+                                )}
+                                {details.last_sync_status === 'in_progress' && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Syncing
+                                  </span>
+                                )}
+                                {details.last_sync_status === 'never' && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-400">
+                                    Never synced
+                                  </span>
+                                )}
+                                {details.last_sync_at && (
+                                  <span className="text-xs text-neutral-500">
+                                    {new Date(details.last_sync_at).toLocaleString()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Last Sync Items Count */}
+                            {details.last_sync_items_count !== null && details.last_sync_items_count !== undefined && (
+                              <div className="flex items-center gap-2 py-1">
+                                <span className="text-neutral-500 dark:text-neutral-400 w-28 text-xs">
+                                  Items Synced:
+                                </span>
+                                <span className="text-xs text-neutral-700 dark:text-neutral-300">
+                                  {details.last_sync_items_count}
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Auto-Sync Status */}
+                            <div className="flex items-center gap-2 py-1">
+                              <span className="text-neutral-500 dark:text-neutral-400 w-28 text-xs">
+                                Auto-Sync:
+                              </span>
+                              <div className="flex-1 flex items-center gap-2">
+                                {details.sync_enabled ? (
+                                  <>
+                                    <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
+                                      <Zap className="h-3 w-3" />
+                                      Enabled
+                                    </span>
+                                    {details.next_sync_at && (
+                                      <span className="text-xs text-neutral-500 flex items-center gap-1">
+                                        <Clock className="h-3 w-3" />
+                                        Next: {new Date(details.next_sync_at).toLocaleString()}
+                                      </span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-xs text-neutral-500">Disabled</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Sync Error */}
+                            {details.last_sync_error && (
+                              <div className="p-2 rounded bg-error-50 dark:bg-error-900/20 text-error-700 dark:text-error-300 text-xs">
+                                <div className="flex items-start gap-2">
+                                  <AlertCircle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                                  <span>{details.last_sync_error}</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Action Buttons */}
+                            <div className="flex items-center gap-2 pt-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleTestConnection(instance.id)
+                                }}
+                                disabled={testingConnection === instance.id}
+                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50"
+                                data-testid={`test-connection-${instance.id}`}
+                              >
+                                {testingConnection === instance.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Activity className="h-3 w-3" />
+                                )}
+                                <span>Test Connection</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleSyncNow(instance.id)
+                                }}
+                                disabled={syncingInstance === instance.id || details.last_sync_status === 'in_progress'}
+                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50 disabled:opacity-50"
+                                data-testid={`sync-now-${instance.id}`}
+                              >
+                                {syncingInstance === instance.id || details.last_sync_status === 'in_progress' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3" />
+                                )}
+                                <span>Sync Now</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleToggleAutoSync(instance.id, !details.sync_enabled)
+                                }}
+                                disabled={togglingAutoSync === instance.id}
+                                className={`flex items-center gap-1 px-2 py-1 text-xs rounded ${
+                                  details.sync_enabled
+                                    ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 hover:bg-warning-200 dark:hover:bg-warning-900/50'
+                                    : 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 hover:bg-success-200 dark:hover:bg-success-900/50'
+                                } disabled:opacity-50`}
+                                data-testid={`toggle-auto-sync-${instance.id}`}
+                              >
+                                {togglingAutoSync === instance.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Zap className="h-3 w-3" />
+                                )}
+                                <span>{details.sync_enabled ? 'Disable' : 'Enable'} Auto-Sync</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Access URL */}
                         {details.outputs?.access_url && (
                           <a
@@ -1528,71 +1767,52 @@ export default function InstancesPage() {
       </Modal>
 
       {/* Add Provider Modal */}
-      {showAddProviderModal && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200]"
-          onClick={(e) => e.target === e.currentTarget && setShowAddProviderModal(false)}
-          data-testid="add-provider-modal"
-        >
-          <div className="bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
-              <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
-                Add Provider
-              </h2>
-              <button
-                onClick={() => setShowAddProviderModal(false)}
-                className="p-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Modal Content */}
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="space-y-2">
-                {availableToAdd.map((template) => (
-                  <button
-                    key={template.id}
-                    onClick={() => handleAddProvider(template.id)}
-                    className="w-full p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-300 dark:hover:border-primary-600 hover:bg-neutral-50 dark:hover:bg-neutral-700/50 transition-colors text-left flex items-center justify-between"
-                    data-testid={`add-provider-${template.id}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${template.mode === 'local' ? 'bg-purple-100 dark:bg-purple-900/30' : 'bg-blue-100 dark:bg-blue-900/30'}`}>
-                        {template.mode === 'local' ? (
-                          <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                        ) : (
-                          <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                        )}
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-neutral-900 dark:text-neutral-100">
-                          {template.name}
-                        </h4>
-                        <p className="text-xs text-neutral-500 capitalize">
-                          {template.provides}
-                        </p>
-                      </div>
-                    </div>
-                    <Plus className="h-4 w-4 text-neutral-400" />
-                  </button>
-                ))}
+      <Modal
+        isOpen={showAddProviderModal}
+        onClose={() => setShowAddProviderModal(false)}
+        title="Add Provider"
+        maxWidth="md"
+        testId="add-provider-modal"
+      >
+        <div className="space-y-2">
+          {availableToAdd.map((template) => (
+            <button
+              key={template.id}
+              onClick={() => handleAddProvider(template.id)}
+              className="w-full p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-300 dark:hover:border-primary-600 hover:bg-neutral-50 dark:hover:bg-neutral-700/50 transition-colors text-left flex items-center justify-between"
+              data-testid={`add-provider-${template.id}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${template.mode === 'local' ? 'bg-purple-100 dark:bg-purple-900/30' : 'bg-blue-100 dark:bg-blue-900/30'}`}>
+                  {template.mode === 'local' ? (
+                    <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  ) : (
+                    <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  )}
+                </div>
+                <div>
+                  <h4 className="font-medium text-neutral-900 dark:text-neutral-100">
+                    {template.name}
+                  </h4>
+                  <p className="text-xs text-neutral-500 capitalize">
+                    {template.provides}
+                  </p>
+                </div>
               </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-neutral-200 dark:border-neutral-700 flex justify-end">
-              <button
-                onClick={() => setShowAddProviderModal(false)}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+              <Plus className="h-4 w-4 text-neutral-400" />
+            </button>
+          ))}
         </div>
-      )}
+
+        <div className="flex justify-end pt-4 border-t border-neutral-200 dark:border-neutral-700 mt-4">
+          <button
+            onClick={() => setShowAddProviderModal(false)}
+            className="btn-secondary"
+          >
+            Cancel
+          </button>
+        </div>
+      </Modal>
 
       {/* Confirmation Dialog */}
       <ConfirmDialog
@@ -1735,9 +1955,12 @@ interface TemplateCardProps {
 
 function TemplateCard({ template, isExpanded, onToggle, onCreate, onRemove }: TemplateCardProps) {
   const isCloud = template.mode === 'cloud'
-  const isReady = template.configured && template.available
-  const needsConfig = !template.configured
-  const notRunning = template.configured && !template.available
+  // Integrations provide "memory_source" capability and config is per-instance
+  const isIntegration = template.provides === 'memory_source'
+  // Integrations are always "ready" - config is per-instance
+  const isReady = isIntegration ? true : (template.configured && template.available)
+  const needsConfig = isIntegration ? false : !template.configured
+  const notRunning = isIntegration ? false : (template.configured && !template.available)
 
   return (
     <div
@@ -1848,7 +2071,7 @@ function TemplateCard({ template, isExpanded, onToggle, onCreate, onRemove }: Te
                   data-testid={`configure-template-${template.id}`}
                 >
                   <Settings className="h-3 w-3" />
-                  Configure API Key
+                  Configure Settings
                 </a>
               ) : notRunning ? (
                 <span className="text-xs text-neutral-500">

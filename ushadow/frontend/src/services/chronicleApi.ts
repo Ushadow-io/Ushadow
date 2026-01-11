@@ -9,6 +9,7 @@
  * so the same JWT token works for both (unified auth).
  */
 import { api } from './api'
+import { getStorageKey } from '../utils/storage'
 
 // Connection info from generic services endpoint
 export interface ChronicleConnectionInfo {
@@ -152,9 +153,12 @@ export function clearConnectionInfoCache() {
  */
 export async function getChronicleProxyUrl(): Promise<string> {
   const info = await getChronicleConnectionInfo()
+  console.log('[ChronicleAPI] Connection info:', info)
   if (!info.proxy_url) {
+    console.error('[ChronicleAPI] No proxy_url in connection info!')
     throw new Error('Chronicle proxy URL not available')
   }
+  console.log('[ChronicleAPI] Using proxy URL:', info.proxy_url)
   return info.proxy_url
 }
 
@@ -203,12 +207,19 @@ export async function isChronicleAvailable(): Promise<boolean> {
 export const chronicleConversationsApi = {
   async getAll() {
     const proxyUrl = await getChronicleProxyUrl()
-    return api.get(`${proxyUrl}/api/conversations`)
+    console.log('[ChronicleAPI] Fetching conversations from:', `${proxyUrl}/api/conversations`)
+    const response = await api.get(`${proxyUrl}/api/conversations`)
+    console.log('[ChronicleAPI] Conversations response:', response)
+    return response
   },
 
   async getById(id: string) {
     const proxyUrl = await getChronicleProxyUrl()
-    return api.get(`${proxyUrl}/api/conversations/${id}`)
+    const url = `${proxyUrl}/api/conversations/${id}`
+    console.log('[ChronicleAPI] Fetching conversation detail from:', url)
+    const response = await api.get(url)
+    console.log('[ChronicleAPI] Conversation detail response:', response)
+    return response
   },
 
   async delete(id: string) {
@@ -362,7 +373,7 @@ export const chronicleSystemApi = {
 
 /**
  * Get WebSocket URL for real-time audio streaming (ws_pcm).
- * This uses direct connection for low latency.
+ * This uses direct connection through Tailscale Serve for low latency.
  */
 export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promise<string> {
   const info = await getChronicleConnectionInfo()
@@ -370,21 +381,36 @@ export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promis
     throw new Error('Chronicle direct URL not available')
   }
 
-  // Use protocol from direct_url (http -> ws, https -> wss)
-  const protocol = info.direct_url.startsWith('https') ? 'wss:' : 'ws:'
-  const port = info.port
+  // Convert HTTP(S) URL to WebSocket URL
+  // direct_url is like "https://red.spangled-kettle.ts.net"
+  const wsUrl = info.direct_url.replace('https:', 'wss:').replace('http:', 'ws:')
 
-  return `${protocol}//localhost:${port}${path}`
+  // Append the WebSocket path (configured in Tailscale Serve)
+  return `${wsUrl}${path}`
 }
 
 /**
  * Get audio URL for playback.
- * Uses direct connection with token in URL.
+ *
+ * STRATEGY 1 (Current): Use proxy with token in query string
+ * The proxy forwards the request to Chronicle with the token parameter.
+ * This works because the proxy just forwards the entire URL including query params.
+ *
+ * STRATEGY 2 (Fallback): If proxy doesn't work, try direct URL with token
  */
 export async function getChronicleAudioUrl(conversationId: string, cropped: boolean = true): Promise<string> {
-  const directUrl = await getChronicleDirectUrl()
-  const token = localStorage.getItem('token') || ''  // Ushadow token
-  return `${directUrl}/api/audio/get_audio/${conversationId}?cropped=${cropped}&token=${token}`
+  const proxyUrl = await getChronicleProxyUrl()
+  const token = localStorage.getItem(getStorageKey('token')) || ''
+
+  if (!token) {
+    console.warn('[ChronicleAPI] No auth token found for audio URL')
+  }
+
+  // Use proxy URL with token in query string
+  // The proxy will forward the entire request including the token parameter
+  const url = `${proxyUrl}/api/audio/get_audio/${conversationId}?cropped=${cropped}&token=${encodeURIComponent(token)}`
+  console.log('[ChronicleAPI] Generated audio URL:', url.substring(0, 100) + '...')
+  return url
 }
 
 // =============================================================================

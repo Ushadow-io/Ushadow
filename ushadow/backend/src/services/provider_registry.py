@@ -122,13 +122,14 @@ class ProviderRegistry:
             logger.error(f"Failed to load capabilities: {e}")
 
     def _load_providers(self) -> None:
-        """Load provider definitions from config/providers/*.yaml."""
+        """Load provider definitions from config/providers/**/*.yaml (recursive)."""
         try:
             if not PROVIDERS_DIR.exists():
                 logger.warning(f"Providers directory not found: {PROVIDERS_DIR}")
                 return
 
-            for provider_file in PROVIDERS_DIR.glob("*.yaml"):
+            # Search recursively for all .yaml files in providers/ and subdirectories
+            for provider_file in PROVIDERS_DIR.rglob("*.yaml"):
                 self._load_provider_file(provider_file)
 
         except Exception as e:

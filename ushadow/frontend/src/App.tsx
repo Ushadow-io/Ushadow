@@ -102,7 +102,7 @@ function AppContent() {
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
                 <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
                 <Route path="services" element={<ServicesPage />} />
-                <Route path="instances" element={<InstancesPage />} />
+                <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><InstancesPage /></FeatureRoute>} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />

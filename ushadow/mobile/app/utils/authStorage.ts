@@ -124,6 +124,14 @@ export async function getAuthInfo(): Promise<{ email: string; userId: string } |
 }
 
 /**
+ * Get user email from token (for OpenMemory user_id)
+ */
+export async function getUserEmail(): Promise<string | null> {
+  const info = await getAuthInfo();
+  return info?.email || null;
+}
+
+/**
  * Append auth token to WebSocket URL
  */
 export function appendTokenToUrl(wsUrl: string, token: string): string {

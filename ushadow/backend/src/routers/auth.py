@@ -9,7 +9,7 @@ ushadow serves as the central auth provider. This router exposes:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, status, Response
+from fastapi import APIRouter, HTTPException, Depends, status, Response, Request
 from pydantic import BaseModel, EmailStr, Field
 
 from src.models.user import User, UserCreate, UserRead, UserUpdate, get_user_by_email
@@ -114,15 +114,30 @@ router.include_router(
 
 @router.post("/login", response_model=LoginResponse)
 async def login(
-    login_data: LoginRequest,
+    request: Request,
     response: Response,
     user_manager=Depends(get_user_manager),
 ):
     """Authenticate user with email/password and return JWT token.
-    
+
     This endpoint accepts JSON (frontend-friendly) instead of form data.
     Sets both a cookie and returns the token in the response.
     """
+    # Log raw request for debugging
+    try:
+        body = await request.body()
+        logger.info(f"[AUTH] Raw login request body: {body.decode('utf-8')}")
+
+        # Parse the login data from the body we just read
+        login_data = LoginRequest.model_validate_json(body)
+    except Exception as e:
+        logger.error(f"[AUTH] Login request validation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid request format: {str(e)}"
+        )
+
+    logger.info(f"[AUTH] Login attempt for email: {login_data.email}")
     try:
         # Get user by email
         try:

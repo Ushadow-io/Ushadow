@@ -76,14 +76,21 @@ export default function UNodeDetailsPage() {
   // Editable endpoint paths for testing
   // These should match the endpoints used in chronicleApi.verifyUnodeAuth
   const [ushadowEndpoint, setUshadowEndpoint] = useState('/api/auth/me');
-  const [chronicleEndpoint, setChronicleEndpoint] = useState('/chronicle/users/me');
+  const [chronicleEndpoint, setChronicleEndpoint] = useState('/api/services/chronicle-backend/proxy/users/me');
   const [streamEndpoint, setStreamEndpoint] = useState('/chronicle/ws_pcm');
   const [streamProtocol, setStreamProtocol] = useState<'ws' | 'wss'>('wss');
+
+  // Timeout configuration (ms)
+  const [requestTimeout, setRequestTimeout] = useState(10000); // 10 seconds default
 
   // URL editing mode
   const [showUrlEdit, setShowUrlEdit] = useState(false);
   const [editApiUrl, setEditApiUrl] = useState('');
   const [editChronicleApiUrl, setEditChronicleApiUrl] = useState('');
+
+  // Debug: Manual QR data input
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualQrData, setManualQrData] = useState('');
 
   // Load data on mount
   useEffect(() => {
@@ -161,9 +168,15 @@ export default function UNodeDetailsPage() {
     const ushadowUrl = `${node.apiUrl}${ushadowEndpoint}`;
     console.log(`[UNodeDetails] Checking ushadow auth: ${ushadowUrl}`);
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+
       const response = await fetch(ushadowUrl, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
       console.log(`[UNodeDetails] Ushadow response: ${response.status}`);
       ushadowStatusCode = response.status;
       if (response.ok) {
@@ -190,9 +203,15 @@ export default function UNodeDetailsPage() {
     const chronicleFullUrl = `${node.apiUrl}${chronicleEndpoint}`;
     console.log(`[UNodeDetails] Checking chronicle: ${chronicleFullUrl}`);
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+
       const response = await fetch(chronicleFullUrl, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
       console.log(`[UNodeDetails] Chronicle response: ${response.status}`);
       chronicleStatusCode = response.status;
       if (response.ok) {
@@ -322,12 +341,17 @@ export default function UNodeDetailsPage() {
 
   // Handle QR scan result for rescan
   const handleQRScan = async (data: UshadowConnectionData) => {
+    console.log('[UNodeDetails] QR scan successful, data:', data);
     setShowScanner(false);
 
     // Connect using the QR data
+    console.log('[UNodeDetails] Attempting to connect from QR...');
     const result = await connectFromQR(data);
+    console.log('[UNodeDetails] Connection result:', result);
+
     if (!result.success || !result.leader) {
-      Alert.alert('Connection Failed', 'Could not connect to the scanned server');
+      console.error('[UNodeDetails] Connection failed:', result.error);
+      Alert.alert('Connection Failed', result.error || 'Could not connect to the scanned server');
       setRescanNodeId(null);
       return;
     }
@@ -566,7 +590,26 @@ export default function UNodeDetailsPage() {
 
             {/* Connection Statuses */}
             <View style={styles.statusSection}>
-              <Text style={styles.statusSectionTitle}>Connection Status</Text>
+              <View style={styles.statusHeader}>
+                <Text style={styles.statusSectionTitle}>Connection Status</Text>
+                <View style={styles.timeoutControl}>
+                  <Text style={styles.timeoutLabel}>Timeout: {requestTimeout / 1000}s</Text>
+                  <View style={styles.timeoutButtons}>
+                    <TouchableOpacity
+                      style={styles.timeoutButton}
+                      onPress={() => setRequestTimeout(Math.max(3000, requestTimeout - 2000))}
+                    >
+                      <Text style={styles.timeoutButtonText}>-</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.timeoutButton}
+                      onPress={() => setRequestTimeout(Math.min(30000, requestTimeout + 2000))}
+                    >
+                      <Text style={styles.timeoutButtonText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
 
               {/* Ushadow Status */}
               <View style={styles.statusItemFull}>
@@ -989,11 +1032,43 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
   },
+  statusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
   statusSectionTitle: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: theme.textSecondary,
-    marginBottom: spacing.md,
+  },
+  timeoutControl: {
+    alignItems: 'flex-end',
+  },
+  timeoutLabel: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    marginBottom: spacing.xs,
+  },
+  timeoutButtons: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  timeoutButton: {
+    width: 28,
+    height: 28,
+    backgroundColor: theme.backgroundInput,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeoutButtonText: {
+    fontSize: fontSize.base,
+    color: colors.primary[400],
+    fontWeight: '600',
   },
   statusRow: {
     flexDirection: 'row',

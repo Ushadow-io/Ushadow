@@ -35,6 +35,98 @@ const SPEAKER_COLOR_PALETTE = [
   'text-cyan-600 dark:text-cyan-400',
 ]
 
+// Lazy-loading audio player component
+interface LazyAudioPlayerProps {
+  conversationId: string
+  useCropped: boolean
+  getAudioUrl: (conversationId: string, useCropped: boolean) => Promise<string>
+}
+
+function LazyAudioPlayer({ conversationId, useCropped, getAudioUrl }: LazyAudioPlayerProps) {
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    setLoading(true)
+    setError(null)
+
+    getAudioUrl(conversationId, useCropped)
+      .then(url => {
+        if (mounted) {
+          console.log('[AudioPlayer] Loaded URL for', conversationId, ':', url)
+          setAudioUrl(url)
+          setLoading(false)
+        }
+      })
+      .catch(err => {
+        console.error('[AudioPlayer] Failed to load audio URL:', err)
+        if (mounted) {
+          setError('Failed to load audio')
+          setLoading(false)
+        }
+      })
+
+    return () => { mounted = false }
+  }, [conversationId, useCropped, getAudioUrl])
+
+  if (loading) {
+    return (
+      <div className="mb-3 h-8 flex items-center justify-center bg-neutral-100 dark:bg-neutral-800 rounded">
+        <span className="text-xs text-neutral-500">Loading audio...</span>
+      </div>
+    )
+  }
+
+  if (error || !audioUrl) {
+    return (
+      <div className="mb-3 h-8 flex items-center justify-center bg-red-50 dark:bg-red-900/20 rounded">
+        <span className="text-xs text-red-600 dark:text-red-400">{error || 'Audio not available'}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-3">
+      <audio
+        controls
+        className="w-full h-8"
+        preload="metadata"
+        src={audioUrl}
+        onLoadedMetadata={(e) => {
+          const audio = e.currentTarget
+          console.log('[AudioPlayer] Metadata loaded:', {
+            conversationId,
+            duration: audio.duration,
+            readyState: audio.readyState
+          })
+        }}
+        onError={(e) => {
+          const audio = e.currentTarget
+          console.error('[AudioPlayer] Audio element error:', {
+            conversationId,
+            url: audioUrl,
+            error: audio.error,
+            errorCode: audio.error?.code,
+            errorMessage: audio.error?.message,
+            networkState: audio.networkState,
+            readyState: audio.readyState
+          })
+        }}
+        onCanPlay={(e) => {
+          console.log('[AudioPlayer] Can play:', conversationId)
+        }}
+        onStalled={(e) => {
+          console.warn('[AudioPlayer] Stalled:', conversationId)
+        }}
+      >
+        Your browser does not support audio.
+      </audio>
+    </div>
+  )
+}
+
 interface ChronicleConversationsProps {
   onAuthRequired?: () => void
 }
@@ -51,6 +143,7 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
 
   // Audio playback state
   const [playingSegment, setPlayingSegment] = useState<string | null>(null)
+  const [audioUrls, setAudioUrls] = useState<Map<string, { cropped: string; original: string }>>(new Map())
   const audioRefs = useRef<{ [key: string]: HTMLAudioElement }>({})
   const segmentTimerRef = useRef<number | null>(null)
 
@@ -67,12 +160,22 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
       const response = await chronicleConversationsApi.getAll()
       const conversationsList = response.data.conversations || []
       setConversations(conversationsList)
+      // Note: Audio URLs are now generated lazily when the audio player is rendered
     } catch (err: any) {
+      console.error('[Chronicle] Load conversations error:', err)
+      console.error('[Chronicle] Error response:', err.response)
+      console.error('[Chronicle] Error status:', err.response?.status)
+      console.error('[Chronicle] Error data:', err.response?.data)
+
       if (err.response?.status === 401) {
         onAuthRequired?.()
-        setError('Authentication required. Please log in to Chronicle.')
+        const errorMsg = err.response?.data?.detail || 'Authentication required. Please log in to Chronicle.'
+        console.error('[Chronicle] Auth error message:', errorMsg)
+        setError(errorMsg)
       } else {
-        setError(err.message || 'Failed to load conversations')
+        const errorMsg = err.response?.data?.detail || err.message || 'Failed to load conversations'
+        console.error('[Chronicle] General error message:', errorMsg)
+        setError(errorMsg)
       }
     } finally {
       setLoading(false)
@@ -80,13 +183,30 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
   }
 
   useEffect(() => {
-    if (chronicleAuthApi.isAuthenticated()) {
-      loadConversations()
-    } else {
-      setLoading(false)
-      setError('Please log in to Chronicle to view conversations.')
-    }
+    // Auth is now handled automatically via ushadow proxy
+    // Just try to load conversations - if auth fails, the error handler will catch it
+    loadConversations()
   }, [])
+
+  // Lazy-load audio URL (only when needed, with caching)
+  const getAudioUrl = async (conversationId: string, useCropped: boolean): Promise<string> => {
+    const cacheKey = useCropped ? 'cropped' : 'original'
+    const cached = audioUrls.get(conversationId)?.[cacheKey]
+    if (cached) return cached
+
+    // Generate URL on-demand
+    const url = await getChronicleAudioUrl(conversationId, useCropped)
+
+    // Cache it
+    setAudioUrls(prev => {
+      const newMap = new Map(prev)
+      const existing = newMap.get(conversationId) || { cropped: '', original: '' }
+      newMap.set(conversationId, { ...existing, [cacheKey]: url })
+      return newMap
+    })
+
+    return url
+  }
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -226,6 +346,11 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
 
     try {
       const response = await chronicleConversationsApi.getById(conversation.conversation_id)
+      console.log('[Chronicle] Conversation detail response:', response)
+      console.log('[Chronicle] Response data:', response.data)
+      console.log('[Chronicle] Conversation data:', response.data?.conversation)
+      console.log('[Chronicle] Segments:', response.data?.conversation?.segments)
+
       if (response.status === 200 && response.data.conversation) {
         setConversations(prev => prev.map(c =>
           c.conversation_id === conversationId
@@ -235,11 +360,13 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
         setExpandedTranscripts(prev => new Set(prev).add(conversationId))
       }
     } catch (err: any) {
+      console.error('[Chronicle] Failed to load transcript:', err)
+      console.error('[Chronicle] Error response:', err.response)
       setError(`Failed to load transcript: ${err.message || 'Unknown error'}`)
     }
   }
 
-  const handleSegmentPlayPause = (conversationId: string, segmentIndex: number, segment: any, useCropped: boolean) => {
+  const handleSegmentPlayPause = async (conversationId: string, segmentIndex: number, segment: any, useCropped: boolean) => {
     const segmentId = `${conversationId}-${segmentIndex}`
     const audioKey = `${conversationId}-${useCropped ? 'cropped' : 'original'}`
 
@@ -265,10 +392,16 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
     let audio = audioRefs.current[audioKey]
 
     if (!audio || audio.error) {
-      const audioUrl = getChronicleAudioUrl(conversationId, useCropped)
-      audio = new Audio(audioUrl)
-      audioRefs.current[audioKey] = audio
-      audio.addEventListener('ended', () => setPlayingSegment(null))
+      // Lazy-load the audio URL
+      try {
+        const audioUrl = await getAudioUrl(conversationId, useCropped)
+        audio = new Audio(audioUrl)
+        audioRefs.current[audioKey] = audio
+        audio.addEventListener('ended', () => setPlayingSegment(null))
+      } catch (err) {
+        console.error('Failed to load audio URL for segment playback:', err)
+        return
+      }
     }
 
     audio.currentTime = segment.start
@@ -303,26 +436,14 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
     )
   }
 
-  if (error && !chronicleAuthApi.isAuthenticated()) {
-    return (
-      <div data-testid="chronicle-conversations-auth-required" className="text-center py-12">
-        <AlertCircle className="h-12 w-12 mx-auto mb-4 text-amber-500" />
-        <p className="text-neutral-600 dark:text-neutral-400 mb-4">{error}</p>
-        <button
-          onClick={onAuthRequired}
-          className="btn-primary"
-        >
-          Log in to Chronicle
-        </button>
-      </div>
-    )
-  }
-
   if (error) {
     return (
       <div data-testid="chronicle-conversations-error" className="text-center py-12">
         <AlertCircle className="h-12 w-12 mx-auto mb-4 text-red-500" />
         <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
+        <div className="text-xs text-gray-500 dark:text-gray-400 mb-4 font-mono">
+          Check browser console (F12) for detailed error logs
+        </div>
         <button onClick={loadConversations} className="btn-primary">
           Try Again
         </button>
@@ -496,16 +617,18 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
 
               {/* Audio Player */}
               {(conversation.audio_path || conversation.cropped_audio_path) && conversation.conversation_id && (
-                <div className="mb-3">
-                  <audio
-                    controls
-                    className="w-full h-8"
-                    preload="metadata"
-                    src={getChronicleAudioUrl(conversation.conversation_id, !debugMode)}
-                  >
-                    Your browser does not support audio.
-                  </audio>
-                </div>
+                <>
+                  {debugMode && (
+                    <div className="mb-2 text-xs text-neutral-500 font-mono">
+                      Audio: {conversation.audio_path || 'none'} | Cropped: {conversation.cropped_audio_path || 'none'}
+                    </div>
+                  )}
+                  <LazyAudioPlayer
+                    conversationId={conversation.conversation_id}
+                    useCropped={!debugMode}
+                    getAudioUrl={getAudioUrl}
+                  />
+                </>
               )}
 
               {/* Transcript Section */}

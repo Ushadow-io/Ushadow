@@ -394,12 +394,23 @@ async def get_service_connection_info(
 
     # Internal URL (for backend-to-service communication only)
     # Backend uses Docker network, not localhost
-    internal_port = primary_port.get("internal_port", 8000)
+    internal_port = primary_port.get("container_port", 8000)
     internal_url = f"http://{name}:{internal_port}"
 
     # Direct URL (for frontend WebSocket/streaming access)
-    # Uses localhost with port mapping
-    direct_url = f"http://localhost:{port}" if port else None
+    # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
+    # WebSocket routes like /ws_pcm are configured in Tailscale Serve
+    direct_url = None
+    try:
+        from src.services.tailscale_serve import get_tailscale_status
+        ts_status = get_tailscale_status()
+        if ts_status.hostname:
+            # Use HTTPS (Tailscale Serve provides TLS)
+            direct_url = f"https://{ts_status.hostname}"
+    except Exception as e:
+        logger.warning(f"Could not get Tailscale hostname for direct_url: {e}")
+        # Fallback to localhost (for development)
+        direct_url = f"http://localhost:{port}" if port else None
 
     # Proxy URL (for frontend REST API access through ushadow)
     # Relative URL that goes through this backend
@@ -423,10 +434,10 @@ async def get_service_connection_info(
         "service": name,
         # Two-tier architecture URLs
         "proxy_url": proxy_url,  # REST APIs → /api/services/chronicle-backend/proxy/*
-        "direct_url": direct_url,  # WebSocket/Streaming → ws://localhost:8082
+        "direct_url": direct_url,  # WebSocket/Streaming → wss://red.spangled-kettle.ts.net
         "internal_url": internal_url,  # Backend only → http://chronicle-backend:8000
         # Port information
-        "port": port,  # External port (for direct connections)
+        "port": port,  # External port (for direct connections, mainly for mobile/desktop apps)
         "env_var": primary_port.get("env_var"),
         "default_port": primary_port.get("default_port"),
         # Status
@@ -434,8 +445,8 @@ async def get_service_connection_info(
         # Usage hints for frontend
         "usage": {
             "rest_api": f"Use proxy_url: axios.get('{proxy_url}/api/endpoint')",
-            "websocket": f"Use direct_url: new WebSocket('ws://localhost:{port}/ws')",
-            "streaming": f"Use direct_url: EventSource('{direct_url}/stream')"
+            "websocket": f"Use direct_url with path: new WebSocket(direct_url.replace('https', 'wss') + '/ws_pcm')",
+            "streaming": f"Use direct_url with path: EventSource('{direct_url}/stream')"
         }
     }
 
@@ -446,7 +457,6 @@ async def proxy_service_request(
     path: str,
     request: Request,
     orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
-    current_user: User = Depends(get_current_user)
 ):
     """
     Generic proxy endpoint for service REST APIs.
@@ -479,18 +489,53 @@ async def proxy_service_request(
         raise HTTPException(status_code=503, detail=f"Service '{name}' has no ports configured")
 
     primary_port = ports[0]
-    internal_port = primary_port.get("internal_port", 8000)
-    internal_url = f"http://{name}:{internal_port}"
+    internal_port = primary_port.get("container_port", 8000)
 
-    # Build target URL
+    # Build container name with project prefix (e.g., ushadow-red-chronicle-backend)
+    import os
+    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+    container_name = f"{project_name}-{name}"
+    internal_url = f"http://{container_name}:{internal_port}"
+
+    # Extract token from query params for audio/media requests
+    # We'll move it to Authorization header
+    query_params = dict(request.query_params)
+    extracted_token = None
+    if ('audio' in path or 'media' in path) and 'token' in query_params:
+        extracted_token = query_params.pop('token')
+        logger.info(f"[PROXY] Extracted token from query param for audio request")
+
+    # Build target URL (without token in query string if extracted)
     target_url = f"{internal_url}/{path}"
-    if request.url.query:
+    if query_params:
+        # Rebuild query string without token
+        from urllib.parse import urlencode
+        query_string = urlencode(query_params)
+        if query_string:
+            target_url = f"{target_url}?{query_string}"
+    elif request.url.query and not extracted_token:
+        # Use original query string if we didn't extract token
         target_url = f"{target_url}?{request.url.query}"
 
     logger.info(f"Proxying {request.method} {request.url.path} -> {target_url}")
 
     # Forward request headers (including auth)
     headers = dict(request.headers)
+
+    # Add extracted token to Authorization header
+    if extracted_token and not headers.get("authorization"):
+        headers["authorization"] = f"Bearer {extracted_token}"
+        logger.info(f"[PROXY] Added Authorization header from extracted token")
+
+    # Log auth header for debugging (masked)
+    auth_header = headers.get("authorization", "")
+    if auth_header:
+        # Show token type and first few chars
+        token_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
+        logger.info(f"[PROXY] Forwarding auth: {token_preview}")
+    else:
+        logger.warning(f"[PROXY] No Authorization header in request to {name}")
+
     # Remove host header (will be set by httpx)
     headers.pop("host", None)
 
@@ -512,11 +557,33 @@ async def proxy_service_request(
                     headers=headers
                 )
 
+            # Log the response from Chronicle
+            logger.info(f"[PROXY] Chronicle response: {response.status_code}")
+            if response.status_code == 206:
+                logger.info(f"[PROXY] Partial content response - Content-Range: {response.headers.get('content-range')}, Content-Type: {response.headers.get('content-type')}")
+            if response.status_code not in [200, 206]:
+                logger.warning(f"[PROXY] Chronicle error body: {response.text[:500]}")
+
             # Forward response headers
             response_headers = dict(response.headers)
             # Remove hop-by-hop headers
             for header in ["connection", "keep-alive", "transfer-encoding"]:
                 response_headers.pop(header, None)
+
+            # Fix Content-Disposition for audio/media files
+            # Change "attachment" to "inline" so browsers play instead of download
+            if 'audio' in path or 'media' in path:
+                content_disp = response_headers.get('content-disposition', '')
+                if 'attachment' in content_disp:
+                    # Change attachment to inline
+                    response_headers['content-disposition'] = content_disp.replace('attachment', 'inline')
+                    logger.info(f"[PROXY] Changed Content-Disposition from attachment to inline")
+
+                # Add CORS headers for audio playback
+                response_headers['access-control-allow-origin'] = '*'
+                response_headers['access-control-expose-headers'] = 'Content-Range, Content-Length, Accept-Ranges'
+
+                logger.info(f"[PROXY] Audio response headers: Content-Type={response_headers.get('content-type')}, Content-Length={response_headers.get('content-length')}, Accept-Ranges={response_headers.get('accept-ranges')}")
 
             # Return proxied response
             from fastapi.responses import Response
