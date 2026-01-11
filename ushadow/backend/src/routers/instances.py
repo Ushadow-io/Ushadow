@@ -472,3 +472,110 @@ async def get_instance_wiring(
     if not instance:
         raise HTTPException(status_code=404, detail=f"Instance not found: {instance_id}")
     return manager.get_wiring_for_instance(instance_id)
+
+
+# =============================================================================
+# Integration-Specific Endpoints
+# =============================================================================
+
+@router.post("/{instance_id}/test-connection")
+async def test_integration_connection(
+    instance_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Test connection to an integration.
+
+    Only works for integration instances (instances with integration_type set).
+    """
+    from src.services.integration_operations import get_integration_operations
+
+    ops = get_integration_operations()
+    success, message = await ops.test_connection(instance_id)
+
+    return {"success": success, "message": message}
+
+
+@router.post("/{instance_id}/sync")
+async def trigger_integration_sync(
+    instance_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Manually trigger sync for an integration.
+
+    Only works for integration instances (instances with integration_type set).
+    """
+    from src.services.integration_operations import get_integration_operations
+
+    ops = get_integration_operations()
+    result = await ops.sync_now(instance_id)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Sync failed"))
+
+    return result
+
+
+@router.get("/{instance_id}/sync-status")
+async def get_integration_sync_status(
+    instance_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get current sync status for an integration.
+
+    Only works for integration instances (instances with integration_type set).
+    """
+    from src.services.integration_operations import get_integration_operations
+
+    ops = get_integration_operations()
+    result = ops.get_sync_status(instance_id)
+
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return result
+
+
+@router.post("/{instance_id}/sync/enable")
+async def enable_integration_auto_sync(
+    instance_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Enable automatic syncing for an integration.
+
+    Only works for integration instances (instances with integration_type set).
+    Requires sync_interval to be configured on the instance.
+    """
+    from src.services.integration_operations import get_integration_operations
+
+    ops = get_integration_operations()
+    success, message = await ops.enable_auto_sync(instance_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+
+    return {"success": True, "message": message}
+
+
+@router.post("/{instance_id}/sync/disable")
+async def disable_integration_auto_sync(
+    instance_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Disable automatic syncing for an integration.
+
+    Only works for integration instances (instances with integration_type set).
+    """
+    from src.services.integration_operations import get_integration_operations
+
+    ops = get_integration_operations()
+    success, message = await ops.disable_auto_sync(instance_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+
+    return {"success": True, "message": message}

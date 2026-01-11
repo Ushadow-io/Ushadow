@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from .integration import IntegrationType
+
 
 class TemplateSource(str, Enum):
     """Where a template was discovered from."""
@@ -128,6 +130,22 @@ class Instance(BaseModel):
 
     # Error tracking
     error: Optional[str] = None
+
+    # Integration-specific fields (null for non-integrations)
+    integration_type: Optional[IntegrationType] = Field(
+        None,
+        description="Integration type (filesystem, rest, graphql) - null for non-integrations"
+    )
+    sync_enabled: Optional[bool] = Field(None, description="Whether auto-sync is enabled")
+    sync_interval: Optional[int] = Field(None, description="Sync interval in seconds (e.g., 21600 for 6 hours)")
+    last_sync_at: Optional[datetime] = Field(None, description="Timestamp of last successful sync")
+    last_sync_status: Optional[str] = Field(
+        None,
+        description="Status of last sync: 'success', 'error', 'in_progress', 'never'"
+    )
+    last_sync_items_count: Optional[int] = Field(None, description="Number of items synced in last sync")
+    last_sync_error: Optional[str] = Field(None, description="Error message from last failed sync")
+    next_sync_at: Optional[datetime] = Field(None, description="Computed timestamp of next scheduled sync")
 
     model_config = {"use_enum_values": True}
 

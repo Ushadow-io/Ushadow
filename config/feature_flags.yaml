@@ -18,6 +18,12 @@ flags:
   # Infrastructure Options
   # =============================================================================
 
+  # Debug Mode - Show advanced debugging tools and reset buttons
+  debug:
+    enabled: true
+    description: "Enable debug mode with advanced reset buttons and diagnostic tools"
+    type: ops
+
   # Caddy Routing - Use Caddy reverse proxy for Tailscale routing
   # When disabled, Tailscale Serve is used directly (simpler setup)
   caddy_routing:
@@ -50,6 +56,13 @@ flags:
   memories_page:
     enabled: true
     description: "Show Memories page in navigation with list view and knowledge graph"
+    type: release
+
+  # Instances Management - Service instance deployment and wiring
+  instances_management:
+    enabled: true
+    description: "Instances page - Deploy and wire service instances with capability
+      resolution"
     type: release
 
   # Add your feature flags here following this format:

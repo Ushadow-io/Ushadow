@@ -130,6 +130,15 @@ class InstanceManager:
                     deployed_at=instance_data.get('deployed_at'),
                     updated_at=instance_data.get('updated_at'),
                     error=instance_data.get('error'),
+                    # Integration-specific fields
+                    integration_type=instance_data.get('integration_type'),
+                    sync_enabled=instance_data.get('sync_enabled'),
+                    sync_interval=instance_data.get('sync_interval'),
+                    last_sync_at=instance_data.get('last_sync_at'),
+                    last_sync_status=instance_data.get('last_sync_status'),
+                    last_sync_items_count=instance_data.get('last_sync_items_count'),
+                    last_sync_error=instance_data.get('last_sync_error'),
+                    next_sync_at=instance_data.get('next_sync_at'),
                 )
                 self._instances[instance_id] = instance
 
@@ -200,6 +209,24 @@ class InstanceManager:
                 instance_data['created_at'] = instance.created_at.isoformat() if isinstance(instance.created_at, datetime) else instance.created_at
             if instance.error:
                 instance_data['error'] = instance.error
+
+            # Integration-specific fields
+            if instance.integration_type is not None:
+                instance_data['integration_type'] = instance.integration_type
+            if instance.sync_enabled is not None:
+                instance_data['sync_enabled'] = instance.sync_enabled
+            if instance.sync_interval is not None:
+                instance_data['sync_interval'] = instance.sync_interval
+            if instance.last_sync_at:
+                instance_data['last_sync_at'] = instance.last_sync_at.isoformat() if isinstance(instance.last_sync_at, datetime) else instance.last_sync_at
+            if instance.last_sync_status:
+                instance_data['last_sync_status'] = instance.last_sync_status
+            if instance.last_sync_items_count is not None:
+                instance_data['last_sync_items_count'] = instance.last_sync_items_count
+            if instance.last_sync_error:
+                instance_data['last_sync_error'] = instance.last_sync_error
+            if instance.next_sync_at:
+                instance_data['next_sync_at'] = instance.next_sync_at.isoformat() if isinstance(instance.next_sync_at, datetime) else instance.next_sync_at
 
             data['instances'][instance_id] = instance_data
 

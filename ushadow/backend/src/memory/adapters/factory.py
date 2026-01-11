@@ -9,6 +9,7 @@ import logging
 
 from .base import MemoryAdapter
 from .rest_adapter import RESTAdapter
+from .obsidian_adapter import ObsidianAdapter
 from src.models.service import ServiceConfig, IntegrationType
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ class AdapterFactory:
     # Registry of integration types to adapter classes
     _adapters = {
         IntegrationType.REST: RESTAdapter,
+        IntegrationType.FILESYSTEM: ObsidianAdapter,
         # Future adapters:
         # IntegrationType.MCP: MCPAdapter,
         # IntegrationType.GRAPHQL: GraphQLAdapter,

@@ -77,3 +77,20 @@ capabilities:
       server_url:
         type: url
         description: "Speaker recognition service endpoint"
+
+  # ==========================================================================
+  # Memory Source Capability (Integrations)
+  # ==========================================================================
+  memory_source:
+    description: "External data sources that sync to memory (Obsidian, Notion, etc.)"
+
+    # Base fields that ALL memory_source providers must implement
+    # Each provider (obsidian, notion, gdrive) provides these fields
+    # with provider-specific labels, defaults, and validation
+    provides:
+      source_path:
+        type: string
+        description: "Path/URL to the data source (file path, API endpoint, etc.)"
+      sync_interval:
+        type: integer
+        description: "Auto-sync interval in seconds"
