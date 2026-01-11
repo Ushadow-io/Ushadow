@@ -58,7 +58,7 @@ export default function Layout() {
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
     { path: '/services', label: 'Services', icon: Server },
-    { path: '/instances', label: 'Instances', icon: Layers },
+    { path: '/instances', label: 'Instances', icon: Layers, featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),

@@ -377,39 +377,43 @@ export default function TailscaleWizard() {
   }
 
   // ============================================================================
-  // Clear Authentication Component
+  // Reset Tailscale Component
   // ============================================================================
 
-  const ClearAuthButton = ({
+  const ResetTailscaleButton = ({
     variant = 'link',
-    testId = 'clear-auth',
+    testId = 'reset-tailscale',
     className = ''
   }: {
     variant?: 'link' | 'button'
     testId?: string
     className?: string
   }) => {
+    // Only show if debug feature flag is enabled
+    if (!isEnabled('debug')) {
+      return null
+    }
+
     if (variant === 'link') {
       return (
         <div className="space-y-2">
           <button
-            onClick={clearAuthentication}
+            onClick={resetTailscale}
             disabled={loading}
             className={`text-sm text-red-600 dark:text-red-400 hover:underline flex items-center gap-2 ${className}`}
             data-testid={testId}
           >
             <RefreshCw className="w-4 h-4" />
-            Clear Authentication & Restart
+            <span>Reset Tailscale</span>
           </button>
-          <a
-            href="https://login.tailscale.com/admin/machines"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-1"
+          <button
+            onClick={() => window.open('https://login.tailscale.com/admin/machines', '_blank', 'noopener,noreferrer')}
+            className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-2"
+            data-testid={`${testId}-admin-console`}
           >
-            Remove machine from admin console
             <ExternalLink className="w-3 h-3" />
-          </a>
+            <span>Remove machine from admin console</span>
+          </button>
         </div>
       )
     }
@@ -417,39 +421,43 @@ export default function TailscaleWizard() {
     return (
       <div className="space-y-2">
         <button
-          onClick={clearAuthentication}
+          onClick={resetTailscale}
           disabled={loading}
-          className={`btn-danger text-sm ${className}`}
+          className={`btn-danger text-sm flex items-center gap-2 ${className}`}
           data-testid={testId}
-          title="Remove machine from Tailscale and clear all authentication"
+          title="Complete Tailscale reset: removes routes, certificates, auth, and all configuration"
         >
           {loading ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
-            <Trash2 className="w-4 h-4 mr-2" />
+            <Trash2 className="w-4 h-4" />
           )}
-          Clear Auth
+          <span>Reset Tailscale</span>
         </button>
-        <a
-          href="https://login.tailscale.com/admin/machines"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-1"
+        <button
+          onClick={() => window.open('https://login.tailscale.com/admin/machines', '_blank', 'noopener,noreferrer')}
+          className="btn-secondary text-xs flex items-center gap-2"
+          data-testid={`${testId}-admin-console`}
         >
-          Remove machine from admin console
           <ExternalLink className="w-3 h-3" />
-        </a>
+          <span>Remove machine from admin console</span>
+        </button>
       </div>
     )
   }
 
   // ============================================================================
-  // Clear Authentication
+  // Reset Tailscale
   // ============================================================================
 
-  const clearAuthentication = async () => {
+  const resetTailscale = async () => {
     const confirmed = window.confirm(
-      'This will clear local authentication and remove the container/volume.\n\n' +
+      'This will completely reset Tailscale to defaults:\n\n' +
+      '• Clear all routes\n' +
+      '• Remove certificates\n' +
+      '• Clear authentication\n' +
+      '• Remove container and volume\n' +
+      '• Delete all configuration\n\n' +
       'Note: You will need to manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines\n\n' +
       'Continue?'
     )
@@ -470,7 +478,7 @@ export default function TailscaleWizard() {
     setPollingAuth(false)
 
     try {
-      const response = await tailscaleApi.clearAuth()
+      const response = await tailscaleApi.reset()
 
       // Reset all state to fresh/unauthenticated
       setContainerStatus({
@@ -490,12 +498,19 @@ export default function TailscaleWizard() {
         await checkContainerStatus()
       }, 100)
 
-      setMessage({ type: 'success', text: response.data.message + ' Container and volume removed. Start fresh.' })
+      const details = response.data.details
+      const successSteps = Object.values(details).filter(Boolean).length
+      const totalSteps = Object.keys(details).length
+
+      setMessage({
+        type: response.data.status === 'success' ? 'success' : 'warning',
+        text: `${response.data.message} (${successSteps}/${totalSteps} steps completed)`
+      })
 
       // Go back to start_container step
       wizard.goTo('start_container')
     } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to clear authentication') })
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to reset Tailscale') })
     } finally {
       setLoading(false)
     }
@@ -561,8 +576,11 @@ export default function TailscaleWizard() {
       await checkTailnetSettings()
 
       // Step 4: Success!
-      setMessage({ type: 'success', text: 'HTTPS enabled! Certificate provisioning may require plan upgrade.' })
-      setCertificateProvisioned(true)
+      const successMsg = certResponse.data.provisioned
+        ? 'HTTPS enabled and SSL certificates provisioned successfully!'
+        : 'HTTPS routing enabled! (SSL certificate provisioning may require Tailscale plan upgrade)'
+      setMessage({ type: 'success', text: successMsg })
+      setCertificateProvisioned(certResponse.data.provisioned || false)
       updateServiceStatus('tailscale', { configured: true, running: true })
       markPhaseComplete('tailscale')
       return true
@@ -717,8 +735,8 @@ export default function TailscaleWizard() {
             </div>
           </div>
 
-          {/* Clear Auth button - only show if container exists */}
-          {containerStatus?.exists && <ClearAuthButton variant="button" testId="clear-auth-welcome" />}
+          {/* Reset Tailscale button - only show if container exists */}
+          {containerStatus?.exists && <ResetTailscaleButton variant="button" testId="reset-tailscale-welcome" />}
         </div>
       )}
 
@@ -790,8 +808,8 @@ export default function TailscaleWizard() {
                 )}
               </div>
 
-              {/* Clear Auth button */}
-              <ClearAuthButton variant="button" testId="clear-auth-start" />
+              {/* Reset Tailscale button */}
+              <ResetTailscaleButton variant="button" testId="reset-tailscale-start" />
             </div>
           )}
         </div>
@@ -911,7 +929,7 @@ export default function TailscaleWizard() {
                 </div>
               </div>
               <div className="flex justify-center">
-                <ClearAuthButton variant="button" testId="clear-auth-button-authenticated" />
+                <ResetTailscaleButton variant="button" testId="reset-tailscale-button-authenticated" />
               </div>
             </div>
           ) : loading ? (
@@ -987,7 +1005,7 @@ export default function TailscaleWizard() {
                       )}
                       New QR Code
                     </button>
-                    <ClearAuthButton variant="button" testId="clear-auth-button" />
+                    <ResetTailscaleButton variant="button" testId="reset-tailscale-button" />
                   </div>
                 </div>
               )}

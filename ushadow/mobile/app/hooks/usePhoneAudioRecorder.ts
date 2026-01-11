@@ -1,15 +1,15 @@
 /**
  * usePhoneAudioRecorder.ts
  *
- * Audio recording hook using expo-av for phone microphone capture.
- * Streams PCM audio data via callback for WebSocket transmission.
+ * Audio recording hook using react-native-audio-record for real-time PCM streaming.
+ * Streams actual microphone audio data via callback for WebSocket transmission.
  *
- * Audio format: 16kHz, mono, 16-bit PCM (matching backend expectations)
+ * Audio format: 16kHz, mono, 16-bit PCM (matching Chronicle backend expectations)
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Alert, Platform } from 'react-native';
-import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
-import base64 from 'react-native-base64';
+import AudioRecord from 'react-native-audio-record';
+import { Audio } from 'expo-av';
 
 export interface UsePhoneAudioRecorder {
   isRecording: boolean;
@@ -20,36 +20,36 @@ export interface UsePhoneAudioRecorder {
   stopRecording: () => Promise<void>;
 }
 
-// Audio recording configuration
-const RECORDING_OPTIONS = {
-  android: {
-    extension: '.wav',
-    outputFormat: Audio.AndroidOutputFormat.DEFAULT,
-    audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 256000,
-  },
-  ios: {
-    extension: '.wav',
-    audioQuality: Audio.IOSAudioQuality.HIGH,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 256000,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
-  },
-  // Enable metering for audio level visualization
-  isMeteringEnabled: true,
-  web: {
-    mimeType: 'audio/webm',
-    bitsPerSecond: 128000,
-  },
+// Audio recording configuration (Chronicle expects 16kHz, mono, 16-bit)
+const AUDIO_OPTIONS = {
+  sampleRate: 16000,
+  channels: 1,
+  bitsPerSample: 16,
+  audioSource: 6, // VOICE_RECOGNITION (best for speech)
+  wavFile: 'audio.wav', // Temporary file name
 };
 
-// Streaming interval in milliseconds
-const STREAM_INTERVAL_MS = 100;
+// Calculate audio level from PCM samples with gain boost for visualization
+const calculateAudioLevel = (buffer: Uint8Array): number => {
+  if (buffer.length === 0) return 0;
+
+  // Calculate RMS (Root Mean Square) from 16-bit PCM samples
+  let sum = 0;
+  const samples = buffer.length / 2; // 16-bit = 2 bytes per sample
+
+  for (let i = 0; i < buffer.length; i += 2) {
+    // Read 16-bit signed integer (little-endian)
+    const sample = (buffer[i + 1] << 8) | buffer[i];
+    const signed = sample > 32767 ? sample - 65536 : sample;
+    sum += signed * signed;
+  }
+
+  const rms = Math.sqrt(sum / samples);
+  // Apply gain boost for better visualization (speech is typically quieter than max volume)
+  // Use logarithmic scaling to handle wide dynamic range
+  const normalized = Math.min(100, (rms / 32768) * 1000); // 5x boost from 200 to 1000
+  return normalized;
+};
 
 export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -57,10 +57,10 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
   const [error, setError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState<number>(0);
 
-  const recordingRef = useRef<Audio.Recording | null>(null);
   const onAudioDataRef = useRef<((pcmBuffer: Uint8Array) => void) | null>(null);
-  const streamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef<boolean>(true);
+  const audioLevelIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioLevelRef = useRef<number>(0); // Store latest audio level in ref
 
   // Safe state setter
   const setStateSafe = useCallback(<T,>(setter: (v: T) => void, val: T) => {
@@ -79,18 +79,6 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
         );
         return false;
       }
-
-      // Configure audio mode for recording
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-        interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-        staysActiveInBackground: true,
-      });
-
       return true;
     } catch (err) {
       console.error('[PhoneAudioRecorder] Permission error:', err);
@@ -98,20 +86,72 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
     }
   }, []);
 
-  // Convert base64 audio data to Uint8Array
-  const base64ToUint8Array = useCallback((base64String: string): Uint8Array => {
-    try {
-      const binaryString = base64.decode(base64String);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
-    } catch (err) {
-      console.error('[PhoneAudioRecorder] Base64 decode error:', err);
-      return new Uint8Array(0);
+  // Store data handler ref so we can remove it
+  const dataHandlerRef = useRef<((data: string) => void) | null>(null);
+
+  // Initialize audio recorder
+  const initializeRecorder = useCallback(() => {
+    console.log('[PhoneAudioRecorder] Initializing audio recorder with options:', AUDIO_OPTIONS);
+
+    // Check if native module is available
+    if (!AudioRecord || typeof AudioRecord.init !== 'function') {
+      throw new Error('AudioRecord native module not available - did you rebuild the app?');
     }
-  }, []);
+
+    // Remove old listener if exists
+    if (dataHandlerRef.current) {
+      console.log('[PhoneAudioRecorder] Removing old audio data listener');
+      try {
+        AudioRecord.removeListener('data', dataHandlerRef.current);
+      } catch (e) {
+        console.warn('[PhoneAudioRecorder] Failed to remove old listener:', e);
+      }
+    }
+
+    AudioRecord.init(AUDIO_OPTIONS);
+
+    // Set up data callback - this receives real PCM audio data
+    let chunkCount = 0;
+    const dataHandler = (data: string) => {
+      chunkCount++;
+      if (chunkCount === 1 || chunkCount % 50 === 0) {
+        console.log(`[PhoneAudioRecorder] Received audio chunk #${chunkCount}, size: ${data.length} bytes (base64)`);
+      }
+
+      if (!onAudioDataRef.current) {
+        console.warn('[PhoneAudioRecorder] No callback set, discarding audio data');
+        return;
+      }
+
+      try {
+        // Convert base64 PCM data to Uint8Array
+        const binaryString = atob(data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        if (chunkCount === 1) {
+          console.log(`[PhoneAudioRecorder] First chunk decoded: ${bytes.length} bytes PCM`);
+        }
+
+        // Send real audio data to WebSocket
+        onAudioDataRef.current(bytes);
+
+        // Calculate and update audio level for visualization
+        const level = calculateAudioLevel(bytes);
+        audioLevelRef.current = level;
+      } catch (err) {
+        console.error('[PhoneAudioRecorder] Error processing audio data:', err);
+      }
+    };
+
+    // Store handler ref and register listener
+    dataHandlerRef.current = dataHandler;
+    AudioRecord.on('data', dataHandler);
+
+    console.log('[PhoneAudioRecorder] Audio recorder initialized with new listener');
+  }, [setStateSafe]);
 
   // Start recording
   const startRecording = useCallback(async (onAudioData: (pcmBuffer: Uint8Array) => void): Promise<void> => {
@@ -132,66 +172,21 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
 
       console.log('[PhoneAudioRecorder] Starting audio recording...');
 
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(RECORDING_OPTIONS);
+      // Initialize recorder with callback
+      initializeRecorder();
 
-      // Enable metering for audio level visualization - MUST be called before starting
-      await recording.setProgressUpdateInterval(STREAM_INTERVAL_MS);
-
-      // Set up status update callback for audio levels
-      recording.setOnRecordingStatusUpdate((status) => {
-        if (status.isRecording) {
-          if (status.metering !== undefined) {
-            // Convert dB to 0-100 range (dB values are typically -160 to 0)
-            // -60 dB is silence, 0 dB is max, so we normalize from -60 to 0
-            const normalized = Math.max(0, Math.min(100, ((status.metering + 60) / 60) * 100));
-            setStateSafe(setAudioLevel, normalized);
-          } else {
-            // Metering not available - generate simulated level based on duration changes
-            // This provides visual feedback even when metering isn't supported
-            const simulatedLevel = 20 + Math.random() * 30; // 20-50 range
-            setStateSafe(setAudioLevel, simulatedLevel);
-          }
-        }
-      });
-
-      await recording.startAsync();
-      recordingRef.current = recording;
+      // Start recording
+      AudioRecord.start();
 
       setStateSafe(setIsRecording, true);
       setStateSafe(setIsInitializing, false);
 
-      // Start streaming interval - periodically get audio data
-      // Note: expo-av doesn't support real-time streaming callbacks,
-      // so we need to use a different approach for streaming.
-      // For real-time streaming, we'll simulate periodic audio chunks.
-      streamIntervalRef.current = setInterval(async () => {
-        if (!recordingRef.current || !onAudioDataRef.current) return;
+      // Start interval to sync ref audioLevel to state (updates React components)
+      audioLevelIntervalRef.current = setInterval(() => {
+        setAudioLevel(audioLevelRef.current);
+      }, 50); // Update state 20 times per second
 
-        try {
-          const status = await recordingRef.current.getStatusAsync();
-          if (status.isRecording && status.durationMillis > 0) {
-            // Generate a placeholder PCM buffer to indicate audio is being recorded
-            // In a production app, you'd use a native module for real-time PCM streaming
-            // For now, we'll send periodic heartbeat signals
-            const durationBytes = Math.floor(
-              (STREAM_INTERVAL_MS / 1000) * 16000 * 2 // samples per interval * 2 bytes per sample
-            );
-            const silenceBuffer = new Uint8Array(durationBytes);
-            // Fill with low-level noise to indicate recording
-            for (let i = 0; i < silenceBuffer.length; i += 2) {
-              const sample = Math.floor(Math.random() * 100) - 50; // Very low level noise
-              silenceBuffer[i] = sample & 0xff;
-              silenceBuffer[i + 1] = (sample >> 8) & 0xff;
-            }
-            onAudioDataRef.current(silenceBuffer);
-          }
-        } catch (err) {
-          console.error('[PhoneAudioRecorder] Stream interval error:', err);
-        }
-      }, STREAM_INTERVAL_MS);
-
-      console.log('[PhoneAudioRecorder] Recording started successfully');
+      console.log('[PhoneAudioRecorder] Recording started successfully - streaming real PCM audio data');
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start recording';
       console.error('[PhoneAudioRecorder] Start recording error:', errorMessage);
@@ -200,22 +195,23 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
       onAudioDataRef.current = null;
       throw new Error(errorMessage);
     }
-  }, [isRecording, requestPermissions, setStateSafe]);
+  }, [isRecording, requestPermissions, initializeRecorder, setStateSafe]);
 
   // Stop recording
   const stopRecording = useCallback(async (): Promise<void> => {
     console.log('[PhoneAudioRecorder] Stopping recording...');
 
-    // Clear streaming interval
-    if (streamIntervalRef.current) {
-      clearInterval(streamIntervalRef.current);
-      streamIntervalRef.current = null;
+    // Stop audio level sync interval
+    if (audioLevelIntervalRef.current) {
+      clearInterval(audioLevelIntervalRef.current);
+      audioLevelIntervalRef.current = null;
     }
 
     onAudioDataRef.current = null;
+    audioLevelRef.current = 0;
     setStateSafe(setAudioLevel, 0);
 
-    if (!recordingRef.current) {
+    if (!isRecording) {
       console.log('[PhoneAudioRecorder] No active recording');
       setStateSafe(setIsRecording, false);
       setStateSafe(setIsInitializing, false);
@@ -223,35 +219,48 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
     }
 
     try {
-      await recordingRef.current.stopAndUnloadAsync();
+      // Stop recording
+      await AudioRecord.stop();
       console.log('[PhoneAudioRecorder] Recording stopped');
     } catch (err) {
-      const errorMessage = (err as Error).message || '';
-      if (!errorMessage.includes('not active') && !errorMessage.includes('not recording')) {
-        console.error('[PhoneAudioRecorder] Stop recording error:', err);
-        setStateSafe(setError, 'Failed to stop recording');
-      } else {
-        console.log('[PhoneAudioRecorder] Recording was already inactive');
-      }
+      console.error('[PhoneAudioRecorder] Stop recording error:', err);
+      setStateSafe(setError, 'Failed to stop recording');
     }
 
-    recordingRef.current = null;
     setStateSafe(setIsRecording, false);
     setStateSafe(setIsInitializing, false);
-  }, [setStateSafe]);
+  }, [isRecording, setStateSafe]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount ONLY (empty deps = runs once, cleanup on unmount)
   useEffect(() => {
     return () => {
+      console.log('[PhoneAudioRecorder] Component unmounting, cleaning up...');
       mountedRef.current = false;
-      if (streamIntervalRef.current) {
-        clearInterval(streamIntervalRef.current);
+
+      if (audioLevelIntervalRef.current) {
+        clearInterval(audioLevelIntervalRef.current);
+        audioLevelIntervalRef.current = null;
       }
-      if (recordingRef.current) {
-        recordingRef.current.stopAndUnloadAsync().catch(() => {});
+
+      // Remove audio data listener
+      if (dataHandlerRef.current) {
+        try {
+          AudioRecord.removeListener('data', dataHandlerRef.current);
+        } catch (e) {
+          // removeListener might not exist on all versions
+          console.log('[PhoneAudioRecorder] Note: removeListener not available');
+        }
+        dataHandlerRef.current = null;
+      }
+
+      // Stop recording if active (react-native-audio-record is global)
+      try {
+        AudioRecord.stop();
+      } catch (e) {
+        // Ignore if not recording
       }
     };
-  }, []);
+  }, []); // Empty deps = cleanup only on unmount
 
   return {
     isRecording,
