@@ -1,6 +1,6 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, AlertTriangle } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -25,7 +25,7 @@ export default function Layout() {
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
   const { getSetupLabel } = useWizard()
-  const { isConnected: isChronicleConnected, recording } = useChronicle()
+  const { isConnected: isChronicleConnected, isCheckingConnection: isChronicleChecking, connectionError: chronicleError, recording } = useChronicle()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
@@ -174,6 +174,21 @@ export default function Layout() {
 
             {/* Header Actions */}
             <div className="flex items-center space-x-1">
+              {/* Chronicle Service Status Warning - show when not connected */}
+              {!isChronicleChecking && !isChronicleConnected && (
+                <Link
+                  to="/wizard/quickstart"
+                  className="flex items-center space-x-2 px-3 py-2 rounded-lg font-medium transition-all bg-red-600/20 hover:bg-red-600/30 border border-red-500/50"
+                  title={chronicleError || 'Chronicle service is not running'}
+                  data-testid="chronicle-error-indicator"
+                >
+                  <AlertTriangle className="h-4 w-4 text-red-400" />
+                  <span className="hidden sm:inline text-sm text-red-400">
+                    Chronicle Down
+                  </span>
+                </Link>
+              )}
+
               {/* Chronicle Record Button - only show when connected */}
               {isChronicleConnected && (
                 <button

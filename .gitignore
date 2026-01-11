@@ -178,3 +178,4 @@ tests/
 
 # Compose overrides
 compose/speaker-compose.yaml
+config/tailscale-serve.json
