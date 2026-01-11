@@ -715,7 +715,7 @@ async def get_mobile_connection_qr(
         config = get_settings_store()
         api_port = config.get_sync("network.backend_public_port") or 8000
         final_hostname = hostname or get_tailscale_hostname()
-        
+
         # Build full API URL for leader info endpoint
         api_url = f"https://{final_hostname}/api/unodes/leader/info"
 
@@ -893,6 +893,162 @@ async def clear_tailscale_auth(
     except Exception as e:
         logger.error(f"Error clearing Tailscale auth: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to clear auth: {str(e)}")
+
+
+@router.post("/container/reset")
+async def reset_tailscale(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Complete Tailscale reset - returns everything to defaults.
+
+    This performs a comprehensive cleanup:
+    1. Clears all Tailscale Serve routes
+    2. Removes certificates
+    3. Logs out from Tailscale
+    4. Stops and removes the container
+    5. Deletes the state volume
+    6. Removes Tailscale configuration files
+
+    Note: The machine will still appear in your Tailscale admin panel
+    until you manually delete it at https://login.tailscale.com/admin/machines
+    """
+    try:
+        container_name = get_tailscale_container_name()
+        volume_name = get_tailscale_volume_name()
+
+        results = {
+            "routes_cleared": False,
+            "certs_removed": False,
+            "auth_cleared": False,
+            "config_removed": False
+        }
+        errors = []
+
+        # Step 1: Clear all Tailscale Serve routes
+        try:
+            container = docker_client.containers.get(container_name)
+            if container.status == 'running':
+                logger.info("Clearing Tailscale Serve routes...")
+                result = container.exec_run("tailscale serve reset", demux=False)
+                if result.exit_code == 0:
+                    logger.info("Routes cleared successfully")
+                    results["routes_cleared"] = True
+                else:
+                    output = result.output.decode() if result.output else ""
+                    logger.warning(f"Failed to clear routes: {output}")
+                    errors.append(f"Routes: {output}")
+        except docker.errors.NotFound:
+            logger.info("Container not found, skipping route clear")
+            results["routes_cleared"] = True  # No container = no routes
+        except Exception as e:
+            logger.warning(f"Could not clear routes: {e}")
+            errors.append(f"Routes: {str(e)}")
+
+        # Step 2: Remove certificates
+        try:
+            import glob
+            cert_files = glob.glob(str(CERTS_DIR / "*.crt")) + glob.glob(str(CERTS_DIR / "*.key"))
+            for cert_file in cert_files:
+                try:
+                    Path(cert_file).unlink()
+                    logger.info(f"Removed certificate file: {cert_file}")
+                except Exception as e:
+                    logger.warning(f"Could not remove {cert_file}: {e}")
+            results["certs_removed"] = True
+        except Exception as e:
+            logger.warning(f"Could not remove certificates: {e}")
+            errors.append(f"Certs: {str(e)}")
+
+        # Step 3: Logout and clear auth (reuse existing logic)
+        try:
+            container = docker_client.containers.get(container_name)
+            if container.status == 'running':
+                logger.info("Logging out from Tailscale...")
+                result = container.exec_run("tailscale logout", demux=False)
+                output = result.output.decode() if result.output else ""
+                if result.exit_code == 0:
+                    logger.info("Successfully logged out from Tailscale")
+                else:
+                    logger.warning(f"Logout returned exit code {result.exit_code}: {output}")
+        except docker.errors.NotFound:
+            logger.info("Container not found, skipping logout")
+        except Exception as e:
+            logger.warning(f"Could not logout: {e}")
+            errors.append(f"Logout: {str(e)}")
+
+        # Step 4: Stop and remove container
+        try:
+            container = docker_client.containers.get(container_name)
+            logger.info(f"Stopping and removing container {container_name}...")
+            container.stop(timeout=5)
+            container.remove(force=True)
+            logger.info("Container removed successfully")
+        except docker.errors.NotFound:
+            logger.info("Container not found, already removed")
+        except Exception as e:
+            logger.warning(f"Could not remove container: {e}")
+            errors.append(f"Container: {str(e)}")
+
+        await asyncio.sleep(1)
+
+        # Step 5: Delete the volume
+        try:
+            volume = docker_client.volumes.get(volume_name)
+            logger.info(f"Removing volume {volume_name}...")
+            volume.remove(force=True)
+            logger.info("Volume removed successfully")
+            results["auth_cleared"] = True
+        except docker.errors.NotFound:
+            logger.info("Volume not found, already cleared")
+            results["auth_cleared"] = True
+        except Exception as e:
+            logger.warning(f"Could not remove volume: {e}")
+            errors.append(f"Volume: {str(e)}")
+
+        # Step 6: Remove Tailscale configuration files
+        try:
+            config_files = [
+                "/config/tailscale.yaml",
+                "/config/tailscale-serve.json",
+                "/config/tailscale-serve-commands.sh"
+            ]
+            for config_file in config_files:
+                try:
+                    if os.path.exists(config_file):
+                        os.remove(config_file)
+                        logger.info(f"Removed config file: {config_file}")
+                except Exception as e:
+                    logger.warning(f"Could not remove {config_file}: {e}")
+            results["config_removed"] = True
+        except Exception as e:
+            logger.warning(f"Could not remove config files: {e}")
+            errors.append(f"Config: {str(e)}")
+
+        # Build response message
+        success_count = sum(results.values())
+        total_steps = len(results)
+
+        if success_count == total_steps:
+            status = "success"
+            message = "Tailscale completely reset. All routes, certificates, auth, and config removed. Start fresh from the beginning."
+        elif success_count > 0:
+            status = "partial"
+            message = f"Partially reset ({success_count}/{total_steps} steps). Errors: {'; '.join(errors)}"
+        else:
+            status = "failed"
+            message = f"Reset failed. Errors: {'; '.join(errors)}"
+
+        return {
+            "status": status,
+            "message": message,
+            "details": results,
+            "errors": errors if errors else None,
+            "note": "Manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines"
+        }
+
+    except Exception as e:
+        logger.error(f"Error resetting Tailscale: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to reset Tailscale: {str(e)}")
 
 
 @router.post("/container/start")

@@ -439,17 +439,18 @@ async def get_leader_info():
     chronicle_service = compose_registry.get_service_by_name("chronicle-backend")
     chronicle_route = chronicle_service.route_path if chronicle_service else None
 
-    # Build Chronicle API URL
+    # Build Chronicle API URL using generic proxy pattern (per docs/IMPLEMENTATION-SUMMARY.md)
     chronicle_api_url = None
-    if tailscale_hostname and chronicle_route:
-        chronicle_api_url = f"https://{tailscale_hostname}{chronicle_route}"
+    if tailscale_hostname:
+        chronicle_api_url = f"https://{tailscale_hostname}/api/services/chronicle-backend/proxy"
 
-    # Build WebSocket URLs from Chronicle's route_path
+    # Build WebSocket URLs - these use direct Tailscale routes (no service prefix)
+    # The /ws_pcm and /ws_omi routes are configured directly in Tailscale Serve
     ws_pcm_url = None
     ws_omi_url = None
-    if tailscale_hostname and chronicle_route:
-        ws_pcm_url = f"wss://{tailscale_hostname}{chronicle_route}/ws_pcm"
-        ws_omi_url = f"wss://{tailscale_hostname}{chronicle_route}/ws_omi"
+    if tailscale_hostname:
+        ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
+        ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
 
     services: List[ServiceDeployment] = []
     for unode in unodes:
@@ -488,11 +489,12 @@ async def get_leader_info():
                     external_url = f"https://{tailscale_hostname}{route_path}"
 
             # Add WebSocket URLs for chronicle service (legacy support)
+            # These use direct Tailscale routes (no service prefix)
             service_ws_pcm_url = None
             service_ws_omi_url = None
-            if service_name == "chronicle-backend" and tailscale_hostname and route_path:
-                service_ws_pcm_url = f"wss://{tailscale_hostname}{route_path}/ws_pcm"
-                service_ws_omi_url = f"wss://{tailscale_hostname}{route_path}/ws_omi"
+            if service_name == "chronicle-backend" and tailscale_hostname:
+                service_ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
+                service_ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
 
             services.append(ServiceDeployment(
                 name=service_name,

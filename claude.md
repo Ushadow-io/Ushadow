@@ -2,6 +2,16 @@
 - There may be multiple environments running simultaneously using different worktrees. To determine the corren environment, you can get port numbers and env name from the root .env file.
 - When refactoring module names, run `grep -r "old_module_name" .` before committing to catch all remaining references (especially entry points like `main.py`). Use `__init__.py` re-exports for backward compatibility.
 
+## Service Integration
+
+**CRITICAL**: Before adding any service integration endpoints, read `docs/SERVICE-INTEGRATION-CHECKLIST.md`.
+
+- ushadow uses a **generic proxy** at `/api/services/{name}/proxy/{path}` that automatically forwards all requests
+- **DO NOT** add custom service endpoints unless absolutely necessary (transformation, aggregation, special auth)
+- Always check swagger docs first: `http://localhost:${BACKEND_PORT}/docs`
+- Test if the generic proxy already works before writing custom code
+- Service cards have an "API" button to view each service's swagger documentation
+
 ## Frontend Testing: data-testid and Playwright POM
 
 ### Test ID Conventions
