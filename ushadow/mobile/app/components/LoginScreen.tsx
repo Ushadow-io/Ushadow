@@ -11,7 +11,7 @@
  * - Returns JWT token valid for both ushadow and Chronicle services
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -25,7 +25,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
-import { saveAuthToken, saveApiUrl } from '../utils/authStorage';
+import { saveAuthToken, saveApiUrl, getDefaultServerUrl, setDefaultServerUrl } from '../utils/authStorage';
 
 interface LoginScreenProps {
   visible: boolean;
@@ -42,11 +42,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 }) => {
   // Server URL format: https://{tailscale-host}
   // Login will POST to {serverUrl}/api/auth/login
-  const [apiUrl, setApiUrl] = useState(initialApiUrl || 'https://blue.spangled-kettle.ts.net');
+  const [apiUrl, setApiUrl] = useState(initialApiUrl || '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveAsDefault, setSaveAsDefault] = useState(false);
+
+  // Load the default server URL when modal opens
+  useEffect(() => {
+    if (visible && !initialApiUrl) {
+      getDefaultServerUrl().then((defaultUrl) => {
+        setApiUrl(defaultUrl);
+      });
+    }
+  }, [visible, initialApiUrl]);
 
   const handleLogin = async () => {
     if (!apiUrl.trim() || !email.trim() || !password.trim()) {
@@ -102,9 +112,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       await saveAuthToken(token);
       await saveApiUrl(baseUrl);
 
+      // Optionally save as default server URL
+      if (saveAsDefault) {
+        await setDefaultServerUrl(baseUrl);
+        console.log('[Login] Saved as default server URL');
+      }
+
       // Clear form
       setEmail('');
       setPassword('');
+      setSaveAsDefault(false);
 
       // Notify parent
       onLoginSuccess(token, baseUrl);
@@ -162,6 +179,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 keyboardType="url"
                 testID="login-api-url"
               />
+              {/* Save as default checkbox */}
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setSaveAsDefault(!saveAsDefault)}
+                testID="login-save-default"
+              >
+                <View style={[styles.checkbox, saveAsDefault && styles.checkboxChecked]}>
+                  {saveAsDefault && <Text style={styles.checkmark}>✓</Text>}
+                </View>
+                <Text style={styles.checkboxLabel}>Save as default server</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Email */}
@@ -290,6 +318,34 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     color: theme.textPrimary,
     fontSize: fontSize.base,
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: theme.textMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  checkboxChecked: {
+    backgroundColor: theme.primaryButton,
+    borderColor: theme.primaryButton,
+  },
+  checkmark: {
+    color: theme.primaryButtonText,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  checkboxLabel: {
+    fontSize: fontSize.sm,
+    color: theme.textSecondary,
   },
   errorContainer: {
     backgroundColor: colors.error.bgSolid,

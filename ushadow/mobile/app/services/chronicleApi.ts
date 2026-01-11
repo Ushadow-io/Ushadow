@@ -4,8 +4,9 @@
  * API client for fetching conversations and memories from the Chronicle backend.
  */
 
-import { getAuthToken, getApiUrl } from '../utils/authStorage';
+import { getAuthToken, getApiUrl, getDefaultServerUrl } from '../utils/authStorage';
 import { getActiveUnode } from '../utils/unodeStorage';
+import AppConfig from '../config';
 
 // Types matching Chronicle backend responses
 export interface Conversation {
@@ -101,10 +102,11 @@ async function getChronicleApiUrl(): Promise<string> {
     return chronicleUrl;
   }
 
-  // Default fallback
-  console.log('[ChronicleAPI] Using default Chronicle generic proxy');
-  return 'https://blue.spangled-kettle.ts.net/api/services/chronicle-backend/proxy';
-}
+  // Default fallback - use configured default server URL
+  const defaultUrl = await getDefaultServerUrl();
+  console.log(`[ChronicleAPI] Using default Chronicle generic proxy: ${defaultUrl}`);
+  return `${defaultUrl}/api/services/chronicle-backend/proxy`;
+e}
 
 /**
  * Get the auth token from active UNode or global storage.
