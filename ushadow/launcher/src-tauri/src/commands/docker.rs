@@ -236,14 +236,20 @@ pub async fn restart_infrastructure(state: State<'_, AppState>) -> Result<String
 
 /// Start a specific environment by name
 #[tauri::command]
-pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> Result<String, String> {
-    eprintln!("DEBUG: start_environment called for env_name = {}", env_name);
-    
+pub async fn start_environment(state: State<'_, AppState>, env_name: String, env_path: Option<String>) -> Result<String, String> {
+    eprintln!("\n[start_env] ========================================");
+    eprintln!("[start_env] Starting environment: {}", env_name);
+    eprintln!("[start_env] ========================================");
+
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
-    
-    eprintln!("DEBUG: project_root from state = {}", project_root);
+
+    // Use env_path if provided (for worktrees), otherwise use project_root
+    let working_dir = env_path.unwrap_or_else(|| project_root.clone());
+
+    eprintln!("[start_env] Project root: {}", project_root);
+    eprintln!("[start_env] Working directory: {}", working_dir);
 
     // Find all stopped containers for this environment by name pattern
     let pattern = if env_name == "default" || env_name == "ushadow" {
@@ -287,10 +293,11 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
         })
         .collect();
 
-    eprintln!("DEBUG: Matched stopped containers for '{}': {:?}", env_name, containers);
+    eprintln!("[start_env] Found {} stopped containers: {:?}", containers.len(), containers);
 
     // If no stopped containers found, check if ANY containers exist for this env
     if containers.is_empty() {
+        eprintln!("[start_env] No stopped containers, checking for running containers...");
         // Check for running containers
         let output = shell_command("docker ps --format '{{.Names}}'")
             .output()
@@ -323,32 +330,40 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
                 })
                 .collect();
 
-            eprintln!("DEBUG: Matched running containers for '{}': {:?}", env_name, running);
+            eprintln!("[start_env] Found {} running containers: {:?}", running.len(), running);
 
             if !running.is_empty() {
-                eprintln!("DEBUG: Environment already running, returning early");
-                return Ok(format!("Environment '{}' is already running ({} containers)", env_name, running.len()));
+                eprintln!("[start_env] Environment already running - nothing to do");
+                return Ok(format!("Environment '{}' is already running ({} containers: {})",
+                    env_name, running.len(), running.join(", ")));
             }
         }
 
         // No containers exist - need to build and create them
-        eprintln!("DEBUG: No containers found (stopped or running), running setup");
+        eprintln!("[start_env] No containers exist - initializing environment");
 
-        // Find available ports (default: 8000 for backend, 3000 for webui)
-        let (backend_port, _webui_port) = find_available_ports(8000, 3000);
-        let port_offset = backend_port - 8000;
+        // Calculate port offset from environment name to avoid conflicts
+        // Hash the env name to get a deterministic offset
+        let port_offset = if &env_name == "ushadow" || env_name.is_empty() {
+            0
+        } else {
+            // Simple hash: sum ASCII values and mod by reasonable range
+            let hash: u32 = env_name.bytes().map(|b| b as u32).sum();
+            ((hash % 50) * 10) as u16  // Gives offsets: 0, 10, 20, ... 490
+        };
 
         let mut log_messages = Vec::new();
 
-        log_messages.push(format!("========== RUNNING SETUP =========="));
-        log_messages.push(format!("Working directory: {}", project_root));
-        log_messages.push(format!("ENV_NAME={}, PORT_OFFSET={}", env_name, port_offset));
+        log_messages.push(format!("========== INITIALIZING ENVIRONMENT =========="));
+        log_messages.push(format!("Working directory: {}", working_dir));
+        log_messages.push(format!("ENV_NAME={}", env_name));
+        log_messages.push(format!("PORT_OFFSET={} (calculated from env name hash)", port_offset));
 
         // Install uv if needed
         let install_script = if cfg!(target_os = "windows") {
-            std::path::Path::new(&project_root).join("scripts/install-uv.ps1")
+            std::path::Path::new(&working_dir).join("scripts/install-uv.ps1")
         } else {
-            std::path::Path::new(&project_root).join("scripts/install-uv.sh")
+            std::path::Path::new(&working_dir).join("scripts/install-uv.sh")
         };
 
         log_messages.push(format!("Checking for uv install script at: {}", install_script.display()));
@@ -360,13 +375,13 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
                 log_messages.push(format!("Executing: powershell -ExecutionPolicy Bypass -File \"{}\"", install_script.display()));
                 shell_command("powershell")
                     .args(["-ExecutionPolicy", "Bypass", "-File", install_script.to_str().unwrap()])
-                    .current_dir(&project_root)
+                    .current_dir(&working_dir)
                     .output()
             } else {
                 log_messages.push(format!("Executing: bash \"{}\"", install_script.display()));
                 shell_command("bash")
                     .arg(install_script.to_str().unwrap())
-                    .current_dir(&project_root)
+                    .current_dir(&working_dir)
                     .output()
             };
 
@@ -406,14 +421,17 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
             log_messages.push(format!("⚠ uv not found at: {}", uv_cmd));
         }
 
-        // Run setup with uv
-        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --quick --prod --skip-admin", uv_cmd));
+        // Run setup with uv in dev mode with calculated port offset
+        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick --skip-admin", uv_cmd));
 
-        let output = shell_command(&uv_cmd)
-            .args(["run", "--with", "pyyaml", "setup/run.py", "--quick", "--prod", "--skip-admin"])
-            .current_dir(&project_root)
-            .env("ENV_NAME", &env_name)
-            .env("PORT_OFFSET", port_offset.to_string())
+        // Build the full command string for shell execution
+        // Pass PORT_OFFSET for compatibility with both old and new setup scripts
+        let setup_command = format!(
+            "cd '{}' && ENV_NAME={} PORT_OFFSET={} {} run --with pyyaml setup/run.py --dev --quick --skip-admin",
+            working_dir, env_name, port_offset, uv_cmd
+        );
+
+        let output = shell_command(&setup_command)
             .output()
             .map_err(|e| {
                 let error_log = log_messages.join("\n");
@@ -460,21 +478,30 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String) -> 
     }
 
     // Containers exist and are stopped - just start them
-    eprintln!("DEBUG: Found stopped containers: {:?}", containers);
+    eprintln!("[start_env] Found {} stopped containers: {:?}", containers.len(), containers);
 
     let container_names = containers.join(" ");
     let start_command = format!("docker start {}", container_names);
+    eprintln!("[start_env] Starting containers: {}", start_command);
 
     let output = shell_command(&start_command)
         .output()
         .map_err(|e| format!("Failed to start containers (docker not found or not executable): {}", e))?;
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("[start_env] Start result - stdout: {}, stderr: {}", stdout, stderr);
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Start failed: {}", stderr));
+        return Err(format!("Failed to start containers: {}", stderr));
     }
 
-    Ok(format!("Environment '{}' started ({} containers)", env_name, containers.len()))
+    let started: Vec<&str> = stdout.lines().collect();
+    Ok(format!("Environment '{}' started: {} containers ({})",
+        env_name,
+        started.len(),
+        started.join(", ")
+    ))
 }
 
 /// Stop a specific environment by name

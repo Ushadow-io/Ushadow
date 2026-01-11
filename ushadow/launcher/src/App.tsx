@@ -6,6 +6,7 @@ import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
 import { EnvironmentsPanel } from './components/EnvironmentsPanel'
+import { FoldersPanel } from './components/FoldersPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
@@ -25,6 +26,8 @@ function App() {
     setSpoofedPrereq,
     projectRoot,
     setProjectRoot,
+    worktreesDir,
+    setWorktreesDir,
   } = useAppStore()
 
   // State
@@ -43,6 +46,8 @@ function App() {
   const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
+  const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
+  const [isResizing, setIsResizing] = useState(false)
 
   // Window focus detection for smart polling
   const isWindowFocused = useWindowFocus()
@@ -72,6 +77,35 @@ function App() {
     setLogs([])
     lastStateRef.current = ''
   }, [])
+
+  // Handle column resize
+  const handleMouseDown = useCallback(() => {
+    setIsResizing(true)
+  }, [])
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (isResizing) {
+      const newWidth = e.clientX - 16 // Account for padding
+      if (newWidth >= 250 && newWidth <= 600) {
+        setLeftColumnWidth(newWidth)
+      }
+    }
+  }, [isResizing])
+
+  const handleMouseUp = useCallback(() => {
+    setIsResizing(false)
+  }, [])
+
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+      }
+    }
+  }, [isResizing, handleMouseMove, handleMouseUp])
 
   // Apply spoofed values to prerequisites
   const getEffectivePrereqs = useCallback((real: Prerequisites | null): Prerequisites | null => {
@@ -430,13 +464,23 @@ function App() {
   }
 
   // Environment handlers
-  const handleStartEnv = async (envName: string) => {
+  const handleStartEnv = async (envName: string, explicitPath?: string) => {
     console.log(`DEBUG: handleStartEnv called for ${envName}`)
     setLoadingEnv(envName)
     log(`Starting ${envName}...`, 'step')
 
-    // Add to creating list to show starting feedback
-    setCreatingEnvs(prev => [...prev, { name: envName, status: 'starting' }])
+    // Use explicit path if provided, otherwise look up the environment
+    const envPath = explicitPath || discovery?.environments.find(e => e.name === envName)?.path || undefined
+
+    // Add to creating list to show starting feedback (only if not already in list)
+    setCreatingEnvs(prev => {
+      const alreadyExists = prev.some(e => e.name === envName)
+      if (alreadyExists) {
+        // Update existing entry
+        return prev.map(e => e.name === envName ? { ...e, status: 'starting' as const } : e)
+      }
+      return [...prev, { name: envName, status: 'starting' as const }]
+    })
 
     try {
       if (dryRunMode) {
@@ -487,11 +531,23 @@ function App() {
           }
         })
       } else {
-        console.log(`DEBUG: Calling tauri.startEnvironment(${envName})`)
-        const result = await tauri.startEnvironment(envName)
+        console.log(`DEBUG: Calling tauri.startEnvironment(${envName}, ${envPath})`)
+        const result = await tauri.startEnvironment(envName, envPath)
         console.log(`DEBUG: tauri.startEnvironment returned: ${result}`)
-        log(result, 'success')
-        await refreshDiscovery()
+        // Only log summary to activity log (full detail is in console/detail pane)
+        log(`✓ Environment ${envName} started successfully`, 'success')
+
+        // Initial refresh
+        await refreshDiscovery(true)
+
+        // Continue polling in background to show container health updates
+        // Don't await this - let it run in background
+        ;(async () => {
+          for (let i = 0; i < 6; i++) {
+            await new Promise(r => setTimeout(r, 2000))
+            await refreshDiscovery(true)
+          }
+        })()
       }
     } catch (err) {
       console.error(`DEBUG: handleStartEnv caught error:`, err)
@@ -503,10 +559,11 @@ function App() {
       setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
     } finally {
       setLoadingEnv(null)
-      // Remove from creating list after a short delay (to show completion)
+      // Keep showing "starting" status longer while containers are coming up
+      // Remove after containers should be healthy (polling runs for ~12s)
       setTimeout(() => {
         setCreatingEnvs(prev => prev.filter(e => e.name !== envName))
-      }, 500)
+      }, 15000) // 15 seconds to allow containers to fully start
     }
   }
 
@@ -544,7 +601,7 @@ function App() {
     }
   }
 
-  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string; webui_port: number | null; backend_port: number }) => {
+  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null }) => {
     const url = env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
@@ -628,36 +685,63 @@ function App() {
 
   const handleNewEnvWorktree = async (name: string, branch: string) => {
     setShowNewEnvDialog(false)
-    setIsLaunching(true)
-    log(`Creating worktree environment "${name}" on branch "${branch}"...`, 'step')
+
+    if (!worktreesDir) {
+      log('Worktrees directory not configured', 'error')
+      return
+    }
+
+    const envPath = `${worktreesDir}/${name}`
+
+    // Add to creating environments list
+    setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
+    log(`Creating worktree "${name}" from branch "${branch || 'main'}"...`, 'step')
 
     try {
-      // TODO: Implement worktree creation in Rust backend
       if (dryRunMode) {
         log(`[DRY RUN] Would create worktree "${name}" for branch "${branch}"`, 'warning')
+        setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting' } : e))
         await new Promise(r => setTimeout(r, 2000))
         log(`[DRY RUN] Worktree environment "${name}" created`, 'success')
       } else {
-        log(`Worktree functionality not yet implemented`, 'warning')
+        // Step 1: Create the git worktree
+        log(`Creating git worktree at ${envPath}...`, 'info')
+        const worktree = await tauri.createWorktree(projectRoot, worktreesDir, name, branch || undefined)
+        log(`✓ Worktree created at ${worktree.path}`, 'success')
+
+        // Step 2: Update status
+        setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting', path: worktree.path } : e))
+
+        // Step 3: Start the environment (run setup and start containers)
+        log(`Starting environment "${name}"...`, 'step')
+        await handleStartEnv(name, worktree.path)
+
+        log(`✓ Worktree environment "${name}" created and started!`, 'success')
       }
+
+      // Remove from creating list after success
+      setTimeout(() => {
+        setCreatingEnvs(prev => prev.filter(e => e.name !== name))
+      }, 15000)
+
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to create worktree`, 'error', false)
-      log(String(err), 'error', true)
-    } finally {
-      setIsLaunching(false)
+      log(`Failed to create worktree: ${err}`, 'error')
+      setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
     }
   }
 
-  // Project setup handler - just saves the path, doesn't clone yet
-  const handleProjectSetup = async (path: string) => {
+  // Project setup handler - saves paths, doesn't clone yet
+  const handleProjectSetup = async (path: string, worktreesPath: string) => {
     setShowProjectDialog(false)
 
     try {
-      // Save the project root
+      // Save the project root and worktrees directory
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
+      setWorktreesDir(worktreesPath)
       log(`Installation path set to ${path}`, 'success')
+      log(`Worktrees directory set to ${worktreesPath}`, 'info')
 
       // Check if repo already exists
       const status = await tauri.checkProjectDir(path)
@@ -921,7 +1005,11 @@ function App() {
   const effectivePrereqs = getEffectivePrereqs(prerequisites)
 
   return (
-    <div className="h-screen bg-surface-900 text-text-primary flex flex-col overflow-hidden" data-testid="launcher-app">
+    <div
+      className="h-screen bg-surface-900 text-text-primary flex flex-col overflow-hidden"
+      data-testid="launcher-app"
+      style={{ cursor: isResizing ? 'col-resize' : 'default' }}
+    >
       {/* Embedded View Overlay */}
       {embeddedView && (
         <EmbeddedView
@@ -1012,17 +1100,17 @@ function App() {
               </p>
             </div>
 
-            {/* Installation Path Display */}
+            {/* Project Folder Display */}
             <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
               <FolderOpen className="w-4 h-4 text-text-muted" />
-              <span className="text-text-muted">Installation:</span>
+              <span className="text-text-muted">Project folder:</span>
               <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
                 {projectRoot || 'Not set'}
               </span>
               <button
                 onClick={() => setShowProjectDialog(true)}
                 className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
-                title="Change installation location"
+                title="Change folder locations"
               >
                 <Pencil className="w-3.5 h-3.5" />
               </button>
@@ -1054,51 +1142,49 @@ function App() {
         ) : (
           /* Dev Mode - Two column layout */
           <div className="h-full flex flex-col gap-4">
-            {/* Ushadow Installation Settings Bar */}
-            <div className="flex items-center gap-3 px-3 py-2 bg-surface-800 rounded-lg" data-testid="repo-settings-bar">
-              <FolderOpen className="w-4 h-4 text-text-muted flex-shrink-0" />
-              <span className="text-xs text-text-muted">Ushadow installation:</span>
-              <span className="text-sm text-text-secondary truncate flex-1" title={projectRoot}>
-                {projectRoot || 'Not set'}
-              </span>
-              <button
-                onClick={() => setShowProjectDialog(true)}
-                className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
-                title="Change installation location"
-                data-testid="edit-repo-button"
+            <div className="flex-1 flex gap-0 overflow-hidden">
+              {/* Left Column - Folders, Prerequisites & Infrastructure */}
+              <div
+                className="flex flex-col gap-4 overflow-y-auto"
+                style={{ width: `${leftColumnWidth}px`, flexShrink: 0 }}
               >
-                <Pencil className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex-1 grid grid-cols-2 gap-4 overflow-hidden">
-              {/* Left Column - Prerequisites & Infrastructure */}
-              <div className="flex flex-col gap-4 overflow-y-auto">
+                <FoldersPanel
+                  projectRoot={projectRoot}
+                  worktreesDir={worktreesDir}
+                  onEditFolders={() => setShowProjectDialog(true)}
+                />
                 <PrerequisitesPanel
-                prerequisites={effectivePrereqs}
-                platform={platform}
-                isInstalling={isInstalling}
-                installingItem={installingItem}
-                onInstall={handleInstall}
-                onStartDocker={handleStartDocker}
-              />
-              <InfrastructurePanel
-                services={discovery?.infrastructure ?? []}
-                onStart={handleStartInfra}
-                onStop={handleStopInfra}
-                onRestart={handleRestartInfra}
-                isLoading={loadingInfra}
-              />
-            </div>
+                  prerequisites={effectivePrereqs}
+                  platform={platform}
+                  isInstalling={isInstalling}
+                  installingItem={installingItem}
+                  onInstall={handleInstall}
+                  onStartDocker={handleStartDocker}
+                />
+                <InfrastructurePanel
+                  services={discovery?.infrastructure ?? []}
+                  onStart={handleStartInfra}
+                  onStop={handleStopInfra}
+                  onRestart={handleRestartInfra}
+                  isLoading={loadingInfra}
+                />
+              </div>
+
+            {/* Resize handle */}
+            <div
+              className={`w-1 bg-surface-700 hover:bg-primary-500 cursor-col-resize transition-colors ${isResizing ? 'bg-primary-500' : ''}`}
+              onMouseDown={handleMouseDown}
+              style={{ userSelect: 'none' }}
+            />
 
             {/* Right Column - Environments */}
-              <div className="overflow-y-auto">
+              <div className="flex-1 overflow-y-auto pl-4">
                 <EnvironmentsPanel
                   environments={discovery?.environments ?? []}
                   creatingEnvs={creatingEnvs}
                   onStart={handleStartEnv}
                   onStop={handleStopEnv}
-                  onCreate={handleQuickLaunch}
+                  onCreate={() => setShowNewEnvDialog(true)}
                   onOpenInApp={handleOpenInApp}
                   onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
                   loadingEnv={loadingEnv}
@@ -1123,6 +1209,7 @@ function App() {
       <ProjectSetupDialog
         isOpen={showProjectDialog}
         defaultPath={projectRoot}
+        defaultWorktreesPath={worktreesDir}
         onClose={() => setShowProjectDialog(false)}
         onSetup={handleProjectSetup}
       />
