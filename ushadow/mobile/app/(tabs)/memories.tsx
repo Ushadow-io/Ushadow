@@ -21,8 +21,12 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
-import { searchMemories, fetchMemories, Memory } from '../services/chronicleApi';
-import { isAuthenticated } from '../utils/authStorage';
+import {
+  fetchMemories,
+  searchMemories,
+  type Memory,
+} from '../services/memoriesApi';
+import { isAuthenticated, getUserEmail } from '../utils/authStorage';
 
 export default function MemoriesScreen() {
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -51,9 +55,17 @@ export default function MemoriesScreen() {
         return;
       }
 
+      // Get user email for OpenMemory user_id
+      const userEmail = await getUserEmail();
+      if (!userEmail) {
+        setError('User email not found');
+        setMemories([]);
+        return;
+      }
+
       const response = query
-        ? await searchMemories(query, 100)
-        : await fetchMemories(100);
+        ? await searchMemories(userEmail, query, 100)
+        : await fetchMemories(userEmail, query, 1, 100);
 
       setMemories(response.memories);
       console.log(`[Memories] Loaded ${response.memories.length} memories`);
@@ -120,31 +132,29 @@ export default function MemoriesScreen() {
           <Ionicons name="bulb" size={16} color={colors.primary[400]} />
           <Text style={styles.cardDate}>{formatDate(item.created_at)}</Text>
         </View>
-        {item.score !== undefined && (
+        {item.state && (
           <View style={styles.scoreContainer}>
-            <Text style={[styles.scoreText, { color: getRelevanceColor(item.score) }]}>
-              {Math.round(item.score * 100)}%
+            <Text style={[styles.scoreText, { color: item.state === 'active' ? colors.success.default : theme.textMuted }]}>
+              {item.state}
             </Text>
           </View>
         )}
       </View>
 
-      <Text style={styles.memoryContent}>{item.content}</Text>
+      <Text style={styles.memoryContent}>{item.memory}</Text>
 
-      {item.source && (
+      {item.app_name && (
         <View style={styles.sourceContainer}>
-          <Ionicons name="link-outline" size={12} color={theme.textMuted} />
-          <Text style={styles.sourceText}>{item.source}</Text>
+          <Ionicons name="apps-outline" size={12} color={theme.textMuted} />
+          <Text style={styles.sourceText}>{item.app_name}</Text>
         </View>
       )}
 
-      {item.metadata && Object.keys(item.metadata).length > 0 && (
+      {item.categories && item.categories.length > 0 && (
         <View style={styles.metadataContainer}>
-          {Object.entries(item.metadata).slice(0, 3).map(([key, value]) => (
-            <View key={key} style={styles.metadataTag}>
-              <Text style={styles.metadataTagText}>
-                {key}: {String(value).slice(0, 20)}
-              </Text>
+          {item.categories.slice(0, 3).map((category) => (
+            <View key={category} style={styles.metadataTag}>
+              <Text style={styles.metadataTagText}>{category}</Text>
             </View>
           ))}
         </View>

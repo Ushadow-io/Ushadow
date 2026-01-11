@@ -96,7 +96,13 @@ const probeLeader = async (
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT);
 
-    const response = await fetch(`http://${ip}:${port}/health`, {
+    // Use HTTPS for Tailscale hostnames (.ts.net), HTTP for IP addresses
+    const protocol = ip.includes('.ts.net') ? 'https' : 'http';
+    const portSuffix = protocol === 'https' ? '' : `:${port}`;
+    const url = `${protocol}://${ip}${portSuffix}/health`;
+
+    console.log(`[Discovery] Probing leader at: ${url}`);
+    const response = await fetch(url, {
       method: 'GET',
       signal: controller.signal,
     });
@@ -120,17 +126,23 @@ const probeLeader = async (
 
 /**
  * Fetch full leader info from the API
- * @param urlOrIp - Either a full URL (https://...) or just the IP address
+ * @param urlOrIp - Either a full URL (https://...) or just the IP address or hostname
  * @param port - Port number (only used if urlOrIp is an IP)
  */
 const fetchLeaderInfoFromApi = async (
   urlOrIp: string,
   port: number = LEADER_PORT
 ): Promise<LeaderInfo | null> => {
-  // Use URL directly if provided, otherwise construct from IP:port
-  const url = urlOrIp.startsWith('http')
-    ? urlOrIp
-    : `http://${urlOrIp}:${port}/api/unodes/leader/info`;
+  // Use URL directly if provided, otherwise construct from IP/hostname:port
+  let url: string;
+  if (urlOrIp.startsWith('http')) {
+    url = urlOrIp;
+  } else {
+    // Use HTTPS for Tailscale hostnames (.ts.net), HTTP for IP addresses
+    const protocol = urlOrIp.includes('.ts.net') ? 'https' : 'http';
+    const portSuffix = protocol === 'https' ? '' : `:${port}`;
+    url = `${protocol}://${urlOrIp}${portSuffix}/api/unodes/leader/info`;
+  }
 
   try {
     const controller = new AbortController();
@@ -158,6 +170,24 @@ const fetchLeaderInfoFromApi = async (
 };
 
 const SCANNED_SERVER_KEY = 'USHADOW_SCANNED_SERVER';
+
+/**
+ * Helper to construct base API URL with correct protocol
+ */
+const buildApiUrl = (hostOrIp: string, port: number = LEADER_PORT): string => {
+  const protocol = hostOrIp.includes('.ts.net') ? 'https' : 'http';
+  const portSuffix = protocol === 'https' ? '' : `:${port}`;
+  return `${protocol}://${hostOrIp}${portSuffix}`;
+};
+
+/**
+ * Helper to construct WebSocket URL with correct protocol
+ */
+const buildWsUrl = (hostOrIp: string, port: number = LEADER_PORT, path: string = '/ws_pcm'): string => {
+  const protocol = hostOrIp.includes('.ts.net') ? 'wss' : 'ws';
+  const portSuffix = protocol === 'wss' ? '' : `:${port}`;
+  return `${protocol}://${hostOrIp}${portSuffix}${path}`;
+};
 
 export const useTailscaleDiscovery = (): UseDiscoveryResult => {
   const [isOnTailscale, setIsOnTailscale] = useState<boolean | null>(null);
@@ -265,18 +295,18 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
 
       if (info) {
         // Build DiscoveredLeader with info from API
-        // Use HTTPS URL from QR code if available
+        // Use HTTPS URL from QR code if available, otherwise construct with correct protocol
         const baseApiUrl = scannedServer.apiUrl
           ? scannedServer.apiUrl.replace('/api/unodes/leader/info', '')
-          : `http://${scannedServer.tailscaleIp}:${scannedServer.port}`;
+          : buildApiUrl(scannedServer.tailscaleIp, scannedServer.port);
         const discoveredLeader: DiscoveredLeader = {
           hostname: info.hostname || scannedServer.hostname,
           tailscaleIp: info?.tailscale_ip || scannedServer.tailscaleIp,
           apiUrl: baseApiUrl,
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || `ws://${scannedServer.tailscaleIp}:${scannedServer.port}/ws_pcm`,
-          wsPcmUrl: info?.ws_pcm_url || `ws://${scannedServer.tailscaleIp}:${scannedServer.port}/ws_pcm`,
-          wsOmiUrl: info?.ws_omi_url || `ws://${scannedServer.tailscaleIp}:${scannedServer.port}/ws_omi`,
+          streamUrl: info?.ws_pcm_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws_pcm'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws_pcm'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws_omi'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -353,18 +383,18 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
       if (info) {
 
         // Build DiscoveredLeader with info from API (or defaults)
-        // Use HTTPS URL from QR code, falling back to constructed HTTP URL
+        // Use HTTPS URL from QR code, falling back to constructed URL with correct protocol
         const baseApiUrl = data.api_url
           ? data.api_url.replace('/api/unodes/leader/info', '')
-          : `http://${data.ip}:${data.port}`;
+          : buildApiUrl(data.ip, data.port);
         const discoveredLeader: DiscoveredLeader = {
           hostname: info.hostname || data.hostname || 'leader',
           tailscaleIp: info?.tailscale_ip || data.ip,
           apiUrl: baseApiUrl,
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || `ws://${data.ip}:${data.port}/ws_pcm`,
-          wsPcmUrl: info?.ws_pcm_url || `ws://${data.ip}:${data.port}/ws_pcm`,
-          wsOmiUrl: info?.ws_omi_url || `ws://${data.ip}:${data.port}/ws_omi`,
+          streamUrl: info?.ws_pcm_url || buildWsUrl(data.ip, data.port, '/ws_pcm'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(data.ip, data.port, '/ws_pcm'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(data.ip, data.port, '/ws_omi'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -446,11 +476,11 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
         const discoveredLeader: DiscoveredLeader = {
           hostname: info?.hostname || result.hostname || host,
           tailscaleIp: info?.tailscale_ip || host,
-          apiUrl: `http://${host}:${port}`,
+          apiUrl: buildApiUrl(host, port),
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || `ws://${host}:${port}/ws_pcm`,
-          wsPcmUrl: info?.ws_pcm_url || `ws://${host}:${port}/ws_pcm`,
-          wsOmiUrl: info?.ws_omi_url || `ws://${host}:${port}/ws_omi`,
+          streamUrl: info?.ws_pcm_url || buildWsUrl(host, port, '/ws_pcm'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(host, port, '/ws_pcm'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(host, port, '/ws_omi'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -502,11 +532,11 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
         const discoveredLeader: DiscoveredLeader = {
           hostname: info?.hostname || result.hostname || 'leader',
           tailscaleIp: info?.tailscale_ip || ip,
-          apiUrl: `http://${ip}:${port}`,
+          apiUrl: buildApiUrl(ip, port),
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || `ws://${ip}:${port}/ws_pcm`,
-          wsPcmUrl: info?.ws_pcm_url || `ws://${ip}:${port}/ws_pcm`,
-          wsOmiUrl: info?.ws_omi_url || `ws://${ip}:${port}/ws_omi`,
+          streamUrl: info?.ws_pcm_url || buildWsUrl(ip, port, '/ws_pcm'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(ip, port, '/ws_pcm'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(ip, port, '/ws_omi'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -544,10 +574,12 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
       return null;
     }
 
-    const [ip, portStr] = leader.apiUrl.replace('http://', '').split(':');
+    // Extract host and port from apiUrl (handles both http:// and https://)
+    const urlWithoutProtocol = leader.apiUrl.replace(/^https?:\/\//, '');
+    const [host, portStr] = urlWithoutProtocol.split(':');
     const port = parseInt(portStr, 10) || LEADER_PORT;
 
-    const info = await fetchLeaderInfoFromApi(ip, port);
+    const info = await fetchLeaderInfoFromApi(host, port);
     if (info) {
       setLeaderInfo(info);
       // Update leader with new info

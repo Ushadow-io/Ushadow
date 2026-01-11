@@ -14,8 +14,8 @@ echo "🔐 Generating secrets..."
 # Change to project root
 cd "$PROJECT_ROOT"
 
-# Run Python script to generate secrets
-python3 - << 'EOF'
+# Run Python script to generate secrets (using uv to ensure pyyaml is available)
+uv run --with pyyaml python - << 'EOF'
 import secrets
 import sys
 import yaml

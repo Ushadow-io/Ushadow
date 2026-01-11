@@ -18,7 +18,7 @@ from typing import Any, Optional, List, Tuple, Dict
 
 from omegaconf import OmegaConf, DictConfig
 
-from src.config.secrets import SENSITIVE_PATTERNS, is_secret_key, mask_value
+from src.config.secrets import SENSITIVE_PATTERNS, is_secret_key, mask_value, mask_if_secret
 from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
@@ -189,9 +189,8 @@ class SettingsStore:
 
     Load order (later overrides earlier):
     1. config.defaults.yaml (general app settings)
-    2. default-services.yaml (provider selection, default services)
-    3. secrets.yaml (credentials - gitignored, for api_keys/passwords)
-    4. config_settings.yaml (runtime settings - gitignored, for preferences)
+    2. secrets.yaml (credentials - gitignored, for api_keys/passwords)
+    3. config.overrides.yaml (user modifications - gitignored)
     """
 
     def __init__(self, config_dir: Optional[Path] = None):
@@ -733,14 +732,14 @@ class SettingsStore:
                 # First try to resolve from settings
                 resolved = await self.get_by_env_var(env_name)
                 if resolved:
-                    logger.info(f"resolve_env_value: {env_name} -> {resolved} (from settings)")
+                    logger.info(f"resolve_env_value: {env_name} -> {mask_if_secret(env_name, resolved)} (from settings)")
                     return resolved
                 # Fall back to os.environ (e.g., from .env file)
                 env_value = os.environ.get(env_name)
                 if env_value:
-                    logger.info(f"resolve_env_value: {env_name} -> {env_value} (from os.environ)")
+                    logger.info(f"resolve_env_value: {env_name} -> {mask_if_secret(env_name, env_value)} (from os.environ)")
                     return env_value
-                logger.info(f"resolve_env_value: {env_name} -> {default_value} (fallback to default)")
+                logger.info(f"resolve_env_value: {env_name} -> {mask_if_secret(env_name, default_value) if default_value else 'None'} (fallback to default)")
             return default_value
         return None
 

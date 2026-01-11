@@ -12,6 +12,7 @@ the resolver:
 import logging
 from typing import Dict, List, Optional, Any
 
+from src.config.secrets import mask_if_secret
 from src.services.provider_registry import get_provider_registry
 from src.services.compose_registry import get_compose_registry
 from src.models.provider import Provider, EnvMap
@@ -82,12 +83,125 @@ class CapabilityResolver:
 
         return env
 
-    async def _resolve_capability(self, use: dict) -> Dict[str, str]:
+    async def resolve_for_instance(self, instance_id: str) -> Dict[str, str]:
+        """
+        Resolve all env vars for an instance or compose service, using its wiring configuration.
+
+        This method checks instance-level wiring before falling back to
+        global selected_providers.
+
+        Args:
+            instance_id: Instance identifier or compose service ID (e.g., "chronicle-compose:chronicle-backend")
+
+        Returns:
+            Dict of ENV_VAR_NAME -> value
+
+        Raises:
+            ValueError: If instance not found or required capability missing
+        """
+        from src.services.instance_manager import get_instance_manager
+        from src.services.compose_registry import get_compose_registry
+
+        instance_manager = get_instance_manager()
+        instance = instance_manager.get_instance(instance_id)
+
+        # If not an instance, check if it's a compose service
+        if not instance:
+            # Try to get compose service
+            registry = get_compose_registry()
+            compose_service = registry.get_service(instance_id)
+            if compose_service:
+                # Resolve capabilities for compose service using wiring
+                return await self._resolve_for_compose_service(compose_service, instance_id)
+            raise ValueError(f"Instance or service '{instance_id}' not found")
+
+        # Get the service config from the instance's template
+        service_config = self._load_service_config(instance.template_id)
+        if not service_config:
+            raise ValueError(
+                f"Service template '{instance.template_id}' not found for instance '{instance_id}'"
+            )
+
+        env: Dict[str, str] = {}
+        errors: List[str] = []
+
+        # Resolve each capability, passing the instance ID for wiring lookup
+        for use in service_config.get('uses', []):
+            try:
+                capability_env = await self._resolve_capability(use, instance_id)
+                env.update(capability_env)
+            except ValueError as e:
+                if use.get('required', True):
+                    errors.append(str(e))
+                else:
+                    logger.warning(f"Optional capability failed: {e}")
+
+        # Resolve service-specific config
+        for config_item in service_config.get('config', []):
+            try:
+                value = await self._resolve_config_item(config_item)
+                if value is not None:
+                    env[config_item['env_var']] = str(value)
+            except Exception as e:
+                logger.warning(f"Failed to resolve config {config_item.get('key')}: {e}")
+
+        if errors:
+            raise ValueError(
+                f"Instance '{instance_id}' has unresolved capabilities:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+        logger.info(f"Resolved {len(env)} env vars for instance '{instance_id}'")
+        return env
+
+    async def _resolve_for_compose_service(self, compose_service, service_id: str) -> Dict[str, str]:
+        """
+        Resolve env vars for a compose service using wiring.
+
+        Args:
+            compose_service: DiscoveredService from compose registry
+            service_id: Full service ID for wiring lookup (e.g., "chronicle-compose:chronicle-backend")
+
+        Returns:
+            Dict of ENV_VAR_NAME -> value
+        """
+        env: Dict[str, str] = {}
+        errors: List[str] = []
+
+        # Resolve each required capability using wiring
+        for capability in compose_service.requires:
+            try:
+                # Create a minimal "use" dict for _resolve_capability
+                use = {
+                    'capability': capability,
+                    'required': True,
+                    'env_mapping': {}  # Use default provider env var names
+                }
+                capability_env = await self._resolve_capability(use, service_id)
+                env.update(capability_env)
+            except ValueError as e:
+                errors.append(str(e))
+
+        if errors:
+            raise ValueError(
+                f"Service '{service_id}' has unresolved capabilities:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+        logger.info(f"Resolved {len(env)} env vars for compose service '{service_id}'")
+        return env
+
+    async def _resolve_capability(
+        self,
+        use: dict,
+        consumer_instance_id: Optional[str] = None
+    ) -> Dict[str, str]:
         """
         Resolve a single capability usage.
 
         Args:
             use: Dict with 'capability', 'required', 'env_mapping'
+            consumer_instance_id: Optional instance ID if resolving for an instance
 
         Returns:
             Dict of env vars for this capability
@@ -95,8 +209,8 @@ class CapabilityResolver:
         capability = use['capability']
         env_mapping = use.get('env_mapping', {})
 
-        # Get the selected provider for this capability
-        provider = await self._get_selected_provider(capability)
+        # Get the selected provider for this capability (and instance if applicable)
+        provider, provider_instance = await self._get_selected_provider(capability, consumer_instance_id)
         if not provider:
             raise ValueError(
                 f"No provider selected for capability '{capability}'. "
@@ -107,7 +221,8 @@ class CapabilityResolver:
         env: Dict[str, str] = {}
 
         for env_map in provider.env_maps:
-            value = await self._resolve_env_map(env_map)
+            # Pass provider_instance so we can check instance-specific config overrides
+            value = await self._resolve_env_map(env_map, provider_instance)
 
             if value is None:
                 if env_map.required:
@@ -129,22 +244,52 @@ class CapabilityResolver:
 
         return env
 
-    async def _get_selected_provider(self, capability: str) -> Optional[Provider]:
+    async def _get_selected_provider(
+        self,
+        capability: str,
+        consumer_instance_id: Optional[str] = None
+    ) -> tuple[Optional[Provider], Optional[any]]:
         """
         Get the provider selected for a capability.
 
-        Checks settings.selected_providers first, falls back to default
-        based on wizard_mode.
+        Resolution order:
+        1. Instance wiring (if consumer_instance_id provided)
+        2. Instance defaults (if consumer_instance_id provided)
+        3. settings.selected_providers
+        4. Default based on wizard_mode
+
+        Returns:
+            Tuple of (Provider, provider_instance)
+            - Provider: The provider template
+            - provider_instance: The specific instance if wired, None if using global config
         """
-        # Try to get explicit selection
+        # 1. Check instance wiring and defaults (if resolving for an instance)
+        if consumer_instance_id:
+            from src.services.instance_manager import get_instance_manager
+            instance_manager = get_instance_manager()
+            provider_instance = instance_manager.get_provider_for_capability(
+                consumer_instance_id, capability
+            )
+            if provider_instance:
+                # The instance's template_id is the provider ID
+                provider = self._provider_registry.get_provider(provider_instance.template_id)
+                if provider:
+                    logger.info(
+                        f"Using wired provider instance '{provider_instance.id}' "
+                        f"for {capability} (consumer={consumer_instance_id})"
+                    )
+                    # Return both provider template AND instance for config override
+                    return provider, provider_instance
+
+        # 2. Try to get explicit selection from settings
         selected = await self._settings.get(f"selected_providers.{capability}")
         if selected:
             provider = self._provider_registry.get_provider(selected)
             if provider:
-                return provider
+                return provider, None
             logger.warning(f"Selected provider '{selected}' not found for {capability}")
 
-        # Fall back to default based on wizard mode
+        # 3. Fall back to default based on wizard mode
         wizard_mode = await self._settings.get("wizard_mode", "quickstart")
         mode = "local" if wizard_mode == "local" else "cloud"
 
@@ -154,26 +299,53 @@ class CapabilityResolver:
                 f"Using default provider '{default_provider.id}' for {capability} "
                 f"(mode={mode})"
             )
-            return default_provider
+            return default_provider, None
 
-        return None
+        return None, None
 
-    async def _resolve_env_map(self, env_map) -> Optional[str]:
+    async def _resolve_env_map(self, env_map, provider_instance=None) -> Optional[str]:
         """
         Resolve an env mapping to its actual value.
 
         Priority:
-        1. Settings path lookup (user override)
-        2. Default value (provider's default)
+        1. Instance-specific config override (if provider_instance provided)
+        2. Settings path lookup (global config)
+        3. Default value (provider's default)
+
+        Args:
+            env_map: The environment map to resolve
+            provider_instance: Optional instance with config overrides
         """
-        # Try settings path first (user override)
+        # 1. Check instance-specific config override first
+        if provider_instance and hasattr(provider_instance, 'config'):
+            # instance.config is a Pydantic InstanceConfig model with values dict
+            config_values = provider_instance.config.values if provider_instance.config else {}
+            # The key in instance config matches the env_map.key (e.g., 'api_key')
+            if env_map.key in config_values:
+                value = config_values[env_map.key]
+                if value:
+                    logger.info(
+                        f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, str(value))} "
+                        f"(from instance '{provider_instance.id}' config override)"
+                    )
+                    return str(value)
+
+        # 2. Try settings path (global config)
         if env_map.settings_path:
             value = await self._settings.get(env_map.settings_path)
             if value:
+                logger.info(
+                    f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, str(value))} "
+                    f"(from global settings: {env_map.settings_path})"
+                )
                 return str(value)
 
-        # Fall back to provider's default
+        # 3. Fall back to provider's default
         if env_map.default is not None:
+            logger.info(
+                f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, env_map.default)} "
+                f"(using provider default)"
+            )
             return env_map.default
 
         return None

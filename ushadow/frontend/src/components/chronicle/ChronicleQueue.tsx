@@ -51,6 +51,7 @@ interface Jobs {
   queued: Job[]
   processing: Job[]
   completed: Job[]
+  failed?: Job[]  // Failed jobs may be separate or mixed with completed
 }
 
 interface ChronicleQueueProps {
@@ -254,12 +255,8 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
 
   // Initial fetch
   useEffect(() => {
-    if (chronicleAuthApi.isAuthenticated()) {
-      fetchData()
-    } else {
-      setLoading(false)
-      setError('Please log in to Chronicle to view the queue.')
-    }
+    // Auth is now handled automatically via ushadow proxy
+    fetchData()
   }, [fetchData])
 
   const cleanupStuckWorkers = async () => {
@@ -281,6 +278,52 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
       fetchData()
     } catch (err: any) {
       alert(`Failed to cleanup: ${err.message}`)
+    }
+  }
+
+  const flushFailedJobs = async () => {
+    if (!window.confirm('Clear all failed jobs? This cannot be undone.')) return
+    try {
+      // Use flush endpoint with 0 hours to clear all failed jobs regardless of age
+      await chronicleQueueApi.flushJobs(false, {
+        older_than_hours: 0,
+        statuses: ['failed']
+      })
+      alert('Failed jobs cleared successfully')
+      fetchData()
+    } catch (err: any) {
+      alert(`Failed to clear jobs: ${err.message}`)
+    }
+  }
+
+  const flushCompletedJobs = async () => {
+    if (!window.confirm('Clear all completed jobs? This cannot be undone.')) return
+    try {
+      // Use flush endpoint with 0 hours to clear all completed jobs regardless of age
+      await chronicleQueueApi.flushJobs(false, {
+        older_than_hours: 0,
+        statuses: ['completed']
+      })
+      alert('Completed jobs cleared successfully')
+      fetchData()
+    } catch (err: any) {
+      alert(`Failed to clear jobs: ${err.message}`)
+    }
+  }
+
+  const flushAllJobs = async () => {
+    if (!window.confirm('⚠️ WARNING: Clear ALL jobs (queued, processing, completed, failed)? This will stop all processing and cannot be undone!')) return
+    try {
+      // Use flush-all endpoint with both flags set to true
+      await chronicleQueueApi.flushJobs(true, {
+        confirm: true,
+        include_failed: true,
+        include_completed: true
+      })
+      alert('All jobs cleared successfully')
+      fetchData()
+    } catch (err: any) {
+      alert(`Failed to clear jobs: ${err.message}`)
     }
   }
 
@@ -347,23 +390,14 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
     )
   }
 
-  if (error && !chronicleAuthApi.isAuthenticated()) {
-    return (
-      <div data-testid="chronicle-queue-auth-required" className="text-center py-12">
-        <AlertCircle className="h-12 w-12 mx-auto mb-4 text-amber-500" />
-        <p className="text-neutral-600 dark:text-neutral-400 mb-4">{error}</p>
-        <button onClick={onAuthRequired} className="btn-primary">
-          Log in to Chronicle
-        </button>
-      </div>
-    )
-  }
-
   if (error) {
     return (
       <div data-testid="chronicle-queue-error" className="text-center py-12">
         <AlertCircle className="h-12 w-12 mx-auto mb-4 text-red-500" />
         <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
+        <div className="text-xs text-gray-500 dark:text-gray-400 mb-4 font-mono">
+          Check browser console (F12) for detailed error logs
+        </div>
         <button onClick={fetchData} className="btn-primary">Try Again</button>
       </div>
     )
@@ -978,8 +1012,16 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
       {/* Jobs List */}
       {jobs && (
         <div className="card">
-          <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-700">
+          <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 flex justify-between items-center">
             <h3 className="font-medium text-neutral-900 dark:text-neutral-100">Recent Jobs</h3>
+            <button
+              onClick={flushAllJobs}
+              className="btn-secondary text-xs flex items-center space-x-1 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30"
+              data-testid="flush-all-jobs"
+            >
+              <AlertTriangle className="h-3 w-3" />
+              <span>Clear All Jobs</span>
+            </button>
           </div>
           <div className="p-4 space-y-4">
             {/* Processing Jobs */}
@@ -1046,15 +1088,82 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
               </div>
             )}
 
+            {/* Failed Jobs */}
+            {(() => {
+              // Extract failed jobs from either the failed array or from completed with status === 'failed'
+              const failedJobs = jobs.failed || jobs.completed?.filter(j => j.status === 'failed') || []
+
+              if (failedJobs.length === 0) return null
+
+              return (
+                <div>
+                  <h4 className="text-sm font-medium text-red-700 dark:text-red-300 mb-2 flex items-center space-x-2">
+                    <XCircle className="h-4 w-4" />
+                    <span>Failed ({failedJobs.length})</span>
+                    <button
+                      onClick={flushFailedJobs}
+                      className="ml-auto btn-secondary text-xs flex items-center space-x-1 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30"
+                      data-testid="flush-failed-jobs"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>Clear Failed</span>
+                    </button>
+                  </h4>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {failedJobs.map((job) => (
+                      <div
+                        key={job.job_id}
+                        className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30"
+                        onClick={() => setSelectedJob(job)}
+                        data-testid={`job-${job.job_id}`}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium text-sm">{job.data?.description || job.job_type}</span>
+                            {job.error_message && (
+                              <div className="text-xs text-red-700 dark:text-red-300 mt-0.5 truncate">
+                                Error: {job.error_message}
+                              </div>
+                            )}
+                            <div className="text-xs text-neutral-500 mt-1">
+                              {job.queue} • Failed {job.ended_at ? new Date(job.ended_at).toLocaleTimeString() : 'recently'}
+                              {job.retry_count > 0 && ` • ${job.retry_count}/${job.max_retries} retries`}
+                            </div>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200 rounded flex-shrink-0">
+                            {job.job_type.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* Completed Jobs */}
-            {jobs.completed && jobs.completed.length > 0 && (
-              <div>
-                <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2 flex items-center space-x-2">
-                  <CheckCircle className="h-4 w-4" />
-                  <span>Completed ({jobs.completed.length})</span>
-                </h4>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {jobs.completed.slice(0, 20).map((job) => (
+            {(() => {
+              // Filter out failed jobs since they have their own section
+              const completedOnly = jobs.completed?.filter(j => j.status !== 'failed') || []
+
+              if (completedOnly.length === 0) return null
+
+              return (
+                <div>
+                  <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2 flex items-center space-x-2">
+                    <CheckCircle className="h-4 w-4" />
+                    <span>Completed ({completedOnly.length})</span>
+                    <button
+                      onClick={flushCompletedJobs}
+                      className="ml-auto btn-secondary text-xs flex items-center space-x-1 text-green-700 dark:text-green-300 hover:bg-green-100 dark:hover:bg-green-900/30"
+                      data-testid="flush-completed-jobs"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>Clear Completed</span>
+                    </button>
+                  </h4>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {completedOnly.slice(0, 20).map((job) => (
                     <div
                       key={job.job_id}
                       className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30"
@@ -1078,15 +1187,17 @@ export default function ChronicleQueue({ onAuthRequired }: ChronicleQueueProps) 
                         </span>
                       </div>
                     </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {/* No Jobs */}
             {(!jobs.processing || jobs.processing.length === 0) &&
              (!jobs.queued || jobs.queued.length === 0) &&
-             (!jobs.completed || jobs.completed.length === 0) && (
+             (!jobs.completed || jobs.completed.length === 0) &&
+             (!jobs.failed || jobs.failed.length === 0) && (
               <div className="text-center py-8 text-neutral-500">
                 <Layers className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p>No jobs in queue</p>

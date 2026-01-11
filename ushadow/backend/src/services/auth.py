@@ -162,7 +162,7 @@ def get_jwt_strategy() -> JWTStrategy:
     
     class MultiAudienceJWTStrategy(BaseJWTStrategy):
         """JWT strategy that supports multi-service audience validation."""
-        
+
         async def read_token(
             self,
             token: Optional[str],
@@ -175,8 +175,8 @@ def get_jwt_strategy() -> JWTStrategy:
             try:
                 # Decode with audience validation - accept any of our services
                 data = jwt.decode(
-                    token, 
-                    self.decode_key, 
+                    token,
+                    self.decode_key,
                     algorithms=[self.algorithm],
                     audience=["ushadow", "chronicle"],  # Accept tokens for either service
                     options={"verify_aud": True}
@@ -184,7 +184,8 @@ def get_jwt_strategy() -> JWTStrategy:
                 user_id = data.get("sub")
                 if user_id is None:
                     return None
-            except (jwt.exceptions.PyJWTError, jwt.exceptions.ExpiredSignatureError, jwt.exceptions.InvalidAudienceError):
+            except (jwt.exceptions.PyJWTError, jwt.exceptions.ExpiredSignatureError, jwt.exceptions.InvalidAudienceError) as e:
+                logger.warning(f"[AUTH] Token validation failed with audience check: {type(e).__name__}: {e}")
                 # Try again without audience validation for backward compat
                 try:
                     data = jwt.decode(
@@ -195,8 +196,11 @@ def get_jwt_strategy() -> JWTStrategy:
                     )
                     user_id = data.get("sub")
                     if user_id is None:
+                        logger.warning("[AUTH] Token decoded but no 'sub' claim found")
                         return None
-                except jwt.exceptions.PyJWTError:
+                    logger.info(f"[AUTH] Token validated without audience check for user {user_id}")
+                except jwt.exceptions.PyJWTError as e2:
+                    logger.error(f"[AUTH] Token validation failed completely: {type(e2).__name__}: {e2}")
                     return None
 
             try:

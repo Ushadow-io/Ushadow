@@ -305,12 +305,15 @@ def configure_base_routes(
     Sets up:
     - /api/* -> backend/api (path preserved)
     - /auth/* -> backend/auth (path preserved)
-    - /ws_pcm -> backend/ws_pcm (websocket)
-    - /ws_omi -> backend/ws_omi (websocket)
+    - /ws_pcm -> chronicle-backend/ws_pcm (websocket - direct to Chronicle)
+    - /ws_omi -> chronicle-backend/ws_omi (websocket - direct to Chronicle)
     - /* -> frontend
 
     Note: Tailscale serve strips the path prefix, so we include it in the
-    target URL to preserve the full path at the backend.
+    target URL to preserve the full path at the service.
+
+    Chronicle REST APIs use /api/services/chronicle-backend/proxy/* through
+    the ushadow backend. WebSockets connect directly for low latency.
 
     Args:
         backend_container: Backend container name (defaults to {env}-backend)
@@ -344,17 +347,28 @@ def configure_base_routes(
 
     # Configure backend routes - include path in target to preserve it
     # (Tailscale serve strips the --set-path prefix from the request)
-    backend_routes = ["/api", "/auth", "/ws_pcm", "/ws_omi"]
+    backend_routes = ["/api", "/auth"]
     for route in backend_routes:
         target = f"{backend_base}{route}"
         if not add_serve_route(route, target):
             success = False
 
-    # Chronicle backend route
-    chronicle_container = "chronicle-backend"
-    chronicle_port = 8000
-    if not add_serve_route("/chronicle", f"http://{chronicle_container}:{chronicle_port}"):
-        success = False
+    # Configure Chronicle WebSocket routes - these go directly to Chronicle for low latency
+    # (REST APIs use /api/services/chronicle-backend/proxy/* through ushadow backend)
+    chronicle_container = f"{env_name}-chronicle-backend"
+    chronicle_port = 8000  # Chronicle's internal port
+    chronicle_base = f"http://{chronicle_container}:{chronicle_port}"
+
+    websocket_routes = ["/ws_pcm", "/ws_omi"]
+    for route in websocket_routes:
+        target = f"{chronicle_base}{route}"
+        if not add_serve_route(route, target):
+            success = False
+
+    # NOTE: Chronicle REST APIs are now accessed via generic proxy pattern:
+    # /api/services/chronicle-backend/proxy/* instead of direct /chronicle routing
+    # This provides unified auth and centralized routing through ushadow backend
+    # WebSockets go directly to Chronicle for low latency
 
     # Frontend catches everything else
     if not add_serve_route("/", frontend_target):

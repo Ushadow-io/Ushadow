@@ -8,6 +8,7 @@ export interface LogEntry {
   timestamp: Date
   message: string
   level: LogLevel
+  detailed?: boolean  // If true, only show in Detail view
 }
 
 interface LogPanelProps {
@@ -41,7 +42,7 @@ export function LogPanel({ logs, onClear, expanded = true, onToggleExpand }: Log
 
   // Filter logs based on view mode
   const filteredLogs = viewMode === 'state'
-    ? logs.filter(log => log.level !== 'info') // State view: hide info logs
+    ? logs.filter(log => log.level !== 'info' && !log.detailed) // State view: hide info and detailed logs
     : logs // Detail view: show all logs
 
   // Reverse logs to show most recent at top
@@ -196,6 +197,9 @@ function LogLine({ entry }: { entry: LogEntry }) {
     }
   }
 
+  // Split message by newlines for proper rendering
+  const lines = entry.message.split('\n')
+
   return (
     <div
       onClick={handleClick}
@@ -203,7 +207,16 @@ function LogLine({ entry }: { entry: LogEntry }) {
       title="Click to copy"
     >
       <span className="text-text-muted opacity-60">[{time}]</span>{' '}
-      {icons[entry.level]}{entry.message}
+      {icons[entry.level]}
+      {lines.length === 1 ? (
+        <span>{entry.message}</span>
+      ) : (
+        <span className="block">
+          {lines.map((line, idx) => (
+            <span key={idx} className="block">{line}</span>
+          ))}
+        </span>
+      )}
       {copied && <span className="ml-2 text-success-400 text-[10px]">copied!</span>}
     </div>
   )
@@ -215,12 +228,13 @@ export function useLogger() {
   const idRef = useRef(0)
   const lastStateRef = useRef<string>('')
 
-  const log = (message: string, level: LogLevel = 'info') => {
+  const log = (message: string, level: LogLevel = 'info', detailed: boolean = false) => {
     const entry: LogEntry = {
       id: idRef.current++,
       timestamp: new Date(),
       message,
       level,
+      detailed,
     }
     logsRef.current = [...logsRef.current, entry]
     return logsRef.current
@@ -230,7 +244,7 @@ export function useLogger() {
   const logStateChange = (stateKey: string, message: string, level: LogLevel = 'info') => {
     if (lastStateRef.current !== stateKey) {
       lastStateRef.current = stateKey
-      return log(message, level)
+      return log(message, level, false)
     }
     return logsRef.current
   }
