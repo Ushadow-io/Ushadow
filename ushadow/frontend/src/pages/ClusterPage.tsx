@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle, QrCode, Smartphone } from 'lucide-react'
-import { clusterApi, deploymentsApi, servicesApi, tailscaleApi, Deployment } from '../services/api'
+import { clusterApi, deploymentsApi, servicesApi, Deployment } from '../services/api'
+import { useMobileQrCode } from '../hooks/useQrCode'
 import Modal from '../components/Modal'
 
 // Service from the catalog API
@@ -107,21 +108,6 @@ interface LeaderInfo {
   }>
 }
 
-// QR code data for mobile app connection
-interface MobileConnectionQR {
-  qr_code_data: string
-  connection_data: {
-    type: string
-    v: number
-    hostname: string
-    ip: string
-    port: number
-  }
-  hostname: string
-  tailscale_ip: string
-  api_port: number
-}
-
 // Response structure from discover peers API
 interface DiscoveredPeersResponse {
   peers: {
@@ -174,10 +160,8 @@ export default function ClusterPage() {
   const [leaderInfo, setLeaderInfo] = useState<LeaderInfo | null>(null)
   const [loadingLeaderInfo, setLoadingLeaderInfo] = useState(false)
 
-  // QR code state
-  const [qrCodeData, setQrCodeData] = useState<MobileConnectionQR | null>(null)
-  const [loadingQrCode, setLoadingQrCode] = useState(false)
-  const [showQrCode, setShowQrCode] = useState(false)
+  // QR code hook
+  const { qrData, loading: loadingQrCode, showModal: showQrCode, fetchQrCode, closeModal: closeQrModal } = useMobileQrCode()
 
   useEffect(() => {
     loadUnodes()
@@ -430,21 +414,6 @@ export default function ClusterPage() {
       setShowLeaderInfoModal(false)
     } finally {
       setLoadingLeaderInfo(false)
-    }
-  }
-
-  // Fetch QR code for mobile app connection
-  const fetchMobileQrCode = async () => {
-    setLoadingQrCode(true)
-    try {
-      const response = await tailscaleApi.getMobileConnectionQR()
-      setQrCodeData(response.data)
-      setShowQrCode(true)
-    } catch (err: any) {
-      console.error('Error fetching QR code:', err)
-      alert(`Failed to generate QR code: ${err.response?.data?.detail || err.message}`)
-    } finally {
-      setLoadingQrCode(false)
     }
   }
 
@@ -1479,11 +1448,11 @@ export default function ClusterPage() {
                 <Smartphone className="h-5 w-5" />
                 Mobile App Connection
               </h3>
-              {showQrCode && qrCodeData ? (
+              {showQrCode && qrData ? (
                 <div className="flex flex-col items-center space-y-4">
                   <div className="p-4 bg-white rounded-xl shadow-lg">
                     <img
-                      src={qrCodeData.qr_code_data}
+                      src={qrData.qr_code_data}
                       alt="Connection QR Code"
                       className="w-48 h-48"
                       data-testid="leader-qr-code"
@@ -1494,11 +1463,11 @@ export default function ClusterPage() {
                       Scan with the Ushadow mobile app
                     </p>
                     <p className="text-xs text-neutral-400 dark:text-neutral-500">
-                      {qrCodeData.tailscale_ip}:{qrCodeData.api_port}
+                      {qrData.tailscale_ip}:{qrData.api_port}
                     </p>
                   </div>
                   <button
-                    onClick={() => setShowQrCode(false)}
+                    onClick={closeQrModal}
                     className="text-sm text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
                   >
                     Hide QR Code
@@ -1506,7 +1475,7 @@ export default function ClusterPage() {
                 </div>
               ) : (
                 <button
-                  onClick={fetchMobileQrCode}
+                  onClick={fetchQrCode}
                   disabled={loadingQrCode}
                   className="w-full flex items-center justify-center gap-2 bg-neutral-100 dark:bg-neutral-700 hover:bg-neutral-200 dark:hover:bg-neutral-600 rounded-lg p-4 transition-colors"
                   data-testid="show-qr-button"
