@@ -1,13 +1,15 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
+import { useMobileQrCode } from '../../hooks/useQrCode'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
+import Modal from '../Modal'
 import type { LucideIcon } from 'lucide-react'
 
 interface NavigationItem {
@@ -30,6 +32,9 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
+
+  // QR code hook
+  const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
 
   // Get dynamic wizard label (includes path, label, level, and icon)
   const wizardLabel = getSetupLabel()
@@ -560,6 +565,27 @@ export default function Layout() {
                 )
               })}
             </div>
+
+            {/* Scan QR Code Button - Separate from menu */}
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={fetchQrCode}
+                disabled={loadingQrCode}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 hover:scale-[1.05] active:scale-[0.95]"
+                style={{
+                  backgroundColor: '#a855f7',
+                  color: '#ffffff',
+                  boxShadow: isDark
+                    ? '0 0 20px rgba(168, 85, 247, 0.3)'
+                    : '0 4px 6px rgba(168, 85, 247, 0.3)',
+                  opacity: loadingQrCode ? 0.6 : 1,
+                }}
+                data-testid="sidebar-scan-qr"
+              >
+                <QrCode className="h-5 w-5" />
+                {loadingQrCode ? 'Loading...' : 'Scan'}
+              </button>
+            </div>
           </nav>
 
           {/* Main Content */}
@@ -582,6 +608,54 @@ export default function Layout() {
         isOpen={featureFlagsDrawerOpen}
         onClose={() => setFeatureFlagsDrawerOpen(false)}
       />
+
+      {/* QR Code Modal */}
+      <Modal
+        isOpen={showQrModal}
+        onClose={closeModal}
+        title="Connect Mobile App"
+        maxWidth="lg"
+        testId="mobile-qr-modal"
+      >
+        <div className="flex flex-col items-center space-y-6 p-6">
+          {qrData && (
+            <>
+              <div className="p-4 bg-white rounded-xl shadow-lg">
+                <img
+                  src={qrData.qr_code_data}
+                  alt="Connection QR Code"
+                  className="w-64 h-64"
+                  data-testid="sidebar-qr-code"
+                />
+              </div>
+              <div className="text-center space-y-2">
+                <p
+                  className="text-lg font-semibold"
+                  style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                >
+                  Scan with Ushadow Mobile
+                </p>
+                <p
+                  className="text-sm"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
+                  Open the Ushadow mobile app and scan this QR code to connect to this server
+                </p>
+                <div
+                  className="mt-4 p-3 rounded-lg font-mono text-xs"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#f4f4f5',
+                    color: isDark ? 'var(--text-secondary)' : '#52525b',
+                  }}
+                >
+                  <div>Server: {qrData.hostname}</div>
+                  <div>IP: {qrData.tailscale_ip}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }
