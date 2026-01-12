@@ -8,6 +8,7 @@ import { ChronicleProvider } from './contexts/ChronicleContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
 import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
+import { VibeKanbanWebCompanion } from 'vibe-kanban-web-companion'
 
 // Get router basename from Vite build config (for path-based deployments like /wiz/)
 // Runtime detection was removed because it incorrectly treated app routes (/settings, /services)
@@ -122,6 +123,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
+        <VibeKanbanWebCompanion />
         <AuthProvider>
           <FeatureFlagsProvider>
             <WizardProvider>

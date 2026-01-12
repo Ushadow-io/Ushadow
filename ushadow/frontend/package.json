@@ -22,6 +22,7 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.69.0",
     "react-router-dom": "^6.26.2",
+    "vibe-kanban-web-companion": "^0.0.5",
     "zod": "^4.2.1",
     "zustand": "^5.0.0"
   },
