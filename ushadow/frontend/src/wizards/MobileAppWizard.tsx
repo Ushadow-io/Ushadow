@@ -20,6 +20,7 @@ import {
 import { tailscaleApi } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
+import { useMobileQrCode } from '../hooks/useQrCode'
 import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
