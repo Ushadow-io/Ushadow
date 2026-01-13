@@ -17,7 +17,6 @@ export async function isDemoMode(): Promise<boolean> {
   try {
     const value = await AsyncStorage.getItem(DEMO_MODE_KEY);
     const result = value === 'true';
-    console.log('[DemoMode] isDemoMode check - stored value:', value, 'result:', result);
     return result;
   } catch (error) {
     console.error('[DemoMode] Failed to check demo mode:', error);

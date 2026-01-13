@@ -22,14 +22,11 @@ export async function fetchMemories(
   size: number = 100
 ): Promise<MemoriesSearchResponse> {
   const demoMode = await isDemoMode();
-  console.log('[MemoriesAPIWrapper] fetchMemories - Demo mode:', demoMode);
 
   if (demoMode) {
-    console.log('[MemoriesAPIWrapper] Using demo API for fetchMemories');
     return demoApi.demoFetchMemories(userId, query, page, size);
   }
 
-  console.log('[MemoriesAPIWrapper] Using real API for fetchMemories');
   return realMemoriesApi.fetchMemories(userId, query, page, size);
 }
 

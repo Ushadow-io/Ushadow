@@ -26,14 +26,11 @@ export async function fetchConversations(
   limit: number = 20
 ): Promise<ConversationsResponse> {
   const demoMode = await isDemoMode();
-  console.log('[ChronicleAPIWrapper] fetchConversations - Demo mode:', demoMode);
 
   if (demoMode) {
-    console.log('[ChronicleAPIWrapper] Using demo API for fetchConversations');
     return demoApi.demoFetchConversations(page, limit);
   }
 
-  console.log('[ChronicleAPIWrapper] Using real API for fetchConversations');
   return realChronicleApi.fetchConversations(page, limit);
 }
 
@@ -94,7 +91,6 @@ export async function verifyUnodeAuth(
 ): Promise<{ valid: boolean; error?: string; ushadowOk?: boolean; chronicleOk?: boolean }> {
   // Check if this is a demo URL first (demo:// URLs)
   if (isDemoUrl(apiUrl)) {
-    console.log('[ChronicleAPIWrapper] Demo URL detected, using mock verification');
     return demoApi.demoVerifyUnodeAuth(apiUrl, token);
   }
 

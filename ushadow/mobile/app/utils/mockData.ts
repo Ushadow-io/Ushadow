@@ -163,3 +163,73 @@ export const DEMO_UNODE = {
 export function isDemoUrl(url: string): boolean {
   return url?.startsWith('demo://') || url?.includes('demo-node');
 }
+
+/**
+ * Mock chat sessions for demo mode
+ */
+export const MOCK_CHAT_SESSIONS = [
+  {
+    id: 'demo_chat_001',
+    title: 'Demo Chat Session',
+    createdAt: new Date(Date.now() - 1000 * 60 * 60).toISOString(), // 1 hour ago
+    lastMessageAt: new Date().toISOString(),
+    messageCount: 4,
+    isDemo: true,
+    userId: MOCK_USER_EMAIL,
+    memoryEnabled: true,
+    model: 'gpt-4o-mini',
+  },
+];
+
+/**
+ * Mock chat messages for demo sessions
+ */
+export const MOCK_CHAT_MESSAGES: Record<string, any[]> = {
+  'demo_chat_001': [
+    {
+      id: 'msg_001',
+      role: 'user',
+      content: 'What did I discuss in my team meeting today?',
+      timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
+    },
+    {
+      id: 'msg_002',
+      role: 'assistant',
+      content: 'Based on your memories, you discussed Q1 roadmap priorities in today\'s team meeting. The key points were:\n\n1. **Mobile App Improvements** - Focus on enhancing the streaming capabilities and offline support\n2. **API Stability** - Prioritize performance optimization and better error handling\n3. **Timeline** - These initiatives are planned for the next quarter\n\nThe team seemed aligned on these priorities, and there was consensus that mobile experience improvements will have the most immediate impact.',
+      timestamp: new Date(Date.now() - 1000 * 60 * 59).toISOString(),
+      metadata: {
+        model: 'gpt-4o-mini',
+        finishReason: 'stop',
+        memoryEnriched: true,
+      },
+    },
+    {
+      id: 'msg_003',
+      role: 'user',
+      content: 'Can you help me draft a follow-up email for that meeting?',
+      timestamp: new Date(Date.now() - 1000 * 60 * 58).toISOString(),
+    },
+    {
+      id: 'msg_004',
+      role: 'assistant',
+      content: 'Certainly! Here\'s a concise follow-up email:\n\n---\n\n**Subject:** Q1 Roadmap - Action Items from Today\'s Meeting\n\nHi team,\n\nThank you for the productive discussion today. To recap our Q1 priorities:\n\n• Mobile App Improvements: Focus on streaming and offline capabilities\n• API Stability: Performance and error handling enhancements\n\nLet\'s schedule individual planning sessions next week to define specific tasks and timelines.\n\nBest,\n[Your name]\n\n---\n\nFeel free to adjust the tone or add any specific details!',
+      timestamp: new Date(Date.now() - 1000 * 60 * 57).toISOString(),
+      metadata: {
+        model: 'gpt-4o-mini',
+        finishReason: 'stop',
+        memoryEnriched: true,
+      },
+    },
+  ],
+};
+
+/**
+ * Mock chat status
+ */
+export const MOCK_CHAT_STATUS = {
+  configured: true,
+  provider: 'openai',
+  model: 'gpt-4o-mini',
+  memory_available: true,
+  error: null,
+};

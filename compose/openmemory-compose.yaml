@@ -6,7 +6,6 @@
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
 # =============================================================================
 x-ushadow:
-  namespace: openmemory
   # Infra services to start before this compose (from docker-compose.infra.yml)
   # To enable graph mode, add "neo4j" to infra_services and uncomment NEO4J_* env vars below
   infra_services: ["qdrant", "neo4j"]

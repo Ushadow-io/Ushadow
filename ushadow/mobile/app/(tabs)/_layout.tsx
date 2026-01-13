@@ -32,6 +32,12 @@ export default function TabLayout() {
           fontSize: 12,
           fontWeight: '500',
         },
+        tabBarItemStyle: {
+          flex: 1, // Equal width for all tabs
+        },
+        tabBarIconStyle: {
+          marginBottom: -3, // Consistent vertical spacing
+        },
       }}
     >
       <Tabs.Screen
@@ -77,6 +83,21 @@ export default function TabLayout() {
             />
           ),
           tabBarAccessibilityLabel: 'Memories Tab',
+        }}
+      />
+      <Tabs.Screen
+        name="chat"
+        options={{
+          title: 'Chat',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'chatbox' : 'chatbox-outline'}
+              size={size}
+              color={color}
+              testID="tab-icon-chat"
+            />
+          ),
+          tabBarAccessibilityLabel: 'Chat Tab',
         }}
       />
     </Tabs>

@@ -13,6 +13,7 @@ import {
   MOCK_USER_ID,
   MOCK_USER_PROFILE,
   MOCK_OMI_DEVICES,
+  MOCK_CHAT_STATUS,
   simulateNetworkDelay,
 } from '../utils/mockData';
 import type { Memory, MemoriesSearchResponse } from './memoriesApi';
@@ -32,8 +33,6 @@ export async function demoFetchMemories(
   size: number = 100
 ): Promise<MemoriesSearchResponse> {
   await simulateNetworkDelay();
-
-  console.log('[DemoAPI] Fetching memories (demo mode)');
 
   // Filter by search query if provided
   let filteredMemories = MOCK_MEMORIES;
@@ -85,8 +84,6 @@ export async function demoCreateMemory(
 ): Promise<Memory> {
   await simulateNetworkDelay();
 
-  console.log('[DemoAPI] Creating memory (demo mode)');
-
   return {
     id: `demo_memory_${Date.now()}`,
     memory: text,
@@ -102,7 +99,6 @@ export async function demoCreateMemory(
  */
 export async function demoDeleteMemories(userId: string, memoryIds: string[]): Promise<void> {
   await simulateNetworkDelay();
-  console.log('[DemoAPI] Deleting memories (demo mode):', memoryIds);
   // In demo mode, this just succeeds without doing anything
 }
 
@@ -114,8 +110,6 @@ export async function demoFetchConversations(
   limit: number = 20
 ): Promise<ConversationsResponse> {
   await simulateNetworkDelay();
-
-  console.log('[DemoAPI] Fetching conversations (demo mode)');
 
   // Convert mock conversations to Chronicle format
   const conversations: Conversation[] = MOCK_CONVERSATIONS.map((conv) => ({
@@ -145,8 +139,6 @@ export async function demoFetchConversations(
 export async function demoFetchConversation(conversationId: string): Promise<Conversation> {
   await simulateNetworkDelay();
 
-  console.log('[DemoAPI] Fetching conversation (demo mode):', conversationId);
-
   const mockConv = MOCK_CONVERSATIONS.find((c) => c.id === conversationId);
   if (!mockConv) {
     throw new Error('Conversation not found');
@@ -175,8 +167,6 @@ export async function demoSearchChronicleMemories(
   limit: number = 50
 ): Promise<ChronicleMemoriesSearchResponse> {
   await simulateNetworkDelay();
-
-  console.log('[DemoAPI] Searching Chronicle memories (demo mode)');
 
   // Reuse the memories from mock data
   let filteredMemories = MOCK_MEMORIES;
@@ -220,7 +210,6 @@ export async function demoFetchChronicleMemories(
  */
 export async function demoDeleteMemory(memoryId: string): Promise<void> {
   await simulateNetworkDelay();
-  console.log('[DemoAPI] Deleting memory (demo mode):', memoryId);
   // In demo mode, this just succeeds without doing anything
 }
 
@@ -264,4 +253,119 @@ export function getDemoUserProfile() {
  */
 export function getDemoOmiDevices() {
   return MOCK_OMI_DEVICES;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHAT API DEMO IMPLEMENTATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Demo implementation of chatApi.getStatus
+ */
+export async function demoGetChatStatus() {
+  await simulateNetworkDelay(100, 300);
+  console.log('[DemoAPI] Getting chat status (demo mode)');
+  return {
+    ...MOCK_CHAT_STATUS,
+  };
+}
+
+/**
+ * Generate contextual demo response based on user message
+ */
+function generateDemoResponse(message: string, useMemory: boolean): string {
+  const lower = message.toLowerCase();
+
+  if (lower.includes('meeting') || lower.includes('discussed') || lower.includes('team')) {
+    return useMemory
+      ? "Based on your memories, you discussed Q1 roadmap priorities in today's team meeting. The key points were mobile app improvements and API stability. The team seemed aligned on these priorities."
+      : "I can help you recall your meetings. Enable memory context for personalized responses based on your conversation history.";
+  }
+
+  if (lower.includes('roadmap') || lower.includes('plan') || lower.includes('priority')) {
+    return useMemory
+      ? "Your current roadmap priorities are: 1) Mobile app improvements with focus on streaming, 2) API stability and performance, 3) User onboarding enhancements. These align with what was discussed in your recent team meeting."
+      : "I can help you with roadmap planning. Turn on memory to get insights from your past conversations and meetings.";
+  }
+
+  if (lower.includes('email') || lower.includes('draft') || lower.includes('write')) {
+    return "I'd be happy to help you draft that! Based on the context, here's a suggestion:\n\n**Subject:** Follow-up on Today's Discussion\n\nHi team,\n\nThank you for the productive meeting. Key takeaways:\n• Focus on mobile improvements\n• Prioritize API stability\n\nLet's sync next week on specific tasks.\n\nBest regards";
+  }
+
+  if (lower.includes('startup') || lower.includes('idea') || lower.includes('friend')) {
+    return useMemory
+      ? "Your friend mentioned building AI-powered productivity tools with privacy-first design. They're focusing on local-first data storage, which aligns with current market trends."
+      : "I can help you explore startup ideas. Enable memory to get insights from your past conversations.";
+  }
+
+  if (lower.includes('design') || lower.includes('wireframe') || lower.includes('ui')) {
+    return useMemory
+      ? "In your recent product design review, the team loved the simplified onboarding flow. The key feedback was to keep the interface clean and minimize steps for new users."
+      : "I can help with design discussions. Memory context would let me reference your previous design meetings.";
+  }
+
+  if (lower.includes('help') || lower.includes('can you')) {
+    return "I'm your AI assistant in demo mode! I can help you with:\n• Summarizing meetings and conversations\n• Drafting emails and documents\n• Planning and roadmapping\n• Recalling past discussions\n\nTry asking about your recent team meeting or roadmap priorities.";
+  }
+
+  // Default response
+  return useMemory
+    ? "That's an interesting question! I have access to your conversation history through memory context. In demo mode, responses are simulated, but in production I would use your configured LLM (like GPT-4) and pull relevant information from your past conversations to provide personalized answers."
+    : "I understand. In demo mode, all responses are simulated. When you're connected to a real backend with an LLM configured, I'll be able to provide much more helpful and contextual responses. Try enabling memory to see how I can reference past conversations!";
+}
+
+/**
+ * Demo implementation of chatApi.streamChat
+ * Simulates streaming character-by-character
+ */
+export async function* demoStreamChat(
+  request: any
+): AsyncGenerator<any, void, unknown> {
+  await simulateNetworkDelay(200, 400);
+  console.log('[DemoAPI] Streaming chat (demo mode)');
+
+  // Get the last user message
+  const lastUserMessage = request.messages.findLast((m: any) => m.role === 'user')?.content || '';
+
+  // Generate contextual response
+  const response = generateDemoResponse(lastUserMessage, request.use_memory !== false);
+
+  // Stream character by character
+  for (const char of response) {
+    await new Promise(resolve => setTimeout(resolve, 20 + Math.random() * 30));
+    yield { type: 'text', content: char };
+  }
+
+  // Send finish marker
+  yield {
+    type: 'finish',
+    finishReason: 'stop',
+    usage: {
+      promptTokens: 150,
+      completionTokens: response.length / 4, // Rough token estimate
+    },
+  };
+}
+
+/**
+ * Demo implementation of chatApi.sendSimpleMessage
+ */
+export async function demoSendSimpleMessage(request: any) {
+  await simulateNetworkDelay();
+  console.log('[DemoAPI] Sending simple message (demo mode)');
+
+  const lastUserMessage = request.messages.findLast((m: any) => m.role === 'user')?.content || '';
+  const response = generateDemoResponse(lastUserMessage, request.use_memory !== false);
+
+  return {
+    id: `msg_${Date.now()}`,
+    role: 'assistant',
+    content: response,
+    timestamp: new Date().toISOString(),
+    metadata: {
+      model: 'gpt-4o-mini',
+      finishReason: 'stop',
+      memoryEnriched: request.use_memory !== false,
+    },
+  };
 }

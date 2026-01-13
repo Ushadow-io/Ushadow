@@ -39,6 +39,7 @@ import { isDemoMode, disableDemoMode } from '../utils/demoModeStorage';
 import { DEMO_UNODE, MOCK_OMI_DEVICES } from '../utils/mockData';
 import { getUnodes, removeUnode, getActiveUnodeId, setActiveUnode, getActiveUnode } from '../utils/unodeStorage';
 import { getSavedOmiDevices, removeOmiDevice } from '../utils/omiDeviceStorage';
+import { cleanupDemoChatData } from '../utils/chatStorage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function HomeScreen() {
@@ -103,6 +104,9 @@ export default function HomeScreen() {
           if (demoDevicesToRemove.length > 0) {
             await Promise.all(demoDevicesToRemove.map(d => removeOmiDevice(d.id)));
           }
+
+          // Remove demo chat sessions
+          await cleanupDemoChatData();
         }
 
         if (authenticated) {
@@ -222,6 +226,9 @@ export default function HomeScreen() {
       if (demoDevicesToRemove.length > 0) {
         await Promise.all(demoDevicesToRemove.map(d => removeOmiDevice(d.id)));
       }
+
+      // Remove demo chat sessions
+      await cleanupDemoChatData();
 
       // Restore previous UNode (or clear if there was none)
       if (previousUnodeId) {
