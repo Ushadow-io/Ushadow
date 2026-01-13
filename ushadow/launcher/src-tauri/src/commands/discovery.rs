@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use crate::models::{DiscoveryResult, EnvironmentStatus, InfraService, UshadowEnvironment, WorktreeInfo};
 use super::prerequisites::{check_docker, check_tailscale};
 use super::utils::silent_command;
@@ -19,6 +21,9 @@ struct EnvContainerInfo {
     has_running: bool,
 }
 
+// Cache tailscale status for 10 seconds to avoid slow repeated checks
+static TAILSCALE_CACHE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+
 /// Discover Ushadow environments and infrastructure (running and stopped)
 #[tauri::command]
 pub async fn discover_environments() -> Result<DiscoveryResult, String> {
@@ -33,10 +38,30 @@ pub async fn discover_environments_with_config(
 ) -> Result<DiscoveryResult, String> {
     // Check prerequisites
     let (docker_installed, docker_running, _) = check_docker();
-    let (tailscale_installed, tailscale_connected, _) = check_tailscale();
+
+    // Cache tailscale checks - they're slow and rarely change
+    let tailscale_ok = {
+        let mut cache = TAILSCALE_CACHE.lock().unwrap();
+        let now = Instant::now();
+
+        if let Some((cached_ok, cached_time)) = *cache {
+            if now.duration_since(cached_time) < Duration::from_secs(10) {
+                cached_ok
+            } else {
+                let (installed, connected, _) = check_tailscale();
+                let ok = installed && connected;
+                *cache = Some((ok, now));
+                ok
+            }
+        } else {
+            let (installed, connected, _) = check_tailscale();
+            let ok = installed && connected;
+            *cache = Some((ok, now));
+            ok
+        }
+    };
 
     let docker_ok = docker_installed && docker_running;
-    let tailscale_ok = tailscale_installed && tailscale_connected;
 
     // Default paths
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());

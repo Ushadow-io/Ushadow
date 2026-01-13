@@ -10,11 +10,15 @@ pub struct PrerequisiteStatus {
     pub tailscale_connected: bool,
     pub git_installed: bool,
     pub python_installed: bool,
+    pub workmux_installed: bool,
+    pub tmux_installed: bool,
     pub homebrew_version: Option<String>,
     pub docker_version: Option<String>,
     pub tailscale_version: Option<String>,
     pub git_version: Option<String>,
     pub python_version: Option<String>,
+    pub workmux_version: Option<String>,
+    pub tmux_version: Option<String>,
 }
 
 /// Project location status
@@ -92,4 +96,38 @@ pub struct DiscoveryResult {
     pub environments: Vec<UshadowEnvironment>,
     pub docker_ok: bool,
     pub tailscale_ok: bool,
+}
+
+/// Tmux session status for an environment
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TmuxStatus {
+    pub exists: bool,
+    pub window_name: Option<String>,
+    pub current_command: Option<String>,
+    pub activity_status: TmuxActivityStatus,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum TmuxActivityStatus {
+    Working,   // 🤖 - actively running commands
+    Waiting,   // 💬 - shell prompt, waiting for input
+    Done,      // ✅ - command completed successfully
+    Error,     // ❌ - command failed
+    Unknown,   // No status available
+}
+
+/// Tmux session information for management UI
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TmuxSessionInfo {
+    pub name: String,
+    pub window_count: usize,
+    pub windows: Vec<TmuxWindowInfo>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TmuxWindowInfo {
+    pub name: String,
+    pub index: String,
+    pub active: bool,
+    pub panes: usize,
 }

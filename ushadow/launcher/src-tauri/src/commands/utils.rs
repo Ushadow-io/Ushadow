@@ -1,5 +1,4 @@
 use std::process::Command;
-use std::path::{Path, PathBuf};
 
 /// Create a new Command that won't open a console window on Windows.
 /// This is essential for background polling commands that shouldn't flash windows.
