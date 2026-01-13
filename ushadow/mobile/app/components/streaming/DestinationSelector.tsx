@@ -27,6 +27,7 @@ interface DestinationSelectorProps {
   authStatus: AuthStatus;
   authError?: string | null;
   onReauthenticate?: () => void;
+  onClearSelection?: () => void;
   disabled?: boolean;
   testID?: string;
 }
@@ -37,6 +38,7 @@ export const DestinationSelector: React.FC<DestinationSelectorProps> = ({
   authStatus,
   authError,
   onReauthenticate,
+  onClearSelection,
   disabled = false,
   testID = 'destination-selector',
 }) => {
@@ -47,6 +49,12 @@ export const DestinationSelector: React.FC<DestinationSelectorProps> = ({
   const handleCardPress = () => {
     if (!disabled) {
       router.push('/unode-details');
+    }
+  };
+
+  const handleClearSelection = () => {
+    if (!disabled && onClearSelection) {
+      onClearSelection();
     }
   };
 
@@ -140,6 +148,18 @@ export const DestinationSelector: React.FC<DestinationSelectorProps> = ({
             </Text>
           </View>
         </View>
+        {/* Clear button */}
+        {onClearSelection && (
+          <TouchableOpacity
+            style={styles.clearButton}
+            onPress={handleClearSelection}
+            disabled={disabled}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            testID={`${testID}-clear`}
+          >
+            <Ionicons name="close-circle" size={20} color={theme.textMuted} />
+          </TouchableOpacity>
+        )}
         <Ionicons name="chevron-forward" size={20} color={theme.textMuted} />
       </View>
     );
@@ -304,6 +324,10 @@ const styles = StyleSheet.create({
   emptyHintText: {
     fontSize: fontSize.xs,
     color: theme.textMuted,
+  },
+  clearButton: {
+    padding: spacing.xs,
+    marginRight: spacing.xs,
   },
 });
 

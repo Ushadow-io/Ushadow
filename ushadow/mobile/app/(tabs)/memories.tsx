@@ -25,7 +25,7 @@ import {
   fetchMemories,
   searchMemories,
   type Memory,
-} from '../services/memoriesApi';
+} from '../services/memoriesApiWrapper';
 import { isAuthenticated, getUserEmail } from '../utils/authStorage';
 
 export default function MemoriesScreen() {

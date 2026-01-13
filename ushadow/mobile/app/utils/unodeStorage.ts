@@ -155,12 +155,14 @@ export async function setActiveUnode(id: string): Promise<void> {
   try {
     await AsyncStorage.setItem(ACTIVE_UNODE_KEY, id);
 
-    // Update last connected time
-    const unodes = await getUnodes();
-    const index = unodes.findIndex(u => u.id === id);
-    if (index >= 0) {
-      unodes[index].lastConnectedAt = new Date().toISOString();
-      await AsyncStorage.setItem(UNODES_KEY, JSON.stringify(unodes));
+    // Update last connected time (skip for demo UNode since it's not in storage)
+    if (id !== 'demo-unode-001') {
+      const unodes = await getUnodes();
+      const index = unodes.findIndex(u => u.id === id);
+      if (index >= 0) {
+        unodes[index].lastConnectedAt = new Date().toISOString();
+        await AsyncStorage.setItem(UNODES_KEY, JSON.stringify(unodes));
+      }
     }
 
     console.log('[UnodeStorage] Set active unode:', id);
@@ -172,11 +174,29 @@ export async function setActiveUnode(id: string): Promise<void> {
 
 /**
  * Get the active UNode
+ *
+ * Note: For demo UNode, returns the DEMO_UNODE object from mockData
+ * without checking storage, since it's never saved there.
  */
 export async function getActiveUnode(): Promise<UNode | null> {
   try {
     const activeId = await getActiveUnodeId();
     if (!activeId) return null;
+
+    // For demo UNode, return DEMO_UNODE from mockData if in demo mode
+    if (activeId === 'demo-unode-001') {
+      const { isDemoMode } = await import('./demoModeStorage');
+      const { DEMO_UNODE } = await import('./mockData');
+      const inDemoMode = await isDemoMode();
+
+      if (inDemoMode) {
+        console.log('[UnodeStorage] Returning demo UNode object');
+        return DEMO_UNODE as UNode;
+      } else {
+        console.log('[UnodeStorage] Demo UNode ID set but not in demo mode - returning null');
+        return null;
+      }
+    }
 
     const unodes = await getUnodes();
     return unodes.find(u => u.id === activeId) || null;

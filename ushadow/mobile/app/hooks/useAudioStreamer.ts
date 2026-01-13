@@ -14,6 +14,8 @@
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import NetInfo from '@react-native-community/netinfo';
+import { isDemoUrl } from '../utils/mockData';
+import type { ConnectionType, ConnectionStatus } from '../types/connectionLog';
 
 export interface UseAudioStreamer {
   isStreaming: boolean;
@@ -27,6 +29,7 @@ export interface UseAudioStreamer {
   cancelRetry: () => void;
   sendAudio: (audioBytes: Uint8Array) => void;
   getWebSocketReadyState: () => number | undefined;
+  setLogEvent: (logFn: (type: ConnectionType, status: ConnectionStatus, message: string, details?: string) => void) => void;
 }
 
 // Wyoming Protocol Types
@@ -75,9 +78,18 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const reconnectAttemptsRef = useRef<number>(0);
   const serverErrorCountRef = useRef<number>(0);
   const audioChunkCountRef = useRef<number>(0);
+  const skippedChunkCountRef = useRef<number>(0);
+  const isDemoStreamRef = useRef<boolean>(false);
+  const demoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const logEventRef = useRef<((type: ConnectionType, status: ConnectionStatus, message: string, details?: string) => void) | null>(null);
 
   // Guard state updates after unmount
   const mountedRef = useRef<boolean>(true);
+
+  // Setter for log event callback
+  const setLogEvent = useCallback((logFn: (type: ConnectionType, status: ConnectionStatus, message: string, details?: string) => void) => {
+    logEventRef.current = logFn;
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -125,6 +137,10 @@ export const useAudioStreamer = (): UseAudioStreamer => {
       clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
     }
+    if (demoIntervalRef.current) {
+      clearInterval(demoIntervalRef.current);
+      demoIntervalRef.current = null;
+    }
 
     if (websocketRef.current) {
       try {
@@ -138,6 +154,10 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         websocketRef.current.close(1000, 'manual-stop');
       } catch {}
       websocketRef.current = null;
+      // Log websocket disconnection
+      if (logEventRef.current) {
+        logEventRef.current('websocket', 'disconnected', 'WebSocket streaming stopped', 'Manual stop');
+      }
     }
 
     setStateSafe(setIsStreaming, false);
@@ -145,6 +165,9 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     setStateSafe(setIsRetrying, false);
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
+    audioChunkCountRef.current = 0;
+    skippedChunkCountRef.current = 0;
+    isDemoStreamRef.current = false;
   }, [sendWyomingEvent, setStateSafe]);
 
   // Cancel retry attempts
@@ -221,7 +244,55 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     currentModeRef.current = mode;
     manuallyStoppedRef.current = false;
 
-    // Network gate
+    // Check if this is a demo URL
+    if (isDemoUrl(trimmed)) {
+      console.log('[AudioStreamer] Demo URL detected - using mock streaming');
+      isDemoStreamRef.current = true;
+
+      setStateSafe(setIsConnecting, true);
+      setStateSafe(setError, null);
+
+      // Log websocket connecting
+      if (logEventRef.current) {
+        logEventRef.current('websocket', 'connecting', 'Connecting to demo WebSocket', trimmed);
+      }
+
+      // Simulate connection delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      if (manuallyStoppedRef.current) {
+        console.log('[AudioStreamer] Demo streaming cancelled during connection');
+        setStateSafe(setIsConnecting, false);
+        return;
+      }
+
+      // Mock successful connection
+      console.log('[AudioStreamer] Demo WebSocket connected');
+      reconnectAttemptsRef.current = 0;
+      serverErrorCountRef.current = 0;
+      audioChunkCountRef.current = 0;
+      skippedChunkCountRef.current = 0;
+      setStateSafe(setIsConnecting, false);
+      setStateSafe(setIsStreaming, true);
+      setStateSafe(setError, null);
+
+      // Log successful connection
+      if (logEventRef.current) {
+        logEventRef.current('websocket', 'connected', 'Demo WebSocket streaming started', `URL: ${trimmed}, Mode: ${mode}`);
+      }
+
+      // Log demo mode activity periodically
+      if (demoIntervalRef.current) clearInterval(demoIntervalRef.current);
+      demoIntervalRef.current = setInterval(() => {
+        if (isDemoStreamRef.current && !manuallyStoppedRef.current) {
+          console.log('[AudioStreamer] Demo streaming active');
+        }
+      }, 10000); // Log every 10 seconds
+
+      return Promise.resolve();
+    }
+
+    // Network gate (only for real connections)
     const netState = await NetInfo.fetch();
     if (!netState.isConnected || !netState.isInternetReachable) {
       const errorMsg = 'No internet connection.';
@@ -236,6 +307,11 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     setStateSafe(setIsConnecting, true);
     setStateSafe(setError, null);
 
+    // Log websocket connecting
+    if (logEventRef.current) {
+      logEventRef.current('websocket', 'connecting', 'Connecting to WebSocket', trimmed);
+    }
+
     return new Promise<void>((resolve, reject) => {
       try {
         console.log(`[AudioStreamer] Creating WebSocket connection...`);
@@ -244,6 +320,11 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
         ws.onopen = async () => {
           console.log('[AudioStreamer] WebSocket open');
+
+          // Log successful connection
+          if (logEventRef.current) {
+            logEventRef.current('websocket', 'connected', 'WebSocket streaming started', `URL: ${trimmed}, Mode: ${currentModeRef.current}`);
+          }
 
           // Set binary type to arraybuffer (matches web implementation)
           if (ws.binaryType !== 'arraybuffer') {
@@ -254,6 +335,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
           reconnectAttemptsRef.current = 0;
           serverErrorCountRef.current = 0;
           audioChunkCountRef.current = 0; // Reset audio chunk counter
+          skippedChunkCountRef.current = 0; // Reset skipped chunk counter
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, true);
           setStateSafe(setError, null);
@@ -320,6 +402,10 @@ export const useAudioStreamer = (): UseAudioStreamer => {
           setStateSafe(setError, msg);
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, false);
+          // Log websocket error
+          if (logEventRef.current) {
+            logEventRef.current('websocket', 'error', 'WebSocket connection error', msg);
+          }
           if (websocketRef.current === ws) websocketRef.current = null;
           reject(new Error(msg));
         };
@@ -330,6 +416,12 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, false);
+
+          // Log websocket disconnection
+          if (logEventRef.current) {
+            const reason = isManual ? 'Manual close' : 'Connection closed unexpectedly';
+            logEventRef.current('websocket', 'disconnected', 'WebSocket closed', `${reason} (code: ${event.code})`);
+          }
 
           if (websocketRef.current === ws) websocketRef.current = null;
 
@@ -351,10 +443,23 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
   // Send audio data
   const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
+    // Handle demo streaming
+    if (isDemoStreamRef.current) {
+      audioChunkCountRef.current++;
+      skippedChunkCountRef.current = 0;
+      // Log first and every 50th chunk to show activity
+      if (audioChunkCountRef.current === 1 || audioChunkCountRef.current % 50 === 0) {
+        console.log(`[AudioStreamer] Demo: Simulating audio chunk #${audioChunkCountRef.current}: ${audioBytes.length} bytes`);
+      }
+      return;
+    }
+
+    // Handle real streaming
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
         // Log first and every 50th chunk
         audioChunkCountRef.current++;
+        skippedChunkCountRef.current = 0; // Reset skipped count when successfully sending
         if (audioChunkCountRef.current === 1 || audioChunkCountRef.current % 50 === 0) {
           console.log(`[AudioStreamer] Sending audio chunk #${audioChunkCountRef.current}: ${audioBytes.length} bytes`);
         }
@@ -366,11 +471,15 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         setStateSafe(setError, msg);
       }
     } else {
-      console.log(
-        `[AudioStreamer] NOT sending audio. hasWS=${!!websocketRef.current
-        } ready=${websocketRef.current?.readyState === WebSocket.OPEN
-        } bytes=${audioBytes.length}`
-      );
+      // Only log first skipped chunk and every 100th after that to avoid spam
+      skippedChunkCountRef.current++;
+      if (skippedChunkCountRef.current === 1 || skippedChunkCountRef.current % 100 === 0) {
+        console.log(
+          `[AudioStreamer] NOT sending audio (${skippedChunkCountRef.current} chunks skipped). hasWS=${!!websocketRef.current
+          } ready=${websocketRef.current?.readyState === WebSocket.OPEN
+          } bytes=${audioBytes.length}`
+        );
+      }
     }
   }, [sendWyomingEvent, setStateSafe]);
 
@@ -417,5 +526,6 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     cancelRetry,
     sendAudio,
     getWebSocketReadyState,
+    setLogEvent,
   };
 };

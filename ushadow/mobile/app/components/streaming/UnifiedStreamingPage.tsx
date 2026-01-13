@@ -52,21 +52,29 @@ import {
   setActiveUnode as setActiveUnodeStorage,
   parseStreamUrl,
 } from '../../utils/unodeStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { appendTokenToUrl, saveAuthToken } from '../../utils/authStorage';
+import { isDemoMode } from '../../utils/demoModeStorage';
+import { DEMO_UNODE, MOCK_OMI_DEVICES } from '../../utils/mockData';
 
 // API
-import { verifyUnodeAuth } from '../../services/chronicleApi';
+import { verifyUnodeAuth } from '../../services/chronicleApiWrapper';
+
+// Types
+import type { ConnectionType, ConnectionStatus } from '../../types/connectionLog';
 
 interface UnifiedStreamingPageProps {
   authToken: string | null;
   onAuthRequired?: () => void;
   testID?: string;
+  logEvent?: (type: ConnectionType, status: ConnectionStatus, message: string, details?: string) => void;
 }
 
 export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   authToken,
   onAuthRequired,
   testID = 'unified-streaming',
+  logEvent,
 }) => {
   // Source state
   const [selectedSource, setSelectedSource] = useState<StreamSource>({ type: 'microphone' });
@@ -102,7 +110,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     disconnectFromDevice: disconnectOmiDevice,
     batteryLevel,
     getBatteryLevel,
-  } = useDeviceConnection(omiConnection);
+  } = useDeviceConnection(omiConnection, undefined, undefined, logEvent);
 
   // Derive OMI connection status for SourceSelector
   const omiConnectionStatus: 'disconnected' | 'connecting' | 'connected' =
@@ -111,8 +119,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
   // isConnected check for audio listener
   const isOmiConnected = useCallback(() => {
+    // Check if connected device is demo device
+    if (connectedDeviceId && MOCK_OMI_DEVICES.some(d => d.id === connectedDeviceId)) {
+      return true; // Demo device is always "connected"
+    }
     return omiConnection.isConnected();
-  }, [omiConnection]);
+  }, [omiConnection, connectedDeviceId]);
 
   // OMI audio listener
   const {
@@ -120,10 +132,17 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     audioLevel: omiAudioLevel,
     startAudioListener,
     stopAudioListener,
-  } = useAudioListener(omiConnection, isOmiConnected);
+  } = useAudioListener(omiConnection, isOmiConnected, connectedDeviceId);
 
   // WebSocket streamer for OMI
   const omiStreamer = useAudioStreamer();
+
+  // Set log event callback on omiStreamer
+  useEffect(() => {
+    if (logEvent) {
+      omiStreamer.setLogEvent(logEvent);
+    }
+  }, [logEvent, omiStreamer]);
 
   // Combined state
   const isStreaming = selectedSource.type === 'microphone'
@@ -179,10 +198,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
   }, [selectedSource, phoneStreaming, omiStreamer]);
 
-  // Load saved data on mount
+  // Load saved data on mount and when authToken changes (login/logout/demo mode)
   useEffect(() => {
     loadSavedData();
-  }, []);
+  }, [authToken, loadSavedData]);
 
   // Refresh unodes when screen regains focus (e.g., returning from unode-details)
   // Always reload to pick up any config changes (protocol, path, etc.)
@@ -193,7 +212,24 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           getActiveUnodeId(),
           getUnodes(),
         ]);
-        setUnodes(savedUnodes);
+
+        // Check demo mode and filter accordingly
+        let finalUnodes = savedUnodes;
+        const inDemoMode = await isDemoMode();
+        if (inDemoMode) {
+          // In demo mode: inject demo UNode
+          console.log('[UnifiedStreaming] Demo mode active - adding demo UNode on refresh');
+          const hasDemoNode = savedUnodes.some(node => node.id === DEMO_UNODE.id);
+          if (!hasDemoNode) {
+            finalUnodes = [DEMO_UNODE as UNode, ...savedUnodes];
+          }
+        } else {
+          // Not in demo mode: filter out demo UNode
+          finalUnodes = savedUnodes.filter(node => node.id !== DEMO_UNODE.id);
+          console.log('[UnifiedStreaming] Demo mode inactive - filtered out demo UNode on refresh');
+        }
+
+        setUnodes(finalUnodes);
         if (activeId && activeId !== selectedUnodeId) {
           setSelectedUnodeId(activeId);
         }
@@ -206,11 +242,44 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   const loadSavedData = useCallback(async () => {
     try {
       // Load OMI devices
-      const devices = await getSavedOmiDevices();
+      let devices = await getSavedOmiDevices();
+
+      // Check demo mode
+      const inDemoMode = await isDemoMode();
+      const demoDeviceIds = MOCK_OMI_DEVICES.map(d => d.id);
+
+      if (inDemoMode && MOCK_OMI_DEVICES.length > 0) {
+        // In demo mode: inject demo OMI device
+        const demoOmiDevice: SavedOmiDevice = {
+          id: MOCK_OMI_DEVICES[0].id,
+          name: MOCK_OMI_DEVICES[0].name,
+          savedAt: new Date().toISOString(),
+        };
+        const hasDemoDevice = devices.some(d => d.id === demoOmiDevice.id);
+        if (!hasDemoDevice) {
+          devices = [demoOmiDevice, ...devices];
+        }
+      } else {
+        // Not in demo mode: filter out any demo devices
+        devices = devices.filter(d => !demoDeviceIds.includes(d.id));
+      }
+
       setOmiDevices(devices);
 
       // Load UNodes
-      const savedUnodes = await getUnodes();
+      let savedUnodes = await getUnodes();
+
+      if (inDemoMode) {
+        // In demo mode: inject demo UNode
+        const hasDemoNode = savedUnodes.some(node => node.id === DEMO_UNODE.id);
+        if (!hasDemoNode) {
+          savedUnodes = [DEMO_UNODE as UNode, ...savedUnodes];
+        }
+      } else {
+        // Not in demo mode: filter out demo UNode
+        savedUnodes = savedUnodes.filter(node => node.id !== DEMO_UNODE.id);
+      }
+
       setUnodes(savedUnodes);
 
       // Load active UNode
@@ -218,8 +287,21 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (activeId) {
         setSelectedUnodeId(activeId);
       } else if (savedUnodes.length > 0) {
-        // Auto-select first UNode if none active
+        // Auto-select first UNode if none active (demo UNode if in demo mode)
         setSelectedUnodeId(savedUnodes[0].id);
+      }
+
+      // Auto-select demo OMI device if in demo mode and it's in the list
+      if (inDemoMode && devices.length > 0 && MOCK_OMI_DEVICES.length > 0) {
+        const demoDeviceId = MOCK_OMI_DEVICES[0].id;
+        if (devices.some(d => d.id === demoDeviceId)) {
+          console.log('[UnifiedStreaming] Auto-selecting demo OMI device as source');
+          setSelectedSource({
+            type: 'omi',
+            deviceId: demoDeviceId,
+            deviceName: MOCK_OMI_DEVICES[0].name,
+          });
+        }
       }
     } catch (err) {
       console.error('[UnifiedStreaming] Failed to load saved data:', err);
@@ -231,6 +313,21 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     if (!unode) {
       setAuthStatus('unknown');
       setAuthError(null);
+      return;
+    }
+
+    // Skip verification if this is demo UNode (shouldn't happen after demo mode ends)
+    if (unode.id === DEMO_UNODE.id) {
+      const inDemoMode = await isDemoMode();
+      if (inDemoMode) {
+        setAuthStatus('authenticated');
+        setAuthError(null);
+      } else {
+        // Demo UNode but not in demo mode - this shouldn't happen, but handle gracefully
+        console.warn('[UnifiedStreaming] Demo UNode selected but not in demo mode');
+        setAuthStatus('error');
+        setAuthError('Invalid demo configuration');
+      }
       return;
     }
 
@@ -304,6 +401,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   const getStreamUrl = useCallback((): string | null => {
     if (!selectedUNode?.apiUrl) return null;
 
+    // Check if this is a demo URL - return it directly
+    if (selectedUNode.apiUrl.startsWith('demo://')) {
+      console.log('[UnifiedStreaming] Demo URL detected, using streamUrl:', selectedUNode.streamUrl);
+      return selectedUNode.streamUrl;
+    }
+
     // Get the stored config (protocol + path) or use defaults
     const storedConfig = selectedUNode.streamUrl
       ? parseStreamUrl(selectedUNode.streamUrl)
@@ -373,12 +476,31 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Handle destination change
   const handleDestinationChange = useCallback(async (unodeId: string) => {
     setSelectedUnodeId(unodeId);
-    await setActiveUnodeStorage(unodeId);
+    // Don't persist demo UNode as active
+    if (unodeId !== DEMO_UNODE.id) {
+      await setActiveUnodeStorage(unodeId);
+    }
+  }, []);
+
+  // Handle clear selection
+  const handleClearSelection = useCallback(async () => {
+    console.log('[UnifiedStreaming] Clearing destination selection');
+    setSelectedUnodeId(null);
+    await AsyncStorage.removeItem('@ushadow_active_unode');
+    console.log('[UnifiedStreaming] ✓ Destination cleared - no UNode selected');
   }, []);
 
   // Start streaming
   const handleStartStreaming = useCallback(async () => {
     const streamUrl = getStreamUrl();
+    console.log('[UnifiedStreaming] Starting stream:', {
+      streamUrl,
+      sourceType: selectedSource.type,
+      selectedDevice: selectedSource.deviceId,
+      connectedDevice: connectedDeviceId,
+      selectedUNode: selectedUNode?.name,
+    });
+
     if (!streamUrl) {
       Alert.alert('No Destination', 'Please select a destination UNode.');
       return;
@@ -386,24 +508,31 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
     try {
       if (selectedSource.type === 'microphone') {
+        console.log('[UnifiedStreaming] Starting phone microphone streaming to:', streamUrl);
         await phoneStreaming.startStreaming(streamUrl);
       } else {
         // OMI streaming
+        console.log('[UnifiedStreaming] Starting OMI device streaming to:', streamUrl);
+
         if (!connectedDeviceId || connectedDeviceId !== selectedSource.deviceId) {
           // Need to connect first
+          console.log('[UnifiedStreaming] Connecting to OMI device:', selectedSource.deviceId);
           await connectOmiDevice(selectedSource.deviceId);
         }
 
         // Start WebSocket
+        console.log('[UnifiedStreaming] Starting WebSocket stream');
         await omiStreamer.startStreaming(streamUrl);
 
         // Start OMI audio listener
+        console.log('[UnifiedStreaming] Starting audio listener');
         await startAudioListener(async (audioBytes: Uint8Array) => {
           if (audioBytes.length > 0) {
             await omiStreamer.sendAudio(audioBytes);
           }
         });
       }
+      console.log('[UnifiedStreaming] ✓ Streaming started successfully');
     } catch (err) {
       console.error('[UnifiedStreaming] Failed to start streaming:', err);
       Alert.alert('Streaming Error', (err as Error).message || 'Failed to start streaming');
@@ -416,6 +545,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     connectOmiDevice,
     omiStreamer,
     startAudioListener,
+    selectedUNode,
   ]);
 
   // Stop streaming
@@ -457,6 +587,13 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
   // Handle OMI device removed
   const handleRemoveOmiDevice = useCallback(async (deviceId: string) => {
+    // Prevent removing demo device
+    const inDemoMode = await isDemoMode();
+    if (inDemoMode && MOCK_OMI_DEVICES.some(d => d.id === deviceId)) {
+      console.log('[UnifiedStreaming] Cannot remove demo device');
+      return;
+    }
+
     await removeOmiDevice(deviceId);
     const devices = await getSavedOmiDevices();
     setOmiDevices(devices);
@@ -484,7 +621,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       await saveAuthToken(token);
     }
 
-    const updatedUnodes = await getUnodes();
+    // Reload unodes and filter out demo node if not in demo mode
+    let updatedUnodes = await getUnodes();
+    const inDemoMode = await isDemoMode();
+    if (!inDemoMode) {
+      updatedUnodes = updatedUnodes.filter(node => node.id !== DEMO_UNODE.id);
+    }
     setUnodes(updatedUnodes);
     setSelectedUnodeId(savedUnode.id);
     await setActiveUnodeStorage(savedUnode.id);
@@ -494,7 +636,13 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Handle UNode removed
   const handleRemoveUnode = useCallback(async (unodeId: string) => {
     await removeUnode(unodeId);
-    const updatedUnodes = await getUnodes();
+
+    // Reload unodes and filter out demo node if not in demo mode
+    let updatedUnodes = await getUnodes();
+    const inDemoMode = await isDemoMode();
+    if (!inDemoMode) {
+      updatedUnodes = updatedUnodes.filter(node => node.id !== DEMO_UNODE.id);
+    }
     setUnodes(updatedUnodes);
 
     // If removed UNode was selected, select another or clear
@@ -552,6 +700,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           authStatus={authStatus}
           authError={authError}
           onReauthenticate={handleReauthenticate}
+          onClearSelection={handleClearSelection}
           disabled={isStreaming}
           testID={`${testID}-destination`}
         />

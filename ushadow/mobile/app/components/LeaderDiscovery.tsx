@@ -6,7 +6,7 @@
  * Fallback: Manual IP entry or reconnect to saved leader
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,9 +16,12 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTailscaleDiscovery, SavedServerConfig } from '../hooks/useTailscaleDiscovery';
 import QRScanner, { UshadowConnectionData } from './QRScanner';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
+import { isDemoMode } from '../utils/demoModeStorage';
+import { DEMO_UNODE } from '../utils/mockData';
 
 interface LeaderDiscoveryProps {
   onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string) => void;
@@ -48,6 +51,16 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
   const [showManual, setShowManual] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [justScanned, setJustScanned] = useState(false);  // Track if user just scanned in this session
+  const [demoMode, setDemoMode] = useState(false);
+
+  // Check demo mode on mount
+  useEffect(() => {
+    const checkDemoMode = async () => {
+      const isDemo = await isDemoMode();
+      setDemoMode(isDemo);
+    };
+    checkDemoMode();
+  }, []);
 
   const handleQRScan = async (data: UshadowConnectionData) => {
     setShowScanner(false);
@@ -93,6 +106,18 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
   const handleConnectToLeader = () => {
     if (leader && onLeaderFound) {
       onLeaderFound(leader.apiUrl, leader.streamUrl, undefined, leader.chronicleApiUrl);
+    }
+  };
+
+  const handleUseDemoNode = () => {
+    if (onLeaderFound) {
+      console.log('[LeaderDiscovery] Using demo UNode');
+      onLeaderFound(
+        DEMO_UNODE.apiUrl,
+        DEMO_UNODE.streamUrl,
+        DEMO_UNODE.authToken,
+        DEMO_UNODE.chronicleApiUrl
+      );
     }
   };
 
@@ -246,6 +271,34 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
             </TouchableOpacity>
           </View>
         </View>
+      )}
+
+      {/* Demo Mode Option - Only show in demo mode */}
+      {demoMode && (
+        <>
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>DEMO MODE</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <View style={styles.demoSection}>
+            <View style={styles.demoHeader}>
+              <Ionicons name="information-circle" size={20} color={colors.primary[400]} />
+              <Text style={styles.demoTitle}>Demo UNode Available</Text>
+            </View>
+            <Text style={styles.demoDescription}>
+              Test streaming features without a real server connection.
+            </Text>
+            <TouchableOpacity
+              style={styles.demoButton}
+              onPress={handleUseDemoNode}
+              testID="use-demo-node-button"
+            >
+              <Text style={styles.demoButtonText}>Use Demo Node</Text>
+            </TouchableOpacity>
+          </View>
+        </>
       )}
 
       {/* Scanned Server Card - Only show if user just scanned */}
@@ -558,6 +611,41 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: borderRadius.md,
     alignItems: 'center',
+  },
+  demoSection: {
+    backgroundColor: `${colors.primary[400]}10`,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.primary[400],
+  },
+  demoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  demoTitle: {
+    color: theme.textPrimary,
+    fontSize: fontSize.base,
+    fontWeight: '600',
+  },
+  demoDescription: {
+    color: theme.textSecondary,
+    fontSize: fontSize.sm,
+    marginBottom: spacing.md,
+    lineHeight: fontSize.sm * 1.5,
+  },
+  demoButton: {
+    backgroundColor: colors.primary[400],
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+  },
+  demoButtonText: {
+    color: '#fff',
+    fontSize: fontSize.base,
+    fontWeight: '600',
   },
 });
 

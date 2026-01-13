@@ -112,27 +112,62 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
   };
 
   const renderStatusSummary = () => (
-    <View style={styles.statusSummary} testID="connection-status-summary">
-      {(['network', 'server', 'bluetooth', 'websocket'] as ConnectionType[]).map((type) => {
-        const status = connectionState[type];
-        const typeColor = TYPE_COLORS[type];
-        const statusColor = STATUS_COLORS[status];
-        const typeIcon = TYPE_ICONS[type];
-        const statusIcon = STATUS_ICONS[status];
-
-        return (
-          <View key={type} style={styles.statusItem}>
-            <View style={[styles.statusIconContainer, { borderColor: typeColor }]}>
-              <Ionicons name={typeIcon} size={18} color={typeColor} />
-              <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-            </View>
-            <Text style={[styles.statusLabel, { color: typeColor }]}>
-              {CONNECTION_TYPE_LABELS[type]}
-            </Text>
-            <Ionicons name={statusIcon} size={14} color={statusColor} />
+    <View style={styles.statusSummaryContainer} testID="connection-status-summary">
+      <View style={styles.statusSummary}>
+        {/* All filter button */}
+        <TouchableOpacity
+          style={styles.statusItem}
+          onPress={() => setActiveFilter('all')}
+          testID="filter-icon-all"
+        >
+          <View
+            style={[
+              styles.statusIconContainer,
+              { borderColor: colors.primary[400] },
+              activeFilter === 'all' && styles.statusIconContainerActive,
+            ]}
+          >
+            <Ionicons name="apps" size={18} color={colors.primary[400]} />
           </View>
-        );
-      })}
+          <Text style={[styles.statusLabel, { color: colors.primary[400] }]}>
+            All
+          </Text>
+        </TouchableOpacity>
+
+        {/* Connection type filters */}
+        {(['network', 'server', 'bluetooth', 'websocket'] as ConnectionType[]).map((type) => {
+          const status = connectionState[type];
+          const typeColor = TYPE_COLORS[type];
+          const statusColor = STATUS_COLORS[status];
+          const typeIcon = TYPE_ICONS[type];
+          const statusIcon = STATUS_ICONS[status];
+          const isActive = activeFilter === type;
+
+          return (
+            <TouchableOpacity
+              key={type}
+              style={styles.statusItem}
+              onPress={() => setActiveFilter(type)}
+              testID={`filter-icon-${type}`}
+            >
+              <View
+                style={[
+                  styles.statusIconContainer,
+                  { borderColor: typeColor },
+                  isActive && styles.statusIconContainerActive,
+                ]}
+              >
+                <Ionicons name={typeIcon} size={18} color={typeColor} />
+                <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+              </View>
+              <Text style={[styles.statusLabel, { color: typeColor }]}>
+                {CONNECTION_TYPE_LABELS[type]}
+              </Text>
+              <Ionicons name={statusIcon} size={14} color={statusColor} />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
   );
 
@@ -245,11 +280,8 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* Current Status Summary */}
+        {/* Current Status Summary with integrated filters */}
         {renderStatusSummary()}
-
-        {/* Filters */}
-        {renderFilters()}
 
         {/* Log Count */}
         <View style={styles.countContainer}>
@@ -309,18 +341,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.primary[400],
   },
-  statusSummary: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
+  statusSummaryContainer: {
     backgroundColor: theme.backgroundCard,
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
+    paddingVertical: spacing.md,
+  },
+  statusSummary: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: spacing.sm,
   },
   statusItem: {
     alignItems: 'center',
     gap: 4,
+    minWidth: 44,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   statusIconContainer: {
     width: 40,
@@ -331,6 +368,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: theme.backgroundInput,
     position: 'relative',
+  },
+  statusIconContainerActive: {
+    backgroundColor: theme.backgroundHover,
+    transform: [{ scale: 1.1 }],
   },
   statusDot: {
     position: 'absolute',

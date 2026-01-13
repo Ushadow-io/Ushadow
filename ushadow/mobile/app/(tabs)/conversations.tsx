@@ -20,7 +20,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
-import { fetchConversations, Conversation, getChronicleAudioUrl } from '../services/chronicleApi';
+import { fetchConversations, Conversation, getChronicleAudioUrl } from '../services/chronicleApiWrapper';
 import { isAuthenticated } from '../utils/authStorage';
 import ConversationAudioPlayer from '../components/AudioPlayer';
 

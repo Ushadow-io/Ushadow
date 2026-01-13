@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Alert } from 'react-native';
 import { OmiConnection } from 'friend-lite-react-native';
 import { Subscription, ConnectionPriority } from 'react-native-ble-plx';
+import { MOCK_OMI_DEVICES } from '../utils/mockData';
 
 interface UseAudioListener {
   isListeningAudio: boolean;
@@ -15,7 +16,8 @@ interface UseAudioListener {
 
 export const useAudioListener = (
   omiConnection: OmiConnection,
-  isConnected: () => boolean
+  isConnected: () => boolean,
+  connectedDeviceId?: string | null
 ): UseAudioListener => {
   const [isListeningAudio, setIsListeningAudio] = useState<boolean>(false);
   const [audioPacketsReceived, setAudioPacketsReceived] = useState<number>(0);
@@ -27,6 +29,7 @@ export const useAudioListener = (
   const uiUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const localPacketCounterRef = useRef<number>(0);
   const audioLevelRef = useRef<number>(0);
+  const demoAudioIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Random pattern for visual feedback (Opus doesn't provide reliable amplitude)
   const calculateAudioLevel = useCallback((_bytes: Uint8Array): number => {
@@ -60,6 +63,11 @@ export const useAudioListener = (
       uiUpdateIntervalRef.current = null;
     }
 
+    if (demoAudioIntervalRef.current) {
+      clearInterval(demoAudioIntervalRef.current);
+      demoAudioIntervalRef.current = null;
+    }
+
     if (audioSubscriptionRef.current) {
       try {
         await omiConnection.stopAudioBytesListener(audioSubscriptionRef.current);
@@ -70,8 +78,21 @@ export const useAudioListener = (
         setAudioLevel(0);
         console.log('Audio listener stopped.');
       } catch (error) {
-        console.error('Stop audio listener error:', error);
-        Alert.alert('Error', `Failed to stop audio listener: ${error}`);
+        // Check if this is the expected "Operation was cancelled" error from BLE
+        const errorMessage = String(error);
+        if (errorMessage.includes('Operation was cancelled') || errorMessage.includes('BleError')) {
+          // This is expected when cancelling a BLE subscription - suppress the error
+          console.log('Audio listener cancelled (expected when stopping)');
+          audioSubscriptionRef.current = null;
+          setIsListeningAudio(false);
+          localPacketCounterRef.current = 0;
+          audioLevelRef.current = 0;
+          setAudioLevel(0);
+        } else {
+          // Unexpected error
+          console.error('Stop audio listener error:', error);
+          Alert.alert('Error', `Failed to stop audio listener: ${error}`);
+        }
       }
     } else {
       console.log('Audio listener was not active.');
@@ -185,6 +206,47 @@ export const useAudioListener = (
       await stopAudioListener();
     }
 
+    // Check if this is a demo device
+    const isDemoDevice = connectedDeviceId && MOCK_OMI_DEVICES.some(d => d.id === connectedDeviceId);
+    if (isDemoDevice) {
+      console.log('[AudioListener] Demo device detected - starting fake audio generation');
+      setIsListeningAudio(true);
+      setAudioPacketsReceived(0);
+      localPacketCounterRef.current = 0;
+      setRetryAttempts(0);
+
+      // Generate fake audio packets at ~50Hz (20ms intervals, typical for audio streaming)
+      demoAudioIntervalRef.current = setInterval(() => {
+        // Generate fake PCM audio data (2048 bytes = 1024 16-bit samples)
+        const fakeAudio = new Uint8Array(2048);
+        // Fill with random-ish data to simulate audio
+        for (let i = 0; i < fakeAudio.length; i++) {
+          fakeAudio[i] = Math.floor(Math.random() * 256);
+        }
+
+        // Update counters and audio level
+        localPacketCounterRef.current++;
+        const level = calculateAudioLevel(fakeAudio);
+        audioLevelRef.current = level;
+        setAudioLevel(level);
+
+        // Call the audio data callback
+        onAudioData(fakeAudio);
+      }, 20); // 20ms = 50Hz
+
+      // Batch UI updates for packet counter
+      if (uiUpdateIntervalRef.current) clearInterval(uiUpdateIntervalRef.current);
+      uiUpdateIntervalRef.current = setInterval(() => {
+        if (localPacketCounterRef.current > 0) {
+          setAudioPacketsReceived(prev => prev + localPacketCounterRef.current);
+          localPacketCounterRef.current = 0;
+        }
+      }, 500);
+
+      console.log('[AudioListener] Demo audio generation started');
+      return;
+    }
+
     // Store the callback for retry attempts
     currentOnAudioDataRef.current = onAudioData;
     shouldRetryRef.current = true;
@@ -211,7 +273,7 @@ export const useAudioListener = (
       setIsRetrying(true);
       retryStartAudioListener();
     }
-  }, [omiConnection, isConnected, stopAudioListener, attemptStartAudioListener, retryStartAudioListener]);
+  }, [omiConnection, isConnected, stopAudioListener, attemptStartAudioListener, retryStartAudioListener, connectedDeviceId, calculateAudioLevel]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -222,6 +284,9 @@ export const useAudioListener = (
       }
       if (uiUpdateIntervalRef.current) {
         clearInterval(uiUpdateIntervalRef.current);
+      }
+      if (demoAudioIntervalRef.current) {
+        clearInterval(demoAudioIntervalRef.current);
       }
     };
   }, []);

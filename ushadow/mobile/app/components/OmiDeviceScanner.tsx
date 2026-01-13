@@ -31,6 +31,8 @@ import {
   saveOmiDevice,
   getSavedOmiDevices,
 } from '../utils/omiDeviceStorage';
+import { isDemoMode } from '../utils/demoModeStorage';
+import { MOCK_OMI_DEVICES } from '../utils/mockData';
 
 interface OmiDeviceScannerProps {
   onDeviceSaved: (device: SavedOmiDevice) => void;
@@ -43,6 +45,30 @@ export const OmiDeviceScanner: React.FC<OmiDeviceScannerProps> = ({
   onCancel,
   testID,
 }) => {
+  // Demo mode state
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoDevices, setDemoDevices] = useState<OmiDevice[]>([]);
+  const [demoScanning, setDemoScanning] = useState(false);
+
+  // Check demo mode on mount
+  useEffect(() => {
+    const checkDemoMode = async () => {
+      const isDemo = await isDemoMode();
+      setDemoMode(isDemo);
+      if (isDemo) {
+        console.log('[OmiDeviceScanner] Demo mode active - using mock devices');
+        // Convert mock devices to OmiDevice format
+        const mockOmiDevices: OmiDevice[] = MOCK_OMI_DEVICES.map(d => ({
+          id: d.id,
+          name: d.name,
+          rssi: d.rssi,
+        } as OmiDevice));
+        setDemoDevices(mockOmiDevices);
+      }
+    };
+    checkDemoMode();
+  }, []);
+
   // Shared OMI Connection from context (singleton)
   const omiConnection = useOmiConnection();
 
@@ -55,15 +81,26 @@ export const OmiDeviceScanner: React.FC<OmiDeviceScannerProps> = ({
     isPermissionsLoading,
   } = useBluetooth();
 
-  // Device scanning hook
+  // Device scanning hook (only used if not in demo mode)
   const isBluetoothOn = bluetoothState === BluetoothState.PoweredOn;
-  const { devices, scanning, startScan, stopScan, error } = useDeviceScanning(
+  const realScanning = useDeviceScanning(
     bleManager,
     omiConnection,
     permissionGranted,
     isBluetoothOn,
     requestBluetoothPermission
   );
+
+  // Use demo data if in demo mode, otherwise use real scanning
+  const devices = demoMode ? demoDevices : realScanning.devices;
+  const scanning = demoMode ? demoScanning : realScanning.scanning;
+  const startScan = demoMode ? () => {
+    console.log('[OmiDeviceScanner] Demo mode - simulating scan');
+    setDemoScanning(true);
+    setTimeout(() => setDemoScanning(false), 2000);
+  } : realScanning.startScan;
+  const stopScan = demoMode ? () => setDemoScanning(false) : realScanning.stopScan;
+  const error = demoMode ? null : realScanning.error;
 
   // UI state
   const [selectedDevice, setSelectedDevice] = useState<OmiDevice | null>(null);

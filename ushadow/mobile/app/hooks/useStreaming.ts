@@ -4,7 +4,7 @@
  * Combined streaming hook that orchestrates audio recording and WebSocket streaming.
  * Provides a simple interface for the UI to start/stop streaming.
  */
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAudioStreamer } from './useAudioStreamer';
 import { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
 
@@ -29,6 +29,8 @@ export interface UseStreaming {
 export const useStreaming = (): UseStreaming => {
   const [combinedError, setCombinedError] = useState<string | null>(null);
   const streamUrlRef = useRef<string>('');
+  const cancelledRef = useRef<boolean>(false);
+  const recordingCallbackRef = useRef<((data: Uint8Array) => void) | null>(null);
 
   // Audio streamer (WebSocket)
   const {
@@ -60,20 +62,49 @@ export const useStreaming = (): UseStreaming => {
   // Combined streaming state (streaming = WS connected + recording)
   const isStreaming = wsStreaming && isRecording;
 
+  // Auto-stop recording if WebSocket disconnects while recording
+  const prevWsStreamingRef = useRef(wsStreaming);
+  useEffect(() => {
+    if (prevWsStreamingRef.current && !wsStreaming && isRecording) {
+      console.log('[Streaming] WebSocket disconnected while recording, stopping recording...');
+      stopRecording().catch(err => {
+        console.error('[Streaming] Error auto-stopping recording:', err);
+      });
+      cancelledRef.current = true;
+      recordingCallbackRef.current = null;
+    }
+    prevWsStreamingRef.current = wsStreaming;
+  }, [wsStreaming, isRecording, stopRecording]);
+
   // Start streaming: connect WebSocket, then start recording
   const startStreamingCombined = useCallback(async (streamUrl: string, mode: 'batch' | 'streaming' = 'streaming') => {
     setCombinedError(null);
     streamUrlRef.current = streamUrl;
+    cancelledRef.current = false;
 
     try {
       console.log(`[Streaming] Starting WebSocket connection (mode: ${mode})...`);
       await wsStart(streamUrl, mode);
 
+      // Check if cancelled during connection
+      if (cancelledRef.current) {
+        console.log('[Streaming] Connection cancelled by user, aborting');
+        wsStop();
+        return;
+      }
+
       console.log('[Streaming] WebSocket connected, starting audio recording...');
-      await startRecording((pcmBuffer: Uint8Array) => {
-        // Forward audio data to WebSocket
-        sendAudio(pcmBuffer);
-      });
+
+      // Create callback that checks if WebSocket is still open before sending
+      const audioCallback = (pcmBuffer: Uint8Array) => {
+        // Only send if not cancelled and WebSocket is connected
+        if (!cancelledRef.current && wsStreaming) {
+          sendAudio(pcmBuffer);
+        }
+      };
+      recordingCallbackRef.current = audioCallback;
+
+      await startRecording(audioCallback);
 
       console.log('[Streaming] Streaming started successfully');
     } catch (err) {
@@ -84,14 +115,19 @@ export const useStreaming = (): UseStreaming => {
       // Cleanup on error
       await stopRecording();
       wsStop();
+      recordingCallbackRef.current = null;
 
       throw err;
     }
-  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop]);
+  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, wsStreaming]);
 
   // Stop streaming: stop recording, then disconnect WebSocket
   const stopStreamingCombined = useCallback(async () => {
     console.log('[Streaming] Stopping streaming...');
+
+    // Mark as cancelled to prevent any pending operations
+    cancelledRef.current = true;
+    recordingCallbackRef.current = null;
 
     try {
       await stopRecording();

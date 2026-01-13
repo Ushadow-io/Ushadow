@@ -39,9 +39,11 @@ import {
   parseStreamUrl,
 } from './utils/unodeStorage';
 import { getAuthToken, saveAuthToken } from './utils/authStorage';
+import { isDemoUrl, DEMO_UNODE } from './utils/mockData';
+import { isDemoMode } from './utils/demoModeStorage';
 
 // API
-import { verifyUnodeAuth } from './services/chronicleApi';
+import { verifyUnodeAuth } from './services/chronicleApiWrapper';
 
 // Types
 type ConnectionStatus = 'unknown' | 'checking' | 'connected' | 'error';
@@ -123,19 +125,39 @@ export default function UNodeDetailsPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [savedUnodes, activeId, token] = await Promise.all([
+      const [savedUnodes, activeId, token, inDemoMode] = await Promise.all([
         getUnodes(),
         getActiveUnodeId(),
         getAuthToken(),
+        isDemoMode(),
       ]);
 
-      setUnodes(savedUnodes);
-      setSelectedId(activeId || (savedUnodes.length > 0 ? savedUnodes[0].id : null));
+      // Filter out demo UNode if not in demo mode
+      let filteredUnodes = savedUnodes;
+      if (!inDemoMode) {
+        filteredUnodes = savedUnodes.filter(node => node.id !== DEMO_UNODE.id);
+        console.log('[UNodeDetails] Not in demo mode - filtered out demo UNode');
+      }
+
+      setUnodes(filteredUnodes);
+
+      // If selected node is demo UNode and we're not in demo mode, clear selection
+      if (activeId === DEMO_UNODE.id && !inDemoMode) {
+        const firstRealNode = filteredUnodes.length > 0 ? filteredUnodes[0].id : null;
+        setSelectedId(firstRealNode);
+        if (firstRealNode) {
+          await setActiveUnode(firstRealNode);
+          console.log('[UNodeDetails] Switched from demo UNode to first real UNode');
+        }
+      } else {
+        setSelectedId(activeId || (filteredUnodes.length > 0 ? filteredUnodes[0].id : null));
+      }
+
       setAuthToken(token);
 
       // Check status for all nodes
-      if (token && savedUnodes.length > 0) {
-        checkAllStatuses(savedUnodes, token);
+      if (token && filteredUnodes.length > 0) {
+        checkAllStatuses(filteredUnodes, token);
       }
     } catch (err) {
       console.error('[UNodeDetails] Failed to load data:', err);
@@ -160,6 +182,19 @@ export default function UNodeDetailsPage() {
         chronicle: 'checking',
       },
     }));
+
+    // Check if this is a demo URL - skip real network requests
+    if (isDemoUrl(node.apiUrl)) {
+      console.log(`[UNodeDetails] Demo URL detected - simulating successful connection`);
+      setStatuses(prev => ({
+        ...prev,
+        [node.id]: {
+          ushadow: 'connected',
+          chronicle: 'connected',
+        },
+      }));
+      return;
+    }
 
     // Check ushadow connection (auth endpoint)
     let ushadowStatus: ConnectionStatus = 'unknown';

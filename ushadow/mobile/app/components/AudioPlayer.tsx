@@ -10,6 +10,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'rea
 import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
+import { isDemoMode } from '../utils/demoModeStorage';
 
 interface AudioPlayerProps {
   conversationId: string;
@@ -36,12 +37,28 @@ export default function ConversationAudioPlayer({
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [position, setPosition] = useState<number>(0);
+  const [demoMode, setDemoMode] = useState(false);
 
   // Set up audio mode and load URL on mount
   useEffect(() => {
     let mounted = true;
 
     async function setupAudio() {
+      // Check if in demo mode first
+      const isDemo = await isDemoMode();
+      if (mounted) {
+        setDemoMode(isDemo);
+      }
+
+      if (isDemo) {
+        console.log('[AudioPlayer] Demo mode - audio playback not available');
+        if (mounted) {
+          setIsLoading(false);
+          setError(null); // No error, just demo mode
+        }
+        return;
+      }
+
       try {
         // Configure audio mode for playback
         await Audio.setAudioModeAsync({
@@ -154,6 +171,15 @@ export default function ConversationAudioPlayer({
     );
   }
 
+  if (demoMode) {
+    return (
+      <View style={styles.demoContainer}>
+        <Ionicons name="information-circle" size={16} color={colors.primary[400]} />
+        <Text style={styles.demoText}>Audio playback not available in demo mode</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.audioControls}>
@@ -195,6 +221,20 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontSize: fontSize.xs,
     marginLeft: spacing.sm,
+  },
+  demoContainer: {
+    backgroundColor: colors.success.bg,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  demoText: {
+    color: colors.primary[400],
+    fontSize: fontSize.xs,
+    flex: 1,
   },
   errorContainer: {
     backgroundColor: colors.error.bg,

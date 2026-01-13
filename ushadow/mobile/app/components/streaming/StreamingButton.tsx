@@ -74,7 +74,7 @@ export const StreamingButton: React.FC<StreamingButtonProps> = ({
       return 'Initializing...';
     }
     if (isConnecting && !isRetrying) {
-      return 'Connecting...';
+      return 'Cancel';
     }
     if (isRecording) {
       return 'Stop Streaming';
@@ -97,10 +97,10 @@ export const StreamingButton: React.FC<StreamingButtonProps> = ({
     return '\u{1F399}'; // Idle microphone
   };
 
-  const isLoading = isInitializing || (isConnecting && !isRetrying);
+  const isLoading = isInitializing;
 
-  // Button is clickable during retry to allow cancellation
-  const buttonDisabled = isRetrying ? false : (isDisabled || isLoading);
+  // Button is clickable during retry AND connection to allow cancellation
+  const buttonDisabled = isRetrying || isConnecting ? false : (isDisabled || isLoading);
 
   return (
     <View style={styles.container} testID={testID}>

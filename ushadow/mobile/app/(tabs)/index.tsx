@@ -18,6 +18,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import NetInfo from '@react-native-community/netinfo';
 import {
   ConnectionLogViewer,
   LoginScreen,
@@ -34,6 +35,11 @@ import {
   saveApiUrl,
 } from '../utils/authStorage';
 import { ConnectionState, createInitialConnectionState } from '../types/connectionLog';
+import { isDemoMode, disableDemoMode } from '../utils/demoModeStorage';
+import { DEMO_UNODE, MOCK_OMI_DEVICES } from '../utils/mockData';
+import { getUnodes, removeUnode, getActiveUnodeId, setActiveUnode, getActiveUnode } from '../utils/unodeStorage';
+import { getSavedOmiDevices, removeOmiDevice } from '../utils/omiDeviceStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function HomeScreen() {
   // Auth state
@@ -41,27 +47,73 @@ export default function HomeScreen() {
   const [authInfo, setAuthInfo] = useState<{ email: string; userId: string } | null>(null);
   const [showLoginScreen, setShowLoginScreen] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
 
   // UI state
   const [showLogViewer, setShowLogViewer] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     createInitialConnectionState()
   );
+  const [loginApiUrl, setLoginApiUrl] = useState<string>('https://blue.spangled-kettle.ts.net');
 
   // Connection logging hook
   const { entries: logEntries, logEvent, clearLogs } = useConnectionLog();
 
-  // Load auth state on mount
+  // Load active UNode's API URL for login
+  useEffect(() => {
+    const loadLoginUrl = async () => {
+      const activeUnode = await getActiveUnode();
+
+      // If no active UNode or demo UNode, use default
+      if (!activeUnode || activeUnode.id === DEMO_UNODE.id) {
+        setLoginApiUrl('https://blue.spangled-kettle.ts.net');
+        return;
+      }
+
+      // Use real UNode URL for login
+      if (activeUnode.apiUrl) {
+        setLoginApiUrl(activeUnode.apiUrl);
+      }
+    };
+
+    // Load when login screen is about to open
+    if (showLoginScreen) {
+      loadLoginUrl();
+    }
+  }, [showLoginScreen]);
+
+  // Load auth state on mount and clean up any leftover demo data
   useEffect(() => {
     const loadAuthState = async () => {
       try {
         const authenticated = await isAuthenticated();
+        const inDemoMode = await isDemoMode();
+        setDemoMode(inDemoMode);
+
+        // Cleanup: Remove demo UNode/devices from storage if NOT in demo mode
+        if (!inDemoMode) {
+          const unodes = await getUnodes();
+          if (unodes.some(node => node.id === DEMO_UNODE.id)) {
+            await removeUnode(DEMO_UNODE.id);
+          }
+
+          const demoDeviceIds = MOCK_OMI_DEVICES.map(d => d.id);
+          const omiDevices = await getSavedOmiDevices();
+          const demoDevicesToRemove = omiDevices.filter(d => demoDeviceIds.includes(d.id));
+          if (demoDevicesToRemove.length > 0) {
+            await Promise.all(demoDevicesToRemove.map(d => removeOmiDevice(d.id)));
+          }
+        }
+
         if (authenticated) {
           const token = await getAuthToken();
           const info = await getAuthInfo();
           setAuthToken(token);
           setAuthInfo(info);
-          logEvent('server', 'connected', 'Authenticated session restored', info?.email);
+          const message = inDemoMode
+            ? 'Demo mode active'
+            : 'Authenticated session restored';
+          logEvent('server', 'connected', message, info?.email);
         }
       } catch (error) {
         console.error('[Home] Failed to load auth state:', error);
@@ -70,6 +122,37 @@ export default function HomeScreen() {
       }
     };
     loadAuthState();
+  }, [logEvent]);
+
+  // Monitor network connectivity
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const isConnected = state.isConnected && state.isInternetReachable;
+      const networkType = state.type || 'unknown';
+
+      setConnectionState((prev) => ({
+        ...prev,
+        network: isConnected ? 'connected' : 'disconnected'
+      }));
+
+      if (isConnected) {
+        logEvent(
+          'network',
+          'connected',
+          `Network connected via ${networkType}`,
+          `Type: ${networkType}, Strength: ${state.details && 'strength' in state.details ? state.details.strength : 'unknown'}`
+        );
+      } else {
+        logEvent(
+          'network',
+          'disconnected',
+          'Network disconnected',
+          `Type: ${networkType}`
+        );
+      }
+    });
+
+    return () => unsubscribe();
   }, [logEvent]);
 
   // Refresh auth state when screen regains focus (e.g., after scanning QR code)
@@ -90,6 +173,12 @@ export default function HomeScreen() {
           setAuthToken(null);
           setAuthInfo(null);
         }
+
+        // Update login URL from active UNode
+        const activeUnode = await getActiveUnode();
+        if (activeUnode?.apiUrl && activeUnode.id !== DEMO_UNODE.id) {
+          setLoginApiUrl(activeUnode.apiUrl);
+        }
       };
       refreshAuthState();
     }, [authToken])
@@ -97,11 +186,16 @@ export default function HomeScreen() {
 
   const handleLoginSuccess = useCallback(
     async (token: string, apiUrl: string) => {
+      // Check if demo mode was enabled during login
+      const inDemoMode = await isDemoMode();
+      setDemoMode(inDemoMode);
+
       await saveAuthToken(token);
       await saveApiUrl(apiUrl);
       setAuthToken(token);
       const info = await getAuthInfo();
       setAuthInfo(info);
+
       setShowLoginScreen(false);
       setConnectionState((prev) => ({ ...prev, server: 'connected' }));
       logEvent('server', 'connected', 'Login successful', info?.email);
@@ -110,6 +204,39 @@ export default function HomeScreen() {
   );
 
   const handleLogout = useCallback(async () => {
+    // If in demo mode, disable it and restore previous UNode
+    if (await isDemoMode()) {
+      // Disable demo mode and get the previous UNode ID to restore
+      const previousUnodeId = await disableDemoMode();
+
+      // Remove demo UNode from storage if it exists
+      const unodes = await getUnodes();
+      if (unodes.some(node => node.id === DEMO_UNODE.id)) {
+        await removeUnode(DEMO_UNODE.id);
+      }
+
+      // Remove demo OMI devices from storage if they exist
+      const demoDeviceIds = MOCK_OMI_DEVICES.map(d => d.id);
+      const omiDevices = await getSavedOmiDevices();
+      const demoDevicesToRemove = omiDevices.filter(d => demoDeviceIds.includes(d.id));
+      if (demoDevicesToRemove.length > 0) {
+        await Promise.all(demoDevicesToRemove.map(d => removeOmiDevice(d.id)));
+      }
+
+      // Restore previous UNode (or clear if there was none)
+      if (previousUnodeId) {
+        await setActiveUnode(previousUnodeId);
+      } else {
+        await AsyncStorage.removeItem('@ushadow_active_unode');
+      }
+
+      // Update demo mode state to trigger component remount
+      setDemoMode(false);
+    } else {
+      setDemoMode(false);
+    }
+
+    // Clear auth
     await clearAuthToken();
     setAuthToken(null);
     setAuthInfo(null);
@@ -151,6 +278,14 @@ export default function HomeScreen() {
         <Text style={styles.subtitle}>Mobile Control</Text>
       </View>
 
+      {/* Demo Mode Banner */}
+      {demoMode && (
+        <View style={styles.demoBanner} testID="demo-mode-banner">
+          <Ionicons name="information-circle" size={16} color={colors.primary[400]} />
+          <Text style={styles.demoBannerText}>Demo Mode - Using Sample Data</Text>
+        </View>
+      )}
+
       {/* Auth Status */}
       {!authLoading && (
         <View style={styles.authStatus} testID="auth-status">
@@ -165,7 +300,9 @@ export default function HomeScreen() {
                 onPress={handleLogout}
                 testID="logout-button"
               >
-                <Text style={styles.logoutButtonText}>Logout</Text>
+                <Text style={styles.logoutButtonText}>
+                  {demoMode ? 'Exit Demo' : 'Logout'}
+                </Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -184,9 +321,11 @@ export default function HomeScreen() {
       {/* Unified Streaming Page */}
       <View style={styles.streamingContainer}>
         <UnifiedStreamingPage
+          key={`streaming-${demoMode ? 'demo' : 'normal'}`}
           authToken={authToken}
           onAuthRequired={() => setShowLoginScreen(true)}
           testID="unified-streaming"
+          logEvent={logEvent}
         />
       </View>
 
@@ -195,7 +334,7 @@ export default function HomeScreen() {
         visible={showLoginScreen}
         onClose={() => setShowLoginScreen(false)}
         onLoginSuccess={handleLoginSuccess}
-        initialApiUrl="https://blue.spangled-kettle.ts.net"
+        initialApiUrl={loginApiUrl}
       />
 
       {/* Connection Log Viewer Modal */}
@@ -309,5 +448,24 @@ const styles = StyleSheet.create({
   streamingContainer: {
     flex: 1,
     paddingHorizontal: spacing.lg,
+  },
+  demoBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.success.bgSolid,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.primary[400],
+  },
+  demoBannerText: {
+    fontSize: fontSize.xs,
+    color: colors.primary[400],
+    fontWeight: '600',
   },
 });

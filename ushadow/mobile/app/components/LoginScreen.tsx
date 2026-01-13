@@ -26,6 +26,9 @@ import {
 } from 'react-native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 import { saveAuthToken, saveApiUrl } from '../utils/authStorage';
+import { enableDemoMode } from '../utils/demoModeStorage';
+import { MOCK_AUTH_TOKEN, DEMO_UNODE } from '../utils/mockData';
+import { getActiveUnodeId, setActiveUnode } from '../utils/unodeStorage';
 
 interface LoginScreenProps {
   visible: boolean;
@@ -42,11 +45,53 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 }) => {
   // Server URL format: https://{tailscale-host}
   // Login will POST to {serverUrl}/api/auth/login
-  const [apiUrl, setApiUrl] = useState(initialApiUrl || 'https://blue.spangled-kettle.ts.net');
+  const [apiUrl, setApiUrl] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Update apiUrl when initialApiUrl changes (from active UNode)
+  React.useEffect(() => {
+    if (initialApiUrl) {
+      setApiUrl(initialApiUrl);
+      console.log('[LoginScreen] Updated URL from prop:', initialApiUrl);
+    }
+  }, [initialApiUrl]);
+
+  const handleDemoMode = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      console.log('[Login] Enabling demo mode');
+
+      // Get current active UNode ID before switching to demo mode
+      const currentActiveUnodeId = await getActiveUnodeId();
+      console.log('[Login] Current active UNode before demo:', currentActiveUnodeId);
+
+      // Enable demo mode and save previous UNode
+      await enableDemoMode(currentActiveUnodeId);
+
+      // Set demo UNode as active (without adding it to storage)
+      await setActiveUnode(DEMO_UNODE.id);
+      console.log('[Login] Set demo UNode as active');
+
+      // Save demo token and URL
+      await saveAuthToken(MOCK_AUTH_TOKEN);
+      await saveApiUrl('https://demo.ushadow.io');
+
+      console.log('[Login] Demo mode enabled');
+
+      // Notify parent
+      onLoginSuccess(MOCK_AUTH_TOKEN, 'https://demo.ushadow.io');
+    } catch (err) {
+      console.error('[Login] Demo mode error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to enable demo mode');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLogin = async () => {
     if (!apiUrl.trim() || !email.trim() || !password.trim()) {
@@ -217,9 +262,29 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               )}
             </TouchableOpacity>
 
+            {/* Divider */}
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>OR</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {/* Demo Mode Button */}
+            <TouchableOpacity
+              style={[styles.demoButton, loading && styles.demoButtonDisabled]}
+              onPress={handleDemoMode}
+              disabled={loading}
+              testID="demo-mode-button"
+            >
+              <Text style={styles.demoButtonText}>Try Demo Mode</Text>
+            </TouchableOpacity>
+
             {/* Help Text */}
             <Text style={styles.helpText}>
               Don't have an account? Scan the QR code from your Ushadow dashboard to connect automatically.
+            </Text>
+            <Text style={styles.demoHelpText}>
+              Demo mode provides sample data for testing without server connection.
             </Text>
           </View>
         </ScrollView>
@@ -322,6 +387,46 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: spacing.lg,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.border,
+  },
+  dividerText: {
+    marginHorizontal: spacing.md,
+    fontSize: fontSize.sm,
+    color: theme.textMuted,
+  },
+  demoButton: {
+    backgroundColor: theme.backgroundCard,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    alignItems: 'center',
+    marginBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: colors.primary[400],
+    borderStyle: 'dashed',
+  },
+  demoButtonDisabled: {
+    opacity: 0.7,
+  },
+  demoButtonText: {
+    color: colors.primary[400],
+    fontSize: fontSize.base,
+    fontWeight: '600',
+  },
+  demoHelpText: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+    lineHeight: 16,
   },
 });
 
