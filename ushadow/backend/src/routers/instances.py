@@ -60,9 +60,50 @@ async def list_templates(
     try:
         from src.services.compose_registry import get_compose_registry
         registry = get_compose_registry()
+        settings = get_settings_store()
+
+        # Get installed service names (same logic as ServiceOrchestrator)
+        default_services = await settings.get("default_services") or []
+        installed_names = set(default_services)
+        removed_names = set()
+
+        logger.info(f"Loading templates - default_services from settings: {default_services}")
+        logger.info(f"Loading templates - installed_names: {installed_names}")
+
+        user_installed = await settings.get("installed_services") or {}
+        for service_name, state in user_installed.items():
+            if hasattr(state, 'items'):
+                state_dict = dict(state)
+            else:
+                state_dict = state if isinstance(state, dict) else {}
+
+            is_removed = state_dict.get("removed") == True
+            is_added = state_dict.get("added") == True
+
+            if is_removed:
+                installed_names.discard(service_name)
+                removed_names.add(service_name)
+            elif is_added:
+                installed_names.add(service_name)
+
         for service in registry.get_services():
             if source and source != "compose":
                 continue
+
+            # Check if service is installed
+            is_installed = False
+            if service.service_name in removed_names:
+                is_installed = False
+            elif service.service_name in installed_names:
+                is_installed = True
+            else:
+                compose_base = service.compose_file.stem.replace('-compose', '')
+                if compose_base in installed_names:
+                    is_installed = True
+
+            # Debug logging
+            logger.info(f"Service: {service.service_name}, installed: {is_installed}, installed_names: {installed_names}")
+
             templates.append(Template(
                 id=service.service_id,
                 source=TemplateSource.COMPOSE,
@@ -75,6 +116,7 @@ async def list_templates(
                 compose_file=str(service.namespace) if service.namespace else None,
                 service_name=service.service_name,
                 mode="local",
+                installed=is_installed,
             ))
     except Exception as e:
         logger.warning(f"Failed to load compose templates: {e}")
@@ -133,6 +175,7 @@ async def list_templates(
                 tags=provider.tags,
                 configured=is_configured,
                 available=is_available,
+                installed=True,  # Providers are always "installed" (discoverable)
             ))
     except Exception as e:
         logger.warning(f"Failed to load provider templates: {e}")

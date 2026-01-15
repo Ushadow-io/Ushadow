@@ -22,21 +22,28 @@ import {
   Database,
   Zap,
   Clock,
+  Lock,
 } from 'lucide-react'
 import {
   instancesApi,
   integrationApi,
   settingsApi,
   servicesApi,
+  kubernetesApi,
+  clusterApi,
+  deploymentsApi,
   Template,
   Instance,
   InstanceSummary,
   Wiring,
   InstanceCreateRequest,
+  EnvVarInfo,
+  EnvVarConfig,
 } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { WiringBoard } from '../components/wiring'
+import DeployToK8sModal from '../components/DeployToK8sModal'
 
 /**
  * Extract error message from FastAPI response.
@@ -124,6 +131,32 @@ export default function InstancesPage() {
   const [editConfig, setEditConfig] = useState<Record<string, string>>({})
   const [isSavingEdit, setIsSavingEdit] = useState(false)
 
+  // Environment variable configuration state (for instance editing)
+  const [envVars, setEnvVars] = useState<EnvVarInfo[]>([])
+  const [envConfigs, setEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
+  const [loadingEnvConfig, setLoadingEnvConfig] = useState(false)
+
+  // Deploy modal state
+  const [deployModalState, setDeployModalState] = useState<{
+    isOpen: boolean
+    serviceId: string | null
+    targetType: 'local' | 'remote' | 'kubernetes' | null
+    selectedClusterId?: string
+    infraServices?: Record<string, any>  // Infrastructure data to pass to modal
+  }>({
+    isOpen: false,
+    serviceId: null,
+    targetType: null,
+  })
+  const [kubernetesClusters, setKubernetesClusters] = useState<any[]>([])
+  const [loadingClusters, setLoadingClusters] = useState(false)
+
+  // Service catalog state
+  const [showCatalog, setShowCatalog] = useState(false)
+  const [catalogServices, setCatalogServices] = useState<any[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [installingService, setInstallingService] = useState<string | null>(null)
+
   // ESC key to close modals
   const closeAllModals = useCallback(() => {
     setCreateInstanceState({
@@ -133,6 +166,7 @@ export default function InstancesPage() {
     })
     setShowAddProviderModal(false)
     setEditingProvider(null)
+    setShowCatalog(false)
   }, [])
 
   useEffect(() => {
@@ -159,6 +193,10 @@ export default function InstancesPage() {
         instancesApi.getWiring(),
         servicesApi.getAllStatuses().catch(() => ({ data: {} })),
       ])
+
+      console.log('Templates loaded:', templatesRes.data)
+      console.log('Compose templates (before filter):', templatesRes.data.filter((t: any) => t.source === 'compose'))
+      console.log('Compose templates (after installed filter):', templatesRes.data.filter((t: any) => t.source === 'compose' && t.installed))
 
       setTemplates(templatesRes.data)
       setInstances(instancesRes.data)
@@ -191,6 +229,61 @@ export default function InstancesPage() {
       setMessage({ type: 'error', text: 'Failed to load instances data' })
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Service catalog functions
+  const openCatalog = async () => {
+    console.log('Opening catalog...')
+    setShowCatalog(true)
+    setCatalogLoading(true)
+    try {
+      const response = await servicesApi.getCatalog()
+      console.log('Catalog response:', response.data)
+      setCatalogServices(response.data)
+    } catch (error: any) {
+      console.error('Catalog error:', error)
+      setMessage({ type: 'error', text: 'Failed to load service catalog' })
+    } finally {
+      setCatalogLoading(false)
+    }
+  }
+
+  const handleInstallService = async (serviceId: string) => {
+    setInstallingService(serviceId)
+    try {
+      await servicesApi.install(serviceId)
+      // Reload templates and catalog
+      const [templatesRes, catalogRes] = await Promise.all([
+        instancesApi.getTemplates(),
+        servicesApi.getCatalog()
+      ])
+      setTemplates(templatesRes.data)
+      setCatalogServices(catalogRes.data)
+      setMessage({ type: 'success', text: 'Service installed successfully' })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to install service' })
+    } finally {
+      setInstallingService(null)
+    }
+  }
+
+  const handleUninstallService = async (serviceId: string) => {
+    setInstallingService(serviceId)
+    try {
+      await servicesApi.uninstall(serviceId)
+      // Reload templates and catalog
+      const [templatesRes, catalogRes] = await Promise.all([
+        instancesApi.getTemplates(),
+        servicesApi.getCatalog()
+      ])
+      setTemplates(templatesRes.data)
+      setCatalogServices(catalogRes.data)
+      setMessage({ type: 'success', text: 'Service uninstalled successfully' })
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to uninstall service' })
+    } finally {
+      setInstallingService(null)
     }
   }
 
@@ -531,13 +624,269 @@ export default function InstancesPage() {
     }
   }
 
-  const handleEditConsumer = (consumerId: string) => {
-    // Navigate to services page with the service pre-selected for editing
-    // For now, just expand the template to show settings
+  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => {
+    // For Kubernetes, load available clusters first
+    if (target.type === 'kubernetes') {
+      setLoadingClusters(true)
+      try {
+        const clustersResponse = await kubernetesApi.listClusters()
+        setKubernetesClusters(clustersResponse.data)
+
+        // If there's only one cluster, auto-select it and use its cached infrastructure scan
+        if (clustersResponse.data.length === 1) {
+          const cluster = clustersResponse.data[0]
+
+          // Use cached infrastructure scan results from cluster
+          // Infrastructure is cluster-wide, so use any available namespace scan
+          let infraData = {}
+          if (cluster.infra_scans && Object.keys(cluster.infra_scans).length > 0) {
+            // Use the first available scan (infra is typically accessible cluster-wide)
+            const firstNamespace = Object.keys(cluster.infra_scans)[0]
+            infraData = cluster.infra_scans[firstNamespace] || {}
+            console.log(`🏗️ Using cached K8s infrastructure from namespace '${firstNamespace}':`, infraData)
+          } else {
+            console.warn('No cached infrastructure scan found for cluster')
+          }
+
+          // Pass infrastructure directly in modal state
+          setDeployModalState({
+            isOpen: true,
+            serviceId: consumerId,
+            targetType: target.type,
+            selectedClusterId: cluster.cluster_id,
+            infraServices: infraData,
+          })
+        } else {
+          // Multiple clusters - need to show cluster selection
+          // Infrastructure will be loaded when cluster is selected in modal
+          setDeployModalState({
+            isOpen: true,
+            serviceId: consumerId,
+            targetType: target.type,
+          })
+        }
+      } catch (err) {
+        console.error('Failed to load K8s clusters:', err)
+        setMessage({ type: 'error', text: 'Failed to load Kubernetes clusters' })
+      } finally {
+        setLoadingClusters(false)
+      }
+    } else if (target.type === 'local') {
+      // Deploy to local unode (leader)
+      try {
+        setCreating(`deploy-${consumerId}`)
+
+        // Get local unode hostname from leader info
+        const leaderResponse = await clusterApi.getLeaderInfo()
+        const unodeHostname = leaderResponse.data.hostname
+
+        console.log(`🚀 Deploying ${consumerId} to local unode: ${unodeHostname}`)
+
+        // Generate unique instance ID for this deployment
+        const template = templates.find(t => t.id === consumerId)
+        const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
+        const timestamp = Date.now()
+        const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
+        const deploymentTarget = unodeHostname
+
+        // Step 1: Create instance with deployment target
+        await instancesApi.createInstance({
+          id: instanceId,
+          template_id: consumerId,
+          name: `${template?.name || consumerId} (${unodeHostname})`,
+          description: `uNode deployment to ${unodeHostname}`,
+          config: {},
+          deployment_target: deploymentTarget
+        })
+
+        // Step 2: Deploy the instance
+        await instancesApi.deployInstance(instanceId)
+
+        console.log('✅ Deployment successful')
+        setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to local unode` })
+
+        // Refresh instances and service statuses
+        const [instancesRes, statusesRes] = await Promise.all([
+          instancesApi.getInstances(),
+          servicesApi.getAllStatuses()
+        ])
+        setInstances(instancesRes.data)
+        setServiceStatuses(statusesRes.data || {})
+
+      } catch (err: any) {
+        console.error('Failed to deploy to local unode:', err)
+        const errorMsg = getErrorMessage(err, 'Failed to deploy to local unode')
+        setMessage({ type: 'error', text: errorMsg })
+      } finally {
+        setCreating(null)
+      }
+    } else if (target.type === 'remote') {
+      // Deploy to remote unode
+      try {
+        setCreating(`deploy-${consumerId}`)
+
+        // For now, show error - need to implement unode selection modal
+        // In the future, this should show a modal to select which remote unode to deploy to
+        if (!target.id) {
+          setMessage({ type: 'error', text: 'Remote unode deployment requires selecting a target unode. This will be implemented soon.' })
+          setCreating(null)
+          return
+        }
+
+        const targetHostname = target.id
+        console.log(`🚀 Deploying ${consumerId} to remote unode: ${targetHostname}`)
+
+        // Generate unique instance ID for this deployment
+        const template = templates.find(t => t.id === consumerId)
+        const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
+        const timestamp = Date.now()
+        const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
+        const deploymentTarget = targetHostname
+
+        // Step 1: Create instance with deployment target
+        await instancesApi.createInstance({
+          id: instanceId,
+          template_id: consumerId,
+          name: `${template?.name || consumerId} (${targetHostname})`,
+          description: `uNode deployment to ${targetHostname}`,
+          config: {},
+          deployment_target: deploymentTarget
+        })
+
+        // Step 2: Deploy the instance
+        await instancesApi.deployInstance(instanceId)
+
+        console.log('✅ Deployment successful')
+        setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to remote unode` })
+
+        // Refresh instances and service statuses
+        const [instancesRes, statusesRes] = await Promise.all([
+          instancesApi.getInstances(),
+          servicesApi.getAllStatuses()
+        ])
+        setInstances(instancesRes.data)
+        setServiceStatuses(statusesRes.data || {})
+
+      } catch (err: any) {
+        console.error('Failed to deploy to remote unode:', err)
+        const errorMsg = getErrorMessage(err, 'Failed to deploy to remote unode')
+        setMessage({ type: 'error', text: errorMsg })
+      } finally {
+        setCreating(null)
+      }
+    }
+  }
+
+  const handleEditConsumer = async (consumerId: string) => {
+    // Edit a consumer service - load its env config and show in modal
     const template = templates.find((t) => t.id === consumerId)
-    if (template) {
-      setSelectedTemplate(template)
-      setShowCreateModal(true)
+    if (!template) return
+
+    try {
+      setLoadingEnvConfig(true)
+
+      // Load environment variable configuration for this service
+      const envResponse = await servicesApi.getEnvConfig(template.id)
+      const envData = envResponse.data
+
+      const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+      setEnvVars(allEnvVars)
+
+      // Load wiring connections for this service to get provider-supplied values
+      const wiringConnections = wiring.filter((w) => w.target_instance_id === consumerId)
+      const providerSuppliedValues: Record<string, { value: string; provider: string; locked: boolean }> = {}
+
+      // For each wiring connection, determine which env vars it supplies
+      for (const conn of wiringConnections) {
+        const provider = [...templates, ...instances].find((p) => p.id === conn.source_instance_id)
+        if (provider) {
+          // Get the capability mapping (e.g., "mongodb" -> MONGODB_URL, MONGODB_NAME)
+          const capability = conn.source_capability
+
+          // Map capability to env var names based on common patterns
+          if (capability === 'mongodb') {
+            providerSuppliedValues['MONGODB_URL'] = {
+              value: `Provider: ${provider.name}`,
+              provider: provider.name,
+              locked: true,
+            }
+            providerSuppliedValues['MONGODB_NAME'] = {
+              value: `Provider: ${provider.name}`,
+              provider: provider.name,
+              locked: true,
+            }
+          } else if (capability === 'memory') {
+            providerSuppliedValues['MEMORY_URL'] = {
+              value: `Provider: ${provider.name}`,
+              provider: provider.name,
+              locked: true,
+            }
+          } else if (capability === 'vector_db') {
+            providerSuppliedValues['QDRANT_URL'] = {
+              value: `Provider: ${provider.name}`,
+              provider: provider.name,
+              locked: true,
+            }
+          } else if (capability === 'redis') {
+            providerSuppliedValues['REDIS_URL'] = {
+              value: `Provider: ${provider.name}`,
+              provider: provider.name,
+              locked: true,
+            }
+          } else if (capability === 'llm') {
+            providerSuppliedValues['OPENAI_API_KEY'] = {
+              value: `Provider: ${provider.name}`,
+              provider: provider.name,
+              locked: true,
+            }
+          }
+        }
+      }
+
+      // Initialize env configs from API response, overriding with provider values
+      const initialEnvConfigs: Record<string, EnvVarConfig> = {}
+      allEnvVars.forEach((envVar) => {
+        const providerValue = providerSuppliedValues[envVar.name]
+
+        if (providerValue) {
+          // This value comes from a wired provider - mark as locked
+          initialEnvConfigs[envVar.name] = {
+            name: envVar.name,
+            source: 'literal',
+            value: providerValue.value,
+            setting_path: undefined,
+            new_setting_path: undefined,
+            locked: true,
+            provider_name: providerValue.provider,
+          }
+        } else {
+          // Use API response data (setting mapping or default)
+          initialEnvConfigs[envVar.name] = {
+            name: envVar.name,
+            source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
+            setting_path: envVar.setting_path,
+            value: envVar.value,
+            new_setting_path: undefined,
+          }
+        }
+      })
+
+      setEnvConfigs(initialEnvConfigs)
+
+      // Open edit modal with service template
+      setEditingProvider({
+        id: template.id,
+        name: template.name,
+        isTemplate: true,
+        template,
+        config: {},
+      })
+      setEditConfig({})
+    } catch (err) {
+      console.error('Failed to load service env config:', err)
+      setMessage({ type: 'error', text: 'Failed to load service configuration' })
+    } finally {
+      setLoadingEnvConfig(false)
     }
   }
 
@@ -685,9 +1034,9 @@ export default function InstancesPage() {
       }),
   ]
 
-  // Consumers: compose services that require capabilities
+  // Consumers: all installed compose services (whether they have requirements or not)
   const wiringConsumers = templates
-    .filter((t) => t.source === 'compose' && t.requires && t.requires.length > 0)
+    .filter((t) => t.source === 'compose' && t.installed)
     .map((t) => {
       // Get actual status from Docker
       // Extract service name from template ID (format: "compose_file:service_name")
@@ -813,9 +1162,11 @@ export default function InstancesPage() {
           config: initialConfig,
         })
         setEditConfig(initialConfig)
+        setEnvVars([])
+        setEnvConfigs({})
       }
     } else {
-      // Edit instance - fetch details and open modal
+      // Edit instance - fetch details and load environment configuration
       try {
         let details = instanceDetails[providerId]
         if (!details) {
@@ -837,6 +1188,98 @@ export default function InstancesPage() {
             config: initialConfig as Record<string, string>,
           })
           setEditConfig(initialConfig as Record<string, string>)
+
+          // Load environment variable configuration for compose services
+          if (template.source === 'compose') {
+            setLoadingEnvConfig(true)
+            try {
+              const envResponse = await servicesApi.getEnvConfig(template.id)
+              const envData = envResponse.data
+
+              const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+              setEnvVars(allEnvVars)
+
+              // Load wiring connections for this instance to get provider-supplied values
+              const wiringConnections = wiring.filter((w) => w.target_instance_id === providerId)
+              const providerSuppliedValues: Record<string, { value: string; provider: string; locked: boolean }> = {}
+
+              // For each wiring connection, determine which env vars it supplies
+              for (const conn of wiringConnections) {
+                const provider = [...templates, ...instances].find((p) => p.id === conn.source_instance_id)
+                if (provider) {
+                  const capability = conn.source_capability
+
+                  // Map capability to env var names
+                  if (capability === 'mongodb') {
+                    providerSuppliedValues['MONGODB_URL'] = { value: `Provider: ${provider.name}`, provider: provider.name, locked: true }
+                    providerSuppliedValues['MONGODB_NAME'] = { value: `Provider: ${provider.name}`, provider: provider.name, locked: true }
+                  } else if (capability === 'memory') {
+                    providerSuppliedValues['MEMORY_URL'] = { value: `Provider: ${provider.name}`, provider: provider.name, locked: true }
+                  } else if (capability === 'vector_db') {
+                    providerSuppliedValues['QDRANT_URL'] = { value: `Provider: ${provider.name}`, provider: provider.name, locked: true }
+                  } else if (capability === 'redis') {
+                    providerSuppliedValues['REDIS_URL'] = { value: `Provider: ${provider.name}`, provider: provider.name, locked: true }
+                  } else if (capability === 'llm') {
+                    providerSuppliedValues['OPENAI_API_KEY'] = { value: `Provider: ${provider.name}`, provider: provider.name, locked: true }
+                  }
+                }
+              }
+
+              // Initialize env configs from API response, checking for provider overrides
+              const initialEnvConfigs: Record<string, EnvVarConfig> = {}
+              allEnvVars.forEach((envVar) => {
+                const providerValue = providerSuppliedValues[envVar.name]
+
+                if (providerValue) {
+                  // This value comes from a wired provider - mark as locked
+                  initialEnvConfigs[envVar.name] = {
+                    name: envVar.name,
+                    source: 'literal',
+                    value: providerValue.value,
+                    setting_path: undefined,
+                    new_setting_path: undefined,
+                    locked: true,
+                    provider_name: providerValue.provider,
+                  }
+                } else {
+                  // Check if instance has an override for this var
+                  const instanceValue = initialConfig[envVar.name]
+
+                  if (instanceValue !== undefined) {
+                    // Instance has an override
+                    initialEnvConfigs[envVar.name] = {
+                      name: envVar.name,
+                      source: 'new_setting',
+                      value: instanceValue,
+                      setting_path: undefined,
+                      new_setting_path: undefined,
+                    }
+                  } else {
+                    // Use service default configuration
+                    initialEnvConfigs[envVar.name] = {
+                      name: envVar.name,
+                      source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
+                      setting_path: envVar.setting_path,
+                      value: envVar.value,
+                      new_setting_path: undefined,
+                    }
+                  }
+                }
+              })
+
+              setEnvConfigs(initialEnvConfigs)
+            } catch (err) {
+              console.error('Failed to load env config:', err)
+              setEnvVars([])
+              setEnvConfigs({})
+            } finally {
+              setLoadingEnvConfig(false)
+            }
+          } else {
+            // Provider templates use config_schema, not env config
+            setEnvVars([])
+            setEnvConfigs({})
+          }
         }
       } catch (err) {
         console.error('Failed to load instance details:', err)
@@ -852,47 +1295,84 @@ export default function InstancesPage() {
     setIsSavingEdit(true)
     try {
       if (editingProvider.isTemplate) {
-        // Templates store values in settings store via settings_path
-        // Build a nested update object from the config schema
-        const updates: Record<string, Record<string, string>> = {}
-        const schema = editingProvider.template?.config_schema || []
+        // For templates, check if we have env config (compose services) or config schema (providers)
+        if (envVars.length > 0) {
+          // Compose service template - save env configs to settings store
+          const envVarConfigs = Object.values(envConfigs).filter(
+            (config) => config.source === 'new_setting' && config.value && config.new_setting_path
+          )
 
-        for (const field of schema) {
-          const newValue = editConfig[field.key]
-          // Only update if user provided a new value (not empty for existing secrets)
-          if (newValue && newValue.trim()) {
-            if (field.settings_path) {
-              // Parse path like "api_keys.openai_api_key" into nested object
-              const parts = field.settings_path.split('.')
-              if (parts.length === 2) {
-                const [section, key] = parts
-                if (!updates[section]) updates[section] = {}
-                updates[section][key] = newValue
+          if (envVarConfigs.length > 0) {
+            // Call the service API to update env config
+            await servicesApi.updateEnvConfig(editingProvider.template!.id, envVarConfigs)
+            setMessage({ type: 'success', text: `${editingProvider.name} configuration updated` })
+          }
+        } else {
+          // Provider template - store values in settings store via settings_path
+          // Build a nested update object from the config schema
+          const updates: Record<string, Record<string, string>> = {}
+          const schema = editingProvider.template?.config_schema || []
+
+          for (const field of schema) {
+            const newValue = editConfig[field.key]
+            // Only update if user provided a new value (not empty for existing secrets)
+            if (newValue && newValue.trim()) {
+              if (field.settings_path) {
+                // Parse path like "api_keys.openai_api_key" into nested object
+                const parts = field.settings_path.split('.')
+                if (parts.length === 2) {
+                  const [section, key] = parts
+                  if (!updates[section]) updates[section] = {}
+                  updates[section][key] = newValue
+                }
               }
             }
           }
-        }
 
-        if (Object.keys(updates).length > 0) {
-          await settingsApi.update(updates)
+          if (Object.keys(updates).length > 0) {
+            await settingsApi.update(updates)
+          }
+
+          setMessage({ type: 'success', text: `${editingProvider.name} settings updated` })
         }
 
         // Refresh templates to get updated values
         const templatesRes = await instancesApi.getTemplates()
         setTemplates(templatesRes.data)
-        setMessage({ type: 'success', text: `${editingProvider.name} settings updated` })
       } else {
-        // Update instance config - filter out empty values before saving
-        const filteredConfig = Object.fromEntries(
-          Object.entries(editConfig).filter(([, v]) => v && v.trim() !== '')
-        )
-        await instancesApi.updateInstance(editingProvider.id, { config: filteredConfig })
+        // Update instance config
+        let configToSave: Record<string, any> = {}
+
+        // For compose services with env config, convert envConfigs to instance config format
+        if (envVars.length > 0) {
+          Object.entries(envConfigs).forEach(([name, config]) => {
+            if (config.source === 'setting' && config.setting_path) {
+              configToSave[name] = { _from_setting: config.setting_path }
+            } else if (config.source === 'new_setting' && config.value) {
+              configToSave[name] = config.value
+              if (config.new_setting_path) {
+                configToSave[`_save_${name}`] = config.new_setting_path
+              }
+            } else if (config.value) {
+              configToSave[name] = config.value
+            }
+          })
+        } else {
+          // For provider templates, use the simple config format
+          configToSave = Object.fromEntries(
+            Object.entries(editConfig).filter(([, v]) => v && v.trim() !== '')
+          )
+        }
+
+        await instancesApi.updateInstance(editingProvider.id, { config: configToSave })
         // Refresh instance details
         const res = await instancesApi.getInstance(editingProvider.id)
         setInstanceDetails((prev) => ({ ...prev, [editingProvider.id]: res.data }))
         setMessage({ type: 'success', text: `${editingProvider.name} updated` })
       }
       setEditingProvider(null)
+      setEnvVars([])
+      setEnvConfigs({})
     } catch (error: any) {
       setMessage({
         type: 'error',
@@ -911,9 +1391,18 @@ export default function InstancesPage() {
     }
   }
 
-  // Group templates by source
-  const composeTemplates = templates.filter((t) => t.source === 'compose')
+  // Group templates by source - only show installed services
+  const composeTemplates = templates.filter((t) => t.source === 'compose' && t.installed)
   const allProviderTemplates = templates.filter((t) => t.source === 'provider')
+
+  // Group instances by their template_id for hierarchical display
+  const instancesByTemplate = instances.reduce((acc, instance) => {
+    if (!acc[instance.template_id]) {
+      acc[instance.template_id] = []
+    }
+    acc[instance.template_id].push(instance)
+    return acc
+  }, {} as Record<string, typeof instances>)
 
   // Providers shown in grid: configured OR user has added them
   const visibleProviders = allProviderTemplates.filter(
@@ -1016,10 +1505,18 @@ export default function InstancesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={openCatalog}
+            className="btn-primary flex items-center gap-2"
+            data-testid="browse-services-button"
+          >
+            <Package className="h-4 w-4" />
+            Browse Services
+          </button>
           {availableToAdd.length > 0 && (
             <button
               onClick={() => setShowAddProviderModal(true)}
-              className="btn-primary flex items-center gap-2"
+              className="btn-secondary flex items-center gap-2"
               data-testid="add-provider-button"
             >
               <Plus className="h-4 w-4" />
@@ -1136,18 +1633,8 @@ export default function InstancesPage() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  // Expand and open edit modal
-                                  if (!expandedInstances.has(instance.id)) {
-                                    toggleInstance(instance.id)
-                                  }
-                                  setEditingProvider({
-                                    id: instance.id,
-                                    name: instance.name,
-                                    isTemplate: false,
-                                    template: instanceTemplate,
-                                    config: (instanceDetails[instance.id]?.config.values || {}) as Record<string, string>,
-                                  })
-                                  setEditConfig((instanceDetails[instance.id]?.config.values || {}) as Record<string, string>)
+                                  // Open edit modal with full env config loading
+                                  handleEditProviderFromBoard(instance.id, false)
                                 }}
                                 className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 hover:bg-warning-200 dark:hover:bg-warning-900/50"
                                 title="Configure required settings"
@@ -1236,15 +1723,8 @@ export default function InstancesPage() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  // Open edit modal for this instance
-                                  setEditingProvider({
-                                    id: instance.id,
-                                    name: instance.name,
-                                    isTemplate: false,
-                                    template: template || null,
-                                    config: configValues as Record<string, string>,
-                                  })
-                                  setEditConfig(configValues as Record<string, string>)
+                                  // Open edit modal with full env config loading
+                                  handleEditProviderFromBoard(instance.id, false)
                                 }}
                                 className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
                                 data-testid={`edit-instance-config-${instance.id}`}
@@ -1491,7 +1971,7 @@ export default function InstancesPage() {
         </div>
       )}
 
-      {/* Templates - Compose */}
+      {/* Templates - Compose Services with Instances */}
       {composeTemplates.length > 0 && (
         <div className="space-y-4">
           <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
@@ -1499,16 +1979,151 @@ export default function InstancesPage() {
             Compose Services
           </h2>
           <div className="card p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {composeTemplates.map((template) => (
-                <TemplateCard
-                  key={template.id}
-                  template={template}
-                  isExpanded={expandedTemplates.has(template.id)}
-                  onToggle={() => toggleTemplate(template.id)}
-                  onCreate={() => openCreateInstanceModal(template)}
-                />
-              ))}
+            <div className="space-y-2">
+              {composeTemplates.map((template) => {
+                const templateInstances = instancesByTemplate[template.id] || []
+                const isExpanded = expandedTemplates.has(template.id)
+
+                return (
+                  <div key={template.id} className="border-b border-neutral-200 dark:border-neutral-700 last:border-0 pb-2 last:pb-0">
+                    {/* Service Template Row */}
+                    <div
+                      className="flex items-center gap-3 p-3 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+                      onClick={() => toggleTemplate(template.id)}
+                      data-testid={`service-template-${template.id}`}
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleTemplate(template.id)
+                        }}
+                        className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronUp className="h-4 w-4" />
+                        )}
+                      </button>
+
+                      <Package className="h-5 w-5 text-primary-600 dark:text-primary-400 flex-shrink-0" />
+
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                          {template.display_name || template.id}
+                        </h3>
+                        {template.description && (
+                          <p className="text-sm text-neutral-600 dark:text-neutral-400 truncate">
+                            {template.description}
+                          </p>
+                        )}
+                      </div>
+
+                      {templateInstances.length > 0 && (
+                        <span className="px-2 py-0.5 text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
+                          {templateInstances.length} {templateInstances.length === 1 ? 'instance' : 'instances'}
+                        </span>
+                      )}
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openCreateInstanceModal(template)
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
+                        data-testid={`deploy-${template.id}`}
+                      >
+                        <Plus className="h-3 w-3" />
+                        Deploy
+                      </button>
+                    </div>
+
+                    {/* Service Instances (indented) */}
+                    {isExpanded && templateInstances.length > 0 && (
+                      <div className="ml-12 mt-2 space-y-1">
+                        {templateInstances.map((instance) => {
+                          const details = instanceDetails[instance.id]
+                          const isRunning = details?.status === 'running'
+
+                          return (
+                            <div
+                              key={instance.id}
+                              className="flex items-center gap-3 p-3 rounded bg-neutral-50 dark:bg-neutral-800/50 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                              data-testid={`service-instance-${instance.id}`}
+                            >
+                              <HardDrive className="h-4 w-4 text-neutral-500 flex-shrink-0" />
+
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100">
+                                    {instance.name}
+                                  </span>
+                                  {details && getStatusBadge(details.status)}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400">
+                                  <span>{instance.deployment_target || 'local'}</span>
+                                  {details?.outputs?.access_url && (
+                                    <>
+                                      <span>•</span>
+                                      <a
+                                        href={details.outputs.access_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-primary-600 hover:underline"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {details.outputs.access_url}
+                                      </a>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                {isRunning && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleRestartService(instance.id)
+                                    }}
+                                    disabled={restartingInstance === instance.id}
+                                    className="p-1.5 text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                                    title="Restart"
+                                  >
+                                    <RefreshCw className="h-4 w-4" />
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleEditConsumer(instance.id)
+                                  }}
+                                  className="p-1.5 text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                                  title="Edit"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </button>
+
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeleteInstance(instance.id)
+                                  }}
+                                  className="p-1.5 text-error-600 hover:text-error-700 dark:text-error-400 dark:hover:text-error-300 rounded hover:bg-error-100 dark:hover:bg-error-900/30"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>
@@ -1592,6 +2207,7 @@ export default function InstancesPage() {
             onEditConsumer={handleEditConsumer}
             onStartConsumer={handleStartConsumer}
             onStopConsumer={handleStopConsumer}
+            onDeployConsumer={handleDeployConsumer}
           />
         </div>
       </div>
@@ -1746,24 +2362,66 @@ export default function InstancesPage() {
               </p>
             </div>
 
-            {/* Config fields */}
-            {editingProvider.template.config_schema && editingProvider.template.config_schema.length > 0 && (
-              <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden">
-                {editingProvider.template.config_schema.map((field: any) => (
-                  <ConfigFieldRow
-                    key={field.key}
-                    field={field}
-                    value={editConfig[field.key] || ''}
-                    onChange={(value) =>
-                      setEditConfig((prev) => ({
-                        ...prev,
-                        [field.key]: value,
-                      }))
-                    }
-                  />
-                ))}
-              </div>
-            )}
+            {/* Config fields - providers use config_schema */}
+            {editingProvider.template.source === 'provider' &&
+              editingProvider.template.config_schema &&
+              editingProvider.template.config_schema.length > 0 && (
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden">
+                  {editingProvider.template.config_schema.map((field: any) => (
+                    <ConfigFieldRow
+                      key={field.key}
+                      field={field}
+                      value={editConfig[field.key] || ''}
+                      onChange={(value) =>
+                        setEditConfig((prev) => ({
+                          ...prev,
+                          [field.key]: value,
+                        }))
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+
+            {/* Environment variables - compose services (both templates and instances) */}
+            {editingProvider.template.source === 'compose' &&
+              (loadingEnvConfig ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary-600" />
+                  <span className="ml-2 text-sm text-neutral-600">Loading configuration...</span>
+                </div>
+              ) : envVars.length > 0 ? (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    Environment Variables
+                  </label>
+                  <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+                    {envVars.map((envVar) => {
+                      const config = envConfigs[envVar.name] || {
+                        name: envVar.name,
+                        source: 'default',
+                        value: undefined,
+                        setting_path: undefined,
+                        new_setting_path: undefined,
+                      }
+
+                      return (
+                        <EnvVarRow
+                          key={envVar.name}
+                          envVar={envVar}
+                          config={config}
+                          onChange={(updates) => {
+                            setEnvConfigs((prev) => ({
+                              ...prev,
+                              [envVar.name]: { ...prev[envVar.name], ...updates } as EnvVarConfig,
+                            }))
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null)}
 
             {/* Footer */}
             <div className="flex items-center justify-end gap-2 pt-4 border-t border-neutral-200 dark:border-neutral-700">
@@ -1847,6 +2505,117 @@ export default function InstancesPage() {
         onConfirm={confirmDeleteInstance}
         onCancel={() => setConfirmDialog({ isOpen: false, instanceId: null })}
       />
+
+      {/* Deploy to Kubernetes Modal */}
+      {deployModalState.isOpen && deployModalState.targetType === 'kubernetes' && (
+        <DeployToK8sModal
+          isOpen={true}
+          onClose={() => setDeployModalState({ isOpen: false, serviceId: null, targetType: null })}
+          cluster={deployModalState.selectedClusterId ? kubernetesClusters.find((c) => c.cluster_id === deployModalState.selectedClusterId) : undefined}
+          availableClusters={kubernetesClusters}
+          infraServices={deployModalState.infraServices || {}}
+          preselectedServiceId={deployModalState.serviceId || undefined}
+        />
+      )}
+
+      {/* Service Catalog Modal */}
+      <Modal
+        isOpen={showCatalog}
+        onClose={() => setShowCatalog(false)}
+        title="Service Catalog"
+        maxWidth="2xl"
+        testId="catalog-modal"
+      >
+        {catalogLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-neutral-400" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {catalogServices.map(service => (
+              <div
+                key={service.service_id}
+                data-testid={`catalog-item-${service.service_name}`}
+                className={`p-4 rounded-lg border transition-all ${
+                  service.installed
+                    ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20'
+                    : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                      <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                        {service.service_name.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                      </h4>
+                      <p className="text-xs text-neutral-500">
+                        {service.description || service.image || 'Docker service'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {/* Capabilities */}
+                    {service.requires && service.requires.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        {service.requires.map((cap: string) => (
+                          <span
+                            key={cap}
+                            className="px-1.5 py-0.5 text-xs rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 capitalize"
+                          >
+                            {cap}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Install/Uninstall Button */}
+                    {service.installed ? (
+                      <button
+                        onClick={() => handleUninstallService(service.service_id)}
+                        disabled={installingService === service.service_id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-danger-300 text-danger-600 hover:bg-danger-50 dark:border-danger-700 dark:text-danger-400 dark:hover:bg-danger-900/20 disabled:opacity-50"
+                      >
+                        {installingService === service.service_id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                        Uninstall
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleInstallService(service.service_id)}
+                        disabled={installingService === service.service_id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50"
+                      >
+                        {installingService === service.service_id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Plus className="h-3 w-3" />
+                        )}
+                        Install
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {catalogServices.length === 0 && (
+              <div className="text-center py-12 text-neutral-500">
+                <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                <p>No services found in the catalog</p>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* TODO: Add Deploy to uNode modals for local and remote */}
     </div>
   )
 }
@@ -2129,6 +2898,182 @@ function TemplateCard({ template, isExpanded, onToggle, onCreate, onRemove }: Te
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// =============================================================================
+// Env Var Row Component (matches ServicesPage env var editor)
+// =============================================================================
+
+interface EnvVarRowProps {
+  envVar: EnvVarInfo
+  config: EnvVarConfig
+  onChange: (updates: Partial<EnvVarConfig>) => void
+}
+
+function EnvVarRow({ envVar, config, onChange }: EnvVarRowProps) {
+  const [editing, setEditing] = useState(false)
+  const [showMapping, setShowMapping] = useState(config.source === 'setting' && !config.locked)
+
+  const isSecret = envVar.name.includes('KEY') || envVar.name.includes('SECRET') || envVar.name.includes('PASSWORD')
+  const hasDefault = envVar.has_default && envVar.default_value
+  const isUsingDefault = config.source === 'default' || (!config.value && !config.setting_path && hasDefault)
+  const isLocked = config.locked || false
+
+  // Generate setting path from env var name for auto-creating settings
+  const autoSettingPath = () => {
+    const name = envVar.name.toLowerCase()
+    if (name.includes('api_key') || name.includes('key') || name.includes('secret') || name.includes('token')) {
+      return `api_keys.${name}`
+    }
+    return `settings.${name}`
+  }
+
+  // Handle value input - auto-create setting
+  const handleValueChange = (value: string) => {
+    if (value) {
+      onChange({ source: 'new_setting', new_setting_path: autoSettingPath(), value, setting_path: undefined })
+    } else {
+      onChange({ source: 'default', value: undefined, setting_path: undefined, new_setting_path: undefined })
+    }
+  }
+
+  // Check if there's a matching suggestion for auto-mapping
+  const matchingSuggestion = envVar.suggestions.find((s) => {
+    const envName = envVar.name.toLowerCase()
+    const pathParts = s.path.toLowerCase().split('.')
+    const lastPart = pathParts[pathParts.length - 1]
+    return envName.includes(lastPart) || lastPart.includes(envVar.name.replace(/_/g, ''))
+  })
+
+  // Auto-map if matching and not yet configured
+  const effectiveSettingPath = config.setting_path || (matchingSuggestion?.has_value ? matchingSuggestion.path : undefined)
+
+  // Locked fields - provided by wired providers or infrastructure
+  if (isLocked) {
+    const displayValue = config.value || ''
+    const isMaskedSecret = isSecret && displayValue.length > 0
+    const maskedValue = isMaskedSecret ? '•'.repeat(Math.min(displayValue.length, 20)) : displayValue
+
+    return (
+      <div
+        className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-blue-50 dark:bg-blue-900/10"
+        data-testid={`env-var-editor-${envVar.name}`}
+      >
+        {/* Label */}
+        <span
+          className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0"
+          title={envVar.name}
+        >
+          {envVar.name}
+          {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
+        </span>
+
+        {/* Padlock icon */}
+        <div className="flex-shrink-0" title="Locked - provided by infrastructure or provider">
+          <Lock className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+        </div>
+
+        {/* Value display */}
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono" title={displayValue}>
+            {maskedValue}
+          </span>
+          <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-blue-600/20 text-blue-700 dark:text-blue-300 flex-shrink-0">
+            {config.provider_name || 'infrastructure'}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-white dark:bg-neutral-800">
+      {/* Label */}
+      <span
+        className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0"
+        title={envVar.name}
+      >
+        {envVar.name}
+        {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
+      </span>
+
+      {/* Map button - LEFT of input */}
+      <button
+        onClick={() => setShowMapping(!showMapping)}
+        className={`px-2 py-1 text-xs rounded transition-colors flex-shrink-0 ${
+          showMapping
+            ? 'bg-primary-900/30 text-primary-300'
+            : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700'
+        }`}
+        title={showMapping ? 'Enter value' : 'Map to setting'}
+        data-testid={`map-button-${envVar.name}`}
+      >
+        Map
+      </button>
+
+      {/* Input area */}
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        {showMapping ? (
+          // Mapping mode - styled dropdown
+          <select
+            value={effectiveSettingPath || ''}
+            onChange={(e) => {
+              if (e.target.value) {
+                onChange({
+                  source: 'setting',
+                  setting_path: e.target.value,
+                  value: undefined,
+                  new_setting_path: undefined,
+                })
+              }
+            }}
+            className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer overflow-hidden text-ellipsis"
+            data-testid={`map-select-${envVar.name}`}
+          >
+            <option value="">select...</option>
+            {envVar.suggestions.map((s) => {
+              const displayValue = s.value && s.value.length > 30 ? s.value.substring(0, 30) + '...' : s.value
+              return (
+                <option key={s.path} value={s.path}>
+                  {s.path}
+                  {displayValue ? ` → ${displayValue}` : ''}
+                </option>
+              )
+            })}
+          </select>
+        ) : hasDefault && isUsingDefault && !editing ? (
+          // Default value display
+          <>
+            <button
+              onClick={() => setEditing(true)}
+              className="text-neutral-500 hover:text-neutral-300 flex-shrink-0"
+              title="Edit"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+            <span className="text-xs text-neutral-400 truncate">{envVar.default_value}</span>
+            <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-neutral-700 text-neutral-400 flex-shrink-0">
+              default
+            </span>
+          </>
+        ) : (
+          // Value input
+          <input
+            type={isSecret ? 'password' : 'text'}
+            value={config.source === 'setting' ? '' : config.value || ''}
+            onChange={(e) => handleValueChange(e.target.value)}
+            placeholder="enter value"
+            className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
+            autoFocus={editing}
+            onBlur={() => {
+              if (!config.value && hasDefault) setEditing(false)
+            }}
+            data-testid={`value-input-${envVar.name}`}
+          />
+        )}
+      </div>
     </div>
   )
 }

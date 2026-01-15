@@ -317,6 +317,8 @@ export interface EnvVarConfig {
   setting_path?: string      // For source='setting' - existing setting to map
   new_setting_path?: string  // For source='new_setting' - new setting path to create
   value?: string             // For source='literal' or 'new_setting'
+  locked?: boolean           // For provider-supplied values that cannot be edited
+  provider_name?: string     // Name of the provider supplying this value
 }
 
 export interface EnvVarSuggestion {
@@ -541,6 +543,7 @@ export interface KubernetesCluster {
   node_count?: number
   namespace: string
   labels: Record<string, string>
+  infra_scans?: Record<string, any>
 }
 
 export const kubernetesApi = {
@@ -552,6 +555,43 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
+
+  // Service management
+  getAvailableServices: () =>
+    api.get<{ services: any[] }>('/api/kubernetes/services/available'),
+  getInfraServices: () =>
+    api.get<{ services: any[] }>('/api/kubernetes/services/infra'),
+
+  // Cluster operations
+  scanInfraServices: (clusterId: string, namespace: string = 'default') =>
+    api.post<{ cluster_id: string; namespace: string; infra_services: Record<string, any> }>(
+      `/api/kubernetes/${clusterId}/scan-infra`,
+      { namespace }
+    ),
+  createEnvmap: (clusterId: string, data: { service_name: string; namespace?: string; env_vars: Record<string, string> }) =>
+    api.post<{ success: boolean; configmap: string | null; secret: string | null; namespace: string }>(
+      `/api/kubernetes/${clusterId}/envmap`,
+      { namespace: 'default', ...data }
+    ),
+  deployService: (clusterId: string, data: { service_id: string; namespace?: string; k8s_spec?: any; instance_id?: string }) =>
+    api.post<{ success: boolean; message: string; service_id: string; namespace: string }>(
+      `/api/kubernetes/${clusterId}/deploy`,
+      { namespace: 'default', ...data }
+    ),
+
+  // Pod operations
+  listPods: (clusterId: string, namespace: string = 'ushadow') =>
+    api.get<{ pods: Array<{ name: string; namespace: string; status: string; restarts: number; age: string; labels: Record<string, string>; node: string }>; namespace: string }>(
+      `/api/kubernetes/${clusterId}/pods?namespace=${namespace}`
+    ),
+  getPodLogs: (clusterId: string, podName: string, namespace: string = 'ushadow', previous: boolean = false, tailLines: number = 100) =>
+    api.get<{ pod_name: string; namespace: string; previous: boolean; logs: string }>(
+      `/api/kubernetes/${clusterId}/pods/${podName}/logs?namespace=${namespace}&previous=${previous}&tail_lines=${tailLines}`
+    ),
+  getPodEvents: (clusterId: string, podName: string, namespace: string = 'ushadow') =>
+    api.get<{ pod_name: string; namespace: string; events: Array<{ type: string; reason: string; message: string; count: number; first_timestamp: string | null; last_timestamp: string | null }> }>(
+      `/api/kubernetes/${clusterId}/pods/${podName}/events?namespace=${namespace}`
+    ),
 }
 
 // Service Definition and Deployment types
@@ -1061,6 +1101,7 @@ export interface Template {
   tags: string[]
   configured: boolean  // Whether required config fields are set (for providers)
   available: boolean   // Whether local service is running (for local providers)
+  installed: boolean   // Whether service is installed (for compose services)
 }
 
 /** Instance config values */

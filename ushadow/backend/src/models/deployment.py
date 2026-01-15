@@ -82,6 +82,67 @@ class ServiceDefinition(BaseModel):
         use_enum_values = True
 
 
+class ResolvedServiceDefinition(BaseModel):
+    """
+    A fully resolved service definition with all variables substituted.
+
+    This model represents a service after docker-compose config resolution,
+    where all ${VAR:-default} syntax has been replaced with actual values.
+    Used as input for all deployment targets (local docker, unode, kubernetes).
+    """
+    service_id: str = Field(..., description="Unique identifier for the service")
+    name: str = Field(..., description="Service name from compose")
+    image: str = Field(..., description="Fully resolved Docker image (no variables)")
+
+    # Ports as list of strings in Docker format: "host:container" or "container"
+    ports: List[str] = Field(
+        default_factory=list,
+        description="Resolved port mappings: ['3000:8080', '9090']"
+    )
+
+    # Fully resolved environment variables
+    environment: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Resolved environment variables (no placeholders)"
+    )
+
+    # Container configuration (already resolved)
+    volumes: List[str] = Field(default_factory=list)
+    command: Optional[str] = None
+    restart_policy: str = Field(default="unless-stopped")
+    network: Optional[str] = None
+
+    # Health check configuration
+    health_check_path: Optional[str] = None
+    health_check_port: Optional[int] = None
+
+    # Original compose file reference
+    compose_file: str = Field(..., description="Source compose file path")
+    compose_service_name: str = Field(..., description="Service name in compose file")
+
+    # Metadata
+    description: Optional[str] = None
+    namespace: Optional[str] = None  # From x-ushadow metadata
+    requires: List[str] = Field(default_factory=list)  # Capability dependencies
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "service_id": "openmemory-compose:mem0-ui",
+                "name": "mem0-ui",
+                "image": "ghcr.io/ushadow-io/u-mem0-ui:latest",
+                "ports": ["3002:3000"],
+                "environment": {
+                    "VITE_API_URL": "http://localhost:8765",
+                    "API_URL": "http://mem0:8765"
+                },
+                "compose_file": "/compose/openmemory-compose.yaml",
+                "compose_service_name": "mem0-ui",
+                "namespace": "openmemory"
+            }
+        }
+
+
 class Deployment(BaseModel):
     """
     A service deployed to a specific node.
@@ -131,6 +192,16 @@ class Deployment(BaseModel):
     exposed_port: Optional[int] = Field(
         default=None,
         description="Primary exposed port for the service"
+    )
+
+    # Backend information
+    backend_type: str = Field(
+        default="docker",
+        description="Deployment backend type: 'docker' or 'kubernetes'"
+    )
+    backend_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Backend-specific metadata (container_id for Docker, pod info for K8s)"
     )
 
     class Config:

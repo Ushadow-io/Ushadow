@@ -75,6 +75,9 @@ class Template(BaseModel):
     # Availability status (for local providers - whether service is running)
     available: bool = Field(default=True, description="Whether local service is running/reachable")
 
+    # Installation status (for compose services - whether service is installed)
+    installed: bool = Field(default=True, description="Whether service is installed (default or user-added)")
+
 
 class InstanceConfig(BaseModel):
     """Configuration values for an instance."""

@@ -36,6 +36,7 @@ import {
   StopCircle,
   Settings,
   Loader2,
+  Package,
 } from 'lucide-react'
 // Per-service wiring model - each consumer has its own connections
 
@@ -99,6 +100,7 @@ interface WiringBoardProps {
   onEditConsumer?: (consumerId: string) => void
   onStartConsumer?: (consumerId: string) => Promise<void>
   onStopConsumer?: (consumerId: string) => Promise<void>
+  onDeployConsumer?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
 }
 
 export default function WiringBoard({
@@ -114,6 +116,7 @@ export default function WiringBoard({
   onStopProvider,
   onEditConsumer,
   onStartConsumer,
+  onDeployConsumer,
   onStopConsumer,
 }: WiringBoardProps) {
   const [activeProvider, setActiveProvider] = useState<ProviderInfo | null>(null)
@@ -341,6 +344,7 @@ export default function WiringBoard({
                     onEdit={onEditConsumer}
                     onStart={onStartConsumer}
                     onStop={onStopConsumer}
+                    onDeploy={onDeployConsumer}
                   />
                 )
               })}
@@ -619,6 +623,7 @@ interface ServiceCardProps {
   onEdit?: (consumerId: string) => void
   onStart?: (consumerId: string) => Promise<void>
   onStop?: (consumerId: string) => Promise<void>
+  onDeploy?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
 }
 
 function ConsumerCard({
@@ -634,8 +639,36 @@ function ConsumerCard({
   onEdit,
   onStart,
   onStop,
+  onDeploy,
 }: ServiceCardProps) {
   const [isStarting, setIsStarting] = useState(false)
+  const [showDeployMenu, setShowDeployMenu] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
+
+  // Close deploy menu when clicking outside
+  useEffect(() => {
+    if (!showDeployMenu) return
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-deploy-menu]')) {
+        setShowDeployMenu(false)
+      }
+    }
+
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [showDeployMenu])
+
+  const handleDeployClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const button = e.currentTarget
+    const rect = button.getBoundingClientRect()
+    setMenuPosition({
+      top: rect.bottom + 4,
+      left: rect.right - 192 // 192px = 48 * 4 (w-48)
+    })
+    setShowDeployMenu(!showDeployMenu)
+  }
 
   const handleStartClick = async () => {
     if (!onStart) return
@@ -733,6 +766,59 @@ function ConsumerCard({
                     Stop
                   </button>
                 ) : null}
+              </>
+            )}
+            {onDeploy && (
+              <>
+                <button
+                  onClick={handleDeployClick}
+                  className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
+                  title="Deploy service"
+                  data-testid={`consumer-deploy-${consumer.id}`}
+                  data-deploy-menu
+                >
+                  <Plus className="h-3 w-3" />
+                  Deploy
+                </button>
+                {showDeployMenu && menuPosition && createPortal(
+                  <div
+                    className="fixed w-48 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl z-[9998]"
+                    style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
+                    data-deploy-menu
+                  >
+                    <button
+                      onClick={() => {
+                        onDeploy(consumer.id, { type: 'local' })
+                        setShowDeployMenu(false)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-t-lg flex items-center gap-2"
+                    >
+                      <HardDrive className="h-4 w-4" />
+                      Local (Leader uNode)
+                    </button>
+                    <button
+                      onClick={() => {
+                        onDeploy(consumer.id, { type: 'remote' })
+                        setShowDeployMenu(false)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-2"
+                    >
+                      <Cloud className="h-4 w-4" />
+                      Remote uNode
+                    </button>
+                    <button
+                      onClick={() => {
+                        onDeploy(consumer.id, { type: 'kubernetes' })
+                        setShowDeployMenu(false)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-b-lg flex items-center gap-2"
+                    >
+                      <Package className="h-4 w-4" />
+                      Kubernetes
+                    </button>
+                  </div>,
+                  document.body
+                )}
               </>
             )}
             {onEdit && (
