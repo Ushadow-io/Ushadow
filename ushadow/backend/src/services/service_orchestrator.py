@@ -70,6 +70,7 @@ class ServiceSummary:
     profiles: List[str] = field(default_factory=list)
     required_env_count: int = 0
     optional_env_count: int = 0
+    wizard: Optional[str] = None  # ID of setup wizard if available
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,6 +90,7 @@ class ServiceSummary:
             "profiles": self.profiles,
             "required_env_count": self.required_env_count,
             "optional_env_count": self.optional_env_count,
+            "wizard": self.wizard,
         }
 
 
