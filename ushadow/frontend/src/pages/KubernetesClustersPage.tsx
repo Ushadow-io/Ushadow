@@ -1,13 +1,41 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X } from 'lucide-react'
+import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket } from 'lucide-react'
 import { kubernetesApi, KubernetesCluster } from '../services/api'
+import Modal from '../components/Modal'
+import ConfirmDialog from '../components/ConfirmDialog'
+import DeployToK8sModal from '../components/DeployToK8sModal'
+
+interface InfraService {
+  found: boolean
+  endpoints: string[]
+  type: string
+  default_port: number
+  error?: string
+}
+
+interface InfraScanResults {
+  cluster_id: string
+  namespace: string
+  infra_services: Record<string, InfraService>
+}
 
 export default function KubernetesClustersPage() {
   const [clusters, setClusters] = useState<KubernetesCluster[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [adding, setAdding] = useState(false)
+
+  // Infrastructure scanning
+  const [scanningClusterId, setScanningClusterId] = useState<string | null>(null)
+  const [scanResults, setScanResults] = useState<Record<string, InfraScanResults>>({})
+  const [showScanResults, setShowScanResults] = useState<string | null>(null)
+  const [showNamespaceSelector, setShowNamespaceSelector] = useState<string | null>(null)
+  const [scanNamespace, setScanNamespace] = useState<string>('')
+
+  // Deployment
+  const [showDeployModal, setShowDeployModal] = useState(false)
+  const [selectedClusterForDeploy, setSelectedClusterForDeploy] = useState<KubernetesCluster | null>(null)
 
   // Form state
   const [clusterName, setClusterName] = useState('')
@@ -24,6 +52,21 @@ export default function KubernetesClustersPage() {
       setError(null)
       const response = await kubernetesApi.listClusters()
       setClusters(response.data)
+
+      // Load cached scan results from clusters
+      const cachedScans: Record<string, InfraScanResults> = {}
+      response.data.forEach((cluster: KubernetesCluster) => {
+        if (cluster.infra_scans) {
+          Object.entries(cluster.infra_scans).forEach(([namespace, scanData]) => {
+            cachedScans[`${cluster.cluster_id}-${namespace}`] = {
+              cluster_id: cluster.cluster_id,
+              namespace: namespace,
+              infra_services: scanData as Record<string, InfraService>
+            }
+          })
+        }
+      })
+      setScanResults(cachedScans)
     } catch (err: any) {
       console.error('Error loading clusters:', err)
       setError(err.response?.data?.detail || 'Failed to load clusters')
@@ -68,10 +111,53 @@ export default function KubernetesClustersPage() {
 
     try {
       await kubernetesApi.removeCluster(clusterId)
+      // Remove scan results for this cluster
+      const newScanResults = { ...scanResults }
+      delete newScanResults[clusterId]
+      setScanResults(newScanResults)
       loadClusters()
     } catch (err: any) {
       alert(`Failed to remove cluster: ${err.response?.data?.detail || err.message}`)
     }
+  }
+
+  const handleScanInfrastructure = async (clusterId: string, namespace?: string) => {
+    try {
+      setScanningClusterId(clusterId)
+      setError(null)
+
+      const cluster = clusters.find(c => c.cluster_id === clusterId)
+      const namespaceToScan = namespace || cluster?.namespace || 'default'
+
+      const response = await kubernetesApi.scanInfraServices(clusterId, namespaceToScan)
+
+      // Store scan results
+      setScanResults(prev => ({
+        ...prev,
+        [`${clusterId}-${namespaceToScan}`]: response.data
+      }))
+
+      // Show results modal
+      setShowScanResults(`${clusterId}-${namespaceToScan}`)
+      setShowNamespaceSelector(null)
+      setScanNamespace('')
+    } catch (err: any) {
+      console.error('Error scanning infrastructure:', err)
+      alert(`Failed to scan infrastructure: ${err.response?.data?.detail || err.message}`)
+    } finally {
+      setScanningClusterId(null)
+    }
+  }
+
+  const handleOpenNamespaceSelector = (clusterId: string) => {
+    const cluster = clusters.find(c => c.cluster_id === clusterId)
+    setScanNamespace(cluster?.namespace || 'ushadow')
+    setShowNamespaceSelector(clusterId)
+  }
+
+  const handleOpenDeployModal = (cluster: KubernetesCluster) => {
+    setSelectedClusterForDeploy(cluster)
+    setShowDeployModal(true)
   }
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -105,14 +191,122 @@ export default function KubernetesClustersPage() {
     }
   }
 
+  const renderInfraScanResults = (clusterId: string) => {
+    const results = scanResults[clusterId]
+    if (!results) return null
+
+    const foundServices = Object.entries(results.infra_services).filter(([_, service]) => service.found)
+    const notFoundServices = Object.entries(results.infra_services).filter(([_, service]) => !service.found)
+
+    return (
+      <Modal
+        isOpen={showScanResults === clusterId}
+        onClose={() => setShowScanResults(null)}
+        title="Infrastructure Scan Results"
+        maxWidth="lg"
+        testId="infra-scan-results-modal"
+      >
+        <div className="space-y-4">
+          <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4">
+            <p className="text-sm text-primary-700 dark:text-primary-300">
+              Scanned namespace: <span className="font-semibold">{results.namespace}</span>
+            </p>
+          </div>
+
+          {/* Found Services */}
+          {foundServices.length > 0 && (
+            <div>
+              <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-3 flex items-center">
+                <CheckCircle className="h-5 w-5 text-success-600 dark:text-success-400 mr-2" />
+                Found Infrastructure ({foundServices.length})
+              </h3>
+              <div className="space-y-2">
+                {foundServices.map(([name, service]) => (
+                  <div
+                    key={name}
+                    className="bg-success-50 dark:bg-success-900/20 border border-success-200 dark:border-success-800 rounded-lg p-4"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-semibold text-success-900 dark:text-success-100 capitalize">
+                        {name}
+                      </span>
+                      <span className="text-xs bg-success-100 dark:bg-success-900/40 text-success-700 dark:text-success-300 px-2 py-1 rounded">
+                        Running
+                      </span>
+                    </div>
+                    {service.endpoints.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs text-success-700 dark:text-success-300 mb-1">Connection endpoints:</p>
+                        {service.endpoints.map((endpoint, idx) => (
+                          <code
+                            key={idx}
+                            className="block text-xs bg-success-100 dark:bg-success-900/40 text-success-800 dark:text-success-200 px-2 py-1 rounded font-mono mb-1"
+                          >
+                            {endpoint}
+                          </code>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Not Found Services */}
+          {notFoundServices.length > 0 && (
+            <div>
+              <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-3 flex items-center">
+                <AlertCircle className="h-5 w-5 text-neutral-400 mr-2" />
+                Not Found ({notFoundServices.length})
+              </h3>
+              <div className="grid grid-cols-2 gap-2">
+                {notFoundServices.map(([name, service]) => (
+                  <div
+                    key={name}
+                    className="bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg p-3"
+                  >
+                    <span className="text-sm text-neutral-600 dark:text-neutral-400 capitalize">{name}</span>
+                    <p className="text-xs text-neutral-500 dark:text-neutral-500 mt-1">
+                      Not running in {results.namespace}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Help Text */}
+          <div className="bg-neutral-50 dark:bg-neutral-800 rounded-lg p-4">
+            <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              <strong>Next steps:</strong> You can use existing infrastructure services when deploying applications,
+              or deploy your own infrastructure using the unified deployment UI.
+            </p>
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end space-x-3 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+            <button
+              onClick={() => setShowScanResults(null)}
+              className="btn-primary"
+              data-testid="close-scan-results"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="kubernetes-page">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Kubernetes Clusters</h1>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-            Manage Kubernetes clusters for service deployment
+            Configure clusters and scan infrastructure for deployments
           </p>
         </div>
         <button
@@ -156,67 +350,136 @@ export default function KubernetesClustersPage() {
       {/* Clusters Grid */}
       {!loading && clusters.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {clusters.map((cluster) => (
-            <div key={cluster.cluster_id} className="card-hover p-6">
-              {/* Header */}
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center space-x-3">
-                  <div className="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
-                    <Server className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+          {clusters.map((cluster) => {
+            // Get all scanned namespaces for this cluster
+            const scannedKeys = Object.keys(scanResults).filter(key => key.startsWith(cluster.cluster_id))
+            const hasScanned = scannedKeys.length > 0
+
+            return (
+              <div key={cluster.cluster_id} className="card-hover p-6">
+                {/* Header */}
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+                      <Server className="h-6 w-6 text-primary-600 dark:text-primary-400" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                        {cluster.name}
+                      </h3>
+                      <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                        {cluster.context}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                      {cluster.name}
-                    </h3>
-                    <p className="text-xs text-neutral-600 dark:text-neutral-400">
-                      {cluster.context}
-                    </p>
+                  {getStatusIcon(cluster.status)}
+                </div>
+
+                {/* Server */}
+                <div className="mb-4 text-sm">
+                  <span className="text-neutral-500 dark:text-neutral-400">Server: </span>
+                  <span className="font-mono text-neutral-700 dark:text-neutral-300 text-xs break-all">
+                    {cluster.server}
+                  </span>
+                </div>
+
+                {/* Info */}
+                {cluster.version && (
+                  <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-4">
+                    K8s {cluster.version} | {cluster.node_count} nodes | namespace: {cluster.namespace}
                   </div>
-                </div>
-                {getStatusIcon(cluster.status)}
-              </div>
+                )}
 
-              {/* Server */}
-              <div className="mb-4 text-sm">
-                <span className="text-neutral-500 dark:text-neutral-400">Server: </span>
-                <span className="font-mono text-neutral-700 dark:text-neutral-300 text-xs break-all">
-                  {cluster.server}
-                </span>
-              </div>
+                {/* Infrastructure Status */}
+                {hasScanned && (
+                  <div className="mb-4 space-y-2">
+                    {scannedKeys.map(key => {
+                      const results = scanResults[key]
+                      const namespace = results.namespace
+                      const foundInfra = Object.values(results.infra_services).filter(s => s.found).length
 
-              {/* Info */}
-              {cluster.version && (
-                <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-4">
-                  K8s {cluster.version} | {cluster.node_count} nodes | namespace: {cluster.namespace}
-                </div>
-              )}
+                      return (
+                        <div key={key} className="p-3 bg-success-50 dark:bg-success-900/20 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <Database className="h-4 w-4 text-success-600 dark:text-success-400" />
+                              <span className="text-sm text-success-700 dark:text-success-300">
+                                {foundInfra} in <code className="px-1 py-0.5 bg-success-100 dark:bg-success-900/40 rounded text-xs">{namespace}</code>
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => setShowScanResults(key)}
+                              className="text-xs text-success-600 dark:text-success-400 hover:underline"
+                              data-testid={`view-scan-results-${key}`}
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
 
-              {/* Labels */}
-              {Object.keys(cluster.labels).length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-4">
-                  {Object.entries(cluster.labels).map(([key, value]) => (
-                    <span
-                      key={key}
-                      className="text-xs px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400"
+                {/* Labels */}
+                {Object.keys(cluster.labels).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-4">
+                    {Object.entries(cluster.labels).map(([key, value]) => (
+                      <span
+                        key={key}
+                        className="text-xs px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400"
+                      >
+                        {key}: {value}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex justify-between items-center pt-4 border-t border-neutral-200 dark:border-neutral-700 gap-2">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleOpenNamespaceSelector(cluster.cluster_id)}
+                      disabled={scanningClusterId === cluster.cluster_id || cluster.status !== 'connected'}
+                      className="btn-secondary flex items-center space-x-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      data-testid={`scan-infra-${cluster.cluster_id}`}
                     >
-                      {key}: {value}
-                    </span>
-                  ))}
-                </div>
-              )}
+                      {scanningClusterId === cluster.cluster_id ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          <span>Scanning...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Search className="h-4 w-4" />
+                          <span>Scan</span>
+                        </>
+                      )}
+                    </button>
 
-              {/* Actions */}
-              <div className="flex justify-end">
-                <button
-                  onClick={() => handleRemoveCluster(cluster.cluster_id)}
-                  className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
-                  title="Remove cluster"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                    <button
+                      onClick={() => handleOpenDeployModal(cluster)}
+                      disabled={cluster.status !== 'connected'}
+                      className="btn-primary flex items-center space-x-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      data-testid={`deploy-services-${cluster.cluster_id}`}
+                    >
+                      <Rocket className="h-4 w-4" />
+                      <span>Deploy</span>
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => handleRemoveCluster(cluster.cluster_id)}
+                    className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
+                    title="Remove cluster"
+                    data-testid={`remove-cluster-${cluster.cluster_id}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -233,6 +496,78 @@ export default function KubernetesClustersPage() {
             <span>Add Your First Cluster</span>
           </button>
         </div>
+      )}
+
+      {/* Namespace Selector Modal */}
+      {showNamespaceSelector && (
+        <Modal
+          isOpen={true}
+          onClose={() => setShowNamespaceSelector(null)}
+          title="Select Namespace to Scan"
+          maxWidth="md"
+          testId="namespace-selector-modal"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              Choose which namespace to scan for infrastructure services.
+            </p>
+
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                Namespace
+              </label>
+              <input
+                type="text"
+                value={scanNamespace}
+                onChange={(e) => setScanNamespace(e.target.value)}
+                placeholder="e.g., ushadow, default, kube-system"
+                className="w-full px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                data-testid="scan-namespace-input"
+              />
+              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                Common namespaces: <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">ushadow</code>, <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">default</code>, <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">kube-system</code>
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+              <button
+                onClick={() => setShowNamespaceSelector(null)}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleScanInfrastructure(showNamespaceSelector, scanNamespace)}
+                disabled={!scanNamespace.trim()}
+                className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="confirm-scan-btn"
+              >
+                <Search className="h-4 w-4 mr-2" />
+                Scan {scanNamespace || 'Namespace'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Scan Results Modal */}
+      {showScanResults && renderInfraScanResults(showScanResults)}
+
+      {/* Deploy to K8s Modal */}
+      {showDeployModal && selectedClusterForDeploy && (
+        <DeployToK8sModal
+          isOpen={showDeployModal}
+          onClose={() => {
+            setShowDeployModal(false)
+            setSelectedClusterForDeploy(null)
+          }}
+          cluster={selectedClusterForDeploy}
+          infraServices={
+            Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))
+              ? scanResults[Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))!].infra_services
+              : undefined
+          }
+        />
       )}
 
       {/* Add Cluster Modal */}
@@ -291,10 +626,13 @@ export default function KubernetesClustersPage() {
                   type="text"
                   value={namespace}
                   onChange={(e) => setNamespace(e.target.value)}
-                  placeholder="default"
+                  placeholder="ushadow"
                   className="w-full px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
                   data-testid="namespace-input"
                 />
+                <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                  Recommended: <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">ushadow</code>
+                </p>
               </div>
 
               {/* Kubeconfig Upload */}

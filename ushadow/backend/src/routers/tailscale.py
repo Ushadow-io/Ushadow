@@ -1575,14 +1575,48 @@ async def provision_cert_in_container(
         cert_cmd = f"tailscale cert --cert-file /certs/{hostname}.crt --key-file /certs/{hostname}.key {hostname}"
         exit_code, stdout, stderr = await exec_in_container(cert_cmd)
 
-        if exit_code == 0:
-            # Copy files from Tailscale container's /certs to backend's /config/SECRETS/certs
-            container_name = get_tailscale_container_name()
-            container = docker_client.containers.get(container_name)
+        if exit_code != 0:
+            error = stderr or stdout or "Unknown error"
+            return CertificateStatus(provisioned=False, error=error)
 
-            import tarfile
-            import io
+        # Wait for certificate files to actually be created (tailscale cert is async)
+        container_name = get_tailscale_container_name()
+        container = docker_client.containers.get(container_name)
 
+        import tarfile
+        import io
+        import time
+
+        max_wait_seconds = 30
+        poll_interval = 1
+        elapsed = 0
+
+        logger.info(f"Waiting for certificate files to be provisioned for {hostname}...")
+
+        while elapsed < max_wait_seconds:
+            try:
+                # Check if cert file exists in container
+                check_cmd = f"test -f /certs/{hostname}.crt && test -f /certs/{hostname}.key && echo 'exists'"
+                check_exit, check_stdout, check_stderr = await exec_in_container(check_cmd)
+
+                if check_exit == 0 and "exists" in check_stdout:
+                    logger.info(f"Certificate files found after {elapsed} seconds")
+                    break
+
+            except Exception as e:
+                logger.debug(f"Checking for cert files: {e}")
+
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+        else:
+            # Timeout reached
+            return CertificateStatus(
+                provisioned=False,
+                error=f"Timeout waiting for certificate to be provisioned after {max_wait_seconds} seconds"
+            )
+
+        # Copy files from Tailscale container's /certs to backend's /config/SECRETS/certs
+        try:
             # Copy cert file from /certs in Tailscale container
             cert_data, _ = container.get_archive(f"/certs/{hostname}.crt")
             tar_stream = io.BytesIO(b''.join(cert_data))
@@ -1608,9 +1642,10 @@ async def provision_cert_in_container(
             logger.info(f"Certificates copied from Tailscale container to {CERTS_DIR}")
 
             return CertificateStatus(provisioned=True, cert_path=str(cert_file), key_path=str(key_file))
-        else:
-            error = stderr or stdout or "Unknown error"
-            return CertificateStatus(provisioned=False, error=error)
+
+        except Exception as e:
+            logger.error(f"Error copying certificate files: {e}", exc_info=True)
+            return CertificateStatus(provisioned=False, error=f"Failed to copy certificates: {str(e)}")
 
     except HTTPException:
         raise

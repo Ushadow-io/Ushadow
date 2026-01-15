@@ -477,15 +477,18 @@ class InstanceManager:
             instance.status = InstanceStatus.DEPLOYING
             self._save_instances()
 
+            # Use service_name (not template_id) for orchestrator calls
+            service_name = compose_service.service_name
+
             try:
-                result = await orchestrator.start_service(instance.template_id)
+                result = await orchestrator.start_service(service_name, instance_id=instance_id)
                 if result.success:
                     # Get the service status to find access URL
-                    status_info = await orchestrator.get_service_status(instance.template_id)
+                    status_info = await orchestrator.get_service_status(service_name)
                     access_url = None
                     if status_info and status_info.get("status") == "running":
                         # Try to get the access URL from docker details
-                        details = await orchestrator.get_docker_details(instance.template_id)
+                        details = await orchestrator.get_docker_details(service_name)
                         if details and details.ports:
                             # Use first mapped port
                             for port_info in details.ports:
@@ -543,11 +546,14 @@ class InstanceManager:
             from src.services.service_orchestrator import get_service_orchestrator
             orchestrator = get_service_orchestrator()
 
+            # Use service_name (not template_id) for orchestrator calls
+            service_name = compose_service.service_name
+
             try:
-                result = await orchestrator.stop_service(instance.template_id)
+                result = await orchestrator.stop_service(service_name, instance_id=instance_id)
                 if result.success:
                     self.update_instance_status(instance_id, InstanceStatus.STOPPED)
-                    return True, f"Service {instance.template_id} stopped"
+                    return True, f"Service {service_name} stopped"
                 else:
                     return False, result.message
             except Exception as e:
