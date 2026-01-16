@@ -23,7 +23,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Linking,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 import { saveAuthToken, saveApiUrl } from '../utils/authStorage';
 import { enableDemoMode } from '../utils/demoModeStorage';
@@ -45,7 +47,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 }) => {
   // Server URL format: https://{tailscale-host}
   // Login will POST to {serverUrl}/api/auth/login
-  const [apiUrl, setApiUrl] = useState('');
+  const [apiUrl, setApiUrl] = useState(initialApiUrl);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -188,6 +190,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
           {/* Form */}
           <View style={styles.form}>
+            {/* Powered with Chronicle badge */}
+            <TouchableOpacity
+              style={styles.chronicleBadge}
+              onPress={() => Linking.openURL('https://github.com/chronicler-ai')}
+              testID="chronicle-badge-login"
+              activeOpacity={0.7}
+            >
+              <Ionicons name="sparkles" size={14} color={colors.primary[400]} />
+              <Text style={styles.chronicleBadgeText}>With Chronicle</Text>
+            </TouchableOpacity>
+
             <Text style={styles.formTitle}>Sign in to Ushadow</Text>
             <Text style={styles.formSubtitle}>
               Enter your credentials to connect to your leader node
@@ -328,6 +341,26 @@ const styles = StyleSheet.create({
   form: {
     padding: spacing.xl,
     flex: 1,
+  },
+  chronicleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: 999, // pill shape
+    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.3)',
+    marginBottom: spacing.lg,
+  },
+  chronicleBadgeText: {
+    fontSize: fontSize.xs,
+    color: colors.primary[400],
+    fontWeight: '500',
+    lineHeight: 14,
   },
   formTitle: {
     fontSize: fontSize['2xl'],

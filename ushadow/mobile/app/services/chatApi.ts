@@ -160,7 +160,6 @@ async function getToken(): Promise<string> {
 export async function getStatus(): Promise<ChatStatus> {
   try {
     const [apiUrl, token] = await Promise.all([getChatApiUrl(), getToken()]);
-    console.log('[ChatAPI] getStatus - API URL:', apiUrl);
 
     const url = `${apiUrl}/api/chat/status`;
 
@@ -177,7 +176,6 @@ export async function getStatus(): Promise<ChatStatus> {
     }
 
     const data = await response.json();
-    console.log('[ChatAPI] getStatus - Response:', JSON.stringify(data));
     return data as ChatStatus;
   } catch (error) {
     if (error instanceof ChatApiError) {
@@ -235,13 +233,6 @@ export async function* streamChat(
       throw ChatApiError.fromResponse(response, errorText);
     }
 
-    console.log('[ChatAPI] Response received:', {
-      status: response.status,
-      hasBody: !!response.body,
-      bodyType: typeof response.body,
-      hasGetReader: response.body ? typeof response.body.getReader : 'no body',
-    });
-
     // Check if streaming is supported
     if (!response.body || typeof response.body.getReader !== 'function') {
       console.warn('[ChatAPI] Streaming not supported, falling back to simple endpoint');
@@ -254,13 +245,11 @@ export async function* streamChat(
 
     reader = response.body.getReader();
 
-    console.log('[ChatAPI] Stream started, reading chunks...');
     const decoder = new TextDecoder();
     let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
-      console.log('[ChatAPI] Read chunk - done:', done, 'bytes:', value?.length);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -272,14 +261,11 @@ export async function* streamChat(
       for (const line of lines) {
         if (!line.trim()) continue;
 
-        console.log('[ChatAPI] Processing line:', line.substring(0, 100));
-
         try {
           // Parse AI SDK format
           if (line.startsWith('0:')) {
             // Text delta: 0:"content"
             const content = JSON.parse(line.substring(2));
-            console.log('[ChatAPI] Yielding text:', content.substring(0, 50));
             yield { type: 'text', content };
           } else if (line.startsWith('d:')) {
             // Finish: d:{"finishReason":"stop","usage":{...}}
@@ -292,7 +278,6 @@ export async function* streamChat(
           } else if (line.startsWith('e:')) {
             // Error: e:{"error":"message"}
             const data = JSON.parse(line.substring(2));
-            console.error('[ChatAPI] Backend error:', data.error);
             yield { type: 'error', error: data.error };
           }
         } catch (parseError) {

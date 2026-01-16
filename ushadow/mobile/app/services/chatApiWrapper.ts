@@ -35,7 +35,6 @@ export async function* streamChat(
   request: ChatRequest
 ): AsyncGenerator<StreamChunk, void, unknown> {
   const demoMode = await isDemoMode();
-  console.log('[ChatAPIWrapper] streamChat - demo mode:', demoMode);
 
   if (demoMode) {
     yield* demoApi.demoStreamChat(request);

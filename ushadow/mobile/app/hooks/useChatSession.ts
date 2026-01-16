@@ -157,8 +157,6 @@ export function useChatSession(): UseChatSessionResult {
         return;
       }
 
-      console.log('[useChatSession] sendMessage called, content:', content.substring(0, 50));
-
       try {
         setIsStreaming(true);
         setError(null);
@@ -195,9 +193,7 @@ export function useChatSession(): UseChatSessionResult {
         };
 
         // Stream the response
-        console.log('[useChatSession] Starting stream...');
         for await (const chunk of chatApi.streamChat(request)) {
-          console.log('[useChatSession] Received chunk:', chunk.type);
           if (chunk.type === 'text') {
             // Accumulate content
             streamingContentRef.current += chunk.content;
@@ -225,7 +221,6 @@ export function useChatSession(): UseChatSessionResult {
               return copy;
             });
           } else if (chunk.type === 'error') {
-            console.error('[useChatSession] Received error chunk:', chunk.error);
             setError(chunk.error);
             // Remove incomplete assistant message on error
             setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
@@ -258,7 +253,6 @@ export function useChatSession(): UseChatSessionResult {
         setSessionData(updatedData);
       } catch (err) {
         console.error('[useChatSession] Failed to send message:', err);
-        console.error('[useChatSession] Error stack:', err instanceof Error ? err.stack : 'No stack');
         setError(err instanceof Error ? err.message : 'Failed to send message');
       } finally {
         setIsStreaming(false);

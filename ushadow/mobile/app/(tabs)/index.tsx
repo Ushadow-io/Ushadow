@@ -14,6 +14,7 @@ import {
   StatusBar,
   Image,
   TouchableOpacity,
+  Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -55,7 +56,7 @@ export default function HomeScreen() {
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     createInitialConnectionState()
   );
-  const [loginApiUrl, setLoginApiUrl] = useState<string>('https://blue.spangled-kettle.ts.net');
+  const [loginApiUrl, setLoginApiUrl] = useState<string>('');
 
   // Connection logging hook
   const { entries: logEntries, logEvent, clearLogs } = useConnectionLog();
@@ -65,9 +66,9 @@ export default function HomeScreen() {
     const loadLoginUrl = async () => {
       const activeUnode = await getActiveUnode();
 
-      // If no active UNode or demo UNode, use default
+      // If no active UNode or demo UNode, leave blank
       if (!activeUnode || activeUnode.id === DEMO_UNODE.id) {
-        setLoginApiUrl('https://blue.spangled-kettle.ts.net');
+        setLoginApiUrl('');
         return;
       }
 
@@ -258,13 +259,28 @@ export default function HomeScreen() {
       {/* Header */}
       <View style={styles.header} testID="home-header">
         <View style={styles.headerTop}>
-          <Image
-            source={require('../../assets/logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-            testID="home-logo"
-          />
-          <View style={styles.headerActions}>
+          <View style={styles.headerLeft}>
+            <Image
+              source={require('../../assets/logo.png')}
+              style={styles.logo}
+              resizeMode="contain"
+              testID="home-logo"
+            />
+            <View style={styles.headerTitleSection}>
+              <View style={styles.titleRow}>
+                <LinearGradient
+                  colors={gradients.brand as [string, string]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.titleGradientContainer}
+                >
+                  <Text style={styles.title}>Ushadow</Text>
+                </LinearGradient>
+                <Text style={styles.subtitle}>Mobile Control</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.headerRight}>
             <TouchableOpacity
               style={styles.iconButton}
               onPress={() => setShowLogViewer(true)}
@@ -274,15 +290,6 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        <LinearGradient
-          colors={gradients.brand as [string, string]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.titleGradientContainer}
-        >
-          <Text style={styles.title}>Ushadow</Text>
-        </LinearGradient>
-        <Text style={styles.subtitle}>Mobile Control</Text>
       </View>
 
       {/* Demo Mode Banner */}
@@ -363,23 +370,38 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    alignItems: 'center',
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.md,
   },
   headerTop: {
     width: '100%',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.md,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
+  },
+  headerTitleSection: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   logo: {
-    width: 48,
-    height: 48,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
+    width: 40,
+    height: 40,
   },
   iconButton: {
     padding: spacing.sm,
@@ -387,20 +409,36 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
   },
   titleGradientContainer: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
   },
   title: {
-    fontSize: fontSize['3xl'],
+    fontSize: fontSize.xl,
     fontWeight: 'bold',
     color: theme.background,
   },
   subtitle: {
-    fontSize: fontSize.base,
-    color: theme.textSecondary,
-    marginBottom: spacing.md,
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+  },
+  chronicleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: 999, // pill shape
+    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.3)',
+  },
+  chronicleBadgeText: {
+    fontSize: 10,
+    color: colors.primary[400],
+    fontWeight: '500',
+    lineHeight: 12,
   },
   authStatus: {
     paddingHorizontal: spacing.lg,

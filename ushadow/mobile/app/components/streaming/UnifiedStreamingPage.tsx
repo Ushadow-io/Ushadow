@@ -17,7 +17,10 @@ import {
   Modal,
   SafeAreaView,
   Alert,
+  TouchableOpacity,
+  Linking,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
@@ -705,6 +708,19 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           testID={`${testID}-destination`}
         />
 
+        {/* Powered with Chronicle badge */}
+        <View style={styles.chronicleBadgeContainer}>
+          <TouchableOpacity
+            style={styles.chronicleBadge}
+            onPress={() => Linking.openURL('https://github.com/chronicler-ai')}
+            testID="chronicle-badge-streaming"
+            activeOpacity={0.7}
+          >
+            <Ionicons name="sparkles" size={12} color={colors.primary[400]} />
+            <Text style={styles.chronicleBadgeText}>With Chronicle</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Streaming Card */}
         <View style={styles.streamingCard}>
           {/* Waveform Display */}
@@ -811,6 +827,28 @@ const styles = StyleSheet.create({
   modalScrollContent: {
     flex: 1,
     padding: spacing.lg,
+  },
+  chronicleBadgeContainer: {
+    alignItems: 'center',
+    marginVertical: spacing.md,
+  },
+  chronicleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.3)',
+  },
+  chronicleBadgeText: {
+    fontSize: 10,
+    color: colors.primary[400],
+    fontWeight: '500',
+    lineHeight: 12,
   },
 });
 

@@ -14,12 +14,13 @@
       "backgroundColor": "#1a1a2e"
     },
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "io.ushadow.mobile",
       "infoPlist": {
         "NSCameraUsageDescription": "Ushadow needs camera access to scan QR codes for connecting to your leader node.",
         "NSBluetoothAlwaysUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device.",
-        "NSBluetoothPeripheralUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device."
+        "NSBluetoothPeripheralUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "6SJ7NH4HSZ"
     },
@@ -68,6 +69,13 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8aeabf15-29ff-47df-ab11-7c8994d9c9d4"
+      }
+    },
+    "owner": "thestumonkey"
   }
 }
