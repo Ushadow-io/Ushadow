@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gai-conf-fix
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: gai-conf-fix
+  template:
+    metadata:
+      labels:
+        name: gai-conf-fix
+    spec:
+      hostNetwork: true
+      hostPID: true
+      initContainers:
+      - name: configure-gai
+        image: busybox
+        command:
+        - sh
+        - -c
+        - |
+          # Check if already configured
+          if grep -q "precedence ::ffff:0:0/96  100" /host-etc/gai.conf; then
+            echo "gai.conf already configured for IPv4 preference"
+          else
+            echo "Configuring gai.conf to prefer IPv4..."
+            # Backup original
+            cp /host-etc/gai.conf /host-etc/gai.conf.backup
+            # Add IPv4 preference
+            echo "precedence ::ffff:0:0/96  100" >> /host-etc/gai.conf
+            echo "gai.conf configured successfully"
+          fi
+        volumeMounts:
+        - name: host-etc
+          mountPath: /host-etc
+        securityContext:
+          privileged: true
+      containers:
+      - name: pause
+        image: gcr.io/google_containers/pause:3.1
+      volumes:
+      - name: host-etc
+        hostPath:
+          path: /etc
+          type: Directory

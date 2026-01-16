@@ -288,6 +288,33 @@ def setup_exception_handlers(app: FastAPI) -> None:
             content={"detail": exc.detail}
         )
 
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        """
+        Catch-all handler for any unhandled exceptions.
+
+        Logs full stack trace and returns structured error response.
+        This ensures all errors are visible in logs for debugging.
+        """
+        import traceback
+
+        # Log full error with stack trace
+        logger.error(
+            f"Unhandled exception in {request.method} {request.url.path}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        logger.error(f"Stack trace:\n{traceback.format_exc()}")
+
+        # Return structured error response
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": str(exc),
+                "error_type": type(exc).__name__,
+                "error_category": "internal_error"
+            }
+        )
+
 
 def setup_middleware(app: FastAPI) -> None:
     """Set up all middleware for the FastAPI application."""

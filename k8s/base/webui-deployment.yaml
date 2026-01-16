@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: webui
+  name: webui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: webui
+  template:
+    metadata:
+      labels:
+        io.kompose.service: webui
+    spec:
+      containers:
+        - env:
+            - name: NODE_ENV
+              value: production
+            - name: VITE_BACKEND_URL
+              value: http://localhost:8000
+            - name: VITE_ENV_NAME
+          image: webui
+          name: ushadow-webui
+          ports:
+            - containerPort: 80
+              protocol: TCP
+      restartPolicy: Always

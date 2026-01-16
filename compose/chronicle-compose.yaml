@@ -20,7 +20,7 @@ x-ushadow:
 
 services:
   chronicle-backend:
-    image: ghcr.io/ushadow-io/chronicle-backend:auth-fix
+    image: ghcr.io/ushadow-io/chronicle/backend:no-spacy
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
     # Sidecar mode: Run both workers and backend in same container
     command:
@@ -94,7 +94,7 @@ services:
           memory: 2G
 
   chronicle-webui:
-    image: ghcr.io/ushadow-io/chronicle-webui:${CHRONICLE_IMAGE_TAG:-latest}
+    image: ghcr.io/ushadow-io/chronicle/webui:no-spacy
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-webui
     ports:
       - "${CHRONICLE_WEBUI_PORT:-3080}:80"
