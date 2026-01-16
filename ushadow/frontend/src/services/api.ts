@@ -128,11 +128,121 @@ export const mcpApi = {
   connectServer: (serverUrl: string) => api.post('/api/mcp/connect', { server_url: serverUrl }),
 }
 
+// =============================================================================
+// Agent Zero Types
+// =============================================================================
+
+export interface AgentTrigger {
+  type: string
+  keywords: string[]
+  context_description?: string
+  threshold: number
+}
+
+export interface AgentOutput {
+  format: string
+  sections: string[]
+  include_sources: boolean
+}
+
+export interface Agent {
+  id: string
+  name: string
+  description: string
+  trigger: AgentTrigger
+  system_prompt: string
+  instructions: string
+  output: AgentOutput
+  status: 'active' | 'inactive' | 'draft'
+  created_at?: string
+  updated_at?: string
+  created_by?: string
+  last_used_at?: string
+  use_count: number
+  tags: string[]
+  metadata: Record<string, any>
+}
+
+export interface AgentCreate {
+  name: string
+  description: string
+  trigger?: Partial<AgentTrigger>
+  system_prompt?: string
+  instructions?: string
+  output?: Partial<AgentOutput>
+  tags?: string[]
+}
+
+export interface AgentUpdate {
+  name?: string
+  description?: string
+  trigger?: Partial<AgentTrigger>
+  system_prompt?: string
+  instructions?: string
+  output?: Partial<AgentOutput>
+  status?: 'active' | 'inactive' | 'draft'
+  tags?: string[]
+}
+
+export interface AgentZeroStatus {
+  connected: boolean
+  agent_count: number
+  active_agents: number
+  error?: string
+}
+
 // Agent Zero integration endpoints
 export const agentZeroApi = {
-  getStatus: () => api.get('/api/agent-zero/status'),
-  getAgents: () => api.get('/api/agent-zero/agents'),
-  createAgent: (agentData: any) => api.post('/api/agent-zero/agents', agentData),
+  /** Get Agent Zero service status */
+  getStatus: () => api.get<AgentZeroStatus>('/api/agent-zero/status'),
+
+  /** List all agents */
+  getAgents: (status?: string) =>
+    api.get<Agent[]>('/api/agent-zero/agents', { params: status ? { status } : {} }),
+
+  /** Get a single agent by ID */
+  getAgent: (agentId: string) => api.get<Agent>(`/api/agent-zero/agents/${agentId}`),
+
+  /** Create a new agent */
+  createAgent: (agentData: AgentCreate) =>
+    api.post<Agent>('/api/agent-zero/agents', agentData),
+
+  /** Create an agent from natural language */
+  createAgentFromChat: (userRequest: string, conversationContext?: Array<{ role: string; content: string }>) =>
+    api.post<{ success: boolean; agent: Agent | null; message: string }>('/api/agent-zero/agents/from-chat', {
+      user_request: userRequest,
+      conversation_context: conversationContext,
+    }),
+
+  /** Update an agent */
+  updateAgent: (agentId: string, data: AgentUpdate) =>
+    api.put<Agent>(`/api/agent-zero/agents/${agentId}`, data),
+
+  /** Delete an agent */
+  deleteAgent: (agentId: string) =>
+    api.delete<{ success: boolean; message: string }>(`/api/agent-zero/agents/${agentId}`),
+
+  /** Execute an agent */
+  executeAgent: (agentId: string, inputText: string, additionalContext?: Record<string, any>) =>
+    api.post<{ success: boolean; output: string; invocation_id?: string }>(
+      `/api/agent-zero/agents/${agentId}/execute`,
+      { agent_id: agentId, input_text: inputText, additional_context: additionalContext }
+    ),
+
+  /** Activate an agent */
+  activateAgent: (agentId: string) =>
+    api.post<{ success: boolean; agent: Agent }>(`/api/agent-zero/agents/${agentId}/activate`),
+
+  /** Deactivate an agent */
+  deactivateAgent: (agentId: string) =>
+    api.post<{ success: boolean; agent: Agent }>(`/api/agent-zero/agents/${agentId}/deactivate`),
+
+  /** Process a chat message for agent actions */
+  processMessage: (message: string, conversationContext?: Array<{ role: string; content: string }>) =>
+    api.post<{ action: any }>('/api/agent-zero/process-message', null, {
+      params: { message },
+      data: { conversation_context: conversationContext },
+    }),
 }
 
 // n8n integration endpoints
@@ -1371,6 +1481,8 @@ export interface ChatStatus {
   provider: string | null
   model: string | null
   memory_available: boolean
+  agents_available: boolean
+  active_agents: number
   error: string | null
 }
 
@@ -1378,6 +1490,7 @@ export interface ChatRequest {
   messages: ChatMessage[]
   system?: string
   use_memory?: boolean
+  use_agents?: boolean
   user_id?: string
   temperature?: number
   max_tokens?: number

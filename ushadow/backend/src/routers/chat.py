@@ -5,6 +5,7 @@ Provides a chat interface that:
 - Uses the selected LLM provider via LiteLLM
 - Optionally enriches context with OpenMemory
 - Streams responses using Server-Sent Events (SSE)
+- Integrates with Agent Zero for autonomous agents
 
 The streaming format is compatible with assistant-ui's data stream protocol.
 """
@@ -20,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.services.llm_client import get_llm_client
+from src.services.agent_zero import get_agent_zero_service
 from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     system: Optional[str] = None  # System prompt
     use_memory: bool = True  # Whether to fetch context from OpenMemory
+    use_agents: bool = True  # Whether to check for Agent Zero triggers
     user_id: Optional[str] = None  # User ID for memory lookup
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
@@ -53,6 +56,8 @@ class ChatStatus(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     memory_available: bool = False
+    agents_available: bool = False
+    active_agents: int = 0
     error: Optional[str] = None
 
 
@@ -125,6 +130,49 @@ async def check_memory_available() -> bool:
         return False
 
 
+async def check_agents_available() -> tuple[bool, int]:
+    """Check if Agent Zero service is available and get active agent count."""
+    service = get_agent_zero_service()
+    if not service:
+        return False, 0
+
+    try:
+        status = await service.get_status()
+        return status.get("connected", False), status.get("active_agents", 0)
+    except Exception:
+        return False, 0
+
+
+# =============================================================================
+# Agent Zero Integration
+# =============================================================================
+
+async def process_agent_action(
+    user_message: str,
+    conversation_context: Optional[List[Dict[str, str]]] = None,
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Check if the user message should trigger an agent action.
+
+    Returns:
+        Dict with agent action info, or None if no action needed.
+    """
+    service = get_agent_zero_service()
+    if not service:
+        return None
+
+    try:
+        return await service.process_chat_message(
+            user_message,
+            conversation_context,
+            user_id,
+        )
+    except Exception as e:
+        logger.warning(f"Agent processing error: {e}")
+        return None
+
+
 # =============================================================================
 # Streaming Helpers
 # =============================================================================
@@ -148,6 +196,12 @@ def format_finish_message(finish_reason: str = "stop") -> str:
     return f"d:{json.dumps({'finishReason': finish_reason})}\n"
 
 
+def format_agent_event(event_type: str, data: Dict[str, Any]) -> str:
+    """Format an agent event in AI SDK data stream format."""
+    # Use custom event type 'a' for agent events
+    return f"a:{json.dumps({'type': event_type, **data})}\n"
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -165,12 +219,15 @@ async def get_chat_status() -> ChatStatus:
         config = await llm.get_llm_config()
         is_configured = await llm.is_configured()
         memory_available = await check_memory_available()
+        agents_available, active_agents = await check_agents_available()
 
         return ChatStatus(
             configured=is_configured,
             provider=config.get("provider_id"),
             model=config.get("model"),
-            memory_available=memory_available
+            memory_available=memory_available,
+            agents_available=agents_available,
+            active_agents=active_agents,
         )
     except Exception as e:
         logger.error(f"Error getting chat status: {e}")
@@ -187,6 +244,10 @@ async def chat(request: ChatRequest):
 
     Accepts messages and returns a streaming response compatible with
     assistant-ui's data stream protocol.
+
+    Integrates with Agent Zero to:
+    - Detect agent creation requests and create agents
+    - Trigger existing agents based on conversation context
     """
     llm = get_llm_client()
 
@@ -195,6 +256,26 @@ async def chat(request: ChatRequest):
         raise HTTPException(
             status_code=503,
             detail="LLM not configured. Please set up an LLM provider in settings."
+        )
+
+    # Get the last user message for agent processing
+    last_user_message = next(
+        (m.content for m in reversed(request.messages) if m.role == "user"),
+        None
+    )
+
+    # Check for agent actions if enabled
+    agent_action = None
+    if request.use_agents and last_user_message:
+        # Build conversation context for agent processing
+        conversation_context = [
+            {"role": m.role, "content": m.content}
+            for m in request.messages[:-1]  # Exclude the last message
+        ]
+        agent_action = await process_agent_action(
+            last_user_message,
+            conversation_context,
+            request.user_id,
         )
 
     # Build messages list
@@ -208,10 +289,6 @@ async def chat(request: ChatRequest):
     memory_context = []
     if request.use_memory and request.messages:
         user_id = request.user_id or "default"
-        last_user_message = next(
-            (m.content for m in reversed(request.messages) if m.role == "user"),
-            None
-        )
         if last_user_message:
             memory_context = await fetch_memory_context(
                 last_user_message,
@@ -238,6 +315,50 @@ async def chat(request: ChatRequest):
     async def generate():
         """Stream response chunks."""
         try:
+            # Handle agent actions
+            if agent_action:
+                action_type = agent_action.get("type")
+
+                if action_type == "agent_created":
+                    # Emit agent created event
+                    yield format_agent_event("agent_created", {
+                        "agent": agent_action.get("agent"),
+                    })
+                    # Stream the confirmation message
+                    message = agent_action.get("message", "Agent created!")
+                    for chunk in message.split(" "):
+                        yield format_text_delta(chunk + " ")
+                    yield format_finish_message("stop")
+                    return
+
+                elif action_type == "agent_triggered":
+                    # Emit agent triggered event
+                    yield format_agent_event("agent_triggered", {
+                        "agent": agent_action.get("agent"),
+                        "confidence": agent_action.get("confidence"),
+                    })
+                    # Stream the agent's output
+                    output = agent_action.get("output", "")
+                    # Stream word by word for a natural feel
+                    words = output.split(" ")
+                    for i, word in enumerate(words):
+                        if i < len(words) - 1:
+                            yield format_text_delta(word + " ")
+                        else:
+                            yield format_text_delta(word)
+                    yield format_finish_message("stop")
+                    return
+
+                elif action_type == "agent_creation_failed":
+                    # Stream the error message but continue with normal chat
+                    message = agent_action.get("message", "")
+                    if message:
+                        for chunk in message.split(" "):
+                            yield format_text_delta(chunk + " ")
+                        yield format_finish_message("stop")
+                        return
+
+            # Normal chat flow
             async for chunk in llm.stream_completion(
                 messages=messages,
                 temperature=request.temperature,

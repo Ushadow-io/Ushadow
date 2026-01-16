@@ -44,7 +44,7 @@ flags:
 
   # Agent Zero - AI agent orchestration framework
   agent_zero:
-    enabled: false
+    enabled: true
     description: "Agent Zero - Autonomous AI agents for task automation"
     type: release
 

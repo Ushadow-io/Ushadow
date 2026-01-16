@@ -21,12 +21,13 @@ from src.models.user import User  # Beanie document model
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, instances, chat
-from src.routers import kubernetes, tailscale, unodes, docker
+from src.routers import kubernetes, tailscale, unodes, docker, agent_zero
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
+from src.services.agent_zero import init_agent_zero_service
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
 from src.config.omegaconf_settings import get_settings_store
@@ -141,6 +142,10 @@ async def lifespan(app: FastAPI):
     await init_kubernetes_manager(db)
     logger.info("✓ Kubernetes manager initialized")
 
+    # Initialize Agent Zero service
+    await init_agent_zero_service(db)
+    logger.info("✓ Agent Zero service initialized")
+
     # Start background task for stale u-node checking
     stale_check_task = asyncio.create_task(check_stale_unodes_task())
 
@@ -178,6 +183,7 @@ app.include_router(services.router, prefix="/api/services", tags=["services"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(instances.router, tags=["instances"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(agent_zero.router, prefix="/api/agent-zero", tags=["agent-zero"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
 

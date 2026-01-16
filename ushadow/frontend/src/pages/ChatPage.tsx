@@ -1,13 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { MessageSquare, Send, Loader2, AlertCircle, Brain, Settings, Trash2 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { MessageSquare, Send, Loader2, AlertCircle, Brain, Settings, Trash2, Bot, Sparkles } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
 import { useTheme } from '../contexts/ThemeContext'
 import { chatApi, BACKEND_URL } from '../services/api'
-import type { ChatMessage, ChatStatus } from '../services/api'
+import type { ChatMessage, ChatStatus, Agent } from '../services/api'
 
 interface Message extends ChatMessage {
   id: string
   isStreaming?: boolean
+  agentInfo?: {
+    type: 'created' | 'triggered'
+    agent: Agent
+    confidence?: number
+  }
 }
 
 export default function ChatPage() {
@@ -22,6 +27,8 @@ export default function ChatPage() {
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [useMemory, setUseMemory] = useState(true)
+  const [useAgents, setUseAgents] = useState(true)
+  const [lastAgentAction, setLastAgentAction] = useState<{ type: string; agent: Agent } | null>(null)
 
   // Fetch chat status on mount
   useEffect(() => {
@@ -52,12 +59,21 @@ export default function ChatPage() {
   const generateId = () => Math.random().toString(36).substring(2, 15)
 
   // Parse AI SDK data stream format
-  const parseStreamChunk = (chunk: string): string | null => {
+  const parseStreamChunk = (chunk: string): { type: 'text' | 'agent'; content?: string; agentData?: any } | null => {
     // Format: 0:"content" (text delta)
     if (chunk.startsWith('0:')) {
       try {
         const content = JSON.parse(chunk.slice(2))
-        return content
+        return { type: 'text', content }
+      } catch {
+        return null
+      }
+    }
+    // Format: a:{type, ...data} (agent event)
+    if (chunk.startsWith('a:')) {
+      try {
+        const agentData = JSON.parse(chunk.slice(2))
+        return { type: 'agent', agentData }
       } catch {
         return null
       }
@@ -106,6 +122,7 @@ export default function ChatPage() {
         body: JSON.stringify({
           messages: allMessages,
           use_memory: useMemory,
+          use_agents: useAgents,
         }),
       })
 
@@ -118,6 +135,7 @@ export default function ChatPage() {
 
       const decoder = new TextDecoder()
       let fullContent = ''
+      let currentAgentInfo: Message['agentInfo'] | undefined = undefined
 
       while (true) {
         const { done, value } = await reader.read()
@@ -127,17 +145,38 @@ export default function ChatPage() {
         const lines = text.split('\n').filter(Boolean)
 
         for (const line of lines) {
-          const content = parseStreamChunk(line)
-          if (content) {
-            fullContent += content
-            setMessages(prev => {
-              const updated = [...prev]
-              const lastMsg = updated[updated.length - 1]
-              if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.content = fullContent
+          const parsed = parseStreamChunk(line)
+          if (parsed) {
+            if (parsed.type === 'text' && parsed.content) {
+              fullContent += parsed.content
+              setMessages(prev => {
+                const updated = [...prev]
+                const lastMsg = updated[updated.length - 1]
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  lastMsg.content = fullContent
+                  if (currentAgentInfo) {
+                    lastMsg.agentInfo = currentAgentInfo
+                  }
+                }
+                return updated
+              })
+            } else if (parsed.type === 'agent' && parsed.agentData) {
+              const agentData = parsed.agentData
+              if (agentData.type === 'agent_created') {
+                currentAgentInfo = {
+                  type: 'created',
+                  agent: agentData.agent,
+                }
+                setLastAgentAction({ type: 'created', agent: agentData.agent })
+              } else if (agentData.type === 'agent_triggered') {
+                currentAgentInfo = {
+                  type: 'triggered',
+                  agent: agentData.agent,
+                  confidence: agentData.confidence,
+                }
+                setLastAgentAction({ type: 'triggered', agent: agentData.agent })
               }
-              return updated
-            })
+            }
           }
         }
       }
@@ -160,7 +199,7 @@ export default function ChatPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [input, messages, isLoading, useMemory])
+  }, [input, messages, isLoading, useMemory, useAgents])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -240,7 +279,13 @@ export default function ChatPage() {
                 {status.memory_available && (
                   <span className="ml-2 text-primary-400">
                     <Brain className="h-3 w-3 inline mr-1" />
-                    Memory enabled
+                    Memory
+                  </span>
+                )}
+                {status.agents_available && (
+                  <span className="ml-2 text-green-400">
+                    <Bot className="h-3 w-3 inline mr-1" />
+                    {status.active_agents} agent{status.active_agents !== 1 ? 's' : ''}
                   </span>
                 )}
               </p>
@@ -272,6 +317,28 @@ export default function ChatPage() {
             <span className="hidden sm:inline">Memory</span>
           </button>
           <button
+            data-testid="chat-agents-toggle"
+            onClick={() => status?.agents_available && setUseAgents(!useAgents)}
+            disabled={!status?.agents_available}
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              !status?.agents_available
+                ? 'bg-surface-700/50 text-text-muted cursor-not-allowed opacity-50'
+                : useAgents
+                ? 'bg-green-400/20 text-green-400'
+                : 'bg-surface-700 text-text-secondary hover:bg-surface-600'
+            }`}
+            title={
+              !status?.agents_available
+                ? 'Agent Zero not available'
+                : useAgents
+                ? 'Agents enabled - describe what you want and I\'ll create an agent'
+                : 'Agents disabled'
+            }
+          >
+            <Bot className="h-4 w-4" />
+            <span className="hidden sm:inline">Agents</span>
+          </button>
+          <button
             data-testid="chat-clear-btn"
             onClick={clearChat}
             className="p-2 rounded-lg hover:bg-surface-600 transition-colors"
@@ -300,9 +367,20 @@ export default function ChatPage() {
             >
               Start a conversation
             </h3>
-            <p style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>
+            <p style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }} className="max-w-md">
               Send a message to begin chatting with the AI assistant.
             </p>
+            {status?.agents_available && useAgents && (
+              <div className="mt-4 p-4 rounded-lg max-w-md" style={{ backgroundColor: isDark ? 'var(--surface-700)' : '#e4e4e7' }}>
+                <p className="text-sm flex items-start" style={{ color: isDark ? 'var(--text-secondary)' : '#52525b' }}>
+                  <Bot className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0 text-green-400" />
+                  <span>
+                    <strong className="text-green-400">Tip:</strong> Describe what you want an agent to do, like{' '}
+                    <em>"When I am having a book review club, summarize the main plot points and characters"</em>
+                  </span>
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           messages.map(message => (
@@ -336,6 +414,22 @@ export default function ChatPage() {
                       : 'none',
                 }}
               >
+                {/* Agent badge */}
+                {message.agentInfo && (
+                  <div className="flex items-center space-x-1 mb-2 text-xs">
+                    {message.agentInfo.type === 'created' ? (
+                      <span className="flex items-center px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">
+                        <Sparkles className="h-3 w-3 mr-1" />
+                        Created: {message.agentInfo.agent.name}
+                      </span>
+                    ) : (
+                      <span className="flex items-center px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400">
+                        <Bot className="h-3 w-3 mr-1" />
+                        {message.agentInfo.agent.name}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <p className="whitespace-pre-wrap break-words">
                   {message.content || (message.isStreaming && (
                     <span className="inline-flex items-center">
