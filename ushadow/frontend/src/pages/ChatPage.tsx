@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { MessageSquare, Send, Loader2, AlertCircle, Brain, Settings, Trash2, Bot, Sparkles } from 'lucide-react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../contexts/ThemeContext'
 import { chatApi, BACKEND_URL } from '../services/api'
 import type { ChatMessage, ChatStatus, Agent } from '../services/api'
