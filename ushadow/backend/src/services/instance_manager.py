@@ -130,6 +130,10 @@ class InstanceManager:
                     deployed_at=instance_data.get('deployed_at'),
                     updated_at=instance_data.get('updated_at'),
                     error=instance_data.get('error'),
+                    # Deployment tracking
+                    deployment_id=instance_data.get('deployment_id'),
+                    container_id=instance_data.get('container_id'),
+                    container_name=instance_data.get('container_name'),
                     # Integration-specific fields
                     integration_type=instance_data.get('integration_type'),
                     sync_enabled=instance_data.get('sync_enabled'),
@@ -196,7 +200,9 @@ class InstanceManager:
             if instance.deployment_target:
                 instance_data['deployment_target'] = instance.deployment_target
             if instance.status != InstanceStatus.PENDING:
-                instance_data['status'] = instance.status
+                # Handle both enum and string status values
+                status_value = instance.status.value if isinstance(instance.status, InstanceStatus) else instance.status
+                instance_data['status'] = status_value
             if instance.outputs.access_url or instance.outputs.env_vars:
                 instance_data['outputs'] = {}
                 if instance.outputs.access_url:
@@ -209,6 +215,14 @@ class InstanceManager:
                 instance_data['created_at'] = instance.created_at.isoformat() if isinstance(instance.created_at, datetime) else instance.created_at
             if instance.error:
                 instance_data['error'] = instance.error
+
+            # Deployment tracking fields
+            if instance.deployment_id:
+                instance_data['deployment_id'] = instance.deployment_id
+            if instance.container_id:
+                instance_data['container_id'] = instance.container_id
+            if instance.container_name:
+                instance_data['container_name'] = instance.container_name
 
             # Integration-specific fields
             if instance.integration_type is not None:
@@ -452,8 +466,10 @@ class InstanceManager:
     async def deploy_instance(self, instance_id: str) -> tuple[bool, str]:
         """Deploy/start an instance.
 
-        For compose services: starts the docker container
-        For cloud providers: marks as N/A (always available)
+        Routes deployment based on deployment_target:
+        - None: Local docker (ServiceOrchestrator)
+        - "cloud": Cloud provider (marks as N/A)
+        - hostname: Remote unode (DeploymentManager)
         """
         self._ensure_loaded()
 
@@ -469,54 +485,121 @@ class InstanceManager:
         compose_service = compose_registry.get_service(instance.template_id)
 
         if compose_service:
-            # This is a compose service - use ServiceOrchestrator
-            from src.services.service_orchestrator import get_service_orchestrator
-            orchestrator = get_service_orchestrator()
+            # Check deployment target
+            if instance.deployment_target and instance.deployment_target != "cloud":
+                # Remote unode deployment - use DeploymentManager
+                from src.services.deployment_manager import get_deployment_manager
+                deployment_manager = get_deployment_manager()
 
-            # Update status to deploying
-            instance.status = InstanceStatus.DEPLOYING
-            self._save_instances()
+                # Update status to deploying
+                instance.status = InstanceStatus.DEPLOYING
+                self._save_instances()
 
-            # Use service_name (not template_id) for orchestrator calls
-            service_name = compose_service.service_name
-
-            try:
-                result = await orchestrator.start_service(service_name, instance_id=instance_id)
-                if result.success:
-                    # Get the service status to find access URL
-                    status_info = await orchestrator.get_service_status(service_name)
-                    access_url = None
-                    if status_info and status_info.get("status") == "running":
-                        # Try to get the access URL from docker details
-                        details = await orchestrator.get_docker_details(service_name)
-                        if details and details.ports:
-                            # Use first mapped port
-                            for port_info in details.ports:
-                                if port_info.get("host_port"):
-                                    access_url = f"http://localhost:{port_info['host_port']}"
-                                    break
-
-                    self.update_instance_status(
-                        instance_id,
-                        InstanceStatus.RUNNING,
-                        access_url=access_url,
+                try:
+                    # Deploy via deployment manager (creates Deployment record)
+                    deployment = await deployment_manager.deploy_service(
+                        service_id=compose_service.service_id,
+                        unode_hostname=instance.deployment_target,
+                        instance_id=instance_id
                     )
-                    return True, f"Service {instance.template_id} started"
-                else:
+
+                    # Store deployment_id in instance
+                    instance.deployment_id = deployment.id
+                    instance.container_id = deployment.container_id
+                    instance.container_name = deployment.container_name
+
+                    # Update instance status based on deployment
+                    if deployment.status == "running":
+                        self.update_instance_status(
+                            instance_id,
+                            InstanceStatus.RUNNING,
+                            access_url=deployment.access_url,
+                        )
+                        return True, f"Service deployed to {instance.deployment_target}"
+                    else:
+                        self.update_instance_status(
+                            instance_id,
+                            InstanceStatus.DEPLOYING,
+                        )
+                        return True, f"Service deploying to {instance.deployment_target}"
+
+                except Exception as e:
+                    logger.exception(f"Failed to deploy instance {instance_id} to unode")
                     self.update_instance_status(
                         instance_id,
                         InstanceStatus.ERROR,
-                        error=result.message,
+                        error=str(e),
                     )
-                    return False, result.message
-            except Exception as e:
-                logger.exception(f"Failed to deploy instance {instance_id}")
-                self.update_instance_status(
-                    instance_id,
-                    InstanceStatus.ERROR,
-                    error=str(e),
-                )
-                return False, str(e)
+                    return False, str(e)
+            else:
+                # Local docker deployment - use ServiceOrchestrator
+                from src.services.service_orchestrator import get_service_orchestrator
+                from src.services.docker_manager import get_docker_manager
+                from src.config.omegaconf_settings import get_settings_store
+
+                orchestrator = get_service_orchestrator()
+                docker_mgr = get_docker_manager()
+                settings_store = get_settings_store()
+
+                # Update status to deploying
+                instance.status = InstanceStatus.DEPLOYING
+                self._save_instances()
+
+                # Use service_name (not template_id) for orchestrator calls
+                service_name = compose_service.service_name
+
+                # Check for port conflicts before deploying
+                conflicts = docker_mgr.check_port_conflicts(service_name)
+                if conflicts:
+                    logger.info(f"Found {len(conflicts)} port conflicts for {service_name}, remapping to available ports")
+
+                    # Remap ports to suggested alternatives
+                    for conflict in conflicts:
+                        if conflict.env_var and conflict.suggested_port:
+                            # Save port override in service preferences
+                            # This matches the pattern from /api/services/{name}/port-override
+                            pref_key = f"services.{service_name}.ports.{conflict.env_var}"
+                            await settings_store.set(pref_key, conflict.suggested_port)
+                            logger.info(f"Remapped {conflict.env_var}: {conflict.port} -> {conflict.suggested_port}")
+
+                try:
+                    result = await orchestrator.start_service(service_name, instance_id=instance_id)
+                    if result.success:
+                        # Get the service status to find access URL
+                        status_info = await orchestrator.get_service_status(service_name)
+                        access_url = None
+                        if status_info and status_info.get("status") == "running":
+                            # Try to get the access URL from docker details
+                            details = await orchestrator.get_docker_details(service_name)
+                            if details and details.ports:
+                                # ports is Dict[str, str] where key is container port, value is host port
+                                # e.g., {"8080/tcp": "32768"}
+                                for container_port, host_port in details.ports.items():
+                                    if host_port:
+                                        access_url = f"http://localhost:{host_port}"
+                                        break
+
+                        self.update_instance_status(
+                            instance_id,
+                            InstanceStatus.RUNNING,
+                            access_url=access_url,
+                        )
+                        return True, f"Service {service_name} started"
+                    else:
+                        self.update_instance_status(
+                            instance_id,
+                            InstanceStatus.ERROR,
+                            error=result.message,
+                        )
+                        return False, result.message
+                except Exception as e:
+                    logger.exception(f"Failed to deploy instance {instance_id}")
+                    self.update_instance_status(
+                        instance_id,
+                        InstanceStatus.ERROR,
+                        error=str(e),
+                    )
+                    return False, str(e)
         else:
             # Cloud provider - mark as N/A (always available)
             self.update_instance_status(instance_id, InstanceStatus.NOT_APPLICABLE)
@@ -550,7 +633,7 @@ class InstanceManager:
             service_name = compose_service.service_name
 
             try:
-                result = await orchestrator.stop_service(service_name, instance_id=instance_id)
+                result = orchestrator.stop_service(service_name)
                 if result.success:
                     self.update_instance_status(instance_id, InstanceStatus.STOPPED)
                     return True, f"Service {service_name} stopped"

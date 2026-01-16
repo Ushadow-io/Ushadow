@@ -440,7 +440,8 @@ class DeploymentManager:
         self,
         service_id: str,
         unode_hostname: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        instance_id: Optional[str] = None
     ) -> Deployment:
         """
         Deploy a service to any deployment target (Docker unode or K8s cluster).
@@ -452,6 +453,7 @@ class DeploymentManager:
             service_id: Service to deploy
             unode_hostname: Target unode hostname (Docker host or K8s cluster ID)
             namespace: Optional K8s namespace (only used for K8s deployments)
+            instance_id: Optional instance ID (for instance-based deployments)
         """
         # Resolve service with all variables substituted
         try:
@@ -472,17 +474,28 @@ class DeploymentManager:
         unode = UNode(**unode_dict)
 
         # Check if already deployed
-        existing = await self.deployments_collection.find_one({
+        # If instance_id is provided, check for that specific instance
+        # Otherwise, check for any deployment of this service (legacy behavior)
+        query = {
             "service_id": service_id,
             "unode_hostname": unode_hostname
-        })
+        }
+        if instance_id:
+            query["instance_id"] = instance_id
+
+        existing = await self.deployments_collection.find_one(query)
         if existing and existing.get("status") in [
             DeploymentStatus.RUNNING,
             DeploymentStatus.DEPLOYING
         ]:
-            raise ValueError(
-                f"Service {service_id} already deployed to {unode_hostname}"
-            )
+            if instance_id:
+                raise ValueError(
+                    f"Instance {instance_id} already deployed to {unode_hostname}"
+                )
+            else:
+                raise ValueError(
+                    f"Service {service_id} already deployed to {unode_hostname}"
+                )
 
         # Create deployment ID
         deployment_id = str(uuid.uuid4())[:8]
@@ -496,6 +509,43 @@ class DeploymentManager:
 
         backend = get_deployment_backend(unode, k8s_manager)
 
+        # Check for port conflicts using the existing method (Docker only)
+        if unode.type != UNodeType.KUBERNETES:
+            from src.services.docker_manager import get_docker_manager
+            docker_mgr = get_docker_manager()
+
+            # Get the service name from the resolved service
+            service_name = resolved_service.compose_service_name
+
+            # Use existing port conflict checking method
+            conflicts = docker_mgr.check_port_conflicts(service_name)
+
+            if conflicts:
+                logger.info(f"Found {len(conflicts)} port conflicts for {service_name}, remapping ports")
+
+                # Remap ports in resolved_service to use suggested alternatives
+                updated_ports = []
+                for port_str in resolved_service.ports:
+                    if ":" in port_str:
+                        host_port, container_port = port_str.split(":")
+                        original_port = int(host_port)
+
+                        # Find if this port has a conflict
+                        conflict = next((c for c in conflicts if c.port == original_port), None)
+                        if conflict and conflict.suggested_port:
+                            # Use suggested alternative port
+                            updated_ports.append(f"{conflict.suggested_port}:{container_port}")
+                            logger.info(f"Remapped port {original_port} -> {conflict.suggested_port}")
+                        else:
+                            updated_ports.append(port_str)
+                    else:
+                        updated_ports.append(port_str)
+
+                # Update the resolved service with new ports
+                resolved_service.ports = updated_ports
+            else:
+                logger.info(f"No port conflicts detected for {service_name}")
+
         # Deploy using the backend
         try:
             deployment = await backend.deploy(
@@ -504,6 +554,9 @@ class DeploymentManager:
                 deployment_id=deployment_id,
                 namespace=namespace
             )
+
+            # Set instance_id on the deployment
+            deployment.instance_id = instance_id
 
             # For Docker deployments, update tailscale serve routes
             if deployment.backend_type == "docker":
@@ -540,6 +593,7 @@ class DeploymentManager:
                 id=deployment_id,
                 service_id=service_id,
                 unode_hostname=unode_hostname,
+                instance_id=instance_id,
                 status=DeploymentStatus.FAILED,
                 created_at=datetime.now(timezone.utc),
                 deployed_config=resolved_service.model_dump(),
