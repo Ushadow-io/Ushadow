@@ -1,17 +1,7 @@
 defaults: {}
 wiring:
-- id: 3cacc293
-  source_instance_id: openai-2
+- id: 891f06d2
+  source_instance_id: openai-1
   source_capability: llm
   target_instance_id: openmemory-compose:mem0
-  target_capability: llm
-- id: 19679d70
-  source_instance_id: whisper-local-1
-  source_capability: transcription
-  target_instance_id: chronicle-compose:chronicle-backend
-  target_capability: transcription
-- id: 0bd39f1d
-  source_instance_id: ollama-2
-  source_capability: llm
-  target_instance_id: chronicle-compose:chronicle-backend
   target_capability: llm
