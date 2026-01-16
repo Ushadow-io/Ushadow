@@ -1444,3 +1444,145 @@ export const integrationApi = {
   disableAutoSync: (instanceId: string) =>
     api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/disable`),
 }
+
+// =============================================================================
+// GitHub Import API - Import docker-compose from GitHub repositories
+// =============================================================================
+
+export interface GitHubUrlInfo {
+  owner: string
+  repo: string
+  branch: string
+  path: string
+}
+
+export interface DetectedComposeFile {
+  path: string
+  name: string
+  download_url: string
+  size: number
+}
+
+export interface GitHubScanResponse {
+  success: boolean
+  github_info?: GitHubUrlInfo
+  compose_files: DetectedComposeFile[]
+  message?: string
+  error?: string
+}
+
+export interface ComposeEnvVarInfo {
+  name: string
+  has_default: boolean
+  default_value?: string
+  is_required: boolean
+  description?: string
+}
+
+export interface ComposeServiceInfo {
+  name: string
+  image?: string
+  ports: Array<{ host?: string; container?: string }>
+  environment: ComposeEnvVarInfo[]
+  depends_on: string[]
+  volumes: string[]
+  networks: string[]
+  command?: string
+  healthcheck?: Record<string, any>
+}
+
+export interface ComposeParseResponse {
+  success: boolean
+  compose_path: string
+  services: ComposeServiceInfo[]
+  networks: string[]
+  volumes: string[]
+  message?: string
+  error?: string
+}
+
+export interface ShadowHeaderConfig {
+  enabled: boolean
+  header_name: string
+  header_value?: string
+  route_path?: string
+}
+
+export interface EnvVarConfigItem {
+  name: string
+  source: 'literal' | 'setting' | 'default'
+  value?: string
+  setting_path?: string
+  is_secret: boolean
+}
+
+export interface ImportedServiceConfig {
+  service_name: string
+  display_name?: string
+  description?: string
+  github_url: string
+  compose_path: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  enabled: boolean
+}
+
+export interface ImportServiceRequest {
+  github_url: string
+  compose_path: string
+  service_name: string
+  config: ImportedServiceConfig
+}
+
+export interface ImportServiceResponse {
+  success: boolean
+  service_id?: string
+  service_name?: string
+  message: string
+  compose_file_path?: string
+}
+
+export interface ImportedService {
+  id: string
+  github_url: string
+  compose_path: string
+  compose_file: string
+  service_name: string
+  display_name?: string
+  description?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  enabled: boolean
+}
+
+export const githubImportApi = {
+  /** Scan a GitHub repository for docker-compose files */
+  scan: (github_url: string, branch?: string, compose_path?: string) =>
+    api.post<GitHubScanResponse>('/api/github-import/scan', {
+      github_url,
+      branch,
+      compose_path
+    }),
+
+  /** Parse a docker-compose file and extract service/env information */
+  parse: (github_url: string, compose_path: string) =>
+    api.post<ComposeParseResponse>('/api/github-import/parse', null, {
+      params: { github_url, compose_path }
+    }),
+
+  /** Register an imported service */
+  register: (request: ImportServiceRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/register', request),
+
+  /** List all imported services */
+  listImported: () =>
+    api.get<ImportedService[]>('/api/github-import/imported'),
+
+  /** Delete an imported service */
+  deleteImported: (serviceId: string) =>
+    api.delete<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}`),
+
+  /** Update configuration for an imported service */
+  updateConfig: (serviceId: string, config: ImportedServiceConfig) =>
+    api.put<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}/config`, config),
+}

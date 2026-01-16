@@ -18,7 +18,8 @@ import {
   Plus,
   Package,
   Trash2,
-  BookOpen
+  BookOpen,
+  Github
 } from 'lucide-react'
 import {
   settingsApi,
@@ -33,6 +34,7 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { PortConflictDialog } from '../components/services'
+import ImportFromGitHubModal from '../components/ImportFromGitHubModal'
 
 export default function ServicesPage() {
   // Compose services state
@@ -95,6 +97,9 @@ export default function ServicesPage() {
   const [catalogServices, setCatalogServices] = useState<ComposeService[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [installingService, setInstallingService] = useState<string | null>(null)
+
+  // GitHub import modal state
+  const [showGitHubImport, setShowGitHubImport] = useState(false)
 
   // Load initial data
   useEffect(() => {
@@ -624,6 +629,14 @@ export default function ServicesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowGitHubImport(true)}
+            data-testid="import-github-button"
+            className="btn-secondary flex items-center gap-2"
+          >
+            <Github className="h-4 w-4" />
+            Import from GitHub
+          </button>
           <button
             onClick={openCatalog}
             data-testid="add-service-button"
@@ -1448,6 +1461,16 @@ export default function ServicesPage() {
           </div>
         </div>
       </Modal>
+
+      {/* GitHub Import Modal */}
+      <ImportFromGitHubModal
+        isOpen={showGitHubImport}
+        onClose={() => setShowGitHubImport(false)}
+        onServiceImported={() => {
+          setShowGitHubImport(false)
+          loadData()
+        }}
+      />
     </div>
   )
 }

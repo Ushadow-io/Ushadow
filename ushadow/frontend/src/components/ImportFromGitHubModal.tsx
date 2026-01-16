@@ -1,0 +1,762 @@
+import { useState, useEffect } from 'react'
+import {
+  X,
+  Github,
+  Loader2,
+  FileCode,
+  ChevronRight,
+  ChevronLeft,
+  Settings,
+  Key,
+  Check,
+  AlertCircle,
+  Server,
+  Eye,
+  EyeOff,
+  RefreshCw,
+} from 'lucide-react'
+import {
+  githubImportApi,
+  DetectedComposeFile,
+  ComposeServiceInfo,
+  ComposeEnvVarInfo,
+  ShadowHeaderConfig,
+  EnvVarConfigItem,
+} from '../services/api'
+
+interface ImportFromGitHubModalProps {
+  isOpen: boolean
+  onClose: () => void
+  onServiceImported: () => void
+}
+
+type WizardStep = 'url' | 'compose' | 'service' | 'config' | 'complete'
+
+export default function ImportFromGitHubModal({
+  isOpen,
+  onClose,
+  onServiceImported,
+}: ImportFromGitHubModalProps) {
+  // Wizard state
+  const [step, setStep] = useState<WizardStep>('url')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // URL step
+  const [githubUrl, setGithubUrl] = useState('')
+  const [branch, setBranch] = useState('')
+
+  // Compose file selection
+  const [composeFiles, setComposeFiles] = useState<DetectedComposeFile[]>([])
+  const [selectedComposeFile, setSelectedComposeFile] = useState<DetectedComposeFile | null>(null)
+
+  // Service selection
+  const [services, setServices] = useState<ComposeServiceInfo[]>([])
+  const [selectedService, setSelectedService] = useState<ComposeServiceInfo | null>(null)
+
+  // Configuration
+  const [serviceName, setServiceName] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [description, setDescription] = useState('')
+  const [shadowHeader, setShadowHeader] = useState<ShadowHeaderConfig>({
+    enabled: true,
+    header_name: 'X-Shadow-Service',
+    header_value: '',
+    route_path: '',
+  })
+  const [envVars, setEnvVars] = useState<EnvVarConfigItem[]>([])
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
+
+  // Reset state when modal opens/closes
+  useEffect(() => {
+    if (!isOpen) {
+      setStep('url')
+      setGithubUrl('')
+      setBranch('')
+      setComposeFiles([])
+      setSelectedComposeFile(null)
+      setServices([])
+      setSelectedService(null)
+      setServiceName('')
+      setDisplayName('')
+      setDescription('')
+      setShadowHeader({
+        enabled: true,
+        header_name: 'X-Shadow-Service',
+        header_value: '',
+        route_path: '',
+      })
+      setEnvVars([])
+      setError(null)
+    }
+  }, [isOpen])
+
+  // Scan GitHub repository
+  const handleScanRepo = async () => {
+    if (!githubUrl.trim()) {
+      setError('Please enter a GitHub URL')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      const response = await githubImportApi.scan(githubUrl, branch || undefined)
+      const data = response.data
+
+      if (!data.success) {
+        setError(data.error || 'Failed to scan repository')
+        return
+      }
+
+      if (data.compose_files.length === 0) {
+        setError('No docker-compose files found in the repository')
+        return
+      }
+
+      setComposeFiles(data.compose_files)
+      setStep('compose')
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to scan repository')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Parse selected compose file
+  const handleSelectComposeFile = async (file: DetectedComposeFile) => {
+    setSelectedComposeFile(file)
+    setLoading(true)
+    setError(null)
+
+    try {
+      const response = await githubImportApi.parse(githubUrl, file.path)
+      const data = response.data
+
+      if (!data.success) {
+        setError(data.error || 'Failed to parse compose file')
+        return
+      }
+
+      if (data.services.length === 0) {
+        setError('No services found in compose file')
+        return
+      }
+
+      setServices(data.services)
+      setStep('service')
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to parse compose file')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Select service and prepare configuration
+  const handleSelectService = (service: ComposeServiceInfo) => {
+    setSelectedService(service)
+    setServiceName(service.name)
+    setDisplayName(service.name.charAt(0).toUpperCase() + service.name.slice(1).replace(/-/g, ' '))
+    setShadowHeader({
+      enabled: true,
+      header_name: 'X-Shadow-Service',
+      header_value: service.name,
+      route_path: `/${service.name}`,
+    })
+
+    // Initialize env vars from service
+    const envConfig: EnvVarConfigItem[] = service.environment.map((env) => ({
+      name: env.name,
+      source: env.has_default ? 'default' : 'literal',
+      value: env.default_value || '',
+      is_secret: env.name.toLowerCase().includes('key') ||
+                 env.name.toLowerCase().includes('secret') ||
+                 env.name.toLowerCase().includes('password') ||
+                 env.name.toLowerCase().includes('token'),
+    }))
+    setEnvVars(envConfig)
+    setStep('config')
+  }
+
+  // Update environment variable
+  const updateEnvVar = (index: number, updates: Partial<EnvVarConfigItem>) => {
+    setEnvVars((prev) =>
+      prev.map((ev, i) => (i === index ? { ...ev, ...updates } : ev))
+    )
+  }
+
+  // Import the service
+  const handleImport = async () => {
+    if (!selectedComposeFile || !selectedService) {
+      setError('Please select a compose file and service')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      const response = await githubImportApi.register({
+        github_url: githubUrl,
+        compose_path: selectedComposeFile.path,
+        service_name: serviceName,
+        config: {
+          service_name: serviceName,
+          display_name: displayName,
+          description,
+          github_url: githubUrl,
+          compose_path: selectedComposeFile.path,
+          shadow_header: shadowHeader,
+          env_vars: envVars,
+          enabled: true,
+        },
+      })
+
+      const data = response.data
+
+      if (!data.success) {
+        setError(data.message || 'Failed to import service')
+        return
+      }
+
+      setStep('complete')
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to import service')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handle completion
+  const handleComplete = () => {
+    onServiceImported()
+    onClose()
+  }
+
+  if (!isOpen) return null
+
+  const renderStepIndicator = () => {
+    const steps: { key: WizardStep; label: string }[] = [
+      { key: 'url', label: 'URL' },
+      { key: 'compose', label: 'Compose' },
+      { key: 'service', label: 'Service' },
+      { key: 'config', label: 'Configure' },
+      { key: 'complete', label: 'Done' },
+    ]
+
+    const currentIndex = steps.findIndex((s) => s.key === step)
+
+    return (
+      <div className="flex items-center justify-center gap-2 mb-6">
+        {steps.map((s, index) => (
+          <div key={s.key} className="flex items-center">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                index < currentIndex
+                  ? 'bg-green-500 text-white'
+                  : index === currentIndex
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-500'
+              }`}
+            >
+              {index < currentIndex ? <Check className="w-4 h-4" /> : index + 1}
+            </div>
+            {index < steps.length - 1 && (
+              <div
+                className={`w-8 h-0.5 ${
+                  index < currentIndex
+                    ? 'bg-green-500'
+                    : 'bg-gray-200 dark:bg-gray-700'
+                }`}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  const renderUrlStep = () => (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          GitHub Repository URL
+        </label>
+        <input
+          type="text"
+          value={githubUrl}
+          onChange={(e) => setGithubUrl(e.target.value)}
+          placeholder="https://github.com/owner/repo"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+        />
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          Supports repository URLs, specific branches, or direct paths to compose files
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Branch (optional)
+        </label>
+        <input
+          type="text"
+          value={branch}
+          onChange={(e) => setBranch(e.target.value)}
+          placeholder="main"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+        />
+      </div>
+    </div>
+  )
+
+  const renderComposeStep = () => (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Found {composeFiles.length} docker-compose file(s). Select one to continue:
+      </p>
+      <div className="space-y-2 max-h-60 overflow-y-auto">
+        {composeFiles.map((file) => (
+          <button
+            key={file.path}
+            onClick={() => handleSelectComposeFile(file)}
+            className={`w-full p-3 rounded-lg border-2 text-left transition-all flex items-center gap-3 ${
+              selectedComposeFile?.path === file.path
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+            }`}
+          >
+            <FileCode className="w-5 h-5 text-primary-600 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-gray-900 dark:text-white truncate">
+                {file.name}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {file.path}
+              </p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-gray-400" />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+
+  const renderServiceStep = () => (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Found {services.length} service(s) in the compose file. Select one to import:
+      </p>
+      <div className="space-y-2 max-h-60 overflow-y-auto">
+        {services.map((service) => (
+          <button
+            key={service.name}
+            onClick={() => handleSelectService(service)}
+            className={`w-full p-3 rounded-lg border-2 text-left transition-all ${
+              selectedService?.name === service.name
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <Server className="w-5 h-5 text-primary-600 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-gray-900 dark:text-white">
+                  {service.name}
+                </p>
+                {service.image && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
+                    Image: {service.image}
+                  </p>
+                )}
+                {service.ports.length > 0 && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Ports: {service.ports.map((p) => p.container).join(', ')}
+                  </p>
+                )}
+                {service.environment.filter((e) => e.is_required).length > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 mt-2">
+                    {service.environment.filter((e) => e.is_required).length} required env vars
+                  </span>
+                )}
+              </div>
+              <ChevronRight className="w-4 h-4 text-gray-400" />
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+
+  const renderConfigStep = () => (
+    <div className="space-y-6 max-h-[50vh] overflow-y-auto">
+      {/* Basic Info */}
+      <div className="space-y-4">
+        <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+          <Settings className="w-4 h-4" />
+          Basic Information
+        </h4>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Service Name
+            </label>
+            <input
+              type="text"
+              value={serviceName}
+              onChange={(e) => setServiceName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Display Name
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Description
+          </label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+          />
+        </div>
+      </div>
+
+      {/* Shadow Header Configuration */}
+      <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+          <RefreshCw className="w-4 h-4" />
+          Shadow Header Configuration
+        </h4>
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="shadow-enabled"
+            checked={shadowHeader.enabled}
+            onChange={(e) =>
+              setShadowHeader({ ...shadowHeader, enabled: e.target.checked })
+            }
+            className="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500"
+          />
+          <label htmlFor="shadow-enabled" className="text-sm text-gray-700 dark:text-gray-300">
+            Enable shadow header routing
+          </label>
+        </div>
+        {shadowHeader.enabled && (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Header Name
+              </label>
+              <input
+                type="text"
+                value={shadowHeader.header_name}
+                onChange={(e) =>
+                  setShadowHeader({ ...shadowHeader, header_name: e.target.value })
+                }
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Header Value
+              </label>
+              <input
+                type="text"
+                value={shadowHeader.header_value || ''}
+                onChange={(e) =>
+                  setShadowHeader({ ...shadowHeader, header_value: e.target.value })
+                }
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Route Path (for Tailscale Serve)
+              </label>
+              <input
+                type="text"
+                value={shadowHeader.route_path || ''}
+                onChange={(e) =>
+                  setShadowHeader({ ...shadowHeader, route_path: e.target.value })
+                }
+                placeholder="/myservice"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Environment Variables */}
+      {envVars.length > 0 && (
+        <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+            <Key className="w-4 h-4" />
+            Environment Variables ({envVars.length})
+          </h4>
+          <div className="space-y-3">
+            {envVars.map((env, index) => {
+              const originalEnv = selectedService?.environment.find(
+                (e) => e.name === env.name
+              )
+              return (
+                <div
+                  key={env.name}
+                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-mono text-sm text-gray-900 dark:text-white">
+                      {env.name}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {originalEnv?.is_required && (
+                        <span className="text-xs text-red-500">Required</span>
+                      )}
+                      {env.is_secret && (
+                        <span className="text-xs text-amber-500">Secret</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={env.source}
+                      onChange={(e) =>
+                        updateEnvVar(index, {
+                          source: e.target.value as 'literal' | 'setting' | 'default',
+                        })
+                      }
+                      className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="literal">Set Value</option>
+                      <option value="default">Use Default</option>
+                      <option value="setting">From Settings</option>
+                    </select>
+                    {env.source === 'literal' && (
+                      <div className="flex-1 flex items-center gap-2">
+                        <input
+                          type={env.is_secret && !showSecrets[env.name] ? 'password' : 'text'}
+                          value={env.value || ''}
+                          onChange={(e) => updateEnvVar(index, { value: e.target.value })}
+                          placeholder={originalEnv?.default_value || 'Enter value'}
+                          className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                        />
+                        {env.is_secret && (
+                          <button
+                            onClick={() =>
+                              setShowSecrets((prev) => ({
+                                ...prev,
+                                [env.name]: !prev[env.name],
+                              }))
+                            }
+                            className="p-1 text-gray-400 hover:text-gray-600"
+                          >
+                            {showSecrets[env.name] ? (
+                              <EyeOff className="w-4 h-4" />
+                            ) : (
+                              <Eye className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {env.source === 'default' && originalEnv?.default_value && (
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        Default: {originalEnv.default_value}
+                      </span>
+                    )}
+                    {env.source === 'setting' && (
+                      <input
+                        type="text"
+                        value={env.setting_path || ''}
+                        onChange={(e) => updateEnvVar(index, { setting_path: e.target.value })}
+                        placeholder="api_keys.my_key"
+                        className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  const renderCompleteStep = () => (
+    <div className="text-center py-8">
+      <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+        <Check className="w-8 h-8 text-green-600" />
+      </div>
+      <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+        Service Imported Successfully
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        The service "{displayName || serviceName}" has been imported and is ready to use.
+      </p>
+      <p className="text-xs text-gray-500 dark:text-gray-500">
+        You can now start the service from the Services page.
+      </p>
+    </div>
+  )
+
+  const renderCurrentStep = () => {
+    switch (step) {
+      case 'url':
+        return renderUrlStep()
+      case 'compose':
+        return renderComposeStep()
+      case 'service':
+        return renderServiceStep()
+      case 'config':
+        return renderConfigStep()
+      case 'complete':
+        return renderCompleteStep()
+      default:
+        return null
+    }
+  }
+
+  const canGoBack = step !== 'url' && step !== 'complete'
+  const canGoNext = step !== 'complete'
+
+  const handleBack = () => {
+    switch (step) {
+      case 'compose':
+        setStep('url')
+        break
+      case 'service':
+        setStep('compose')
+        break
+      case 'config':
+        setStep('service')
+        break
+    }
+  }
+
+  const handleNext = () => {
+    switch (step) {
+      case 'url':
+        handleScanRepo()
+        break
+      case 'config':
+        handleImport()
+        break
+    }
+  }
+
+  const getNextButtonLabel = () => {
+    switch (step) {
+      case 'url':
+        return 'Scan Repository'
+      case 'config':
+        return 'Import Service'
+      default:
+        return 'Next'
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center gap-3">
+            <Github className="w-6 h-6 text-primary-600" />
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+              Import from GitHub
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        {/* Step indicator */}
+        <div className="px-6 pt-4">
+          {renderStepIndicator()}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {error && (
+            <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 flex items-center gap-2 text-red-600 dark:text-red-400">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <span className="text-sm">{error}</span>
+            </div>
+          )}
+          {renderCurrentStep()}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-between gap-3 p-6 border-t border-gray-200 dark:border-gray-700">
+          <div>
+            {canGoBack && (
+              <button
+                onClick={handleBack}
+                disabled={loading}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Back
+              </button>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+            >
+              {step === 'complete' ? 'Close' : 'Cancel'}
+            </button>
+            {canGoNext && step !== 'compose' && step !== 'service' && (
+              <button
+                onClick={step === 'complete' ? handleComplete : handleNext}
+                disabled={loading || (step === 'url' && !githubUrl.trim())}
+                className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading...
+                  </>
+                ) : step === 'complete' ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Done
+                  </>
+                ) : (
+                  <>
+                    {getNextButtonLabel()}
+                    <ChevronRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
