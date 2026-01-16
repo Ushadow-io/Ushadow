@@ -152,6 +152,7 @@ class Deployment(BaseModel):
     id: str = Field(..., description="Unique deployment ID")
     service_id: str = Field(..., description="Reference to ServiceDefinition")
     unode_hostname: str = Field(..., description="Target u-node hostname")
+    instance_id: Optional[str] = Field(None, description="Instance ID (for instance-based deployments)")
 
     # Status
     status: DeploymentStatus = Field(

@@ -198,7 +198,12 @@ class DockerDeploymentBackend(DeploymentBackend):
         if self._is_local_deployment(unode):
             # Use Docker directly for local deployments
             logger.info("Using local Docker for deployment")
-            return await self._deploy_local(unode, resolved_service, deployment_id, container_name)
+            return await self._deploy_local(
+                unode,
+                resolved_service,
+                deployment_id,
+                container_name
+            )
 
         # Build deploy payload for remote unode manager
         payload = {
