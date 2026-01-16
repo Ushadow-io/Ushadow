@@ -539,7 +539,14 @@ async def init_agent_zero_service(db: AsyncIOMotorDatabase) -> AgentZeroService:
     """Initialize the Agent Zero service with database connection."""
     global _agent_service
     _agent_service = AgentZeroService(db)
-    logger.info("Agent Zero service initialized")
+
+    # Verify the service is working
+    try:
+        status = await _agent_service.get_status()
+        logger.info(f"Agent Zero service initialized - {status.get('agent_count', 0)} agents, {status.get('active_agents', 0)} active")
+    except Exception as e:
+        logger.warning(f"Agent Zero service initialized but status check failed: {e}")
+
     return _agent_service
 
 
