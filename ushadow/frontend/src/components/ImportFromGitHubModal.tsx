@@ -89,6 +89,10 @@ export default function ImportFromGitHubModal({
   // Capabilities this service provides
   const [capabilities, setCapabilities] = useState<string[]>([])
 
+  // Env template paste
+  const [showEnvPaste, setShowEnvPaste] = useState(false)
+  const [envPasteText, setEnvPasteText] = useState('')
+
   // Common capability options
   const CAPABILITY_OPTIONS = [
     { id: 'llm', label: 'LLM', description: 'Language model inference' },
@@ -128,6 +132,8 @@ export default function ImportFromGitHubModal({
       setPorts([])
       setVolumes([])
       setCapabilities([])
+      setShowEnvPaste(false)
+      setEnvPasteText('')
       setError(null)
     }
   }, [isOpen])
@@ -341,6 +347,45 @@ export default function ImportFromGitHubModal({
   // Remove env var
   const removeEnvVar = (index: number) => {
     setEnvVars((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Parse env template (KEY=value format, one per line)
+  const parseEnvTemplate = () => {
+    const lines = envPasteText.split('\n')
+    const newEnvVars: EnvVarConfigItem[] = []
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith('#')) continue
+
+      // Parse KEY=value or KEY= or just KEY
+      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$/)
+      if (match) {
+        const name = match[1]
+        const value = match[2] ?? ''
+
+        // Check if already exists
+        const exists = envVars.some((e) => e.name === name)
+        if (!exists) {
+          newEnvVars.push({
+            name,
+            source: 'literal',
+            value,
+            is_secret: name.toLowerCase().includes('key') ||
+                       name.toLowerCase().includes('secret') ||
+                       name.toLowerCase().includes('password') ||
+                       name.toLowerCase().includes('token'),
+          })
+        }
+      }
+    }
+
+    if (newEnvVars.length > 0) {
+      setEnvVars((prev) => [...prev, ...newEnvVars])
+    }
+    setEnvPasteText('')
+    setShowEnvPaste(false)
   }
 
   // Add port
@@ -961,13 +1006,55 @@ export default function ImportFromGitHubModal({
             <Key className="w-4 h-4" />
             Environment Variables ({envVars.length})
           </h4>
-          <button
-            onClick={addEnvVar}
-            className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-          >
-            <Plus className="w-4 h-4" /> Add Variable
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowEnvPaste(!showEnvPaste)}
+              className="text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1"
+            >
+              <FileCode className="w-4 h-4" /> Paste Template
+            </button>
+            <button
+              onClick={addEnvVar}
+              className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+            >
+              <Plus className="w-4 h-4" /> Add Variable
+            </button>
+          </div>
         </div>
+
+        {/* Env Template Paste Area */}
+        {showEnvPaste && (
+          <div className="p-3 rounded-lg border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+              Paste environment variables (KEY=value format, one per line):
+            </p>
+            <textarea
+              value={envPasteText}
+              onChange={(e) => setEnvPasteText(e.target.value)}
+              placeholder={`# Example:\nAPI_KEY=your-key-here\nDATABASE_URL=postgres://...\nDEBUG=true`}
+              rows={5}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+            />
+            <div className="flex justify-end gap-2 mt-2">
+              <button
+                onClick={() => {
+                  setEnvPasteText('')
+                  setShowEnvPaste(false)
+                }}
+                className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={parseEnvTemplate}
+                disabled={!envPasteText.trim()}
+                className="px-3 py-1 text-sm bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
+              >
+                Add Variables
+              </button>
+            </div>
+          </div>
+        )}
         <div className="space-y-3">
           {envVars.map((env, index) => {
             // Find original env across all selected services

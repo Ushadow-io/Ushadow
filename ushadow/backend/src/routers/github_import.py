@@ -660,7 +660,14 @@ async def register_imported_service(
         registry = get_compose_registry()
         registry.refresh()
 
-        logger.info(f"Imported service '{request.service_name}' from GitHub: {request.github_url}")
+        # Auto-install the service (mark as added so it shows in installed services)
+        installed_key = f"installed_services.{request.service_name}"
+        await settings.update({
+            f"{installed_key}.added": True,
+            f"{installed_key}.enabled": True
+        })
+
+        logger.info(f"Imported and installed service '{request.service_name}' from GitHub: {request.github_url}")
 
         return ImportServiceResponse(
             success=True,
@@ -1001,7 +1008,14 @@ async def register_dockerhub_service(
         registry = get_compose_registry()
         registry.refresh()
 
-        logger.info(f"Imported service '{service_name}' from Docker Hub: {image_info.full_image_name}")
+        # Auto-install the service (mark as added so it shows in installed services)
+        installed_key = f"installed_services.{service_name}"
+        await settings.update({
+            f"{installed_key}.added": True,
+            f"{installed_key}.enabled": True
+        })
+
+        logger.info(f"Imported and installed service '{service_name}' from Docker Hub: {image_info.full_image_name}")
 
         return ImportServiceResponse(
             success=True,
