@@ -129,7 +129,8 @@ class DeploymentManager:
 
     async def resolve_service_for_deployment(
         self,
-        service_id: str
+        service_id: str,
+        config_id: Optional[str] = None
     ) -> "ResolvedServiceDefinition":
         """
         Resolve all variables for a service using docker-compose config.
@@ -139,13 +140,14 @@ class DeploymentManager:
 
         Steps:
         1. Get service from compose registry
-        2. Get user's saved env configuration
+        2. Get user's saved env configuration (from ServiceConfig if config_id provided)
         3. Run `docker-compose -f <file> config <service>` with resolved env vars
         4. Parse the resolved YAML output (all ${VAR:-default} substituted)
         5. Return ResolvedServiceDefinition with clean values
 
         Args:
             service_id: Service identifier (e.g., "openmemory-compose:mem0-ui")
+            config_id: Optional ServiceConfig ID to load env var overrides from
 
         Returns:
             ResolvedServiceDefinition with all variables resolved
@@ -169,9 +171,10 @@ class DeploymentManager:
         from src.services.docker_manager import get_docker_manager
         docker_manager = get_docker_manager()
 
-        # Build environment variables with user configuration
+        # Build environment variables with user configuration (including ServiceConfig overrides)
         subprocess_env, container_env = await docker_manager._build_env_vars_for_service(
-            service.service_name
+            service.service_name,
+            config_id=config_id
         )
 
         # Get compose file path (DiscoveredService has compose_file as direct attribute)
@@ -326,7 +329,7 @@ class DeploymentManager:
 
             logger.info(
                 f"Resolved service {service_id}: image={image}, "
-                f"ports={ports}, env_vars={len(environment)}"
+                f"ports={ports}, env_vars={len(environment)}, volumes={len(volumes)}"
             )
 
             return resolved
@@ -441,7 +444,7 @@ class DeploymentManager:
         service_id: str,
         unode_hostname: str,
         namespace: Optional[str] = None,
-        instance_id: Optional[str] = None
+        config_id: Optional[str] = None
     ) -> Deployment:
         """
         Deploy a service to any deployment target (Docker unode or K8s cluster).
@@ -453,7 +456,7 @@ class DeploymentManager:
             service_id: Service to deploy
             unode_hostname: Target unode hostname (Docker host or K8s cluster ID)
             namespace: Optional K8s namespace (only used for K8s deployments)
-            instance_id: Optional instance ID (for instance-based deployments)
+            config_id: Optional instance ID (for instance-based deployments)
         """
         # Resolve service with all variables substituted
         try:
@@ -474,23 +477,23 @@ class DeploymentManager:
         unode = UNode(**unode_dict)
 
         # Check if already deployed
-        # If instance_id is provided, check for that specific instance
+        # If config_id is provided, check for that specific instance
         # Otherwise, check for any deployment of this service (legacy behavior)
         query = {
             "service_id": service_id,
             "unode_hostname": unode_hostname
         }
-        if instance_id:
-            query["instance_id"] = instance_id
+        if config_id:
+            query["config_id"] = config_id
 
         existing = await self.deployments_collection.find_one(query)
         if existing and existing.get("status") in [
             DeploymentStatus.RUNNING,
             DeploymentStatus.DEPLOYING
         ]:
-            if instance_id:
+            if config_id:
                 raise ValueError(
-                    f"Instance {instance_id} already deployed to {unode_hostname}"
+                    f"ServiceConfig {config_id} already deployed to {unode_hostname}"
                 )
             else:
                 raise ValueError(
@@ -555,8 +558,8 @@ class DeploymentManager:
                 namespace=namespace
             )
 
-            # Set instance_id on the deployment
-            deployment.instance_id = instance_id
+            # Set config_id on the deployment
+            deployment.config_id = config_id
 
             # For Docker deployments, update tailscale serve routes
             if deployment.backend_type == "docker":
@@ -593,7 +596,7 @@ class DeploymentManager:
                 id=deployment_id,
                 service_id=service_id,
                 unode_hostname=unode_hostname,
-                instance_id=instance_id,
+                config_id=config_id,
                 status=DeploymentStatus.FAILED,
                 created_at=datetime.now(timezone.utc),
                 deployed_config=resolved_service.model_dump(),

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { CheckCircle, Loader, ChevronRight } from 'lucide-react'
 import Modal from './Modal'
 import EnvVarEditor from './EnvVarEditor'
-import { kubernetesApi, servicesApi, instancesApi, KubernetesCluster, EnvVarInfo, EnvVarConfig } from '../services/api'
+import { kubernetesApi, servicesApi, svcConfigsApi, KubernetesCluster, EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface DeployToK8sModalProps {
   isOpen: boolean
@@ -197,7 +197,8 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
 
       // Generate instance ID for this deployment target (only lowercase, numbers, hyphens)
       const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
-      const instanceId = `${sanitizedServiceId}-k8s-${selectedCluster.cluster_id}-${namespace}`
+      const clusterName = selectedCluster.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+      const instanceId = `${sanitizedServiceId}-${clusterName}`
       const deploymentTarget = `k8s://${selectedCluster.cluster_id}/${namespace}`
 
       // Convert env configs to instance config format
@@ -219,17 +220,17 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       // Step 1: Create or update instance with this configuration
       try {
         // Try to get existing instance
-        await instancesApi.getInstance(instanceId)
-        // Instance exists - update it
-        await instancesApi.updateInstance(instanceId, {
+        await svcConfigsApi.getServiceConfig(instanceId)
+        // ServiceConfig exists - update it
+        await svcConfigsApi.updateServiceConfig(instanceId, {
           name: `${selectedService.display_name} (${selectedCluster.name}/${namespace})`,
           description: `K8s deployment to ${selectedCluster.name} in ${namespace} namespace`,
           config: configValues,
           deployment_target: deploymentTarget
         })
       } catch {
-        // Instance doesn't exist - create it
-        await instancesApi.createInstance({
+        // ServiceConfig doesn't exist - create it
+        await svcConfigsApi.createServiceConfig({
           id: instanceId,
           template_id: selectedService.service_id,
           name: `${selectedService.display_name} (${selectedCluster.name}/${namespace})`,
@@ -239,14 +240,14 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
         })
       }
 
-      // Step 2: Deploy the instance to K8s
-      // The backend will use centralized resolution which reads from the instance config
+      // Step 2: Deploy the service config to K8s
+      // The backend will use centralized resolution which reads from the service config config
       const deployResponse = await kubernetesApi.deployService(
         selectedCluster.cluster_id,
         {
           service_id: selectedService.service_id,
           namespace: namespace,
-          instance_id: instanceId
+          config_id: instanceId
         }
       )
 

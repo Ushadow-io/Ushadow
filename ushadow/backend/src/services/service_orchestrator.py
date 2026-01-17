@@ -366,7 +366,7 @@ class ServiceOrchestrator:
     # Lifecycle Methods
     # =========================================================================
 
-    async def start_service(self, name: str, instance_id: Optional[str] = None) -> ActionResult:
+    async def start_service(self, name: str, config_id: Optional[str] = None) -> ActionResult:
         """Start a service container."""
         success, message = await self.docker_manager.start_service(name, instance_id)
         return ActionResult(success=success, message=message)
@@ -869,7 +869,7 @@ class ServiceOrchestrator:
 
 
 # =============================================================================
-# Singleton Instance
+# Singleton ServiceConfig
 # =============================================================================
 
 _orchestrator: Optional[ServiceOrchestrator] = None

@@ -393,7 +393,7 @@ class KubernetesDeploymentBackend(DeploymentBackend):
                 "cluster_id": cluster_id,
                 "namespace": namespace,
                 "deployment_name": result["deployment_name"],
-                "instance_id": result["instance_id"],
+                "config_id": result["config_id"],
             }
         )
 
