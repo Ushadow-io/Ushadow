@@ -1,0 +1,134 @@
+name: PR Tests (No Secrets Required)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "ushadow/backend/**"
+      - "ushadow/frontend/**"
+      - "robot_tests/**"
+      - ".github/workflows/pr-tests.yml"
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  backend-unit-tests:
+    name: Backend Unit Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ushadow/backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Run unit tests (no secrets required)
+        env:
+          CI: "true"
+          SKIP_INTEGRATION: "false"
+        run: |
+          pytest -m "no_secrets" --cov=src --cov-report=xml --cov-report=term
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./ushadow/backend/coverage.xml
+          flags: backend-unit
+          name: backend-coverage
+
+  frontend-build:
+    name: Frontend Build Check
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ushadow/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ushadow/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript type check
+        run: npm run type-check
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build
+
+  # Separate job for tests requiring secrets (only runs when explicitly triggered)
+  backend-integration-tests:
+    name: Backend Integration Tests (Secrets Required)
+    runs-on: ubuntu-latest
+    # Only run on workflow_dispatch or when explicitly requested
+    if: github.event_name == 'workflow_dispatch'
+
+    defaults:
+      run:
+        working-directory: ushadow/backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Start test services
+        run: |
+          docker compose -f ../../docker-compose.test.yml up -d mongodb redis
+
+      - name: Wait for services
+        run: |
+          timeout 60 bash -c 'until docker compose -f ../../docker-compose.test.yml ps | grep -q "healthy"; do sleep 2; done'
+
+      - name: Run integration tests
+        env:
+          CI: "true"
+          RUN_SECRET_TESTS: "true"
+          # Add your secret env vars here when running manually
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest -m "requires_secrets or integration" --cov=src --cov-report=xml
+
+      - name: Cleanup services
+        if: always()
+        run: |
+          docker compose -f ../../docker-compose.test.yml down -v
