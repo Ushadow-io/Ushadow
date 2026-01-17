@@ -56,7 +56,7 @@ flags:
 
   # Notifications - User notification system
   notifications:
-    enabled: false
+    enabled: true
     description: "Notifications - Real-time user notifications and alerts (not implemented)"
     type: release
 
