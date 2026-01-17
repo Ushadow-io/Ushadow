@@ -1124,6 +1124,24 @@ export interface Wiring {
   created_at?: string
 }
 
+/** Output wiring - connects service outputs to env vars of other services */
+export interface OutputWiring {
+  id: string
+  source_instance_id: string
+  source_output_key: string  // "access_url" | "env_vars.XXX" | "capability_values.XXX"
+  target_instance_id: string
+  target_env_var: string     // The env var key on the target service
+  created_at?: string
+}
+
+/** Request to create output wiring */
+export interface OutputWiringCreateRequest {
+  source_instance_id: string
+  source_output_key: string
+  target_instance_id: string
+  target_env_var: string
+}
+
 /** Request to create an instance */
 export interface InstanceCreateRequest {
   id: string
@@ -1213,6 +1231,19 @@ export const instancesApi = {
   /** Get wiring for a specific instance */
   getInstanceWiring: (instanceId: string) =>
     api.get<Wiring[]>(`/api/instances/${instanceId}/wiring`),
+
+  // Output Wiring - connects service outputs to env vars
+  /** List all output wiring connections */
+  getOutputWiring: () =>
+    api.get<OutputWiring[]>('/api/instances/output-wiring/all'),
+
+  /** Create an output wiring connection */
+  createOutputWiring: (data: OutputWiringCreateRequest) =>
+    api.post<OutputWiring>('/api/instances/output-wiring', data),
+
+  /** Delete an output wiring connection */
+  deleteOutputWiring: (wiringId: string) =>
+    api.delete(`/api/instances/output-wiring/${wiringId}`),
 }
 
 export const graphApi = {

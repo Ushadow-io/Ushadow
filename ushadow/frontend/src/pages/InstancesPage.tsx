@@ -33,6 +33,7 @@ import {
   InstanceSummary,
   Wiring,
   InstanceCreateRequest,
+  OutputWiring,
 } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
@@ -71,6 +72,9 @@ export default function InstancesPage() {
 
   // Wiring state (per-service connections)
   const [wiring, setWiring] = useState<Wiring[]>([])
+
+  // Output wiring state (service outputs to env vars)
+  const [outputWiring, setOutputWiring] = useState<OutputWiring[]>([])
 
   // Service status state for consumers
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
@@ -153,16 +157,18 @@ export default function InstancesPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [templatesRes, instancesRes, wiringRes, statusesRes] = await Promise.all([
+      const [templatesRes, instancesRes, wiringRes, outputWiringRes, statusesRes] = await Promise.all([
         instancesApi.getTemplates(),
         instancesApi.getInstances(),
         instancesApi.getWiring(),
+        instancesApi.getOutputWiring().catch(() => ({ data: [] })),
         servicesApi.getAllStatuses().catch(() => ({ data: {} })),
       ])
 
       setTemplates(templatesRes.data)
       setInstances(instancesRes.data)
       setWiring(wiringRes.data)
+      setOutputWiring(outputWiringRes.data || [])
       setServiceStatuses(statusesRes.data || {})
 
       // Load details for provider instances (instances that provide capabilities)
@@ -607,6 +613,10 @@ export default function InstancesPage() {
           templateId: t.id,
           configVars,
           configured: t.configured,
+          // For templates, outputs are shown as placeholders
+          outputs: t.mode === 'local' ? {
+            access_url: `http://localhost:${t.service_name ? '(port)' : '(configured port)'}`,
+          } : undefined,
         }
       }),
     // Custom instances from provider templates
@@ -681,6 +691,12 @@ export default function InstancesPage() {
           templateId: i.template_id,
           configVars,
           configured: template.configured, // Instance inherits template's configured status
+          // Instance outputs from deployment
+          outputs: details?.outputs ? {
+            access_url: details.outputs.access_url,
+            env_vars: details.outputs.env_vars,
+            capability_values: details.outputs.capability_values,
+          } : undefined,
         }
       }),
   ]
@@ -713,6 +729,29 @@ export default function InstancesPage() {
         }
       })
 
+      // Extract wirable env vars - env vars that can receive wired values
+      // These are typically URL-type or connection-type env vars
+      const wirableEnvVars = (t.config_schema || [])
+        .filter((field: any) => {
+          // Include fields that look like they accept URLs or connection strings
+          const key = field.key.toLowerCase()
+          return (
+            key.includes('url') ||
+            key.includes('endpoint') ||
+            key.includes('host') ||
+            key.includes('server') ||
+            key.includes('api') ||
+            field.env_var?.toLowerCase().includes('url') ||
+            field.env_var?.toLowerCase().includes('endpoint')
+          )
+        })
+        .map((field: any) => ({
+          key: field.env_var || field.key,
+          label: field.label || field.key,
+          value: field.value,
+          required: field.required,
+        }))
+
       return {
         id: t.id,
         name: t.name,
@@ -722,6 +761,7 @@ export default function InstancesPage() {
         configVars,
         configured: t.configured,
         description: t.description,
+        wirableEnvVars,
       }
     })
 
@@ -788,6 +828,47 @@ export default function InstancesPage() {
         text: error.response?.data?.detail || 'Failed to clear provider',
       })
       throw error
+    }
+  }
+
+  // Handle output wiring create (from dragging output to env var)
+  const handleOutputWiringCreate = async (dropInfo: {
+    source: { instanceId: string; instanceName: string; outputKey: string; outputLabel: string }
+    targetInstanceId: string
+    targetEnvVar: string
+  }) => {
+    try {
+      const newWiring = await instancesApi.createOutputWiring({
+        source_instance_id: dropInfo.source.instanceId,
+        source_output_key: dropInfo.source.outputKey,
+        target_instance_id: dropInfo.targetInstanceId,
+        target_env_var: dropInfo.targetEnvVar,
+      })
+
+      setOutputWiring((prev) => [...prev, newWiring.data])
+      setMessage({
+        type: 'success',
+        text: `Connected ${dropInfo.source.outputLabel} to ${dropInfo.targetEnvVar}`,
+      })
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: getErrorMessage(error, 'Failed to create output wiring'),
+      })
+    }
+  }
+
+  // Handle output wiring delete
+  const handleOutputWiringDelete = async (wiringId: string) => {
+    try {
+      await instancesApi.deleteOutputWiring(wiringId)
+      setOutputWiring((prev) => prev.filter((w) => w.id !== wiringId))
+      setMessage({ type: 'success', text: 'Output wire disconnected' })
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: getErrorMessage(error, 'Failed to delete output wiring'),
+      })
     }
   }
 
@@ -1561,7 +1642,7 @@ export default function InstancesPage() {
             Wiring
           </h2>
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            Drag providers to connect them to service capability slots
+            Drag providers to capability slots, or drag outputs to env vars
           </p>
         </div>
 
@@ -1592,6 +1673,9 @@ export default function InstancesPage() {
             onEditConsumer={handleEditConsumer}
             onStartConsumer={handleStartConsumer}
             onStopConsumer={handleStopConsumer}
+            outputWiring={outputWiring}
+            onOutputWiringCreate={handleOutputWiringCreate}
+            onOutputWiringDelete={handleOutputWiringDelete}
           />
         </div>
       </div>
