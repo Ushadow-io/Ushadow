@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Server,
   CheckCircle,
@@ -18,7 +19,8 @@ import {
   Plus,
   Package,
   Trash2,
-  BookOpen
+  BookOpen,
+  Download
 } from 'lucide-react'
 import {
   settingsApi,
@@ -33,6 +35,7 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { PortConflictDialog } from '../components/services'
+import ImportFromGitHubModal from '../components/ImportFromGitHubModal'
 import { StatusBadge } from '../components/StatusBadge'
 
 export default function ServicesPage() {
@@ -96,6 +99,9 @@ export default function ServicesPage() {
   const [catalogServices, setCatalogServices] = useState<ComposeService[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [installingService, setInstallingService] = useState<string | null>(null)
+
+  // GitHub import modal state
+  const [showGitHubImport, setShowGitHubImport] = useState(false)
 
   // Load initial data
   useEffect(() => {
@@ -625,6 +631,19 @@ export default function ServicesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded">
+              BETA
+            </span>
+            <button
+              onClick={() => setShowGitHubImport(true)}
+              data-testid="import-service-button"
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Import Service
+            </button>
+          </div>
           <button
             onClick={openCatalog}
             data-testid="add-service-button"
@@ -1264,9 +1283,20 @@ export default function ServicesPage() {
       </div>
 
       {/* Service Catalog Modal */}
-      {showCatalog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="catalog-modal">
-          <div className="bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+      {showCatalog && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+          data-testid="catalog-modal"
+          onClick={() => setShowCatalog(false)}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+
+          {/* Modal Content */}
+          <div
+            className="relative bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
               <div className="flex items-center gap-2">
@@ -1277,7 +1307,7 @@ export default function ServicesPage() {
               </div>
               <button
                 onClick={() => setShowCatalog(false)}
-                className="p-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                className="p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -1384,7 +1414,8 @@ export default function ServicesPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Confirmation Dialog */}
@@ -1454,6 +1485,16 @@ export default function ServicesPage() {
           </div>
         </div>
       </Modal>
+
+      {/* GitHub Import Modal */}
+      <ImportFromGitHubModal
+        isOpen={showGitHubImport}
+        onClose={() => setShowGitHubImport(false)}
+        onServiceImported={() => {
+          setShowGitHubImport(false)
+          loadData()
+        }}
+      />
     </div>
   )
 }

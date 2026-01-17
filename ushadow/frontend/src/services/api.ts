@@ -1440,3 +1440,251 @@ export const integrationApi = {
   disableAutoSync: (instanceId: string) =>
     api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/disable`),
 }
+
+// =============================================================================
+// GitHub Import API - Import docker-compose from GitHub repositories
+// =============================================================================
+
+export interface GitHubUrlInfo {
+  owner: string
+  repo: string
+  branch: string
+  path: string
+}
+
+export interface DetectedComposeFile {
+  path: string
+  name: string
+  download_url: string
+  size: number
+}
+
+export interface GitHubScanResponse {
+  success: boolean
+  github_info?: GitHubUrlInfo
+  compose_files: DetectedComposeFile[]
+  message?: string
+  error?: string
+}
+
+export interface ComposeEnvVarInfo {
+  name: string
+  has_default: boolean
+  default_value?: string
+  is_required: boolean
+  description?: string
+}
+
+export interface ComposeServiceInfo {
+  name: string
+  image?: string
+  ports: Array<{ host?: string; container?: string }>
+  environment: ComposeEnvVarInfo[]
+  depends_on: string[]
+  volumes: string[]
+  networks: string[]
+  command?: string
+  healthcheck?: Record<string, any>
+}
+
+export interface ComposeParseResponse {
+  success: boolean
+  compose_path: string
+  services: ComposeServiceInfo[]
+  networks: string[]
+  volumes: string[]
+  message?: string
+  error?: string
+}
+
+export interface ShadowHeaderConfig {
+  enabled: boolean
+  header_name: string
+  header_value?: string
+  route_path?: string
+}
+
+export interface EnvVarConfigItem {
+  name: string
+  source: 'literal' | 'setting' | 'default'
+  value?: string
+  setting_path?: string
+  is_secret: boolean
+}
+
+export interface ImportedServiceConfig {
+  service_name: string
+  display_name?: string
+  description?: string
+  source_url: string  // GitHub URL or Docker Hub URL
+  compose_path?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides (e.g., ['llm', 'tts'])
+}
+
+export interface ImportServiceRequest {
+  github_url: string
+  compose_path: string
+  service_name: string
+  config: ImportedServiceConfig
+}
+
+export interface ImportServiceResponse {
+  success: boolean
+  service_id?: string
+  service_name?: string
+  message: string
+  compose_file_path?: string
+}
+
+export interface ImportedService {
+  id: string
+  source_type?: 'github' | 'dockerhub'
+  source_url?: string
+  github_url?: string
+  compose_path?: string
+  compose_file: string
+  docker_image?: string
+  service_name: string
+  display_name?: string
+  description?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  ports?: PortConfig[]
+  volumes?: VolumeConfig[]
+  enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides
+}
+
+export interface PortConfig {
+  host_port: number
+  container_port: number
+  protocol?: string
+}
+
+export interface VolumeConfig {
+  name: string
+  container_path: string
+  is_named_volume?: boolean
+}
+
+export interface DockerHubImageInfo {
+  namespace: string
+  repository: string
+  tag: string
+  full_image_name?: string
+}
+
+export interface DockerHubScanResponse {
+  success: boolean
+  image_info?: DockerHubImageInfo
+  description?: string
+  stars?: number
+  pulls?: number
+  available_tags: string[]
+  message?: string
+  error?: string
+}
+
+export interface UnifiedScanResponse {
+  success: boolean
+  source_type: 'github' | 'dockerhub'
+  // GitHub-specific
+  github_info?: GitHubUrlInfo
+  compose_files?: DetectedComposeFile[]
+  // Docker Hub-specific
+  dockerhub_info?: DockerHubImageInfo
+  available_tags?: string[]
+  image_description?: string
+  // Common
+  message?: string
+  error?: string
+}
+
+export interface DockerHubRegisterRequest {
+  service_name: string
+  dockerhub_url: string
+  tag?: string
+  display_name?: string
+  description?: string
+  ports?: PortConfig[]
+  volumes?: VolumeConfig[]
+  env_vars?: EnvVarConfigItem[]
+  shadow_header_enabled?: boolean
+  shadow_header_name?: string
+  shadow_header_value?: string
+  route_path?: string
+  capabilities?: string[]  // Capabilities this service provides
+}
+
+export const githubImportApi = {
+  /** Scan a GitHub repository for docker-compose files */
+  scan: (github_url: string, branch?: string, compose_path?: string) =>
+    api.post<GitHubScanResponse>('/api/github-import/scan', {
+      github_url,
+      branch,
+      compose_path
+    }),
+
+  /** Parse a docker-compose file and extract service/env information */
+  parse: (github_url: string, compose_path: string) =>
+    api.post<ComposeParseResponse>('/api/github-import/parse', null, {
+      params: { github_url, compose_path }
+    }),
+
+  /** Register an imported service */
+  register: (request: ImportServiceRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/register', request),
+
+  /** List all imported services */
+  listImported: () =>
+    api.get<ImportedService[]>('/api/github-import/imported'),
+
+  /** Delete an imported service */
+  deleteImported: (serviceId: string) =>
+    api.delete<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}`),
+
+  /** Update configuration for an imported service */
+  updateConfig: (serviceId: string, config: ImportedServiceConfig) =>
+    api.put<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}/config`, config),
+
+  // Docker Hub endpoints
+  /** Scan a Docker Hub image for information */
+  scanDockerHub: (dockerhub_url: string, tag?: string) =>
+    api.post<DockerHubScanResponse>('/api/github-import/dockerhub/scan', {
+      dockerhub_url,
+      tag
+    }),
+
+  /** Register a service from Docker Hub */
+  registerDockerHub: (request: DockerHubRegisterRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/dockerhub/register', null, {
+      params: {
+        service_name: request.service_name,
+        dockerhub_url: request.dockerhub_url,
+        tag: request.tag,
+        display_name: request.display_name,
+        description: request.description,
+        shadow_header_enabled: request.shadow_header_enabled ?? true,
+        shadow_header_name: request.shadow_header_name ?? 'X-Shadow-Service',
+        shadow_header_value: request.shadow_header_value,
+        route_path: request.route_path,
+        ports: request.ports ? JSON.stringify(request.ports) : undefined,
+        volumes: request.volumes ? JSON.stringify(request.volumes) : undefined,
+        env_vars: request.env_vars ? JSON.stringify(request.env_vars) : undefined,
+        capabilities: request.capabilities ? JSON.stringify(request.capabilities) : undefined,
+      }
+    }),
+
+  // Unified endpoints (auto-detect source type)
+  /** Scan any supported source (GitHub or Docker Hub) */
+  unifiedScan: (url: string, branch?: string, tag?: string, compose_path?: string) =>
+    api.post<UnifiedScanResponse>('/api/github-import/unified/scan', {
+      url,
+      branch,
+      tag,
+      compose_path
+    }),
+}
