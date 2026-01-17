@@ -1,3 +1,4 @@
+git branch
 # ushadow
 
 **AI Orchestration Platform** - Unified interface for Chronicle, MCP, Agent Zero, n8n, and more.
