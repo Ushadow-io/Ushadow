@@ -20,8 +20,9 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
-import { fetchConversations, Conversation } from '../services/chronicleApi';
+import { fetchConversations, Conversation, getChronicleAudioUrl } from '../services/chronicleApi';
 import { isAuthenticated } from '../utils/authStorage';
+import ConversationAudioPlayer from '../components/AudioPlayer';
 
 export default function ConversationsScreen() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -30,6 +31,7 @@ export default function ConversationsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedDetailedSummary, setExpandedDetailedSummary] = useState<Set<string>>(new Set());
 
   const loadConversations = useCallback(async (showRefreshIndicator = false) => {
     try {
@@ -80,6 +82,18 @@ export default function ConversationsScreen() {
     setExpandedId(expandedId === id ? null : id);
   };
 
+  const toggleDetailedSummary = (id: string) => {
+    setExpandedDetailedSummary(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  };
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'Unknown date';
     const date = new Date(dateString);
@@ -114,10 +128,11 @@ export default function ConversationsScreen() {
   const renderConversation = ({ item }: { item: Conversation }) => {
     const itemId = item.id || item.conversation_id;
     const isExpanded = expandedId === itemId;
+    const isDetailedExpanded = expandedDetailedSummary.has(itemId);
 
     // Use title as main heading, summary as preview
     const title = item.title || 'Untitled Conversation';
-    const preview = item.summary || item.detailed_summary?.slice(0, 200) || 'No summary available';
+    const summary = item.summary || 'No summary available';
 
     // Determine status from has_memory or default
     const hasContent = item.has_memory || (item.memory_count && item.memory_count > 0);
@@ -151,23 +166,48 @@ export default function ConversationsScreen() {
           {title}
         </Text>
 
-        {/* Summary preview */}
+        {/* Summary - always visible, more lines when collapsed */}
         <Text
           style={styles.transcriptPreview}
-          numberOfLines={isExpanded ? undefined : 2}
+          numberOfLines={isExpanded ? undefined : 4}
         >
-          {preview}
+          {summary}
         </Text>
 
         {isExpanded && (
           <View style={styles.expandedContent}>
-            {/* Detailed summary if available */}
+            {/* Audio Player */}
+            {(item.audio_path || item.cropped_audio_path) && item.conversation_id && (
+              <ConversationAudioPlayer
+                conversationId={item.conversation_id}
+                cropped={true}
+                getAudioUrl={getChronicleAudioUrl}
+              />
+            )}
+
+            {/* Detailed summary with its own toggle */}
             {item.detailed_summary && (
               <View style={styles.detailedSummarySection}>
-                <Text style={styles.sectionLabel}>Detailed Summary</Text>
-                <Text style={styles.fullTranscript}>
-                  {item.detailed_summary}
-                </Text>
+                <TouchableOpacity
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    toggleDetailedSummary(itemId);
+                  }}
+                  style={styles.sectionHeader}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.sectionLabel}>Detailed Summary</Text>
+                  <Ionicons
+                    name={isDetailedExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={theme.textMuted}
+                  />
+                </TouchableOpacity>
+                {isDetailedExpanded && (
+                  <Text style={styles.fullTranscript}>
+                    {item.detailed_summary}
+                  </Text>
+                )}
               </View>
             )}
 
@@ -379,20 +419,28 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     marginBottom: spacing.md,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    marginHorizontal: -spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
   sectionLabel: {
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: theme.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: spacing.xs,
-    paddingTop: spacing.md,
   },
   fullTranscript: {
     fontSize: fontSize.sm,
     color: theme.textPrimary,
     lineHeight: 22,
-    marginBottom: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
   },
   metadataSection: {
     backgroundColor: theme.backgroundInput,

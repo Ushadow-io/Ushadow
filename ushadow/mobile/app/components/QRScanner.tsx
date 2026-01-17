@@ -60,25 +60,33 @@ export const QRScanner: React.FC<QRScannerProps> = ({
   const handleBarCodeScanned = (result: BarcodeScanningResult) => {
     if (scanned) return;
 
+    console.log('[QRScanner] Raw QR data:', result.data);
+
     try {
       const data = JSON.parse(result.data);
+      console.log('[QRScanner] Parsed QR data:', data);
 
       // Validate it's a ushadow connection QR code
       if (data.type !== 'ushadow-connect') {
+        console.log('[QRScanner] Wrong type:', data.type);
         setError('Not a Ushadow QR code. Please scan the code from your Ushadow dashboard.');
         return;
       }
 
       // Validate required fields
       if (!data.ip || !data.port) {
+        console.log('[QRScanner] Missing fields - ip:', data.ip, 'port:', data.port);
         setError('Invalid QR code data. Missing connection details.');
         return;
       }
 
+      console.log('[QRScanner] QR validation successful, calling onScan');
       setScanned(true);
       onScan(data as UshadowConnectionData);
-    } catch {
-      setError('Could not read QR code. Please try again.');
+    } catch (err) {
+      console.error('[QRScanner] Failed to parse QR code:', err);
+      console.error('[QRScanner] Raw data was:', result.data);
+      setError(`Could not read QR code: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 

@@ -47,10 +47,11 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
   const [showScanner, setShowScanner] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [endpoint, setEndpoint] = useState('');
-  const [showDetails, setShowDetails] = useState(false);  // Collapsed by default
+  const [justScanned, setJustScanned] = useState(false);  // Track if user just scanned in this session
 
   const handleQRScan = async (data: UshadowConnectionData) => {
     setShowScanner(false);
+    setJustScanned(true);  // Mark that we just scanned
     // This now saves the server AND attempts to connect
     const result = await connectFromQR(data);
     if (result.success && result.leader && onLeaderFound) {
@@ -102,139 +103,61 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
   const services = leaderInfo?.services || [];
   const unodes = leaderInfo?.unodes || [];
 
-  // Render scanned server details card
+  // Render scanned server details card - compact version
   const renderScannedServer = (server: SavedServerConfig) => (
     <View style={styles.serverCard} testID="scanned-server-card">
-      <View style={styles.serverHeader}>
-        <Text style={styles.serverTitle}>Scanned Server</Text>
+      <View style={styles.compactServerInfo}>
+        <View style={styles.serverTextContainer}>
+          <Text style={styles.serverHostname}>{leaderInfo?.hostname || server.hostname}</Text>
+          <Text style={styles.serverIp}>{server.tailscaleIp}:{server.port}</Text>
+          {connectionStatus === 'connected' && capabilities && (
+            <View style={styles.compactCapabilities}>
+              {capabilities.can_run_docker && <Text style={styles.capDot}>🐳</Text>}
+              {capabilities.can_run_gpu && <Text style={styles.capDot}>⚡</Text>}
+              {services.length > 0 && <Text style={styles.capCount}>{services.length} svc</Text>}
+            </View>
+          )}
+        </View>
         <View style={[
-          styles.connectionBadge,
-          connectionStatus === 'connected' ? styles.badgeConnected :
-          connectionStatus === 'connecting' ? styles.badgeConnecting :
-          connectionStatus === 'failed' ? styles.badgeFailed :
-          styles.badgeIdle
+          styles.statusIndicator,
+          connectionStatus === 'connected' ? styles.statusConnected :
+          connectionStatus === 'connecting' ? styles.statusConnecting :
+          connectionStatus === 'failed' ? styles.statusFailed :
+          styles.statusIdle
         ]}>
-          <Text style={styles.badgeText}>
-            {connectionStatus === 'connected' ? 'Connected' :
-             connectionStatus === 'connecting' ? 'Connecting...' :
-             connectionStatus === 'failed' ? 'Failed' :
-             'Ready'}
+          <Text style={styles.statusDot}>
+            {connectionStatus === 'connected' ? '●' :
+             connectionStatus === 'connecting' ? '◐' :
+             connectionStatus === 'failed' ? '●' :
+             '○'}
           </Text>
         </View>
       </View>
 
-      <View style={styles.serverInfo}>
-        <Text style={styles.serverHostname}>{leaderInfo?.hostname || server.hostname}</Text>
-        <Text style={styles.serverIp}>{server.tailscaleIp}:{server.port}</Text>
-      </View>
-
-      {/* Collapsible Details Toggle - shown after connection */}
-      {connectionStatus === 'connected' && leaderInfo && (
+      {/* Action button */}
+      {connectionStatus !== 'connected' && (
         <TouchableOpacity
-          style={styles.detailsToggle}
-          onPress={() => setShowDetails(!showDetails)}
-          testID="toggle-details"
+          style={[styles.connectButton, isConnecting && styles.buttonDisabled]}
+          onPress={handleConnectToScanned}
+          disabled={isConnecting}
+          testID="connect-scanned-button"
         >
-          <Text style={styles.detailsToggleText}>
-            {showDetails ? '▼ Hide Details' : '▶ Show Details'}
-          </Text>
+          {isConnecting ? (
+            <ActivityIndicator color={theme.primaryButtonText} size="small" />
+          ) : (
+            <Text style={styles.connectButtonText}>Connect</Text>
+          )}
         </TouchableOpacity>
       )}
-
-      {/* Collapsible Details Section */}
-      {showDetails && (
-        <>
-          {/* Capabilities */}
-          {capabilities && (
-            <View style={styles.capabilitiesSection}>
-              <Text style={styles.capabilitiesTitle}>Capabilities</Text>
-              <View style={styles.capabilitiesRow}>
-                <View style={[styles.capBadge, capabilities.can_run_docker && styles.capEnabled]}>
-                  <Text style={styles.capText}>Docker</Text>
-                </View>
-                <View style={[styles.capBadge, capabilities.can_run_gpu && styles.capEnabled]}>
-                  <Text style={styles.capText}>GPU</Text>
-                </View>
-                <View style={[styles.capBadge, capabilities.can_become_leader && styles.capEnabled]}>
-                  <Text style={styles.capText}>Leader</Text>
-                </View>
-              </View>
-            </View>
-          )}
-
-          {/* Streaming URLs */}
-          {leaderInfo && (
-            <View style={styles.urlsSection}>
-              <Text style={styles.urlsTitle}>Streaming Endpoints</Text>
-              <Text style={styles.urlText}>PCM: {leaderInfo.ws_pcm_url}</Text>
-              <Text style={styles.urlText}>OMI: {leaderInfo.ws_omi_url}</Text>
-            </View>
-          )}
-
-          {/* Services */}
-          {services.length > 0 && (
-            <View style={styles.servicesSection}>
-              <Text style={styles.servicesTitle}>Services ({services.length})</Text>
-              {services.map((svc, idx) => (
-                <View key={idx} style={styles.serviceRow}>
-                  <Text style={styles.serviceName}>{svc.display_name}</Text>
-                  <Text style={styles.serviceStatus}>{svc.status}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Unodes */}
-          {unodes.length > 0 && (
-            <View style={styles.unodesSection}>
-              <Text style={styles.unodesTitle}>Cluster Nodes ({unodes.length})</Text>
-              {unodes.map((node, idx) => (
-                <View key={idx} style={styles.unodeRow}>
-                  <Text style={styles.unodeHostname}>{node.hostname}</Text>
-                  <View style={[styles.unodeStatusBadge,
-                    node.status === 'online' ? styles.unodeOnline : styles.unodeOffline]}>
-                    <Text style={styles.unodeStatusText}>{node.role}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </>
+      {connectionStatus === 'connected' && (
+        <TouchableOpacity
+          style={styles.continueButton}
+          onPress={handleConnectToLeader}
+          testID="continue-button"
+        >
+          <Text style={styles.connectButtonText}>Use This Server</Text>
+        </TouchableOpacity>
       )}
-
-      {/* Hint to connect if not connected */}
-      {connectionStatus !== 'connected' && (
-        <Text style={styles.hintText}>
-          Connect to see full server details
-        </Text>
-      )}
-
-      {/* Action buttons */}
-      <View style={styles.serverActions}>
-        {connectionStatus !== 'connected' && (
-          <TouchableOpacity
-            style={[styles.connectButton, isConnecting && styles.buttonDisabled]}
-            onPress={handleConnectToScanned}
-            disabled={isConnecting}
-            testID="connect-scanned-button"
-          >
-            {isConnecting ? (
-              <ActivityIndicator color={theme.primaryButtonText} size="small" />
-            ) : (
-              <Text style={styles.connectButtonText}>Connect</Text>
-            )}
-          </TouchableOpacity>
-        )}
-        {connectionStatus === 'connected' && (
-          <TouchableOpacity
-            style={styles.continueButton}
-            onPress={handleConnectToLeader}
-            testID="continue-button"
-          >
-            <Text style={styles.connectButtonText}>Use This Server</Text>
-          </TouchableOpacity>
-        )}
-      </View>
     </View>
   );
 
@@ -247,88 +170,44 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
         onScan={handleQRScan}
       />
 
-      {/* Connection Status */}
-      <View style={styles.statusSection}>
-        <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.statusDot,
-              isOnTailscale === true
-                ? styles.statusOnline
-                : isOnTailscale === false
-                ? styles.statusOffline
-                : styles.statusUnknown,
-            ]}
-          />
-          <Text style={styles.statusText}>
-            {isOnTailscale === true
-              ? 'Connected to Tailscale'
-              : isOnTailscale === false
-              ? 'Tailscale not detected'
-              : 'Checking Tailscale...'}
-          </Text>
-        </View>
-      </View>
+      {/* Header Text */}
+      <Text style={styles.headerText}>Choose how to connect to your UNode:</Text>
 
-      {/* Primary Action: Scan QR Code - Always visible */}
+      {/* Primary Action: Scan QR Code */}
       <TouchableOpacity
         style={[styles.primaryButton, isConnecting && styles.buttonDisabled]}
         onPress={() => setShowScanner(true)}
         disabled={isConnecting}
         testID="scan-qr-button"
       >
-        {isConnecting ? (
-          <ActivityIndicator color={theme.primaryButtonText} size="small" />
-        ) : (
-          <Text style={styles.primaryButtonText}>Scan QR Code</Text>
-        )}
+        <Text style={styles.primaryButtonText}>Scan QR Code</Text>
       </TouchableOpacity>
 
       <Text style={styles.helperText}>
-        Start your Ushadow server, then scan the QR code shown in the terminal or web dashboard
+        Scan the QR code from your Ushadow dashboard
       </Text>
 
-      {/* Scanned Server Card - Show if available */}
-      {scannedServer && renderScannedServer(scannedServer)}
+      {/* Divider */}
+      <View style={styles.divider}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>OR</Text>
+        <View style={styles.dividerLine} />
+      </View>
 
-      {/* Saved Leader Quick Reconnect - only if different from scanned */}
-      {savedLeader && !scannedServer && (
-        <View style={styles.savedSection}>
-          <View style={styles.savedHeader}>
-            <Text style={styles.savedLabel}>Previous Connection</Text>
-            <TouchableOpacity onPress={clearSaved} style={styles.clearButton}>
-              <Text style={styles.clearButtonText}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.savedValue}>
-            {savedLeader.hostname} ({savedLeader.tailscaleIp})
-          </Text>
-          <TouchableOpacity
-            style={[styles.reconnectButton, isConnecting && styles.buttonDisabled]}
-            onPress={handleReconnect}
-            disabled={isConnecting}
-            testID="reconnect-button"
-          >
-            <Text style={styles.buttonText}>Reconnect</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Manual Connection Toggle */}
+      {/* Secondary Action: Manual Entry */}
       <TouchableOpacity
-        style={styles.toggleManual}
-        onPress={() => setShowManual(!showManual)}
-        testID="toggle-manual"
+        style={[styles.secondaryButton, (isConnecting || showManual) && styles.buttonDisabled]}
+        onPress={() => setShowManual(true)}
+        disabled={isConnecting || showManual}
+        testID="manual-entry-button"
       >
-        <Text style={styles.toggleManualText}>
-          {showManual ? 'Hide manual entry' : 'Enter address manually'}
-        </Text>
+        <Text style={styles.secondaryButtonText}>Enter Address Manually</Text>
       </TouchableOpacity>
 
       {/* Manual Endpoint Entry */}
       {showManual && (
         <View style={styles.manualSection}>
-          <Text style={styles.inputLabel}>Endpoint</Text>
+          <Text style={styles.inputLabel}>Server Address</Text>
           <TextInput
             style={styles.input}
             value={endpoint}
@@ -340,18 +219,37 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
             testID="manual-endpoint-input"
           />
           <Text style={styles.endpointHint}>
-            Tailscale hostname or IP address. Port defaults to 8000 if not specified.
+            Enter hostname or IP address. Port defaults to 8000 if not specified.
           </Text>
-          <TouchableOpacity
-            style={[styles.manualConnectButton, isConnecting && styles.buttonDisabled]}
-            onPress={handleManualConnect}
-            disabled={isConnecting}
-            testID="manual-connect-button"
-          >
-            <Text style={styles.buttonText}>Connect</Text>
-          </TouchableOpacity>
+          <View style={styles.manualActions}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => {
+                setShowManual(false);
+                setEndpoint('');
+              }}
+              testID="cancel-manual-button"
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.manualConnectButton, isConnecting && styles.buttonDisabled]}
+              onPress={handleManualConnect}
+              disabled={isConnecting}
+              testID="manual-connect-button"
+            >
+              {isConnecting ? (
+                <ActivityIndicator color={theme.primaryButtonText} size="small" />
+              ) : (
+                <Text style={styles.buttonText}>Connect</Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       )}
+
+      {/* Scanned Server Card - Only show if user just scanned */}
+      {justScanned && scannedServer && renderScannedServer(scannedServer)}
 
       {/* Error Display */}
       {error && (
@@ -369,31 +267,12 @@ const styles = StyleSheet.create({
     backgroundColor: theme.backgroundCard,
     borderRadius: borderRadius.lg,
   },
-  statusSection: {
-    marginBottom: spacing.xl,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: spacing.sm,
-  },
-  statusOnline: {
-    backgroundColor: theme.statusOnline,
-  },
-  statusOffline: {
-    backgroundColor: colors.error.default,
-  },
-  statusUnknown: {
-    backgroundColor: theme.statusConnecting,
-  },
-  statusText: {
+  headerText: {
     color: theme.textPrimary,
-    fontSize: fontSize.sm,
+    fontSize: fontSize.lg,
+    fontWeight: '600',
+    marginBottom: spacing.xl,
+    textAlign: 'center',
   },
   primaryButton: {
     backgroundColor: theme.primaryButton,
@@ -409,12 +288,44 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     fontWeight: '600',
   },
+  secondaryButton: {
+    backgroundColor: theme.backgroundHover,
+    padding: spacing.xl,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  secondaryButtonText: {
+    color: theme.textPrimary,
+    fontSize: fontSize.lg,
+    fontWeight: '600',
+  },
   helperText: {
     color: theme.textSecondary,
     fontSize: fontSize.sm - 1,
     textAlign: 'center',
     marginTop: spacing.md,
-    marginBottom: spacing.xl,
+    marginBottom: spacing.lg,
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: spacing.lg,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.border,
+  },
+  dividerText: {
+    color: theme.textMuted,
+    fontSize: fontSize.sm,
+    marginHorizontal: spacing.md,
+    fontWeight: '500',
   },
   savedSection: {
     backgroundColor: theme.backgroundHover,
@@ -463,18 +374,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.backgroundHover,
     borderRadius: borderRadius.md,
     padding: spacing.lg,
+    marginTop: spacing.lg,
     marginBottom: spacing.lg,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.md,
-  },
-  ipInputContainer: {
-    flex: 2,
-  },
-  portInputContainer: {
-    flex: 1,
   },
   inputLabel: {
     color: theme.textSecondary,
@@ -494,8 +395,27 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     marginBottom: spacing.md,
   },
+  manualActions: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: theme.backgroundInput,
+    padding: spacing.sm + 2,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  cancelButtonText: {
+    color: theme.textSecondary,
+    fontSize: fontSize.base,
+    fontWeight: '600',
+  },
   manualConnectButton: {
-    backgroundColor: theme.ghostButtonHover,
+    flex: 1,
+    backgroundColor: theme.primaryButton,
     padding: spacing.sm + 2,
     borderRadius: borderRadius.md,
     alignItems: 'center',
@@ -565,222 +485,79 @@ const styles = StyleSheet.create({
     fontSize: fontSize.base,
     fontWeight: '600',
   },
-  // Scanned Server Card Styles
+  // Scanned Server Card Styles - Compact
   serverCard: {
     backgroundColor: theme.backgroundHover,
     borderRadius: borderRadius.lg,
-    padding: spacing.lg,
+    padding: spacing.md,
+    marginTop: spacing.lg,
     marginBottom: spacing.lg,
     borderWidth: 1,
     borderColor: theme.border,
   },
-  serverHeader: {
+  compactServerInfo: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: spacing.md,
   },
-  serverTitle: {
+  serverTextContainer: {
+    flex: 1,
+  },
+  serverHostname: {
     color: theme.textPrimary,
     fontSize: fontSize.base,
     fontWeight: '600',
-  },
-  connectionBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.lg,
-  },
-  badgeConnected: {
-    backgroundColor: colors.success.bgSolid,
-  },
-  badgeConnecting: {
-    backgroundColor: colors.warning.bgSolid,
-  },
-  badgeFailed: {
-    backgroundColor: colors.error.bgSolid,
-  },
-  badgeIdle: {
-    backgroundColor: theme.ghostButtonHover,
-  },
-  badgeText: {
-    color: colors.white,
-    fontSize: fontSize.xs,
-    fontWeight: '500',
-  },
-  serverInfo: {
-    marginBottom: spacing.lg,
-    paddingBottom: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
-  },
-  serverHostname: {
-    color: colors.white,
-    fontSize: fontSize.xl,
-    fontWeight: '600',
-    marginBottom: spacing.xs,
+    marginBottom: spacing.xs - 2,
   },
   serverIp: {
     color: theme.textSecondary,
-    fontSize: fontSize.sm,
-    fontFamily: 'monospace',
-  },
-  detailsToggle: {
-    paddingVertical: spacing.md,
-    marginBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
-  },
-  detailsToggleText: {
-    color: theme.link,
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  capabilitiesSection: {
-    marginBottom: spacing.lg,
-  },
-  capabilitiesTitle: {
-    color: theme.textSecondary,
     fontSize: fontSize.xs,
-    textTransform: 'uppercase',
-    marginBottom: spacing.sm,
-  },
-  capabilitiesRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  capBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: spacing.sm - 2,
-    borderRadius: borderRadius.sm + 2,
-    backgroundColor: theme.ghostButtonHover,
-    opacity: 0.5,
-  },
-  capEnabled: {
-    backgroundColor: colors.info.bgSolid,
-    opacity: 1,
-  },
-  capText: {
-    color: theme.textPrimary,
-    fontSize: fontSize.xs,
-  },
-  urlsSection: {
-    backgroundColor: theme.background,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.lg,
-  },
-  urlsTitle: {
-    color: theme.textSecondary,
-    fontSize: fontSize.xs,
-    textTransform: 'uppercase',
-    marginBottom: spacing.sm,
-  },
-  urlText: {
-    color: colors.primary[300],
-    fontSize: 11,
     fontFamily: 'monospace',
     marginBottom: spacing.xs,
   },
-  serverActions: {
+  compactCapabilities: {
     flexDirection: 'row',
-    gap: spacing.md,
-  },
-  continueButton: {
-    flex: 1,
-    backgroundColor: theme.primaryButton,
-    padding: spacing.sm + 2,
-    borderRadius: borderRadius.md,
     alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.xs - 2,
   },
-  rescanButton: {
-    padding: spacing.sm + 2,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.accent[500],
+  capDot: {
+    fontSize: 14,
   },
-  rescanText: {
-    color: colors.accent[500],
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  // Services section
-  servicesSection: {
-    backgroundColor: theme.background,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.lg,
-  },
-  servicesTitle: {
-    color: theme.textSecondary,
-    fontSize: fontSize.xs,
-    textTransform: 'uppercase',
-    marginBottom: spacing.sm,
-  },
-  serviceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm - 2,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.backgroundHover,
-  },
-  serviceName: {
-    color: theme.textPrimary,
-    fontSize: fontSize.sm,
-  },
-  serviceStatus: {
-    color: theme.statusOnline,
-    fontSize: fontSize.xs,
-  },
-  // Unodes section
-  unodesSection: {
-    backgroundColor: theme.background,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.lg,
-  },
-  unodesTitle: {
-    color: theme.textSecondary,
-    fontSize: fontSize.xs,
-    textTransform: 'uppercase',
-    marginBottom: spacing.sm,
-  },
-  unodeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm - 2,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.backgroundHover,
-  },
-  unodeHostname: {
-    color: theme.textPrimary,
-    fontSize: fontSize.sm,
-  },
-  unodeStatusBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-  },
-  unodeOnline: {
-    backgroundColor: colors.success.bgSolid,
-  },
-  unodeOffline: {
-    backgroundColor: colors.error.bgSolid,
-  },
-  unodeStatusText: {
-    color: colors.white,
-    fontSize: 10,
-    textTransform: 'uppercase',
-  },
-  // Hint text
-  hintText: {
+  capCount: {
     color: theme.textMuted,
     fontSize: fontSize.xs,
-    fontStyle: 'italic',
-    textAlign: 'center',
-    marginBottom: spacing.lg,
+  },
+  statusIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: spacing.sm,
+  },
+  statusConnected: {
+    backgroundColor: colors.success.bgSolid,
+  },
+  statusConnecting: {
+    backgroundColor: colors.warning.bgSolid,
+  },
+  statusFailed: {
+    backgroundColor: colors.error.bgSolid,
+  },
+  statusIdle: {
+    backgroundColor: theme.backgroundInput,
+  },
+  statusDot: {
+    color: colors.white,
+    fontSize: fontSize.sm,
+  },
+  continueButton: {
+    backgroundColor: theme.primaryButton,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
   },
 });
 

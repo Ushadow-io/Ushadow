@@ -315,7 +315,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     // Determine endpoint based on source type
     let path = storedConfig.path;
     if (selectedSource.type === 'microphone') {
-      // Ensure we're using ws_pcm for microphone
+      // Phone microphone - use ws_pcm
       if (!path.includes('ws_pcm')) {
         path = path.replace('ws_omi', 'ws_pcm');
       }
@@ -327,7 +327,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
 
     // Use stored protocol (user can toggle between ws and wss)
-    const url = `${storedConfig.protocol}://${host}${path}`;
+    let url = `${storedConfig.protocol}://${host}${path}`;
+
     console.log('[UnifiedStreamingPage] Built stream URL:', url);
 
     // Add auth token
@@ -563,6 +564,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
             isConnecting={isConnecting}
             audioLevel={audioLevel}
             startTime={startTime}
+            sourceType={selectedSource.type === 'microphone' ? 'microphone' : 'omi'}
             testID={`${testID}-display`}
           />
 

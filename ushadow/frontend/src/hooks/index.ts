@@ -17,3 +17,7 @@ export type { PortConflict, PortConflictDialogState, UseServiceStartResult } fro
 // Memory and graph hooks
 export { useMemories, useMemory, useRelatedMemories } from './useMemories';
 export { useGraphApi } from './useGraphApi';
+
+// Generic QR code hook (mobile, Tailscale auth, etc.)
+export { useQrCode, useMobileQrCode } from './useQrCode';
+export type { QrCodeData, UseQrCodeOptions } from './useQrCode';

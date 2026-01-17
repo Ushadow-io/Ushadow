@@ -17,7 +17,8 @@ import {
   Pencil,
   Plus,
   Package,
-  Trash2
+  Trash2,
+  BookOpen
 } from 'lucide-react'
 import {
   settingsApi,
@@ -986,6 +987,34 @@ export default function ServicesPage() {
                             </div>
                           </button>
                         ) : null}
+
+                        {/* Swagger Docs Button */}
+                        {status.state === 'running' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              // Get connection info to find the service's port
+                              servicesApi.getConnectionInfo(service.service_name).then(info => {
+                                if (info.data.port) {
+                                  window.open(`http://localhost:${info.data.port}/docs`, '_blank')
+                                } else {
+                                  alert('Service port not available')
+                                }
+                              }).catch(err => {
+                                console.error('Failed to get service port:', err)
+                                alert('Failed to get service connection info')
+                              })
+                            }}
+                            className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
+                            title="View API Documentation"
+                            data-testid={`swagger-docs-${service.service_name}`}
+                          >
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all group-hover:ring-2 bg-primary-100 dark:bg-primary-900/30 group-hover:ring-primary-400 group-hover:bg-primary-200 dark:group-hover:bg-primary-800">
+                              <BookOpen className="h-3.5 w-3.5 text-primary-700 dark:text-primary-300" />
+                              <span className="text-xs font-medium text-primary-700 dark:text-primary-300">API</span>
+                            </div>
+                          </button>
+                        )}
 
                         {/* Expand/Collapse */}
                         <div className="flex items-center text-neutral-400">

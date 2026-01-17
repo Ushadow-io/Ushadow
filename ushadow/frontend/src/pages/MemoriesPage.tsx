@@ -85,9 +85,16 @@ export default function MemoriesPage() {
   // Handle create memory
   const handleCreateMemory = async () => {
     if (!newMemoryText.trim()) return
-    await createMemory({ text: newMemoryText })
-    setNewMemoryText('')
-    setShowCreateDialog(false)
+    try {
+      await createMemory({ text: newMemoryText })
+      // Wait for refetch to complete before closing dialog
+      await refetchMemories()
+      setNewMemoryText('')
+      setShowCreateDialog(false)
+    } catch (error) {
+      // Error is already handled by React Query, but keep dialog open
+      console.error('Failed to create memory:', error)
+    }
   }
 
   // Handle update memory
