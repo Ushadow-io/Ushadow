@@ -1,4 +1,4 @@
-.# Default model registry configuration
+# Default model registry configuration
 # These provide fallback defaults when config.yml is missing or incomplete
 # Priority: config.yml > environment variables > defaults.yml
 

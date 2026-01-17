@@ -287,9 +287,15 @@ class SettingsStore:
 
         Returns:
             Resolved value (interpolations are automatically resolved)
+            Converts OmegaConf containers to regular Python dicts/lists
         """
         config = await self.load_config()
         value = OmegaConf.select(config, key_path, default=default)
+
+        # Convert OmegaConf containers to regular Python types for Pydantic serialization
+        if isinstance(value, (DictConfig, type(OmegaConf.create([])))):
+            return OmegaConf.to_container(value, resolve=True)
+
         return value
 
     def get_sync(self, key_path: str, default: Any = None) -> Any:
@@ -307,7 +313,14 @@ class SettingsStore:
                     configs.append(cfg)
             self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
             self._cache_timestamp = time.time()
-        return OmegaConf.select(self._cache, key_path, default=default)
+
+        value = OmegaConf.select(self._cache, key_path, default=default)
+
+        # Convert OmegaConf containers to regular Python types for Pydantic serialization
+        if isinstance(value, (DictConfig, type(OmegaConf.create([])))):
+            return OmegaConf.to_container(value, resolve=True)
+
+        return value
 
     async def get_by_env_var(self, env_var_name: str, default: Any = None) -> Any:
         """
@@ -741,6 +754,61 @@ class SettingsStore:
                     return env_value
                 logger.info(f"resolve_env_value: {env_name} -> {mask_if_secret(env_name, default_value) if default_value else 'None'} (fallback to default)")
             return default_value
+        return None
+
+    async def resolve_env_value_with_source(
+        self,
+        source: str,
+        setting_path: Optional[str],
+        literal_value: Optional[str],
+        default_value: Optional[str],
+        env_name: str = ""
+    ) -> Optional[tuple[str, str, Optional[str]]]:
+        """
+        Resolve env var value WITH source tracking.
+
+        Args:
+            source: One of "setting", "literal", "default"
+            setting_path: Path to setting if source is "setting"
+            literal_value: Direct value if source is "literal"
+            default_value: Fallback if source is "default"
+            env_name: Env var name for auto-resolution
+
+        Returns:
+            Tuple of (value, source_type, source_path) or None
+            - value: Resolved string value
+            - source_type: One of "settings", "os.environ", "default", "override"
+            - source_path: Settings path or other identifier
+        """
+        from src.models.service_config import EnvVarSource
+
+        if source == "setting" and setting_path:
+            value = await self.get(setting_path)
+            if value:
+                return (str(value), EnvVarSource.SETTINGS.value, setting_path)
+
+        elif source == "literal" and literal_value:
+            return (literal_value, EnvVarSource.OVERRIDE.value, None)
+
+        elif source == "default":
+            if env_name:
+                # First try to resolve from settings
+                resolved = await self.get_by_env_var(env_name)
+                if resolved:
+                    logger.info(f"resolve_env_value_with_source: {env_name} -> {mask_if_secret(env_name, resolved)} (from settings)")
+                    return (str(resolved), EnvVarSource.SETTINGS.value, f"auto:{env_name}")
+
+                # Fall back to os.environ (e.g., from .env file)
+                env_value = os.environ.get(env_name)
+                if env_value:
+                    logger.info(f"resolve_env_value_with_source: {env_name} -> {mask_if_secret(env_name, env_value)} (from os.environ)")
+                    return (env_value, EnvVarSource.OS_ENVIRON.value, None)
+
+                logger.info(f"resolve_env_value_with_source: {env_name} -> {mask_if_secret(env_name, default_value) if default_value else 'None'} (fallback to default)")
+
+            if default_value:
+                return (default_value, EnvVarSource.DEFAULT.value, None)
+
         return None
 
     async def build_env_var_config(
