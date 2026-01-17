@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Server,
   CheckCircle,
@@ -1276,9 +1277,20 @@ export default function ServicesPage() {
       </div>
 
       {/* Service Catalog Modal */}
-      {showCatalog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-testid="catalog-modal">
-          <div className="bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+      {showCatalog && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+          data-testid="catalog-modal"
+          onClick={() => setShowCatalog(false)}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+
+          {/* Modal Content */}
+          <div
+            className="relative bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
               <div className="flex items-center gap-2">
@@ -1289,7 +1301,7 @@ export default function ServicesPage() {
               </div>
               <button
                 onClick={() => setShowCatalog(false)}
-                className="p-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                className="p-2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg transition-colors"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -1396,7 +1408,8 @@ export default function ServicesPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Confirmation Dialog */}
