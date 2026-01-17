@@ -1,9 +1,11 @@
 """
-GitHub Docker Compose Import Router.
+Docker Import Router - GitHub and Docker Hub.
 
 Provides endpoints for:
 - Scanning GitHub repositories for docker-compose files
+- Scanning Docker Hub for image information
 - Parsing compose files and extracting service/env info
+- Creating compose files from Docker Hub images
 - Importing and registering services with shadow header configuration
 """
 
@@ -30,7 +32,17 @@ from src.models.github_import import (
     ImportedServiceConfig,
     ShadowHeaderConfig,
     EnvVarConfigItem,
+    PortConfig,
+    VolumeConfig,
     parse_github_url,
+    # Docker Hub imports
+    DockerHubImageInfo,
+    DockerHubScanResponse,
+    DockerHubImportRequest,
+    UnifiedImportRequest,
+    UnifiedScanResponse,
+    parse_dockerhub_url,
+    detect_import_source,
 )
 from src.services.auth import get_current_user
 from src.models.user import User
@@ -231,6 +243,164 @@ def extract_services_from_compose(data: Dict[str, Any]) -> List[ComposeServiceIn
 
     return services
 
+
+# =============================================================================
+# Docker Hub Functions
+# =============================================================================
+
+async def fetch_dockerhub_info(image_info: DockerHubImageInfo) -> Dict[str, Any]:
+    """Fetch image information from Docker Hub API."""
+    headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'Ushadow-Import'
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Fetch repository info
+        response = await client.get(image_info.api_url, headers=headers)
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Docker Hub image not found")
+        response.raise_for_status()
+        return response.json()
+
+
+async def fetch_dockerhub_tags(image_info: DockerHubImageInfo, limit: int = 25) -> List[str]:
+    """Fetch available tags for a Docker Hub image."""
+    headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'Ushadow-Import'
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        url = f"{image_info.tags_url}?page_size={limit}"
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            return ["latest"]
+
+        data = response.json()
+        tags = [tag.get('name', 'latest') for tag in data.get('results', [])]
+        return tags if tags else ["latest"]
+
+
+def generate_compose_from_dockerhub(
+    image_info: DockerHubImageInfo,
+    service_name: str,
+    ports: List[PortConfig],
+    volumes: List[VolumeConfig],
+    env_vars: List[EnvVarConfigItem],
+    shadow_header: ShadowHeaderConfig,
+    display_name: Optional[str] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Generate a docker-compose.yaml from Docker Hub image info."""
+    yaml = YAML()
+    yaml.default_flow_style = False
+
+    # Build compose structure
+    compose_data = {
+        'x-ushadow': {
+            service_name: {
+                'display_name': display_name or service_name.replace('-', ' ').title(),
+                'description': description or f"Imported from Docker Hub: {image_info.full_image_name}",
+                'requires': ['llm'],  # Default capability requirement
+                'optional': [],
+                'dockerhub_source': {
+                    'namespace': image_info.namespace,
+                    'repository': image_info.repository,
+                    'tag': image_info.tag,
+                    'full_image': image_info.full_image_name
+                }
+            }
+        },
+        'services': {
+            service_name: {
+                'image': image_info.full_image_name,
+                'container_name': f'${{COMPOSE_PROJECT_NAME:-ushadow}}-{service_name}',
+            }
+        },
+        'networks': {
+            'infra-network': {
+                'external': True,
+                'name': '${COMPOSE_PROJECT_NAME:-ushadow}_infra-network'
+            }
+        }
+    }
+
+    service_config = compose_data['services'][service_name]
+
+    # Add shadow header config
+    if shadow_header.enabled:
+        compose_data['x-ushadow'][service_name]['shadow_header'] = {
+            'enabled': True,
+            'header_name': shadow_header.header_name,
+            'header_value': shadow_header.header_value or service_name
+        }
+        if shadow_header.route_path:
+            compose_data['x-ushadow'][service_name]['route_path'] = shadow_header.route_path
+
+    # Add ports
+    if ports:
+        service_config['ports'] = [
+            f"${{{service_name.upper().replace('-', '_')}_PORT:-{p.host_port}}}:{p.container_port}"
+            for p in ports
+        ]
+
+    # Add environment variables
+    if env_vars:
+        env_list = []
+        for ev in env_vars:
+            if ev.source == 'literal' and ev.value:
+                env_list.append(f"{ev.name}=${{{ev.name}:-{ev.value}}}")
+            else:
+                env_list.append(f"{ev.name}=${{{ev.name}:-}}")
+        if env_list:
+            service_config['environment'] = env_list
+
+    # Add volumes
+    if volumes:
+        service_config['volumes'] = []
+        volume_definitions = {}
+        for v in volumes:
+            if v.is_named_volume:
+                volume_name = f"{service_name}_{v.name}"
+                service_config['volumes'].append(f"{volume_name}:{v.container_path}")
+                volume_definitions[volume_name] = {
+                    'name': f'${{COMPOSE_PROJECT_NAME:-ushadow}}_{volume_name}'
+                }
+            else:
+                service_config['volumes'].append(f"{v.name}:{v.container_path}")
+
+        if volume_definitions:
+            compose_data['volumes'] = volume_definitions
+
+    # Add network
+    service_config['networks'] = ['infra-network']
+
+    # Add extra_hosts for host.docker.internal
+    service_config['extra_hosts'] = ['host.docker.internal:host-gateway']
+
+    # Add healthcheck placeholder
+    service_config['healthcheck'] = {
+        'test': ['CMD', 'echo', 'ok'],
+        'interval': '30s',
+        'timeout': '10s',
+        'retries': 3,
+        'start_period': '30s'
+    }
+
+    # Add restart policy
+    service_config['restart'] = 'unless-stopped'
+
+    # Serialize to YAML
+    from io import StringIO
+    output = StringIO()
+    yaml.dump(compose_data, output)
+    return output.getvalue()
+
+
+# =============================================================================
+# GitHub Endpoints
+# =============================================================================
 
 @router.post("/scan", response_model=GitHubScanResponse)
 async def scan_github_repo(
@@ -610,3 +780,317 @@ async def update_imported_service_config(
     except Exception as e:
         logger.error(f"Error updating imported service config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Docker Hub Endpoints
+# =============================================================================
+
+@router.post("/dockerhub/scan", response_model=DockerHubScanResponse)
+async def scan_dockerhub_image(
+    request: DockerHubImportRequest,
+    current_user: User = Depends(get_current_user)
+) -> DockerHubScanResponse:
+    """
+    Scan a Docker Hub image for information.
+
+    Accepts a Docker Hub URL or image reference and returns
+    image details and available tags.
+    """
+    try:
+        image_info = parse_dockerhub_url(request.dockerhub_url)
+
+        # Override tag if specified
+        if request.tag:
+            image_info.tag = request.tag
+
+        logger.info(f"Scanning Docker Hub image: {image_info.full_image_name}")
+
+        # Fetch image info
+        try:
+            repo_info = await fetch_dockerhub_info(image_info)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not fetch Docker Hub info: {e}")
+            repo_info = {}
+
+        # Fetch available tags
+        try:
+            tags = await fetch_dockerhub_tags(image_info)
+        except Exception as e:
+            logger.warning(f"Could not fetch tags: {e}")
+            tags = ["latest"]
+
+        return DockerHubScanResponse(
+            success=True,
+            image_info=image_info,
+            description=repo_info.get('description', ''),
+            stars=repo_info.get('star_count', 0),
+            pulls=repo_info.get('pull_count', 0),
+            available_tags=tags,
+            message=f"Found Docker Hub image: {image_info.full_image_name}"
+        )
+
+    except ValueError as e:
+        return DockerHubScanResponse(
+            success=False,
+            error=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error scanning Docker Hub image: {e}")
+        return DockerHubScanResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@router.post("/dockerhub/register", response_model=ImportServiceResponse)
+async def register_dockerhub_service(
+    service_name: str,
+    dockerhub_url: str,
+    tag: Optional[str] = None,
+    display_name: Optional[str] = None,
+    description: Optional[str] = None,
+    ports: Optional[List[Dict[str, int]]] = None,
+    volumes: Optional[List[Dict[str, Any]]] = None,
+    env_vars: Optional[List[Dict[str, Any]]] = None,
+    shadow_header_enabled: bool = True,
+    shadow_header_name: str = "X-Shadow-Service",
+    shadow_header_value: Optional[str] = None,
+    route_path: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+) -> ImportServiceResponse:
+    """
+    Register a service from Docker Hub by generating a compose file.
+
+    Creates a docker-compose file for the specified Docker Hub image
+    with the provided configuration.
+    """
+    try:
+        image_info = parse_dockerhub_url(dockerhub_url)
+        if tag:
+            image_info.tag = tag
+
+        logger.info(f"Registering Docker Hub service: {service_name} from {image_info.full_image_name}")
+
+        # Parse port configs
+        port_configs = []
+        if ports:
+            for p in ports:
+                port_configs.append(PortConfig(
+                    host_port=p.get('host_port', p.get('host', 8080)),
+                    container_port=p.get('container_port', p.get('container', 8080)),
+                    protocol=p.get('protocol', 'tcp')
+                ))
+
+        # Parse volume configs
+        volume_configs = []
+        if volumes:
+            for v in volumes:
+                volume_configs.append(VolumeConfig(
+                    name=v.get('name', 'data'),
+                    container_path=v.get('container_path', v.get('path', '/data')),
+                    is_named_volume=v.get('is_named_volume', True)
+                ))
+
+        # Parse env var configs
+        env_var_configs = []
+        if env_vars:
+            for ev in env_vars:
+                env_var_configs.append(EnvVarConfigItem(
+                    name=ev.get('name', ''),
+                    source=ev.get('source', 'literal'),
+                    value=ev.get('value'),
+                    setting_path=ev.get('setting_path'),
+                    is_secret=ev.get('is_secret', False)
+                ))
+
+        # Build shadow header config
+        shadow_header = ShadowHeaderConfig(
+            enabled=shadow_header_enabled,
+            header_name=shadow_header_name,
+            header_value=shadow_header_value or service_name,
+            route_path=route_path or f"/{service_name}"
+        )
+
+        # Generate compose file content
+        compose_content = generate_compose_from_dockerhub(
+            image_info=image_info,
+            service_name=service_name,
+            ports=port_configs,
+            volumes=volume_configs,
+            env_vars=env_var_configs,
+            shadow_header=shadow_header,
+            display_name=display_name,
+            description=description
+        )
+
+        # Ensure compose directory exists
+        compose_dir = Path('/compose')
+        if not compose_dir.exists():
+            compose_dir = Path('compose')
+        compose_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate filename
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '-', service_name)
+        compose_filename = f"{safe_name}-compose.yaml"
+        compose_path = compose_dir / compose_filename
+
+        # Write compose file
+        with open(compose_path, 'w') as f:
+            f.write(compose_content)
+
+        # Write env file if we have literal env vars
+        env_file_content = []
+        for ev in env_var_configs:
+            if ev.source == "literal" and ev.value:
+                env_file_content.append(f"{ev.name}={ev.value}")
+
+        if env_file_content:
+            env_file_path = compose_dir / f"{safe_name}.env"
+            with open(env_file_path, 'w') as f:
+                f.write('\n'.join(env_file_content) + '\n')
+
+        # Save service configuration to settings
+        from src.config.omegaconf_settings import get_settings_store
+        settings = get_settings_store()
+
+        service_config_key = f"imported_services.{safe_name}"
+        await settings.update({
+            service_config_key: {
+                'source_type': 'dockerhub',
+                'source_url': dockerhub_url,
+                'docker_image': image_info.full_image_name,
+                'compose_file': str(compose_path),
+                'service_name': service_name,
+                'display_name': display_name,
+                'description': description,
+                'shadow_header': shadow_header.model_dump(),
+                'ports': [p.model_dump() for p in port_configs],
+                'volumes': [v.model_dump() for v in volume_configs],
+                'env_vars': [ev.model_dump() for ev in env_var_configs],
+                'enabled': True
+            }
+        })
+
+        # Refresh compose registry to pick up new service
+        from src.services.compose_registry import get_compose_registry
+        registry = get_compose_registry()
+        registry.refresh()
+
+        logger.info(f"Imported service '{service_name}' from Docker Hub: {image_info.full_image_name}")
+
+        return ImportServiceResponse(
+            success=True,
+            service_id=f"{compose_filename.replace('.yaml', '')}:{service_name}",
+            service_name=service_name,
+            message=f"Successfully imported service '{service_name}' from Docker Hub",
+            compose_file_path=str(compose_path)
+        )
+
+    except ValueError as e:
+        return ImportServiceResponse(
+            success=False,
+            message=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error registering Docker Hub service: {e}")
+        return ImportServiceResponse(
+            success=False,
+            message=f"Failed to import service: {str(e)}"
+        )
+
+
+# =============================================================================
+# Unified Endpoints (Auto-detect source type)
+# =============================================================================
+
+@router.post("/unified/scan", response_model=UnifiedScanResponse)
+async def unified_scan(
+    request: UnifiedImportRequest,
+    current_user: User = Depends(get_current_user)
+) -> UnifiedScanResponse:
+    """
+    Scan any supported source (GitHub or Docker Hub).
+
+    Automatically detects the source type and returns appropriate information.
+    """
+    try:
+        source_type = detect_import_source(request.url)
+        logger.info(f"Unified scan: detected source type '{source_type}' for URL: {request.url}")
+
+        if source_type == "github":
+            # Handle GitHub
+            github_info = parse_github_url(request.url)
+            if request.branch:
+                github_info.branch = request.branch
+            if request.compose_path:
+                github_info.path = request.compose_path
+
+            # Fetch directory contents
+            contents = await fetch_github_contents(github_info.api_url)
+
+            # Handle single file case
+            if isinstance(contents, dict) and contents.get('type') == 'file':
+                compose_files = [DetectedComposeFile(
+                    path=contents.get('path', ''),
+                    name=contents.get('name', ''),
+                    download_url=contents.get('download_url', ''),
+                    size=contents.get('size', 0)
+                )]
+            else:
+                compose_files = detect_compose_files(contents if isinstance(contents, list) else [])
+
+            return UnifiedScanResponse(
+                success=True,
+                source_type="github",
+                github_info=github_info,
+                compose_files=compose_files,
+                message=f"Found {len(compose_files)} docker-compose file(s)" if compose_files else "No docker-compose files found"
+            )
+
+        else:
+            # Handle Docker Hub
+            image_info = parse_dockerhub_url(request.url)
+            if request.tag:
+                image_info.tag = request.tag
+
+            # Fetch image info
+            try:
+                repo_info = await fetch_dockerhub_info(image_info)
+            except Exception:
+                repo_info = {}
+
+            # Fetch available tags
+            try:
+                tags = await fetch_dockerhub_tags(image_info)
+            except Exception:
+                tags = ["latest"]
+
+            return UnifiedScanResponse(
+                success=True,
+                source_type="dockerhub",
+                dockerhub_info=image_info,
+                available_tags=tags,
+                image_description=repo_info.get('description', ''),
+                message=f"Found Docker Hub image: {image_info.full_image_name}"
+            )
+
+    except ValueError as e:
+        return UnifiedScanResponse(
+            success=False,
+            source_type="github",
+            error=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in unified scan: {e}")
+        return UnifiedScanResponse(
+            success=False,
+            source_type="github",
+            error=str(e)
+        )

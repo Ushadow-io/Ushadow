@@ -14,14 +14,19 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
+  Box,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 import {
   githubImportApi,
   DetectedComposeFile,
   ComposeServiceInfo,
-  ComposeEnvVarInfo,
   ShadowHeaderConfig,
   EnvVarConfigItem,
+  DockerHubImageInfo,
+  PortConfig,
+  VolumeConfig,
 } from '../services/api'
 
 interface ImportFromGitHubModalProps {
@@ -30,6 +35,7 @@ interface ImportFromGitHubModalProps {
   onServiceImported: () => void
 }
 
+type ImportSource = 'github' | 'dockerhub'
 type WizardStep = 'url' | 'compose' | 'service' | 'config' | 'complete'
 
 export default function ImportFromGitHubModal({
@@ -42,15 +48,24 @@ export default function ImportFromGitHubModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Source type
+  const [sourceType, setSourceType] = useState<ImportSource>('github')
+
   // URL step
-  const [githubUrl, setGithubUrl] = useState('')
+  const [importUrl, setImportUrl] = useState('')
   const [branch, setBranch] = useState('')
 
-  // Compose file selection
+  // Docker Hub specific
+  const [dockerHubInfo, setDockerHubInfo] = useState<DockerHubImageInfo | null>(null)
+  const [availableTags, setAvailableTags] = useState<string[]>([])
+  const [selectedTag, setSelectedTag] = useState('latest')
+  const [imageDescription, setImageDescription] = useState('')
+
+  // Compose file selection (GitHub)
   const [composeFiles, setComposeFiles] = useState<DetectedComposeFile[]>([])
   const [selectedComposeFile, setSelectedComposeFile] = useState<DetectedComposeFile | null>(null)
 
-  // Service selection
+  // Service selection (GitHub)
   const [services, setServices] = useState<ComposeServiceInfo[]>([])
   const [selectedService, setSelectedService] = useState<ComposeServiceInfo | null>(null)
 
@@ -67,12 +82,21 @@ export default function ImportFromGitHubModal({
   const [envVars, setEnvVars] = useState<EnvVarConfigItem[]>([])
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
 
+  // Docker Hub specific config
+  const [ports, setPorts] = useState<PortConfig[]>([])
+  const [volumes, setVolumes] = useState<VolumeConfig[]>([])
+
   // Reset state when modal opens/closes
   useEffect(() => {
     if (!isOpen) {
       setStep('url')
-      setGithubUrl('')
+      setSourceType('github')
+      setImportUrl('')
       setBranch('')
+      setDockerHubInfo(null)
+      setAvailableTags([])
+      setSelectedTag('latest')
+      setImageDescription('')
       setComposeFiles([])
       setSelectedComposeFile(null)
       setServices([])
@@ -87,14 +111,27 @@ export default function ImportFromGitHubModal({
         route_path: '',
       })
       setEnvVars([])
+      setPorts([])
+      setVolumes([])
       setError(null)
     }
   }, [isOpen])
 
-  // Scan GitHub repository
-  const handleScanRepo = async () => {
-    if (!githubUrl.trim()) {
-      setError('Please enter a GitHub URL')
+  // Auto-detect source type from URL
+  useEffect(() => {
+    const url = importUrl.toLowerCase().trim()
+    if (url.includes('github.com') || url.includes('githubusercontent.com')) {
+      setSourceType('github')
+    } else if (url.includes('hub.docker.com') || url.includes('docker.io') ||
+               (url && !url.startsWith('http') && url.includes('/'))) {
+      setSourceType('dockerhub')
+    }
+  }, [importUrl])
+
+  // Scan using unified endpoint
+  const handleScan = async () => {
+    if (!importUrl.trim()) {
+      setError('Please enter a URL or image reference')
       return
     }
 
@@ -102,36 +139,69 @@ export default function ImportFromGitHubModal({
     setError(null)
 
     try {
-      const response = await githubImportApi.scan(githubUrl, branch || undefined)
+      const response = await githubImportApi.unifiedScan(
+        importUrl,
+        branch || undefined,
+        selectedTag !== 'latest' ? selectedTag : undefined
+      )
       const data = response.data
 
       if (!data.success) {
-        setError(data.error || 'Failed to scan repository')
+        setError(data.error || 'Failed to scan')
         return
       }
 
-      if (data.compose_files.length === 0) {
-        setError('No docker-compose files found in the repository')
-        return
-      }
+      if (data.source_type === 'github') {
+        // GitHub flow
+        if (!data.compose_files || data.compose_files.length === 0) {
+          setError('No docker-compose files found in the repository')
+          return
+        }
+        setComposeFiles(data.compose_files)
+        setStep('compose')
+      } else {
+        // Docker Hub flow
+        if (data.dockerhub_info) {
+          setDockerHubInfo(data.dockerhub_info)
+          setAvailableTags(data.available_tags || ['latest'])
+          setImageDescription(data.image_description || '')
 
-      setComposeFiles(data.compose_files)
-      setStep('compose')
+          // Pre-populate service name from image
+          const name = data.dockerhub_info.repository.replace(/[^a-zA-Z0-9]/g, '-')
+          setServiceName(name)
+          setDisplayName(name.charAt(0).toUpperCase() + name.slice(1).replace(/-/g, ' '))
+          setDescription(data.image_description || `Docker Hub image: ${data.dockerhub_info.namespace}/${data.dockerhub_info.repository}`)
+          setShadowHeader({
+            enabled: true,
+            header_name: 'X-Shadow-Service',
+            header_value: name,
+            route_path: `/${name}`,
+          })
+
+          // Add default port and volume
+          setPorts([{ host_port: 8080, container_port: 8080, protocol: 'tcp' }])
+          setVolumes([{ name: 'data', container_path: '/data', is_named_volume: true }])
+
+          setStep('config')
+        } else {
+          setError('Could not parse Docker Hub image information')
+        }
+      }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to scan repository')
+      setError(err.response?.data?.detail || 'Failed to scan')
     } finally {
       setLoading(false)
     }
   }
 
-  // Parse selected compose file
+  // Parse selected compose file (GitHub)
   const handleSelectComposeFile = async (file: DetectedComposeFile) => {
     setSelectedComposeFile(file)
     setLoading(true)
     setError(null)
 
     try {
-      const response = await githubImportApi.parse(githubUrl, file.path)
+      const response = await githubImportApi.parse(importUrl, file.path)
       const data = response.data
 
       if (!data.success) {
@@ -153,7 +223,7 @@ export default function ImportFromGitHubModal({
     }
   }
 
-  // Select service and prepare configuration
+  // Select service and prepare configuration (GitHub)
   const handleSelectService = (service: ComposeServiceInfo) => {
     setSelectedService(service)
     setServiceName(service.name)
@@ -186,38 +256,103 @@ export default function ImportFromGitHubModal({
     )
   }
 
+  // Add new env var
+  const addEnvVar = () => {
+    setEnvVars((prev) => [...prev, { name: '', source: 'literal', value: '', is_secret: false }])
+  }
+
+  // Remove env var
+  const removeEnvVar = (index: number) => {
+    setEnvVars((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Add port
+  const addPort = () => {
+    setPorts((prev) => [...prev, { host_port: 8080, container_port: 8080, protocol: 'tcp' }])
+  }
+
+  // Remove port
+  const removePort = (index: number) => {
+    setPorts((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Update port
+  const updatePort = (index: number, updates: Partial<PortConfig>) => {
+    setPorts((prev) => prev.map((p, i) => (i === index ? { ...p, ...updates } : p)))
+  }
+
+  // Add volume
+  const addVolume = () => {
+    setVolumes((prev) => [...prev, { name: 'data', container_path: '/data', is_named_volume: true }])
+  }
+
+  // Remove volume
+  const removeVolume = (index: number) => {
+    setVolumes((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Update volume
+  const updateVolume = (index: number, updates: Partial<VolumeConfig>) => {
+    setVolumes((prev) => prev.map((v, i) => (i === index ? { ...v, ...updates } : v)))
+  }
+
   // Import the service
   const handleImport = async () => {
-    if (!selectedComposeFile || !selectedService) {
-      setError('Please select a compose file and service')
-      return
-    }
-
     setLoading(true)
     setError(null)
 
     try {
-      const response = await githubImportApi.register({
-        github_url: githubUrl,
-        compose_path: selectedComposeFile.path,
-        service_name: serviceName,
-        config: {
+      if (sourceType === 'dockerhub' || dockerHubInfo) {
+        // Docker Hub import
+        const response = await githubImportApi.registerDockerHub({
           service_name: serviceName,
+          dockerhub_url: importUrl,
+          tag: selectedTag,
           display_name: displayName,
           description,
-          github_url: githubUrl,
-          compose_path: selectedComposeFile.path,
-          shadow_header: shadowHeader,
+          ports,
+          volumes,
           env_vars: envVars,
-          enabled: true,
-        },
-      })
+          shadow_header_enabled: shadowHeader.enabled,
+          shadow_header_name: shadowHeader.header_name,
+          shadow_header_value: shadowHeader.header_value || serviceName,
+          route_path: shadowHeader.route_path || `/${serviceName}`,
+        })
 
-      const data = response.data
+        const data = response.data
+        if (!data.success) {
+          setError(data.message || 'Failed to import service')
+          return
+        }
+      } else {
+        // GitHub import
+        if (!selectedComposeFile || !selectedService) {
+          setError('Please select a compose file and service')
+          return
+        }
 
-      if (!data.success) {
-        setError(data.message || 'Failed to import service')
-        return
+        const response = await githubImportApi.register({
+          github_url: importUrl,
+          compose_path: selectedComposeFile.path,
+          service_name: serviceName,
+          config: {
+            service_name: serviceName,
+            display_name: displayName,
+            description,
+            source_type: 'github',
+            source_url: importUrl,
+            compose_path: selectedComposeFile.path,
+            shadow_header: shadowHeader,
+            env_vars: envVars,
+            enabled: true,
+          },
+        })
+
+        const data = response.data
+        if (!data.success) {
+          setError(data.message || 'Failed to import service')
+          return
+        }
       }
 
       setStep('complete')
@@ -236,15 +371,25 @@ export default function ImportFromGitHubModal({
 
   if (!isOpen) return null
 
-  const renderStepIndicator = () => {
-    const steps: { key: WizardStep; label: string }[] = [
-      { key: 'url', label: 'URL' },
+  const getSteps = (): { key: WizardStep; label: string }[] => {
+    if (sourceType === 'dockerhub' || dockerHubInfo) {
+      return [
+        { key: 'url', label: 'Source' },
+        { key: 'config', label: 'Configure' },
+        { key: 'complete', label: 'Done' },
+      ]
+    }
+    return [
+      { key: 'url', label: 'Source' },
       { key: 'compose', label: 'Compose' },
       { key: 'service', label: 'Service' },
       { key: 'config', label: 'Configure' },
       { key: 'complete', label: 'Done' },
     ]
+  }
 
+  const renderStepIndicator = () => {
+    const steps = getSteps()
     const currentIndex = steps.findIndex((s) => s.key === step)
 
     return (
@@ -279,34 +424,68 @@ export default function ImportFromGitHubModal({
 
   const renderUrlStep = () => (
     <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          GitHub Repository URL
-        </label>
-        <input
-          type="text"
-          value={githubUrl}
-          onChange={(e) => setGithubUrl(e.target.value)}
-          placeholder="https://github.com/owner/repo"
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-        />
-        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          Supports repository URLs, specific branches, or direct paths to compose files
-        </p>
+      {/* Source Type Selector */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setSourceType('github')}
+          className={`flex-1 p-3 rounded-lg border-2 flex items-center justify-center gap-2 transition-all ${
+            sourceType === 'github'
+              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+          }`}
+        >
+          <Github className="w-5 h-5" />
+          <span className="font-medium">GitHub</span>
+        </button>
+        <button
+          onClick={() => setSourceType('dockerhub')}
+          className={`flex-1 p-3 rounded-lg border-2 flex items-center justify-center gap-2 transition-all ${
+            sourceType === 'dockerhub'
+              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+          }`}
+        >
+          <Box className="w-5 h-5" />
+          <span className="font-medium">Docker Hub</span>
+        </button>
       </div>
 
       <div>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Branch (optional)
+          {sourceType === 'github' ? 'GitHub Repository URL' : 'Docker Hub Image'}
         </label>
         <input
           type="text"
-          value={branch}
-          onChange={(e) => setBranch(e.target.value)}
-          placeholder="main"
+          value={importUrl}
+          onChange={(e) => setImportUrl(e.target.value)}
+          placeholder={
+            sourceType === 'github'
+              ? 'https://github.com/owner/repo'
+              : 'https://hub.docker.com/r/namespace/repo or namespace/repo'
+          }
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
         />
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          {sourceType === 'github'
+            ? 'Supports repository URLs, specific branches, or direct paths to compose files'
+            : 'Supports Docker Hub URLs or direct image references (e.g., fishaudio/fish-speech)'}
+        </p>
       </div>
+
+      {sourceType === 'github' && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Branch (optional)
+          </label>
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            placeholder="main"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+          />
+        </div>
+      )}
     </div>
   )
 
@@ -389,7 +568,26 @@ export default function ImportFromGitHubModal({
   )
 
   const renderConfigStep = () => (
-    <div className="space-y-6 max-h-[50vh] overflow-y-auto">
+    <div className="space-y-6 max-h-[50vh] overflow-y-auto pr-2">
+      {/* Docker Hub Tag Selection */}
+      {dockerHubInfo && availableTags.length > 0 && (
+        <div className="space-y-4">
+          <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+            <Box className="w-4 h-4" />
+            Image Tag
+          </h4>
+          <select
+            value={selectedTag}
+            onChange={(e) => setSelectedTag(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+          >
+            {availableTags.map((tag) => (
+              <option key={tag} value={tag}>{tag}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Basic Info */}
       <div className="space-y-4">
         <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
@@ -432,6 +630,86 @@ export default function ImportFromGitHubModal({
           />
         </div>
       </div>
+
+      {/* Ports (Docker Hub) */}
+      {dockerHubInfo && (
+        <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between">
+            <h4 className="font-medium text-gray-900 dark:text-white">Port Mappings</h4>
+            <button
+              onClick={addPort}
+              className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+            >
+              <Plus className="w-4 h-4" /> Add Port
+            </button>
+          </div>
+          {ports.map((port, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <input
+                type="number"
+                value={port.host_port}
+                onChange={(e) => updatePort(index, { host_port: parseInt(e.target.value) || 0 })}
+                placeholder="Host"
+                className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+              <span className="text-gray-500">:</span>
+              <input
+                type="number"
+                value={port.container_port}
+                onChange={(e) => updatePort(index, { container_port: parseInt(e.target.value) || 0 })}
+                placeholder="Container"
+                className="w-24 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+              <button
+                onClick={() => removePort(index)}
+                className="p-1 text-gray-400 hover:text-red-500"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Volumes (Docker Hub) */}
+      {dockerHubInfo && (
+        <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between">
+            <h4 className="font-medium text-gray-900 dark:text-white">Volumes</h4>
+            <button
+              onClick={addVolume}
+              className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+            >
+              <Plus className="w-4 h-4" /> Add Volume
+            </button>
+          </div>
+          {volumes.map((vol, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={vol.name}
+                onChange={(e) => updateVolume(index, { name: e.target.value })}
+                placeholder="Volume name"
+                className="w-32 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+              <span className="text-gray-500">:</span>
+              <input
+                type="text"
+                value={vol.container_path}
+                onChange={(e) => updateVolume(index, { container_path: e.target.value })}
+                placeholder="/path/in/container"
+                className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+              <button
+                onClick={() => removeVolume(index)}
+                className="p-1 text-gray-400 hover:text-red-500"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Shadow Header Configuration */}
       <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -500,98 +778,122 @@ export default function ImportFromGitHubModal({
       </div>
 
       {/* Environment Variables */}
-      {envVars.length > 0 && (
-        <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+      <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between">
           <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
             <Key className="w-4 h-4" />
             Environment Variables ({envVars.length})
           </h4>
-          <div className="space-y-3">
-            {envVars.map((env, index) => {
-              const originalEnv = selectedService?.environment.find(
-                (e) => e.name === env.name
-              )
-              return (
-                <div
-                  key={env.name}
-                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
-                >
-                  <div className="flex items-center justify-between mb-2">
+          <button
+            onClick={addEnvVar}
+            className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+          >
+            <Plus className="w-4 h-4" /> Add Variable
+          </button>
+        </div>
+        <div className="space-y-3">
+          {envVars.map((env, index) => {
+            const originalEnv = selectedService?.environment.find(
+              (e) => e.name === env.name
+            )
+            return (
+              <div
+                key={index}
+                className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  {dockerHubInfo ? (
+                    <input
+                      type="text"
+                      value={env.name}
+                      onChange={(e) => updateEnvVar(index, { name: e.target.value.toUpperCase() })}
+                      placeholder="VAR_NAME"
+                      className="font-mono text-sm text-gray-900 dark:text-white bg-transparent border-none p-0 focus:ring-0"
+                    />
+                  ) : (
                     <span className="font-mono text-sm text-gray-900 dark:text-white">
                       {env.name}
                     </span>
-                    <div className="flex items-center gap-2">
-                      {originalEnv?.is_required && (
-                        <span className="text-xs text-red-500">Required</span>
-                      )}
-                      {env.is_secret && (
-                        <span className="text-xs text-amber-500">Secret</span>
-                      )}
-                    </div>
-                  </div>
+                  )}
                   <div className="flex items-center gap-2">
-                    <select
-                      value={env.source}
-                      onChange={(e) =>
-                        updateEnvVar(index, {
-                          source: e.target.value as 'literal' | 'setting' | 'default',
-                        })
-                      }
-                      className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    >
-                      <option value="literal">Set Value</option>
-                      <option value="default">Use Default</option>
-                      <option value="setting">From Settings</option>
-                    </select>
-                    {env.source === 'literal' && (
-                      <div className="flex-1 flex items-center gap-2">
-                        <input
-                          type={env.is_secret && !showSecrets[env.name] ? 'password' : 'text'}
-                          value={env.value || ''}
-                          onChange={(e) => updateEnvVar(index, { value: e.target.value })}
-                          placeholder={originalEnv?.default_value || 'Enter value'}
-                          className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                        />
-                        {env.is_secret && (
-                          <button
-                            onClick={() =>
-                              setShowSecrets((prev) => ({
-                                ...prev,
-                                [env.name]: !prev[env.name],
-                              }))
-                            }
-                            className="p-1 text-gray-400 hover:text-gray-600"
-                          >
-                            {showSecrets[env.name] ? (
-                              <EyeOff className="w-4 h-4" />
-                            ) : (
-                              <Eye className="w-4 h-4" />
-                            )}
-                          </button>
-                        )}
-                      </div>
+                    {originalEnv?.is_required && (
+                      <span className="text-xs text-red-500">Required</span>
                     )}
-                    {env.source === 'default' && originalEnv?.default_value && (
-                      <span className="text-sm text-gray-500 dark:text-gray-400">
-                        Default: {originalEnv.default_value}
-                      </span>
+                    {env.is_secret && (
+                      <span className="text-xs text-amber-500">Secret</span>
                     )}
-                    {env.source === 'setting' && (
-                      <input
-                        type="text"
-                        value={env.setting_path || ''}
-                        onChange={(e) => updateEnvVar(index, { setting_path: e.target.value })}
-                        placeholder="api_keys.my_key"
-                        className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      />
+                    {dockerHubInfo && (
+                      <button
+                        onClick={() => removeEnvVar(index)}
+                        className="p-1 text-gray-400 hover:text-red-500"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     )}
                   </div>
                 </div>
-              )
-            })}
-          </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={env.source}
+                    onChange={(e) =>
+                      updateEnvVar(index, {
+                        source: e.target.value as 'literal' | 'setting' | 'default',
+                      })
+                    }
+                    className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="literal">Set Value</option>
+                    <option value="default">Use Default</option>
+                    <option value="setting">From Settings</option>
+                  </select>
+                  {env.source === 'literal' && (
+                    <div className="flex-1 flex items-center gap-2">
+                      <input
+                        type={env.is_secret && !showSecrets[env.name] ? 'password' : 'text'}
+                        value={env.value || ''}
+                        onChange={(e) => updateEnvVar(index, { value: e.target.value })}
+                        placeholder={originalEnv?.default_value || 'Enter value'}
+                        className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                      {env.is_secret && (
+                        <button
+                          onClick={() =>
+                            setShowSecrets((prev) => ({
+                              ...prev,
+                              [env.name]: !prev[env.name],
+                            }))
+                          }
+                          className="p-1 text-gray-400 hover:text-gray-600"
+                        >
+                          {showSecrets[env.name] ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {env.source === 'default' && originalEnv?.default_value && (
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      Default: {originalEnv.default_value}
+                    </span>
+                  )}
+                  {env.source === 'setting' && (
+                    <input
+                      type="text"
+                      value={env.setting_path || ''}
+                      onChange={(e) => updateEnvVar(index, { setting_path: e.target.value })}
+                      placeholder="api_keys.my_key"
+                      className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    />
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
-      )}
+      </div>
     </div>
   )
 
@@ -633,23 +935,32 @@ export default function ImportFromGitHubModal({
   const canGoNext = step !== 'complete'
 
   const handleBack = () => {
-    switch (step) {
-      case 'compose':
+    if (dockerHubInfo) {
+      // Docker Hub flow
+      if (step === 'config') {
+        setDockerHubInfo(null)
         setStep('url')
-        break
-      case 'service':
-        setStep('compose')
-        break
-      case 'config':
-        setStep('service')
-        break
+      }
+    } else {
+      // GitHub flow
+      switch (step) {
+        case 'compose':
+          setStep('url')
+          break
+        case 'service':
+          setStep('compose')
+          break
+        case 'config':
+          setStep('service')
+          break
+      }
     }
   }
 
   const handleNext = () => {
     switch (step) {
       case 'url':
-        handleScanRepo()
+        handleScan()
         break
       case 'config':
         handleImport()
@@ -660,7 +971,7 @@ export default function ImportFromGitHubModal({
   const getNextButtonLabel = () => {
     switch (step) {
       case 'url':
-        return 'Scan Repository'
+        return 'Scan'
       case 'config':
         return 'Import Service'
       default:
@@ -680,9 +991,13 @@ export default function ImportFromGitHubModal({
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center gap-3">
-            <Github className="w-6 h-6 text-primary-600" />
+            {sourceType === 'github' && !dockerHubInfo ? (
+              <Github className="w-6 h-6 text-primary-600" />
+            ) : (
+              <Box className="w-6 h-6 text-primary-600" />
+            )}
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-              Import from GitHub
+              Import Docker Service
             </h2>
           </div>
           <button
@@ -733,7 +1048,7 @@ export default function ImportFromGitHubModal({
             {canGoNext && step !== 'compose' && step !== 'service' && (
               <button
                 onClick={step === 'complete' ? handleComplete : handleNext}
-                disabled={loading || (step === 'url' && !githubUrl.trim())}
+                disabled={loading || (step === 'url' && !importUrl.trim())}
                 className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
               >
                 {loading ? (

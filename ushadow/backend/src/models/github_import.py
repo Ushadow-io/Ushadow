@@ -1,13 +1,48 @@
 """
-Models for GitHub Docker Compose Import functionality.
+Models for Docker Import functionality.
 
-Supports importing docker-compose files from GitHub repositories
-and configuring shadow headers and environment variables.
+Supports importing docker-compose files from:
+- GitHub repositories
+- Docker Hub images
+
+And configuring shadow headers and environment variables.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Literal
 from pydantic import BaseModel, Field, field_validator
 import re
+
+
+# =============================================================================
+# Import Source Types
+# =============================================================================
+
+ImportSourceType = Literal["github", "dockerhub"]
+
+
+class DockerHubImageInfo(BaseModel):
+    """Parsed Docker Hub URL information."""
+    namespace: str  # e.g., "fishaudio" or "library" for official images
+    repository: str  # e.g., "fish-speech"
+    tag: str = "latest"
+
+    @property
+    def full_image_name(self) -> str:
+        """Get full Docker image name."""
+        if self.namespace == "library":
+            # Official images don't need namespace prefix
+            return f"{self.repository}:{self.tag}"
+        return f"{self.namespace}/{self.repository}:{self.tag}"
+
+    @property
+    def api_url(self) -> str:
+        """Get Docker Hub API URL for image info."""
+        return f"https://hub.docker.com/v2/repositories/{self.namespace}/{self.repository}"
+
+    @property
+    def tags_url(self) -> str:
+        """Get Docker Hub API URL for tags."""
+        return f"https://hub.docker.com/v2/repositories/{self.namespace}/{self.repository}/tags"
 
 
 class GitHubUrlInfo(BaseModel):
@@ -96,16 +131,43 @@ class EnvVarConfigItem(BaseModel):
     is_secret: bool = False
 
 
+class PortConfig(BaseModel):
+    """Configuration for a port mapping."""
+    host_port: int
+    container_port: int
+    protocol: str = "tcp"
+
+
+class VolumeConfig(BaseModel):
+    """Configuration for a volume mount."""
+    name: str
+    container_path: str
+    is_named_volume: bool = True  # True for named volumes, False for bind mounts
+
+
 class ImportedServiceConfig(BaseModel):
     """Full configuration for an imported service."""
     service_name: str
     display_name: Optional[str] = None
     description: Optional[str] = None
-    github_url: str
-    compose_path: str
+    # Source can be GitHub or Docker Hub
+    source_type: ImportSourceType = "github"
+    source_url: str  # GitHub URL or Docker Hub URL
+    # For GitHub imports
+    compose_path: Optional[str] = None
+    # For Docker Hub imports
+    docker_image: Optional[str] = None
+    ports: List[PortConfig] = Field(default_factory=list)
+    volumes: List[VolumeConfig] = Field(default_factory=list)
+    # Common config
     shadow_header: ShadowHeaderConfig = Field(default_factory=ShadowHeaderConfig)
     env_vars: List[EnvVarConfigItem] = Field(default_factory=list)
     enabled: bool = True
+
+    # Backwards compatibility
+    @property
+    def github_url(self) -> str:
+        return self.source_url
 
 
 class GitHubScanResponse(BaseModel):
@@ -204,3 +266,139 @@ def parse_github_url(url: str) -> GitHubUrlInfo:
         )
 
     raise ValueError(f"Could not parse GitHub URL: {url}")
+
+
+def parse_dockerhub_url(url: str) -> DockerHubImageInfo:
+    """
+    Parse a Docker Hub URL into its components.
+
+    Supports:
+    - https://hub.docker.com/r/namespace/repository
+    - https://hub.docker.com/r/namespace/repository/tags
+    - https://hub.docker.com/_/official-image (official images)
+    - namespace/repository (direct image reference)
+    - namespace/repository:tag
+    """
+    url = url.strip()
+
+    # Handle hub.docker.com URLs
+    dockerhub_match = re.match(
+        r'https?://hub\.docker\.com/r/([^/]+)/([^/]+)(?:/tags)?/?$',
+        url
+    )
+    if dockerhub_match:
+        namespace, repository = dockerhub_match.groups()
+        return DockerHubImageInfo(
+            namespace=namespace,
+            repository=repository,
+            tag="latest"
+        )
+
+    # Handle official images: https://hub.docker.com/_/image-name
+    official_match = re.match(
+        r'https?://hub\.docker\.com/_/([^/]+)/?$',
+        url
+    )
+    if official_match:
+        repository = official_match.group(1)
+        return DockerHubImageInfo(
+            namespace="library",
+            repository=repository,
+            tag="latest"
+        )
+
+    # Handle direct image reference: namespace/repository:tag
+    direct_match = re.match(
+        r'^([^/:]+)/([^/:]+)(?::([^/]+))?$',
+        url
+    )
+    if direct_match:
+        namespace, repository, tag = direct_match.groups()
+        return DockerHubImageInfo(
+            namespace=namespace,
+            repository=repository,
+            tag=tag or "latest"
+        )
+
+    # Handle official image direct reference: image-name:tag
+    official_direct_match = re.match(
+        r'^([^/:]+)(?::([^/]+))?$',
+        url
+    )
+    if official_direct_match:
+        repository, tag = official_direct_match.groups()
+        return DockerHubImageInfo(
+            namespace="library",
+            repository=repository,
+            tag=tag or "latest"
+        )
+
+    raise ValueError(f"Could not parse Docker Hub URL: {url}")
+
+
+def detect_import_source(url: str) -> ImportSourceType:
+    """Detect whether a URL is GitHub or Docker Hub."""
+    url = url.strip().lower()
+    if 'github.com' in url or 'raw.githubusercontent.com' in url:
+        return "github"
+    if 'hub.docker.com' in url or 'docker.io' in url:
+        return "dockerhub"
+    # Check if it looks like a docker image reference (namespace/repo or repo:tag)
+    if re.match(r'^[a-z0-9_-]+/[a-z0-9_-]+(?::[a-z0-9._-]+)?$', url):
+        return "dockerhub"
+    if re.match(r'^[a-z0-9_-]+(?::[a-z0-9._-]+)?$', url):
+        return "dockerhub"
+    # Default to github for URLs
+    if url.startswith('http'):
+        return "github"
+    return "dockerhub"
+
+
+class DockerHubScanResponse(BaseModel):
+    """Response from scanning a Docker Hub image."""
+    success: bool
+    image_info: Optional[DockerHubImageInfo] = None
+    description: Optional[str] = None
+    stars: int = 0
+    pulls: int = 0
+    available_tags: List[str] = Field(default_factory=list)
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+class DockerHubImportRequest(BaseModel):
+    """Request to import from Docker Hub."""
+    dockerhub_url: str = Field(..., description="Docker Hub URL or image reference")
+    tag: Optional[str] = Field(None, description="Image tag (defaults to latest)")
+
+    @field_validator('dockerhub_url')
+    @classmethod
+    def validate_dockerhub_url(cls, v: str) -> str:
+        """Validate the Docker Hub URL or image reference."""
+        if not v:
+            raise ValueError("Docker Hub URL or image reference is required")
+        return v
+
+
+class UnifiedImportRequest(BaseModel):
+    """Unified request for importing from any supported source."""
+    url: str = Field(..., description="GitHub URL, Docker Hub URL, or image reference")
+    branch: Optional[str] = Field(None, description="Branch for GitHub (defaults to main)")
+    tag: Optional[str] = Field(None, description="Tag for Docker Hub (defaults to latest)")
+    compose_path: Optional[str] = Field(None, description="Path to docker-compose file if not auto-detected")
+
+
+class UnifiedScanResponse(BaseModel):
+    """Unified response from scanning any import source."""
+    success: bool
+    source_type: ImportSourceType
+    # GitHub-specific
+    github_info: Optional[GitHubUrlInfo] = None
+    compose_files: List[DetectedComposeFile] = Field(default_factory=list)
+    # Docker Hub-specific
+    dockerhub_info: Optional[DockerHubImageInfo] = None
+    available_tags: List[str] = Field(default_factory=list)
+    image_description: Optional[str] = None
+    # Common
+    message: Optional[str] = None
+    error: Optional[str] = None
