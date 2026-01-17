@@ -31,7 +31,7 @@ from src.services.feature_flags import create_feature_flag_service, set_feature_
 from src.services.mcp_server import setup_mcp_server
 from src.config.omegaconf_settings import get_settings_store
 from src.utils.telemetry import TelemetryClient
-import threading
+from src.utils.version import VERSION as BACKEND_VERSION
 
 # Configure logging
 logging.basicConfig(
@@ -40,8 +40,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Version and telemetry configuration
-from src.utils.version import VERSION as BACKEND_VERSION
+# Telemetry configuration
 TELEMETRY_ENDPOINT = os.environ.get(
     "TELEMETRY_ENDPOINT",
     "https://ushadow-telemetry.your-subdomain.workers.dev"
@@ -157,7 +156,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ushadow API",
     description="AI Orchestration Platform",
-    version=BACKEND_VERSION,
+    version=BACKEND_VERSION or "0.1.0",
     lifespan=lifespan
 )
 
@@ -190,7 +189,7 @@ async def root():
     """Root endpoint."""
     return {
         "name": "ushadow API",
-        "version": BACKEND_VERSION,
+        "version": BACKEND_VERSION or "0.1.0",
         "status": "running"
     }
 
@@ -199,6 +198,6 @@ async def root():
 async def get_version():
     """Get application version information."""
     return {
-        "version": BACKEND_VERSION,
+        "version": BACKEND_VERSION or "0.1.0",
         "api_version": "v1"
     }
