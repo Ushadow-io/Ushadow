@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Version and telemetry configuration
-BACKEND_VERSION = "0.1.0"
+from src.utils.version import VERSION as BACKEND_VERSION
 TELEMETRY_ENDPOINT = os.environ.get(
     "TELEMETRY_ENDPOINT",
     "https://ushadow-telemetry.your-subdomain.workers.dev"
@@ -157,7 +157,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ushadow API",
     description="AI Orchestration Platform",
-    version="0.1.0",
+    version=BACKEND_VERSION,
     lifespan=lifespan
 )
 
@@ -190,6 +190,15 @@ async def root():
     """Root endpoint."""
     return {
         "name": "ushadow API",
-        "version": "0.1.0",
+        "version": BACKEND_VERSION,
         "status": "running"
+    }
+
+
+@app.get("/api/version")
+async def get_version():
+    """Get application version information."""
+    return {
+        "version": BACKEND_VERSION,
+        "api_version": "v1"
     }
