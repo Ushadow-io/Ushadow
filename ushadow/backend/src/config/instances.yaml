@@ -32,3 +32,10 @@ instances:
     name: ollama-1
     deployment_target: local
     created_at: '2026-01-17T17:18:32.522812+00:00'
+  ollama-2:
+    template_id: ollama
+    name: ollama-2
+    config:
+      model: fgdsfgsdgsdfgsdfg
+    deployment_target: local
+    created_at: '2026-01-17T17:29:13.996166+00:00'

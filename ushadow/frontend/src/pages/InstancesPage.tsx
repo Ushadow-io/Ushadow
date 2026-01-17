@@ -588,9 +588,18 @@ export default function InstancesPage() {
           status = t.available ? 'running' : 'stopped'
         }
 
+        // For LLM providers, append model to name for clarity
+        let displayName = t.name
+        if (t.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${t.name}-${modelVar.value}`
+          }
+        }
+
         return {
           id: t.id,
-          name: t.name,
+          name: displayName,
           capability: t.provides!,
           status,
           mode: t.mode,
@@ -653,9 +662,18 @@ export default function InstancesPage() {
           instanceStatus = i.status === 'running' ? 'running' : i.status
         }
 
+        // For LLM providers, append model to name for clarity
+        let displayName = i.name
+        if (template.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${i.name}-${modelVar.value}`
+          }
+        }
+
         return {
           id: i.id,
-          name: i.name,
+          name: displayName,
           capability: template.provides!,
           status: instanceStatus,
           mode: template.mode,
