@@ -9,11 +9,15 @@ export interface Prerequisites {
   tailscale_connected: boolean
   git_installed: boolean
   python_installed: boolean
+  workmux_installed: boolean
+  tmux_installed: boolean
   homebrew_version: string | null
   docker_version: string | null
   tailscale_version: string | null
   git_version: string | null
   python_version: string | null
+  workmux_version: string | null
+  tmux_version: string | null
 }
 
 export interface UshadowEnvironment {
@@ -54,6 +58,13 @@ export interface Discovery {
   environments: UshadowEnvironment[]
   docker_ok: boolean
   tailscale_ok: boolean
+}
+
+// Launcher settings
+export interface LauncherSettings {
+  default_admin_email: string | null
+  default_admin_password: string | null
+  default_admin_name: string | null
 }
 
 // Tauri command wrappers with proper typing
@@ -112,10 +123,38 @@ export const tauri = {
 
   // Worktree management
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
+  listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),
+  checkWorktreeExists: (mainRepo: string, branch: string) => invoke<WorktreeInfo | null>('check_worktree_exists', { mainRepo, branch }),
   createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
     invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
+  createWorktreeWithWorkmux: (mainRepo: string, name: string, baseBranch?: string, background?: boolean) =>
+    invoke<WorktreeInfo>('create_worktree_with_workmux', { mainRepo, name, baseBranch, background }),
+  mergeWorktreeWithRebase: (mainRepo: string, name: string, useRebase: boolean, keepWorktree: boolean) =>
+    invoke<string>('merge_worktree_with_rebase', { mainRepo, name, useRebase, keepWorktree }),
+  listTmuxSessions: () => invoke<string[]>('list_tmux_sessions'),
+  getTmuxWindowStatus: (windowName: string) => invoke<string | null>('get_tmux_window_status', { windowName }),
+  getEnvironmentTmuxStatus: (envName: string) => invoke<TmuxStatus>('get_environment_tmux_status', { envName }),
+  getTmuxInfo: () => invoke<string>('get_tmux_info'),
+  ensureTmuxRunning: () => invoke<string>('ensure_tmux_running'),
+  attachTmuxToWorktree: (worktreePath: string, envName: string) => invoke<string>('attach_tmux_to_worktree', { worktreePath, envName }),
   openInVscode: (path: string, envName?: string) => invoke<void>('open_in_vscode', { path, envName }),
+  openInVscodeWithTmux: (path: string, envName: string) => invoke<void>('open_in_vscode_with_tmux', { path, envName }),
   removeWorktree: (mainRepo: string, name: string) => invoke<void>('remove_worktree', { mainRepo, name }),
+  deleteEnvironment: (mainRepo: string, envName: string) => invoke<string>('delete_environment', { mainRepo, envName }),
+
+  // Tmux management
+  getTmuxSessions: () => invoke<TmuxSessionInfo[]>('get_tmux_sessions'),
+  killTmuxWindow: (windowName: string) => invoke<string>('kill_tmux_window', { windowName }),
+  killTmuxServer: () => invoke<string>('kill_tmux_server'),
+  openTmuxInTerminal: (windowName: string, worktreePath: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath }),
+  captureTmuxPane: (windowName: string) => invoke<string>('capture_tmux_pane', { windowName }),
+  getClaudeStatus: (windowName: string) => invoke<ClaudeStatus>('get_claude_status', { windowName }),
+
+  // Settings
+  loadLauncherSettings: () => invoke<LauncherSettings>('load_launcher_settings'),
+  saveLauncherSettings: (settings: LauncherSettings) => invoke<void>('save_launcher_settings', { settings }),
+  writeCredentialsToWorktree: (worktreePath: string, adminEmail: string, adminPassword: string, adminName?: string) =>
+    invoke<void>('write_credentials_to_worktree', { worktreePath, adminEmail, adminPassword, adminName }),
 }
 
 // WorktreeInfo type
@@ -123,6 +162,37 @@ export interface WorktreeInfo {
   path: string
   branch: string
   name: string
+}
+
+// Tmux status types
+export type TmuxActivityStatus = 'Working' | 'Waiting' | 'Done' | 'Error' | 'Unknown'
+
+export interface TmuxStatus {
+  exists: boolean
+  window_name: string | null
+  current_command: string | null
+  activity_status: TmuxActivityStatus
+}
+
+// Tmux session management types
+export interface TmuxWindowInfo {
+  name: string
+  index: string
+  active: boolean
+  panes: number
+}
+
+export interface TmuxSessionInfo {
+  name: string
+  window_count: number
+  windows: TmuxWindowInfo[]
+}
+
+// Claude Code status types
+export interface ClaudeStatus {
+  is_running: boolean
+  current_task: string | null
+  last_output: string | null
 }
 
 export default tauri

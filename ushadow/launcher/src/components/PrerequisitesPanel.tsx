@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle, XCircle, AlertCircle, Loader2, ChevronDown, ChevronRight, Download } from 'lucide-react'
+import { CheckCircle, XCircle, AlertCircle, Loader2, ChevronDown, ChevronRight, ChevronUp, Download } from 'lucide-react'
 import type { Prerequisites } from '../hooks/useTauri'
 
 interface PrerequisitesPanelProps {
@@ -9,6 +9,8 @@ interface PrerequisitesPanelProps {
   installingItem: string | null
   onInstall: (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => void
   onStartDocker: () => void
+  showDevTools: boolean
+  onToggleDevTools: () => void
 }
 
 export function PrerequisitesPanel({
@@ -18,6 +20,8 @@ export function PrerequisitesPanel({
   installingItem,
   onInstall,
   onStartDocker,
+  showDevTools,
+  onToggleDevTools,
 }: PrerequisitesPanelProps) {
   const getOverallStatus = () => {
     if (!prerequisites) return 'checking'
@@ -33,17 +37,17 @@ export function PrerequisitesPanel({
   return (
     <div className="bg-surface-800 rounded-lg" data-testid="prerequisites-panel">
       {/* Header */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between p-4"
-        data-testid="prerequisites-toggle"
-      >
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between p-4">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 flex-1"
+          data-testid="prerequisites-toggle"
+        >
           <span className="font-medium">Prerequisites</span>
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </div>
+        </button>
         <StatusBadge status={status} />
-      </button>
+      </div>
 
       {/* Content */}
       {expanded && (
@@ -109,6 +113,18 @@ export function PrerequisitesPanel({
           />
         </div>
       )}
+
+      {/* Drawer toggle - centered at bottom */}
+      <div className="flex justify-center pb-2">
+        <button
+          onClick={onToggleDevTools}
+          className="p-1 bg-surface-800 rounded-full hover:bg-surface-700 transition-colors border border-surface-600"
+          title={showDevTools ? "Hide dev tools" : "Show dev tools"}
+          data-testid="toggle-devtools"
+        >
+          {showDevTools ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
+        </button>
+      </div>
     </div>
   )
 }

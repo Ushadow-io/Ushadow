@@ -425,12 +425,13 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         }
 
         // Run setup with uv in dev mode with calculated port offset
-        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick --skip-admin", uv_cmd));
+        // Note: Removed --skip-admin flag so admin user can be auto-created from secrets.yaml
+        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick", uv_cmd));
 
         // Build the full command string for shell execution
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
         let setup_command = format!(
-            "cd '{}' && ENV_NAME={} PORT_OFFSET={} {} run --with pyyaml setup/run.py --dev --quick --skip-admin",
+            "cd '{}' && ENV_NAME={} PORT_OFFSET={} {} run --with pyyaml setup/run.py --dev --quick",
             working_dir, env_name, port_offset, uv_cmd
         );
 
@@ -725,7 +726,7 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
 
 
-/// Create a new environment using start-dev.sh
+/// Create a new environment using dev.sh
 /// mode: "dev" for hot-reload, "prod" for production build
 #[tauri::command]
 pub async fn create_environment(state: State<'_, AppState>, name: String, mode: Option<String>) -> Result<String, String> {
@@ -733,10 +734,10 @@ pub async fn create_environment(state: State<'_, AppState>, name: String, mode: 
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    // Check if start-dev.sh exists
-    let script_path = std::path::Path::new(&project_root).join("start-dev.sh");
+    // Check if dev.sh exists
+    let script_path = std::path::Path::new(&project_root).join("dev.sh");
     if !script_path.exists() {
-        return Err(format!("start-dev.sh not found in {}. Make sure you're pointing to a valid Ushadow repository.", project_root));
+        return Err(format!("dev.sh not found in {}. Make sure you're pointing to a valid Ushadow repository.", project_root));
     }
 
     // Find available ports (default: 8000 for backend, 3000 for webui)
@@ -751,15 +752,15 @@ pub async fn create_environment(state: State<'_, AppState>, name: String, mode: 
         _ => "--dev", // Default to dev mode (hot-reload)
     };
 
-    // Run start-dev.sh in quick mode with environment name and port offset
+    // Run dev.sh in quick mode with environment name and port offset
     let output = silent_command("bash")
-        .args(["start-dev.sh", "--quick", mode_flag])
+        .args(["dev.sh", "--quick", mode_flag])
         .current_dir(&project_root)
         .env("ENV_NAME", &name)
         .env("PORT_OFFSET", port_offset.to_string())
         .env("USHADOW_NO_BROWSER", "1")  // Custom env var we can check in script
         .output()
-        .map_err(|e| format!("Failed to run start-dev.sh: {}", e))?;
+        .map_err(|e| format!("Failed to run dev.sh: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
