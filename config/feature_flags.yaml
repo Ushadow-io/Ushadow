@@ -72,10 +72,10 @@ flags:
     description: "Show Memories page in navigation with list view and knowledge graph"
     type: release
 
-  # Instances Management - Service instance deployment and wiring
+  # ServiceConfigs Management - Service instance deployment and wiring
   instances_management:
     enabled: true
-    description: "Instances page - Deploy and wire service instances with capability
+    description: "ServiceConfigs page - Deploy and wire service instances with capability
       resolution"
     type: release
 
