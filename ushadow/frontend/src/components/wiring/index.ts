@@ -10,3 +10,14 @@ export { FlatServiceCard } from './FlatServiceCard'
 export type { FlatServiceCardProps } from './FlatServiceCard'
 export { SystemOverview } from './SystemOverview'
 export type { SystemOverviewProps } from './SystemOverview'
+export {
+  OutputPort,
+  EnvVarDropTarget,
+  WireOverlay,
+  OutputSection,
+  EnvVarSection,
+  type OutputInfo,
+  type EnvVarInfo,
+  type OutputWiringConnection,
+  type WirePosition,
+} from './OutputWiring'
