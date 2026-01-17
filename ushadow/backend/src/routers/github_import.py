@@ -291,26 +291,36 @@ def generate_compose_from_dockerhub(
     shadow_header: ShadowHeaderConfig,
     display_name: Optional[str] = None,
     description: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
 ) -> str:
     """Generate a docker-compose.yaml from Docker Hub image info."""
     yaml = YAML()
     yaml.default_flow_style = False
 
     # Build compose structure
+    service_metadata = {
+        'display_name': display_name or service_name.replace('-', ' ').title(),
+        'description': description or f"Imported from Docker Hub: {image_info.full_image_name}",
+        'requires': [],
+        'optional': [],
+        'dockerhub_source': {
+            'namespace': image_info.namespace,
+            'repository': image_info.repository,
+            'tag': image_info.tag,
+            'full_image': image_info.full_image_name
+        }
+    }
+
+    # Add capabilities if provided
+    if capabilities and len(capabilities) > 0:
+        if len(capabilities) == 1:
+            service_metadata['provides'] = capabilities[0]
+        else:
+            service_metadata['provides'] = capabilities
+
     compose_data = {
         'x-ushadow': {
-            service_name: {
-                'display_name': display_name or service_name.replace('-', ' ').title(),
-                'description': description or f"Imported from Docker Hub: {image_info.full_image_name}",
-                'requires': ['llm'],  # Default capability requirement
-                'optional': [],
-                'dockerhub_source': {
-                    'namespace': image_info.namespace,
-                    'repository': image_info.repository,
-                    'tag': image_info.tag,
-                    'full_image': image_info.full_image_name
-                }
-            }
+            service_name: service_metadata
         },
         'services': {
             service_name: {
@@ -564,6 +574,7 @@ async def register_imported_service(
         service_meta = {
             'display_name': config.display_name or request.service_name,
             'description': config.description or f"Imported from {github_info.owner}/{github_info.repo}",
+            'requires': [],
             'github_source': {
                 'url': request.github_url,
                 'owner': github_info.owner,
@@ -572,6 +583,13 @@ async def register_imported_service(
                 'path': request.compose_path
             }
         }
+
+        # Add capabilities if provided
+        if config.capabilities and len(config.capabilities) > 0:
+            if len(config.capabilities) == 1:
+                service_meta['provides'] = config.capabilities[0]
+            else:
+                service_meta['provides'] = config.capabilities
 
         # Add shadow header config
         if config.shadow_header.enabled:
@@ -861,6 +879,7 @@ async def register_dockerhub_service(
     shadow_header_name: str = "X-Shadow-Service",
     shadow_header_value: Optional[str] = None,
     route_path: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
     current_user: User = Depends(get_current_user)
 ) -> ImportServiceResponse:
     """
@@ -925,7 +944,8 @@ async def register_dockerhub_service(
             env_vars=env_var_configs,
             shadow_header=shadow_header,
             display_name=display_name,
-            description=description
+            description=description,
+            capabilities=capabilities
         )
 
         # Ensure compose directory exists

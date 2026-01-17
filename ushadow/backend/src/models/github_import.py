@@ -163,6 +163,8 @@ class ImportedServiceConfig(BaseModel):
     shadow_header: ShadowHeaderConfig = Field(default_factory=ShadowHeaderConfig)
     env_vars: List[EnvVarConfigItem] = Field(default_factory=list)
     enabled: bool = True
+    # Capabilities this service provides (e.g., ['llm', 'tts'])
+    capabilities: List[str] = Field(default_factory=list, description="Capabilities this service provides")
 
     # Backwards compatibility
     @property

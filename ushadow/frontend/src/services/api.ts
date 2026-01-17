@@ -1525,6 +1525,7 @@ export interface ImportedServiceConfig {
   shadow_header: ShadowHeaderConfig
   env_vars: EnvVarConfigItem[]
   enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides (e.g., ['llm', 'tts'])
 }
 
 export interface ImportServiceRequest {
@@ -1558,6 +1559,7 @@ export interface ImportedService {
   ports?: PortConfig[]
   volumes?: VolumeConfig[]
   enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides
 }
 
 export interface PortConfig {
@@ -1618,6 +1620,7 @@ export interface DockerHubRegisterRequest {
   shadow_header_name?: string
   shadow_header_value?: string
   route_path?: string
+  capabilities?: string[]  // Capabilities this service provides
 }
 
 export const githubImportApi = {
@@ -1675,6 +1678,7 @@ export const githubImportApi = {
         ports: request.ports ? JSON.stringify(request.ports) : undefined,
         volumes: request.volumes ? JSON.stringify(request.volumes) : undefined,
         env_vars: request.env_vars ? JSON.stringify(request.env_vars) : undefined,
+        capabilities: request.capabilities ? JSON.stringify(request.capabilities) : undefined,
       }
     }),
 

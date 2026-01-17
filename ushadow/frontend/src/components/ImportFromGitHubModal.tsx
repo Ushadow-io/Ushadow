@@ -86,6 +86,20 @@ export default function ImportFromGitHubModal({
   const [ports, setPorts] = useState<PortConfig[]>([])
   const [volumes, setVolumes] = useState<VolumeConfig[]>([])
 
+  // Capabilities this service provides
+  const [capabilities, setCapabilities] = useState<string[]>([])
+
+  // Common capability options
+  const CAPABILITY_OPTIONS = [
+    { id: 'llm', label: 'LLM', description: 'Language model inference' },
+    { id: 'tts', label: 'TTS', description: 'Text to speech' },
+    { id: 'stt', label: 'STT', description: 'Speech to text' },
+    { id: 'embedding', label: 'Embedding', description: 'Text embeddings' },
+    { id: 'memory', label: 'Memory', description: 'Persistent memory storage' },
+    { id: 'vision', label: 'Vision', description: 'Image understanding' },
+    { id: 'image_gen', label: 'Image Gen', description: 'Image generation' },
+  ]
+
   // Reset state when modal opens/closes
   useEffect(() => {
     if (!isOpen) {
@@ -113,6 +127,7 @@ export default function ImportFromGitHubModal({
       setEnvVars([])
       setPorts([])
       setVolumes([])
+      setCapabilities([])
       setError(null)
     }
   }, [isOpen])
@@ -317,6 +332,7 @@ export default function ImportFromGitHubModal({
           shadow_header_name: shadowHeader.header_name,
           shadow_header_value: shadowHeader.header_value || serviceName,
           route_path: shadowHeader.route_path || `/${serviceName}`,
+          capabilities: capabilities.length > 0 ? capabilities : undefined,
         })
 
         const data = response.data
@@ -339,12 +355,12 @@ export default function ImportFromGitHubModal({
             service_name: serviceName,
             display_name: displayName,
             description,
-            source_type: 'github',
-            source_url: importUrl,
+            github_url: importUrl,
             compose_path: selectedComposeFile.path,
             shadow_header: shadowHeader,
             env_vars: envVars,
             enabled: true,
+            capabilities: capabilities.length > 0 ? capabilities : undefined,
           },
         })
 
@@ -629,6 +645,44 @@ export default function ImportFromGitHubModal({
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
           />
         </div>
+      </div>
+
+      {/* Capabilities */}
+      <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+          <Server className="w-4 h-4" />
+          Capabilities Provided
+        </h4>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Select the capabilities this service provides (optional)
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {CAPABILITY_OPTIONS.map((cap) => (
+            <button
+              key={cap.id}
+              onClick={() => {
+                if (capabilities.includes(cap.id)) {
+                  setCapabilities(capabilities.filter((c) => c !== cap.id))
+                } else {
+                  setCapabilities([...capabilities, cap.id])
+                }
+              }}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                capabilities.includes(cap.id)
+                  ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 border-2 border-primary-500'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:border-gray-300 dark:hover:border-gray-600'
+              }`}
+              title={cap.description}
+            >
+              {cap.label}
+            </button>
+          ))}
+        </div>
+        {capabilities.length > 0 && (
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Selected: {capabilities.join(', ')}
+          </p>
+        )}
       </div>
 
       {/* Ports (Docker Hub) */}
