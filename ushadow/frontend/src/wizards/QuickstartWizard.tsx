@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
-import { useFormContext, Controller } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, CheckCircle, RefreshCw, ExternalLink } from 'lucide-react'
+import { Sparkles, Loader2, RefreshCw } from 'lucide-react'
 
-import { servicesApi, quickstartApi, type QuickstartConfig, type CapabilityRequirement, type MissingKey, type ServiceInfo } from '../services/api'
+import { servicesApi, quickstartApi, type QuickstartConfig, type CapabilityRequirement, type ServiceInfo } from '../services/api'
 import { ServiceStatusCard, type ServiceStatus } from '../components/services'
-import { SecretInput, SettingField } from '../components/settings'
+import { RequiredFieldsForm } from '../components/forms'
 import { useWizard } from '../contexts/WizardContext'
 import { WizardFormProvider, useWizardForm } from '../contexts/WizardFormContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
@@ -352,135 +351,20 @@ function QuickstartWizardContent() {
   )
 }
 
-// Step 1: API Keys - now organized by capability/provider
+// Step 1: API Keys - now uses shared RequiredFieldsForm component
 function ApiKeysStep({ capabilities }: { capabilities: CapabilityRequirement[] }) {
-  if (capabilities.length === 0) {
-    return (
-      <div data-testid="quickstart-step-api-keys" className="text-center space-y-4">
-        <CheckCircle className="w-12 h-12 text-green-600 mx-auto" />
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">All Set!</h2>
-        <p className="text-gray-600 dark:text-gray-400">
-          All required API keys are already configured. Click next to start services.
-        </p>
-      </div>
-    )
-  }
-
   return (
-    <div data-testid="quickstart-step-api-keys" className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-          Configure API Keys
-        </h2>
-        <p className="text-sm text-gray-600 dark:text-gray-400">
-          Enter your API keys to enable AI features. These will be securely stored.
-        </p>
-      </div>
-
-      {capabilities.map((capability) => (
-        <CapabilityFieldGroup key={capability.id} capability={capability} />
-      ))}
-    </div>
-  )
-}
-
-// Capability field group - shows provider info and missing keys
-function CapabilityFieldGroup({ capability }: { capability: CapabilityRequirement }) {
-  // Format capability ID for display (llm -> LLM, transcription -> Transcription)
-  const capabilityLabel = capability.id === 'llm'
-    ? 'LLM'
-    : capability.id.charAt(0).toUpperCase() + capability.id.slice(1)
-
-  return (
-    <div
-      data-testid={`quickstart-capability-${capability.id}`}
-      className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg space-y-4"
-    >
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="font-medium text-gray-900 dark:text-white">
-            {capabilityLabel} Provider
-          </h3>
-          {capability.provider_name && (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Using {capability.provider_name}
-              {capability.provider_mode && (
-                <span className="ml-2 px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
-                  {capability.provider_mode}
-                </span>
-              )}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {capability.error && (
-        <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm rounded">
-          {capability.error}
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {capability.missing_keys.map((key) => (
-          <KeyField key={key.key} keyInfo={key} capabilityId={capability.id} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// Individual key field
-function KeyField({ keyInfo, capabilityId }: { keyInfo: MissingKey; capabilityId: string }) {
-  const { control } = useFormContext()
-
-  if (!keyInfo.settings_path) return null
-
-  const fieldId = `quickstart-${capabilityId}-${keyInfo.key}`
-
-  return (
-    <div data-testid={`quickstart-field-${capabilityId}-${keyInfo.key}`} className="space-y-2">
-      <div className="flex items-center justify-between">
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-          {keyInfo.label} <span className="text-red-600">*</span>
-        </label>
-        {keyInfo.link && (
-          <a
-            href={keyInfo.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-primary-600 hover:underline flex items-center gap-1"
-          >
-            Get API Key <ExternalLink className="w-3 h-3" />
-          </a>
-        )}
-      </div>
-      <Controller
-        name={keyInfo.settings_path}
-        control={control}
-        render={({ field }) => {
-          if (keyInfo.type === 'secret') {
-            return (
-              <SecretInput
-                id={fieldId}
-                name={field.name as string}
-                value={(field.value as string) || ''}
-                onChange={field.onChange}
-                placeholder={`Enter ${keyInfo.label}`}
-              />
-            )
-          }
-          return (
-            <SettingField
-              id={fieldId}
-              name={field.name as string}
-              label=""
-              type={keyInfo.type === 'url' ? 'url' : 'text'}
-              value={(field.value as string) || ''}
-              onChange={field.onChange}
-              placeholder={`Enter ${keyInfo.label}`}
-            />
-          )
+    <div data-testid="quickstart-step-api-keys">
+      <RequiredFieldsForm
+        capabilities={capabilities}
+        testIdPrefix="quickstart"
+        emptyMessage={{
+          title: 'All Set!',
+          description: 'All required API keys are already configured. Click next to start services.'
         }}
+        showHeader={true}
+        headerTitle="Configure API Keys"
+        headerDescription="Enter your API keys to enable AI features. These will be securely stored."
       />
     </div>
   )

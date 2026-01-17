@@ -8,7 +8,12 @@
     "build": "vite build",
     "build:strict": "tsc && vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -24,10 +29,12 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.69.0",
     "react-router-dom": "^6.26.2",
+    "vibe-kanban-web-companion": "^0.0.5",
     "zod": "^4.2.1",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.48.0",
     "@types/react": "^18.3.9",
     "@types/react-dom": "^18.3.0",
     "@typescript-eslint/eslint-plugin": "^8.7.0",

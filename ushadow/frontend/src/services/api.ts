@@ -637,6 +637,7 @@ export interface PlatformInfo {
   os_version: string
   architecture: string
   is_docker: boolean
+  tailscale_installed: boolean
 }
 
 export interface EnvironmentInfo {
@@ -1300,11 +1301,6 @@ export const tailscaleApi = {
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
-  configureCaddyRouting: (hostname?: string) =>
-    api.post<{ status: string; message: string; cors_origin_added?: string }>(
-      '/api/tailscale/configure-caddy-routing',
-      hostname ? { hostname } : undefined
-    ),
   updateCorsOrigins: (hostname: string) =>
     api.post<{
       status: string

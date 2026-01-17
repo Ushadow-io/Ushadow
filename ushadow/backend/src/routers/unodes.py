@@ -22,7 +22,7 @@ from src.models.unode import (
 )
 from src.services.unode_manager import get_unode_manager
 from src.services.auth import get_current_user
-from src.services.tailscale_serve import get_tailscale_status
+from src.utils.tailscale_serve import get_tailscale_status
 from src.models.user import User
 
 logger = logging.getLogger(__name__)

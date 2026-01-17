@@ -32,7 +32,6 @@ from src.config.omegaconf_settings import (
     SettingsStore,
 )
 from src.services.provider_registry import get_provider_registry
-from src.services.tailscale_serve_config import regenerate_and_apply
 
 logger = logging.getLogger(__name__)
 
@@ -370,38 +369,17 @@ class ServiceOrchestrator:
     async def start_service(self, name: str, instance_id: Optional[str] = None) -> ActionResult:
         """Start a service container."""
         success, message = await self.docker_manager.start_service(name, instance_id)
-        if success:
-            # Regenerate Tailscale Serve routes for newly started service
-            self._regenerate_tailscale_routes()
         return ActionResult(success=success, message=message)
 
     def stop_service(self, name: str) -> ActionResult:
         """Stop a service container."""
         success, message = self.docker_manager.stop_service(name)
-        if success:
-            # Regenerate Tailscale Serve routes to remove stopped service
-            self._regenerate_tailscale_routes()
         return ActionResult(success=success, message=message)
 
     def restart_service(self, name: str) -> ActionResult:
         """Restart a service container."""
         success, message = self.docker_manager.restart_service(name)
         return ActionResult(success=success, message=message)
-
-    def _regenerate_tailscale_routes(self) -> None:
-        """Regenerate Tailscale Serve routes after service lifecycle changes.
-
-        This updates the tailscale-serve.json with routes from all running services
-        and applies it via `tailscale serve set-raw`.
-        """
-        try:
-            if regenerate_and_apply():
-                logger.info("Tailscale Serve routes regenerated successfully")
-            else:
-                logger.warning("Failed to regenerate Tailscale Serve routes")
-        except Exception as e:
-            # Don't fail the service operation if route regeneration fails
-            logger.error(f"Error regenerating Tailscale Serve routes: {e}")
 
     def get_service_logs(self, name: str, tail: int = 100) -> LogResult:
         """Get service container logs."""

@@ -9,6 +9,7 @@ import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
 import { useMobileQrCode } from '../../hooks/useQrCode'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
+import { StatusBadge, type BadgeVariant } from '../StatusBadge'
 import Modal from '../Modal'
 import type { LucideIcon } from 'lucide-react'
 
@@ -19,6 +20,7 @@ interface NavigationItem {
   separator?: boolean
   featureFlag?: string
   badge?: string
+  badgeVariant?: BadgeVariant
 }
 
 export default function Layout() {
@@ -58,7 +60,7 @@ export default function Layout() {
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
-    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users },
+    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
@@ -67,7 +69,7 @@ export default function Layout() {
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
-    { path: '/cluster', label: 'Cluster', icon: Network },
+    { path: '/cluster', label: 'Cluster', icon: Network, badgeVariant: 'beta' },
     { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },
     { path: '/settings', label: 'Settings', icon: Settings },
     ...(isAdmin ? [
@@ -165,7 +167,7 @@ export default function Layout() {
                   placeholder="Search services, workflows..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg text-sm transition-all focus:outline-none focus:ring-2"
+                  className="w-full pl-10 pr-32 py-2 rounded-lg text-sm transition-all focus:outline-none focus:ring-2"
                   style={{
                     backgroundColor: isDark ? 'var(--surface-700)' : '#f5f5f5',
                     border: isDark ? '1px solid var(--surface-500)' : '1px solid transparent',
@@ -174,6 +176,9 @@ export default function Layout() {
                   } as React.CSSProperties}
                   data-testid="search-input"
                 />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <StatusBadge variant="not-implemented" testId="badge-search" />
+                </div>
               </div>
             </div>
 
@@ -232,7 +237,7 @@ export default function Layout() {
 
               {/* Search Icon (Mobile) */}
               <button
-                className="p-2.5 rounded-lg md:hidden transition-colors"
+                className="p-2.5 rounded-lg md:hidden transition-colors relative"
                 style={{
                   color: isDark ? 'var(--text-secondary)' : '#525252',
                 }}
@@ -240,23 +245,24 @@ export default function Layout() {
                 data-testid="mobile-search-btn"
               >
                 <Search className="h-5 w-5" />
+                <div className="absolute -top-1 -right-1">
+                  <StatusBadge variant="not-implemented" testId="badge-search-mobile" />
+                </div>
               </button>
 
               {/* Notifications */}
-              <button
-                className="p-2.5 rounded-lg relative transition-colors"
-                style={{
-                  color: isDark ? 'var(--text-secondary)' : '#525252',
-                }}
-                aria-label="Notifications"
-                data-testid="notifications-btn"
-              >
-                <Bell className="h-5 w-5" />
-                <span
-                  className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
-                  style={{ backgroundColor: 'var(--primary-400)' }}
-                />
-              </button>
+              {isEnabled('notifications') && (
+                <button
+                  className="p-2.5 rounded-lg relative transition-colors"
+                  style={{
+                    color: isDark ? 'var(--text-secondary)' : '#525252',
+                  }}
+                  aria-label="Notifications"
+                  data-testid="notifications-btn"
+                >
+                  <Bell className="h-5 w-5" />
+                </button>
+              )}
 
               {/* Feature Flags */}
               <button
@@ -497,7 +503,7 @@ export default function Layout() {
                 )}
               </div>
 
-              {navigationItems.map(({ path, label, icon: Icon, separator, badge }) => {
+              {navigationItems.map(({ path, label, icon: Icon, separator, badge, badgeVariant }) => {
                 const isActive = location.pathname === path ||
                   (path !== '/' && location.pathname.startsWith(path))
 
@@ -559,6 +565,15 @@ export default function Layout() {
                         >
                           {badge}
                         </span>
+                      )}
+
+                      {/* Status Badge */}
+                      {badgeVariant && (
+                        <StatusBadge
+                          variant={badgeVariant}
+                          className="ml-auto"
+                          testId={`badge-${path.replace('/', '')}`}
+                        />
                       )}
                     </Link>
                   </div>
