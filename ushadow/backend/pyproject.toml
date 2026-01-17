@@ -90,3 +90,17 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# Custom markers for test categorization
+markers = [
+    "unit: Unit tests that don't require external dependencies",
+    "integration: Integration tests that require services (DB, Redis, etc.)",
+    "e2e: End-to-end tests that test full workflows",
+    "requires_secrets: Tests that require API keys or secrets (skipped in CI)",
+    "no_secrets: Tests that run without any secrets (safe for PR checks)",
+    "requires_backend: Tests that need backend services running",
+    "requires_frontend: Tests that need frontend running",
+]
+
+# Default: run only tests without secrets in CI
+addopts = "-v --strict-markers"

@@ -2,6 +2,33 @@
 - There may be multiple environments running simultaneously using different worktrees. To determine the corren environment, you can get port numbers and env name from the root .env file.
 - When refactoring module names, run `grep -r "old_module_name" .` before committing to catch all remaining references (especially entry points like `main.py`). Use `__init__.py` re-exports for backward compatibility.
 
+## CRITICAL Frontend Development Rules
+
+**MANDATORY: Every frontend change MUST include `data-testid` attributes for ALL interactive elements.**
+
+### Pre-Flight Checklist for Frontend Code
+
+Before completing ANY frontend development task, you MUST:
+
+1. ✅ **Add `data-testid` to ALL interactive elements** (buttons, inputs, links, tabs, forms, modals)
+2. ✅ **Update corresponding POM** if adding new pages/workflows (in `frontend/e2e/pom/`)
+3. ✅ **Follow naming conventions** (see table below - use kebab-case, not camelCase)
+4. ✅ **Verify test IDs are present** by running: `grep -r "data-testid" <your-new-file.tsx>`
+
+### Enforcement
+
+- **DO NOT** mark frontend tasks as complete without data-testid attributes
+- **DO NOT** use `id` attributes for testing - only `data-testid`
+- **DO NOT** skip this even for "quick fixes" or "simple changes"
+
+### Why This Matters
+
+Without `data-testid`:
+- E2E tests break when UI text changes
+- Tests become fragile and flaky
+- Debugging is harder (no semantic selectors)
+- Our automation agents can't write reliable tests
+
 ## Frontend Testing: data-testid and Playwright POM
 
 ### Test ID Conventions
