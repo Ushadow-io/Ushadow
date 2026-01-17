@@ -67,7 +67,7 @@ export default function ImportFromGitHubModal({
 
   // Service selection (GitHub)
   const [services, setServices] = useState<ComposeServiceInfo[]>([])
-  const [selectedService, setSelectedService] = useState<ComposeServiceInfo | null>(null)
+  const [selectedServices, setSelectedServices] = useState<ComposeServiceInfo[]>([])
 
   // Configuration
   const [serviceName, setServiceName] = useState('')
@@ -114,7 +114,7 @@ export default function ImportFromGitHubModal({
       setComposeFiles([])
       setSelectedComposeFile(null)
       setServices([])
-      setSelectedService(null)
+      setSelectedServices([])
       setServiceName('')
       setDisplayName('')
       setDescription('')
@@ -131,6 +131,37 @@ export default function ImportFromGitHubModal({
       setError(null)
     }
   }, [isOpen])
+
+  // Helper to extract error message from various error formats
+  const extractErrorMessage = (err: any, fallback: string): string => {
+    // Handle axios error response
+    const detail = err?.response?.data?.detail
+    if (detail) {
+      // If detail is a string, use it directly
+      if (typeof detail === 'string') {
+        return detail
+      }
+      // If detail is an array (Pydantic validation errors), extract messages
+      if (Array.isArray(detail)) {
+        return detail
+          .map((e: any) => e.msg || e.message || JSON.stringify(e))
+          .join(', ')
+      }
+      // If detail is an object with a message field
+      if (typeof detail === 'object' && detail.msg) {
+        return detail.msg
+      }
+    }
+    // Check for direct message field
+    if (err?.response?.data?.message) {
+      return err.response.data.message
+    }
+    // Check for error message on the error object itself
+    if (err?.message && typeof err.message === 'string') {
+      return err.message
+    }
+    return fallback
+  }
 
   // Auto-detect source type from URL
   useEffect(() => {
@@ -203,7 +234,7 @@ export default function ImportFromGitHubModal({
         }
       }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to scan')
+      setError(extractErrorMessage(err, 'Failed to scan'))
     } finally {
       setLoading(false)
     }
@@ -232,35 +263,66 @@ export default function ImportFromGitHubModal({
       setServices(data.services)
       setStep('service')
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to parse compose file')
+      setError(extractErrorMessage(err, 'Failed to parse compose file'))
     } finally {
       setLoading(false)
     }
   }
 
-  // Select service and prepare configuration (GitHub)
-  const handleSelectService = (service: ComposeServiceInfo) => {
-    setSelectedService(service)
-    setServiceName(service.name)
-    setDisplayName(service.name.charAt(0).toUpperCase() + service.name.slice(1).replace(/-/g, ' '))
+  // Toggle service selection (GitHub)
+  const handleToggleService = (service: ComposeServiceInfo) => {
+    setSelectedServices((prev) => {
+      const isSelected = prev.some((s) => s.name === service.name)
+      if (isSelected) {
+        return prev.filter((s) => s.name !== service.name)
+      } else {
+        return [...prev, service]
+      }
+    })
+  }
+
+  // Select/deselect all services
+  const handleSelectAllServices = () => {
+    if (selectedServices.length === services.length) {
+      setSelectedServices([])
+    } else {
+      setSelectedServices([...services])
+    }
+  }
+
+  // Proceed to config after service selection
+  const handleProceedToConfig = () => {
+    if (selectedServices.length === 0) return
+
+    // Use first selected service for basic config defaults
+    const firstService = selectedServices[0]
+    setServiceName(firstService.name)
+    setDisplayName(firstService.name.charAt(0).toUpperCase() + firstService.name.slice(1).replace(/-/g, ' '))
     setShadowHeader({
       enabled: true,
       header_name: 'X-Shadow-Service',
-      header_value: service.name,
-      route_path: `/${service.name}`,
+      header_value: firstService.name,
+      route_path: `/${firstService.name}`,
     })
 
-    // Initialize env vars from service
-    const envConfig: EnvVarConfigItem[] = service.environment.map((env) => ({
-      name: env.name,
-      source: env.has_default ? 'default' : 'literal',
-      value: env.default_value || '',
-      is_secret: env.name.toLowerCase().includes('key') ||
-                 env.name.toLowerCase().includes('secret') ||
-                 env.name.toLowerCase().includes('password') ||
-                 env.name.toLowerCase().includes('token'),
-    }))
-    setEnvVars(envConfig)
+    // Combine env vars from all selected services (deduplicated)
+    const allEnvVars = new Map<string, EnvVarConfigItem>()
+    for (const service of selectedServices) {
+      for (const env of service.environment) {
+        if (!allEnvVars.has(env.name)) {
+          allEnvVars.set(env.name, {
+            name: env.name,
+            source: env.has_default ? 'default' : 'literal',
+            value: env.default_value || '',
+            is_secret: env.name.toLowerCase().includes('key') ||
+                       env.name.toLowerCase().includes('secret') ||
+                       env.name.toLowerCase().includes('password') ||
+                       env.name.toLowerCase().includes('token'),
+          })
+        }
+      }
+    }
+    setEnvVars(Array.from(allEnvVars.values()))
     setStep('config')
   }
 
@@ -341,39 +403,70 @@ export default function ImportFromGitHubModal({
           return
         }
       } else {
-        // GitHub import
-        if (!selectedComposeFile || !selectedService) {
-          setError('Please select a compose file and service')
+        // GitHub import - supports multiple services
+        if (!selectedComposeFile || selectedServices.length === 0) {
+          setError('Please select a compose file and at least one service')
           return
         }
 
-        const response = await githubImportApi.register({
-          github_url: importUrl,
-          compose_path: selectedComposeFile.path,
-          service_name: serviceName,
-          config: {
-            service_name: serviceName,
-            display_name: displayName,
-            description,
-            github_url: importUrl,
-            compose_path: selectedComposeFile.path,
-            shadow_header: shadowHeader,
-            env_vars: envVars,
-            enabled: true,
-            capabilities: capabilities.length > 0 ? capabilities : undefined,
-          },
-        })
+        const errors: string[] = []
+        let successCount = 0
 
-        const data = response.data
-        if (!data.success) {
-          setError(data.message || 'Failed to import service')
+        // Import each selected service
+        for (const service of selectedServices) {
+          try {
+            const svcName = service.name
+            const svcDisplayName = svcName.charAt(0).toUpperCase() + svcName.slice(1).replace(/-/g, ' ')
+
+            const response = await githubImportApi.register({
+              github_url: importUrl,
+              compose_path: selectedComposeFile.path,
+              service_name: svcName,
+              config: {
+                service_name: svcName,
+                display_name: svcDisplayName,
+                description: description || `Imported from GitHub`,
+                github_url: importUrl,
+                compose_path: selectedComposeFile.path,
+                shadow_header: {
+                  ...shadowHeader,
+                  header_value: svcName,
+                  route_path: `/${svcName}`,
+                },
+                env_vars: envVars,
+                enabled: true,
+                capabilities: capabilities.length > 0 ? capabilities : undefined,
+              },
+            })
+
+            const data = response.data
+            if (data.success) {
+              successCount++
+            } else {
+              errors.push(`${svcName}: ${data.message || 'Failed'}`)
+            }
+          } catch (err: any) {
+            errors.push(`${service.name}: ${extractErrorMessage(err, 'Failed')}`)
+          }
+        }
+
+        // Check results
+        if (successCount === 0) {
+          setError(`Failed to import services: ${errors.join('; ')}`)
           return
         }
+
+        if (errors.length > 0) {
+          // Partial success
+          setError(`Imported ${successCount} service(s), but some failed: ${errors.join('; ')}`)
+        }
+
+        // Proceed to complete (even with partial success)
       }
 
       setStep('complete')
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to import service')
+      setError(extractErrorMessage(err, 'Failed to import service'))
     } finally {
       setLoading(false)
     }
@@ -539,47 +632,77 @@ export default function ImportFromGitHubModal({
 
   const renderServiceStep = () => (
     <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-400">
-        Found {services.length} service(s) in the compose file. Select one to import:
-      </p>
-      <div className="space-y-2 max-h-60 overflow-y-auto">
-        {services.map((service) => (
-          <button
-            key={service.name}
-            onClick={() => handleSelectService(service)}
-            className={`w-full p-3 rounded-lg border-2 text-left transition-all ${
-              selectedService?.name === service.name
-                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <Server className="w-5 h-5 text-primary-600 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-900 dark:text-white">
-                  {service.name}
-                </p>
-                {service.image && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
-                    Image: {service.image}
-                  </p>
-                )}
-                {service.ports.length > 0 && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    Ports: {service.ports.map((p) => p.container).join(', ')}
-                  </p>
-                )}
-                {service.environment.filter((e) => e.is_required).length > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 mt-2">
-                    {service.environment.filter((e) => e.is_required).length} required env vars
-                  </span>
-                )}
-              </div>
-              <ChevronRight className="w-4 h-4 text-gray-400" />
-            </div>
-          </button>
-        ))}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Found {services.length} service(s). Select the services to import:
+        </p>
+        <button
+          onClick={handleSelectAllServices}
+          className="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400"
+        >
+          {selectedServices.length === services.length ? 'Deselect All' : 'Select All'}
+        </button>
       </div>
+      <div className="space-y-2 max-h-60 overflow-y-auto">
+        {services.map((service) => {
+          const isSelected = selectedServices.some((s) => s.name === service.name)
+          return (
+            <button
+              key={service.name}
+              onClick={() => handleToggleService(service)}
+              className={`w-full p-3 rounded-lg border-2 text-left transition-all ${
+                isSelected
+                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                  : 'border-gray-200 dark:border-gray-700 hover:border-primary-300'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                  isSelected
+                    ? 'bg-primary-500 border-primary-500'
+                    : 'border-gray-300 dark:border-gray-600'
+                }`}>
+                  {isSelected && <Check className="w-3 h-3 text-white" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-gray-900 dark:text-white">
+                    {service.name}
+                  </p>
+                  {service.image && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
+                      Image: {service.image}
+                    </p>
+                  )}
+                  {service.ports.length > 0 && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Ports: {service.ports.map((p) => p.container).join(', ')}
+                    </p>
+                  )}
+                  {service.environment.filter((e) => e.is_required).length > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 mt-2">
+                      {service.environment.filter((e) => e.is_required).length} required env vars
+                    </span>
+                  )}
+                </div>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+      {selectedServices.length > 0 && (
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+            {selectedServices.length} service(s) selected
+          </p>
+          <button
+            onClick={handleProceedToConfig}
+            className="w-full py-2 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 flex items-center justify-center gap-2"
+          >
+            Continue to Configuration
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 
@@ -847,9 +970,10 @@ export default function ImportFromGitHubModal({
         </div>
         <div className="space-y-3">
           {envVars.map((env, index) => {
-            const originalEnv = selectedService?.environment.find(
-              (e) => e.name === env.name
-            )
+            // Find original env across all selected services
+            const originalEnv = selectedServices
+              .flatMap((s) => s.environment)
+              .find((e) => e.name === env.name)
             return (
               <div
                 key={index}
