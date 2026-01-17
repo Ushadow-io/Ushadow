@@ -426,7 +426,7 @@ export default function ImportFromGitHubModal({
                 service_name: svcName,
                 display_name: svcDisplayName,
                 description: description || `Imported from GitHub`,
-                github_url: importUrl,
+                source_url: importUrl,
                 compose_path: selectedComposeFile.path,
                 shadow_header: {
                   ...shadowHeader,

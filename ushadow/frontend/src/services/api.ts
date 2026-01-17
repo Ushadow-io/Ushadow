@@ -1520,8 +1520,8 @@ export interface ImportedServiceConfig {
   service_name: string
   display_name?: string
   description?: string
-  github_url: string
-  compose_path: string
+  source_url: string  // GitHub URL or Docker Hub URL
+  compose_path?: string
   shadow_header: ShadowHeaderConfig
   env_vars: EnvVarConfigItem[]
   enabled: boolean
