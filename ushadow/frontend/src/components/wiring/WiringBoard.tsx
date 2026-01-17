@@ -288,6 +288,7 @@ export default function WiringBoard({
                                 onDelete={() => onDeleteInstance(instance.id)}
                                 onStart={onStartProvider ? () => onStartProvider(instance.id, false) : undefined}
                                 onStop={onStopProvider ? () => onStopProvider(instance.id, false) : undefined}
+                                templateProvider={template}
                               />
                             )
                           })}
@@ -391,9 +392,10 @@ interface DraggableProviderProps {
   onDelete?: () => void // Only for instances
   onStart?: () => Promise<void>
   onStop?: () => Promise<void>
+  templateProvider?: ProviderInfo // Parent template for instances
 }
 
-function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance, onDelete, onStart, onStop }: DraggableProviderProps) {
+function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance, onDelete, onStart, onStop, templateProvider }: DraggableProviderProps) {
   const [isStarting, setIsStarting] = useState(false)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: provider.id,
@@ -470,11 +472,6 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
               {isConnected && (
                 <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
                   {connectionCount}
-                </span>
-              )}
-              {provider.isTemplate && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-medium">
-                  template
                 </span>
               )}
             </div>
@@ -574,18 +571,24 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
                 +{missingRequiredVars.length - 2} required
               </span>
             )}
-            {/* Configured fields */}
-            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => (
-              <span
-                key={v.key}
-                className="text-xs text-neutral-500 dark:text-neutral-400"
-                title={`${v.label}: ${v.value}`}
-              >
-                {v.required && <span className="text-error-500 mr-0.5">*</span>}
-                <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
-                <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-              </span>
-            ))}
+            {/* Configured fields - color code overrides */}
+            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
+              // Check if this value is overridden from template
+              const isOverridden = templateProvider &&
+                templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
+
+              return (
+                <span
+                  key={v.key}
+                  className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
+                  title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
+                >
+                  {v.required && <span className="text-error-500 mr-0.5">*</span>}
+                  <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                  <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                </span>
+              )
+            })}
             {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
               <span className="text-xs text-neutral-400">
                 +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
@@ -848,23 +851,48 @@ function CapabilitySlot({
       data-testid={`capability-slot-${consumerId}-${capability}`}
     >
       {hasProvider ? (
-        <div className="flex items-center justify-between w-full">
-          <div className="flex items-center gap-2">
-            <Cloud className="h-4 w-4 text-success-500" />
-            <span className="font-medium text-neutral-900 dark:text-neutral-100">
-              {connection.provider!.name}
-            </span>
-            <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
-              {capability}
-            </span>
+        <div className="w-full">
+          <div className="flex items-center justify-between w-full mb-1.5">
+            <div className="flex items-center gap-2">
+              <Cloud className="h-4 w-4 text-success-500" />
+              <span className="font-medium text-neutral-900 dark:text-neutral-100">
+                {connection.provider!.name}
+              </span>
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                {capability}
+              </span>
+            </div>
+            <button
+              onClick={onClear}
+              className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+              title="Disconnect"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            onClick={onClear}
-            className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-            title="Disconnect"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {/* Show provider config vars */}
+          {connection.provider!.configVars.filter(v => v.value).length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-6">
+              {connection.provider!.configVars
+                .filter(v => v.value)
+                .slice(0, 2)
+                .map((v) => (
+                  <span
+                    key={v.key}
+                    className="text-xs text-neutral-500 dark:text-neutral-400"
+                    title={`${v.label}: ${v.value}`}
+                  >
+                    <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                    <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                  </span>
+                ))}
+              {connection.provider!.configVars.filter(v => v.value).length > 2 && (
+                <span className="text-xs text-neutral-400">
+                  +{connection.provider!.configVars.filter(v => v.value).length - 2} more
+                </span>
+              )}
+            </div>
+          )}
         </div>
       ) : isOrphaned ? (
         <div className="flex items-center justify-between w-full">
