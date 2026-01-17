@@ -629,14 +629,19 @@ export default function ServicesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowGitHubImport(true)}
-            data-testid="import-service-button"
-            className="btn-secondary flex items-center gap-2"
-          >
-            <Download className="h-4 w-4" />
-            Import Service
-          </button>
+          <div className="relative">
+            <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded">
+              BETA
+            </span>
+            <button
+              onClick={() => setShowGitHubImport(true)}
+              data-testid="import-service-button"
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Import Service
+            </button>
+          </div>
           <button
             onClick={openCatalog}
             data-testid="add-service-button"
