@@ -10,7 +10,7 @@ wiring:
   source_capability: transcription
   target_instance_id: chronicle-compose:chronicle-backend
   target_capability: transcription
-- id: b8ef73ef
+- id: 0bd39f1d
   source_instance_id: ollama-2
   source_capability: llm
   target_instance_id: chronicle-compose:chronicle-backend

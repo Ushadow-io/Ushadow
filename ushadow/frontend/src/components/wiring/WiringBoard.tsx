@@ -454,7 +454,7 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
     >
       {/* Draggable header */}
       <div
-        className="px-3 py-2 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+        className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
         {...attributes}
         {...listeners}
       >
