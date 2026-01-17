@@ -726,10 +726,8 @@ function App() {
 
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to create worktree`, 'error', false)
-      log(String(err), 'error', true)
-    } finally {
-      setIsLaunching(false)
+      log(`Failed to create worktree: ${err}`, 'error')
+      setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
     }
   }
 

@@ -564,16 +564,6 @@ export default function TailscaleWizard() {
       setMessage({ type: 'info', text: 'Enabling HTTPS on Tailscale...' })
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
-
-      // Check if routing configuration succeeded
-      if (serveResponse.data.status !== 'configured' && serveResponse.data.status !== 'skipped') {
-        setMessage({ type: 'error', text: 'Failed to configure routing' })
-        return false
-      }
-
-      // Store the configured routes for display
-      if (serveResponse.data.routes) {
-        setConfiguredRoutes(serveResponse.data.routes)
       }
 
       // Step 2: Provision the certificate (HTTPS is now enabled)

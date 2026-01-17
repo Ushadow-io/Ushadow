@@ -2,6 +2,7 @@ import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, Refr
 import { useState, useEffect } from 'react'
 import { settingsApi } from '../services/api'
 import { JsonTreeViewer } from '../components/JsonTreeViewer'
+import { StatusBadge } from '../components/StatusBadge'
 
 interface ApiKey {
   name: string
@@ -141,6 +142,7 @@ export default function SettingsPage() {
           <div className="flex items-center space-x-2">
             <Settings className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
             <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Settings</h1>
+            <StatusBadge variant="needs-updating" testId="badge-settings-page" />
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             View saved configuration
