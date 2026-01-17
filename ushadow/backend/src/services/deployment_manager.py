@@ -42,7 +42,7 @@ def _update_tailscale_serve_route(service_id: str, container_name: str, port: in
         True if successful
     """
     try:
-        from src.services.tailscale_serve import add_service_route, remove_service_route
+        from src.utils.tailscale_serve import add_service_route, remove_service_route
 
         if add:
             return add_service_route(service_id, container_name, port)
@@ -287,7 +287,7 @@ class DeploymentManager:
                     _update_tailscale_serve_route(service_id, container_name, port, add=True)
 
                 # Set access URL using tailscale helper
-                from src.services.tailscale_serve import get_service_access_url
+                from src.utils.tailscale_serve import get_service_access_url
                 access_url = get_service_access_url(unode_hostname, port, is_local=is_local)
                 if access_url:
                     if is_local:

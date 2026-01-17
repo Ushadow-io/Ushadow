@@ -20,9 +20,11 @@ import {
 import { tailscaleApi } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
+import { useMobileQrCode } from '../hooks/useQrCode'
 import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
+import { StatusBadge } from '../components/StatusBadge'
 
 // Step definitions
 const STEPS: WizardStep[] = [
@@ -166,9 +168,12 @@ export default function MobileAppWizard() {
               <div className="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center">
                 <Smartphone className="w-10 h-10 text-white" />
               </div>
-              <h2 className="text-2xl font-semibold text-white">
-                Get the Ushadow Mobile App
-              </h2>
+              <div className="flex items-center justify-center gap-3">
+                <h2 className="text-2xl font-semibold text-white">
+                  Get the Ushadow Mobile App
+                </h2>
+                <StatusBadge variant="beta" testId="badge-mobile-app" />
+              </div>
               <p className="text-gray-400 max-w-md mx-auto">
                 Stream audio from your phone or OMI device to your Ushadow server.
                 Choose the installation method that works best for you.

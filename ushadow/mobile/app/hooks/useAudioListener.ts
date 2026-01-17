@@ -67,7 +67,6 @@ export const useAudioListener = (
         setIsListeningAudio(false);
         localPacketCounterRef.current = 0;
         audioLevelRef.current = 0;
-        pulsePhaseRef.current = 0;
         setAudioLevel(0);
         console.log('Audio listener stopped.');
       } catch (error) {

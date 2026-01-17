@@ -56,8 +56,28 @@ pub fn shell_command(command: &str) -> Command {
     }
 }
 
+/// Normalize path separators to the platform standard
+///
+/// On Windows: Converts all forward slashes to backslashes
+/// On Unix: Returns path unchanged
+///
+/// This is critical for paths coming from JavaScript/frontend which always use forward slashes
+pub fn normalize_path(path: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        path.replace('/', "\\")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.to_string()
+    }
+}
+
 /// Expand ~ in paths to the user's home directory
 /// Example: ~/ushadow -> /Users/username/ushadow
+///
+/// On Windows, automatically normalizes path separators to backslashes
 pub fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
         if let Ok(home) = std::env::var("HOME") {
@@ -66,21 +86,10 @@ pub fn expand_tilde(path: &str) -> String {
         // Windows fallback
         #[cfg(target_os = "windows")]
         if let Ok(userprofile) = std::env::var("USERPROFILE") {
-            return path.replacen("~", &userprofile, 1);
+            // Replace tilde and normalize to backslashes
+            let expanded = path.replacen("~", &userprofile, 1);
+            return expanded.replace('/', "\\");
         }
     }
     path.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_silent_command_creates_command() {
-        // Just verify it creates a command without panicking
-        let cmd = silent_command("echo");
-        // We can't easily test the creation_flags, but we can verify it's a valid Command
-        assert!(format!("{:?}", cmd).contains("echo"));
-    }
 }

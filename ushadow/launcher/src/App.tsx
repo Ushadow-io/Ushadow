@@ -496,7 +496,8 @@ function App() {
       }
       await refreshPrerequisites()
     } catch (err) {
-      log(`Failed to start Docker: ${err}`, 'error')
+      log(`Failed to start Docker`, 'error', false)
+      log(String(err), 'error', true)
     } finally {
       setIsInstalling(false)
       setInstallingItem(null)
@@ -519,7 +520,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to start infrastructure: ${err}`, 'error')
+      log(`Failed to start infrastructure`, 'error', false)
+      log(String(err), 'error', true)
     } finally {
       setLoadingInfra(false)
     }
@@ -540,7 +542,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to stop infrastructure: ${err}`, 'error')
+      log(`Failed to stop infrastructure`, 'error', false)
+      log(String(err), 'error', true)
     } finally {
       setLoadingInfra(false)
     }
@@ -561,7 +564,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to restart infrastructure: ${err}`, 'error')
+      log(`Failed to restart infrastructure`, 'error', false)
+      log(String(err), 'error', true)
     } finally {
       setLoadingInfra(false)
     }
@@ -658,7 +662,10 @@ function App() {
       }
     } catch (err) {
       console.error(`DEBUG: handleStartEnv caught error:`, err)
-      log(`Failed to start ${envName}: ${err}`, 'error')
+      // Log simple error for State view
+      log(`Failed to start ${envName}`, 'error', false)
+      // Log detailed error for Detail view
+      log(String(err), 'error', true)
       // Update creating env to error state
       setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
     } finally {
@@ -698,7 +705,8 @@ function App() {
         await refreshDiscovery()
       }
     } catch (err) {
-      log(`Failed to stop ${envName}: ${err}`, 'error')
+      log(`Failed to stop ${envName}`, 'error', false)
+      log(String(err), 'error', true)
     } finally {
       setLoadingEnv(null)
     }
@@ -868,7 +876,8 @@ function App() {
       setCreatingEnvs(prev => prev.filter(e => e.name !== name))
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to create environment: ${err}`, 'error')
+      log(`Failed to create environment`, 'error', false)
+      log(String(err), 'error', true)
       setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
     }
   }
@@ -888,7 +897,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to link environment: ${err}`, 'error')
+      log(`Failed to link environment`, 'error', false)
+      log(String(err), 'error', true)
     }
   }
 
@@ -1008,7 +1018,8 @@ function App() {
         log('Press Launch to install Ushadow', 'step')
       }
     } catch (err) {
-      log(`Failed to set installation path: ${err}`, 'error')
+      log(`Failed to set installation path`, 'error', false)
+      log(String(err), 'error', true)
     }
   }
 
@@ -1203,14 +1214,16 @@ function App() {
       // Step 6: Start infrastructure (postgres, redis, etc.) - only if needed
       log('Checking infrastructure...', 'step')
       // Use cached discovery first (fast), only refresh if needed
-      let infraRunning = discovery?.infrastructure.every(svc => svc.running) ?? false
+      let infraRunning = (discovery?.infrastructure.length ?? 0) > 0 &&
+                         discovery.infrastructure.every(svc => svc.running)
 
       if (infraRunning) {
         log('✓ Infrastructure already running', 'success')
       } else {
         // Re-check to be sure (in case cache is stale)
         const currentDiscovery = await tauri.discoverEnvironments()
-        infraRunning = currentDiscovery.infrastructure.every(svc => svc.running)
+        infraRunning = currentDiscovery.infrastructure.length > 0 &&
+                       currentDiscovery.infrastructure.every(svc => svc.running)
 
         if (infraRunning) {
           log('✓ Infrastructure already running', 'success')

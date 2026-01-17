@@ -22,7 +22,7 @@ export interface UseAudioStreamer {
   retryCount: number;
   maxRetries: number;
   error: string | null;
-  startStreaming: (url: string) => Promise<void>;
+  startStreaming: (url: string, mode?: 'batch' | 'streaming') => Promise<void>;
   stopStreaming: () => void;
   cancelRetry: () => void;
   sendAudio: (audioBytes: Uint8Array) => void;
@@ -44,6 +44,14 @@ const AUDIO_FORMAT = {
   channels: 1,
 };
 
+// Create audio start format with specified mode
+const createAudioStartFormat = (mode: 'batch' | 'streaming' = 'streaming') => ({
+  rate: 16000,
+  width: 2,
+  channels: 1,
+  mode, // batch: process after recording completes, streaming: real-time transcription
+});
+
 // Reconnection constants
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MAX_SERVER_ERRORS = 5;
@@ -63,8 +71,10 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentUrlRef = useRef<string>('');
+  const currentModeRef = useRef<'batch' | 'streaming'>('streaming');
   const reconnectAttemptsRef = useRef<number>(0);
   const serverErrorCountRef = useRef<number>(0);
+  const audioChunkCountRef = useRef<number>(0);
 
   // Guard state updates after unmount
   const mountedRef = useRef<boolean>(true);
@@ -86,12 +96,16 @@ export const useAudioStreamer = (): UseAudioStreamer => {
       return;
     }
     try {
-      event.version = '1.0.0';
+      // Match web implementation - don't add version field
       event.payload_length = payload ? payload.length : null;
 
       const jsonHeader = JSON.stringify(event) + '\n';
       websocketRef.current.send(jsonHeader);
-      if (payload?.length) websocketRef.current.send(payload);
+
+      if (payload?.length) {
+        // Send binary payload exactly like web implementation
+        websocketRef.current.send(new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength));
+      }
     } catch (e) {
       const errorMessage = (e as Error).message || 'Error sending Wyoming event.';
       console.error('[AudioStreamer] Error sending Wyoming event:', errorMessage);
@@ -180,7 +194,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     reconnectTimeoutRef.current = setTimeout(() => {
       if (!manuallyStoppedRef.current) {
-        startStreaming(currentUrlRef.current)
+        startStreaming(currentUrlRef.current, currentModeRef.current)
           .then(() => {
             // Connection successful, reset retry state
             setStateSafe(setIsRetrying, false);
@@ -195,7 +209,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   }, [setStateSafe]);
 
   // Start streaming
-  const startStreaming = useCallback(async (url: string): Promise<void> => {
+  const startStreaming = useCallback(async (url: string, mode: 'batch' | 'streaming' = 'streaming'): Promise<void> => {
     const trimmed = (url || '').trim();
     if (!trimmed) {
       const errorMsg = 'WebSocket URL is required.';
@@ -204,6 +218,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     }
 
     currentUrlRef.current = trimmed;
+    currentModeRef.current = mode;
     manuallyStoppedRef.current = false;
 
     // Network gate
@@ -215,6 +230,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     }
 
     console.log(`[AudioStreamer] Initializing WebSocket: ${trimmed}`);
+    console.log(`[AudioStreamer] Network state:`, netState);
     if (websocketRef.current) await stopStreaming();
 
     setStateSafe(setIsConnecting, true);
@@ -222,13 +238,22 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     return new Promise<void>((resolve, reject) => {
       try {
+        console.log(`[AudioStreamer] Creating WebSocket connection...`);
         const ws = new WebSocket(trimmed);
+        console.log(`[AudioStreamer] WebSocket object created, waiting for connection...`);
 
         ws.onopen = async () => {
           console.log('[AudioStreamer] WebSocket open');
+
+          // Set binary type to arraybuffer (matches web implementation)
+          if (ws.binaryType !== 'arraybuffer') {
+            ws.binaryType = 'arraybuffer';
+          }
+
           websocketRef.current = ws;
           reconnectAttemptsRef.current = 0;
           serverErrorCountRef.current = 0;
+          audioChunkCountRef.current = 0; // Reset audio chunk counter
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, true);
           setStateSafe(setError, null);
@@ -244,8 +269,11 @@ export const useAudioStreamer = (): UseAudioStreamer => {
           }, HEARTBEAT_MS);
 
           try {
-            const audioStartEvent: WyomingEvent = { type: 'audio-start', data: AUDIO_FORMAT };
-            console.log('[AudioStreamer] Sending audio-start event');
+            const audioStartEvent: WyomingEvent = {
+              type: 'audio-start',
+              data: createAudioStartFormat(currentModeRef.current)
+            };
+            console.log(`[AudioStreamer] Sending audio-start event with mode: ${currentModeRef.current}`);
             await sendWyomingEvent(audioStartEvent);
             console.log('[AudioStreamer] audio-start sent successfully');
           } catch (e) {
@@ -325,7 +353,11 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
       try {
-        // console.log(`[AudioStreamer] Sending audio chunk: ${audioBytes.length} bytes`);
+        // Log first and every 50th chunk
+        audioChunkCountRef.current++;
+        if (audioChunkCountRef.current === 1 || audioChunkCountRef.current % 50 === 0) {
+          console.log(`[AudioStreamer] Sending audio chunk #${audioChunkCountRef.current}: ${audioBytes.length} bytes`);
+        }
         const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: AUDIO_FORMAT };
         await sendWyomingEvent(audioChunkEvent, audioBytes);
       } catch (e) {

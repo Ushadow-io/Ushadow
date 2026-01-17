@@ -293,7 +293,30 @@ export default function TailscaleWizard() {
       setAuthData(response.data)
       startPollingAuth()
     } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to get authentication URL') })
+      // Parse error to provide helpful troubleshooting tips
+      const errorMsg = getErrorMessage(err, 'Failed to generate authentication URL')
+      let userFriendlyMessage = 'Unable to generate the QR code for device authorization.'
+      let tips: string[] = []
+
+      if (errorMsg.includes('timeout') || errorMsg.includes('timed out')) {
+        tips.push('The Tailscale container may be starting up - please wait a moment and try again')
+        tips.push('Check that Docker is running and the container has network access')
+      } else if (errorMsg.includes('not found') || errorMsg.includes('404')) {
+        tips.push('The Tailscale container may not be running')
+        tips.push('Try clicking "Start Container" in the previous step')
+      } else if (errorMsg.includes('connection refused') || errorMsg.includes('network')) {
+        tips.push('Network connectivity issue detected')
+        tips.push('Verify that the Tailscale container is running and accessible')
+      } else {
+        tips.push('The Tailscale service may need a moment to initialize')
+        tips.push('Ensure Docker is running and has sufficient resources')
+      }
+
+      const fullMessage = tips.length > 0
+        ? `${userFriendlyMessage}\n\n💡 Troubleshooting tips:\n${tips.map((tip, i) => `${i + 1}. ${tip}`).join('\n')}`
+        : `${userFriendlyMessage}\n\nError: ${errorMsg}`
+
+      setMessage({ type: 'error', text: fullMessage })
     } finally {
       setLoading(false)
     }
@@ -377,39 +400,43 @@ export default function TailscaleWizard() {
   }
 
   // ============================================================================
-  // Clear Authentication Component
+  // Reset Tailscale Component
   // ============================================================================
 
-  const ClearAuthButton = ({
+  const ResetTailscaleButton = ({
     variant = 'link',
-    testId = 'clear-auth',
+    testId = 'reset-tailscale',
     className = ''
   }: {
     variant?: 'link' | 'button'
     testId?: string
     className?: string
   }) => {
+    // Only show if debug feature flag is enabled
+    if (!isEnabled('debug')) {
+      return null
+    }
+
     if (variant === 'link') {
       return (
         <div className="space-y-2">
           <button
-            onClick={clearAuthentication}
+            onClick={resetTailscale}
             disabled={loading}
             className={`text-sm text-red-600 dark:text-red-400 hover:underline flex items-center gap-2 ${className}`}
             data-testid={testId}
           >
             <RefreshCw className="w-4 h-4" />
-            Clear Authentication & Restart
+            <span>Reset Tailscale</span>
           </button>
-          <a
-            href="https://login.tailscale.com/admin/machines"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-1"
+          <button
+            onClick={() => window.open('https://login.tailscale.com/admin/machines', '_blank', 'noopener,noreferrer')}
+            className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-2"
+            data-testid={`${testId}-admin-console`}
           >
-            Remove machine from admin console
             <ExternalLink className="w-3 h-3" />
-          </a>
+            <span>Remove machine from admin console</span>
+          </button>
         </div>
       )
     }
@@ -417,39 +444,43 @@ export default function TailscaleWizard() {
     return (
       <div className="space-y-2">
         <button
-          onClick={clearAuthentication}
+          onClick={resetTailscale}
           disabled={loading}
-          className={`btn-danger text-sm ${className}`}
+          className={`btn-danger text-sm flex items-center gap-2 ${className}`}
           data-testid={testId}
-          title="Remove machine from Tailscale and clear all authentication"
+          title="Complete Tailscale reset: removes routes, certificates, auth, and all configuration"
         >
           {loading ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
-            <Trash2 className="w-4 h-4 mr-2" />
+            <Trash2 className="w-4 h-4" />
           )}
-          Clear Auth
+          <span>Reset Tailscale</span>
         </button>
-        <a
-          href="https://login.tailscale.com/admin/machines"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-1"
+        <button
+          onClick={() => window.open('https://login.tailscale.com/admin/machines', '_blank', 'noopener,noreferrer')}
+          className="btn-secondary text-xs flex items-center gap-2"
+          data-testid={`${testId}-admin-console`}
         >
-          Remove machine from admin console
           <ExternalLink className="w-3 h-3" />
-        </a>
+          <span>Remove machine from admin console</span>
+        </button>
       </div>
     )
   }
 
   // ============================================================================
-  // Clear Authentication
+  // Reset Tailscale
   // ============================================================================
 
-  const clearAuthentication = async () => {
+  const resetTailscale = async () => {
     const confirmed = window.confirm(
-      'This will clear local authentication and remove the container/volume.\n\n' +
+      'This will completely reset Tailscale to defaults:\n\n' +
+      '• Clear all routes\n' +
+      '• Remove certificates\n' +
+      '• Clear authentication\n' +
+      '• Remove container and volume\n' +
+      '• Delete all configuration\n\n' +
       'Note: You will need to manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines\n\n' +
       'Continue?'
     )
@@ -470,7 +501,7 @@ export default function TailscaleWizard() {
     setPollingAuth(false)
 
     try {
-      const response = await tailscaleApi.clearAuth()
+      const response = await tailscaleApi.reset()
 
       // Reset all state to fresh/unauthenticated
       setContainerStatus({
@@ -490,12 +521,19 @@ export default function TailscaleWizard() {
         await checkContainerStatus()
       }, 100)
 
-      setMessage({ type: 'success', text: response.data.message + ' Container and volume removed. Start fresh.' })
+      const details = response.data.details
+      const successSteps = Object.values(details).filter(Boolean).length
+      const totalSteps = Object.keys(details).length
+
+      setMessage({
+        type: response.data.status === 'success' ? 'success' : 'warning',
+        text: `${response.data.message} (${successSteps}/${totalSteps} steps completed)`
+      })
 
       // Go back to start_container step
       wizard.goTo('start_container')
     } catch (err) {
-      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to clear authentication') })
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Failed to reset Tailscale') })
     } finally {
       setLoading(false)
     }
@@ -525,24 +563,13 @@ export default function TailscaleWizard() {
       // Step 1: Enable HTTPS (required for cert provisioning)
       setMessage({ type: 'info', text: 'Enabling HTTPS on Tailscale...' })
       const finalConfig = { ...config, hostname }
-
-      if (serveResponse.data.status === 'configured' || serveResponse.data.status === 'skipped') {
-        // Store the configured routes for display
-        if (serveResponse.data.routes) {
-          setConfiguredRoutes(serveResponse.data.routes)
-        }
-        setCertificateProvisioned(true)
-        updateServiceStatus('tailscale', { configured: true, running: true })
-        markPhaseComplete('tailscale')
-        setMessage({ type: 'success', text: 'HTTPS access configured and ready!' })
-        return true
-      } else {
-        setMessage({ type: 'error', text: 'Failed to configure routing' })
-        return false
-      }
+      const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
       // Step 2: Provision the certificate (HTTPS is now enabled)
-      setMessage({ type: 'info', text: 'Provisioning SSL certificate...' })
+      setMessage({
+        type: 'info',
+        text: 'Provisioning SSL certificate from Let\'s Encrypt...\n\nThis may take 60-90 seconds. Please wait while we:\n1. Register with Let\'s Encrypt\n2. Complete DNS validation\n3. Issue your certificate'
+      })
       const certResponse = await tailscaleApi.provisionCertInContainer(hostname)
       if (!certResponse.data.provisioned) {
         const error = certResponse.data.error || ''
@@ -561,8 +588,11 @@ export default function TailscaleWizard() {
       await checkTailnetSettings()
 
       // Step 4: Success!
-      setMessage({ type: 'success', text: 'HTTPS enabled! Certificate provisioning may require plan upgrade.' })
-      setCertificateProvisioned(true)
+      const successMsg = certResponse.data.provisioned
+        ? 'HTTPS enabled and SSL certificates provisioned successfully!'
+        : 'HTTPS routing enabled! (SSL certificate provisioning may require Tailscale plan upgrade)'
+      setMessage({ type: 'success', text: successMsg })
+      setCertificateProvisioned(certResponse.data.provisioned || false)
       updateServiceStatus('tailscale', { configured: true, running: true })
       markPhaseComplete('tailscale')
       return true
@@ -717,8 +747,8 @@ export default function TailscaleWizard() {
             </div>
           </div>
 
-          {/* Clear Auth button - only show if container exists */}
-          {containerStatus?.exists && <ClearAuthButton variant="button" testId="clear-auth-welcome" />}
+          {/* Reset Tailscale button - only show if container exists */}
+          {containerStatus?.exists && <ResetTailscaleButton variant="button" testId="reset-tailscale-welcome" />}
         </div>
       )}
 
@@ -790,8 +820,8 @@ export default function TailscaleWizard() {
                 )}
               </div>
 
-              {/* Clear Auth button */}
-              <ClearAuthButton variant="button" testId="clear-auth-start" />
+              {/* Reset Tailscale button */}
+              <ResetTailscaleButton variant="button" testId="reset-tailscale-start" />
             </div>
           )}
         </div>
@@ -911,13 +941,53 @@ export default function TailscaleWizard() {
                 </div>
               </div>
               <div className="flex justify-center">
-                <ClearAuthButton variant="button" testId="clear-auth-button-authenticated" />
+                <ResetTailscaleButton variant="button" testId="reset-tailscale-button-authenticated" />
               </div>
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center gap-3 p-8">
               <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
               <span className="text-gray-700 dark:text-gray-300">Generating authentication QR code...</span>
+            </div>
+          ) : !authData && message?.type === 'error' ? (
+            // Error state with retry button
+            <div className="space-y-4">
+              <div className="p-6 bg-white dark:bg-gray-800 border-2 border-red-200 dark:border-red-800 rounded-lg space-y-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="font-medium text-gray-900 dark:text-white mb-1">
+                      QR Code Generation Failed
+                    </h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-line">
+                      {message.text}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col items-center gap-2 pt-2">
+                  <button
+                    data-testid="retry-auth-url"
+                    onClick={() => loadAuthUrl(false)}
+                    disabled={loading}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Try Again
+                  </button>
+                  <button
+                    data-testid="regenerate-after-error"
+                    onClick={() => loadAuthUrl(true)}
+                    disabled={loading}
+                    className="btn-secondary text-sm flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Generate New QR Code
+                  </button>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 text-center max-w-md">
+                    "Try Again" reuses existing session. "Generate New" creates a fresh authentication URL.
+                  </p>
+                </div>
+              </div>
             </div>
           ) : (
             <>
@@ -934,13 +1004,23 @@ export default function TailscaleWizard() {
                       className="w-64 h-64"
                     />
                   </div>
-                  {/* Debug: show URL for verification */}
-                  <p className="text-xs text-gray-400 text-center font-mono break-all mt-2">
-                    {authData.auth_url.slice(-20)}
-                  </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
                     This will open the Tailscale login page where you can approve the device
                   </p>
+                  <div className="text-center pt-2 border-t border-gray-200 dark:border-gray-700">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      No phone nearby? Open the link directly:
+                    </p>
+                    <a
+                      href={authData.auth_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="auth-url-link"
+                      className="text-sm text-primary-600 dark:text-primary-400 hover:underline break-all"
+                    >
+                      {authData.auth_url}
+                    </a>
+                  </div>
                   {pollingAuth && (
                     <div className="flex items-center justify-center gap-2 text-primary-600 dark:text-primary-400">
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -987,7 +1067,7 @@ export default function TailscaleWizard() {
                       )}
                       New QR Code
                     </button>
-                    <ClearAuthButton variant="button" testId="clear-auth-button" />
+                    <ResetTailscaleButton variant="button" testId="reset-tailscale-button" />
                   </div>
                 </div>
               )}
@@ -1170,19 +1250,9 @@ export default function TailscaleWizard() {
                 <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
                 HTTPS certificate provisioned
               </li>
-              <li className="flex items-start gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
-                <div>
-                  <span>{caddyEnabled ? 'Caddy reverse proxy routes' : 'Tailscale Serve routes'}</span>
-                  {configuredRoutes && (
-                    <pre
-                      data-testid="configured-routes"
-                      className="mt-2 p-3 bg-gray-100 dark:bg-gray-800 rounded text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-40"
-                    >
-                      {configuredRoutes}
-                    </pre>
-                  )}
-                </div>
+              <li className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                {caddyEnabled ? 'Caddy reverse proxy routes configured' : 'Tailscale Serve routes configured'}
               </li>
               <li className="flex items-center gap-2" data-testid="cors-status">
                 {corsStatus.loading ? (
@@ -1210,11 +1280,32 @@ export default function TailscaleWizard() {
             </ul>
           </div>
 
+          {/* Configured Routes Display */}
+          {configuredRoutes && (
+            <div className="p-5 bg-primary-50 dark:bg-primary-900/20 rounded-lg text-left border-2 border-primary-200 dark:border-primary-800">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3 text-sm flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                Configured Routes
+              </h3>
+              <pre
+                data-testid="configured-routes"
+                className="p-3 bg-white dark:bg-gray-800 rounded text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-64 border border-primary-200 dark:border-primary-700"
+              >
+                {configuredRoutes}
+              </pre>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                These routes direct traffic from your Tailscale URL to the appropriate services
+              </p>
+            </div>
+          )}
+
           <WhatsNext
             currentLevel={2}
             onGoHome={() => {
               markPhaseComplete('tailscale')
-              navigate('/')
+              // Redirect to Tailscale URL to force authentication via Tailscale
+              const tailscaleUrl = `https://${config.hostname}/`
+              window.location.href = tailscaleUrl
             }}
             onContinue={() => {
               markPhaseComplete('tailscale')

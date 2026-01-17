@@ -1,0 +1,15 @@
+{
+  "name": "test-automation",
+  "version": "1.0.0",
+  "description": "Multi-agent test automation workflow for UShadow - from specification to test implementation",
+  "agents": [
+    "spec-agent.md",
+    "qa-agent.md",
+    "automation-agent.md"
+  ],
+  "skills": [
+    "spec.md",
+    "qa-test-cases.md",
+    "automate-tests.md"
+  ]
+}

@@ -1,85 +1,30 @@
 /**
- * Chronicle API Client
+ * Chronicle API Client - Two-Tier Architecture
  *
- * This service provides direct communication with the Chronicle backend
- * for conversations and queue management functionality.
+ * This service uses ushadow's two-tier integration pattern:
+ * 1. Control Plane (REST APIs): Proxied through ushadow backend
+ * 2. Data Plane (WebSocket): Direct connection for low latency
  *
- * Authentication: Chronicle and ushadow share the same AUTH_SECRET_KEY,
- * so the ushadow JWT token can be used directly with Chronicle.
+ * Authentication: Chronicle shares AUTH_SECRET_KEY with ushadow,
+ * so the same JWT token works for both (unified auth).
  */
-import axios from 'axios'
-import { getStorageKey } from '../utils/storage'
 import { api } from './api'
+import { getStorageKey } from '../utils/storage'
 
 // Connection info from generic services endpoint
 export interface ChronicleConnectionInfo {
   service: string
-  url: string | null
+  proxy_url: string | null  // For REST APIs
+  direct_url: string | null  // For WebSocket/streaming
+  internal_url: string  // Backend only
   port: number | null
-  env_var: string | null
-  default_port: number | null
   available: boolean
-}
-
-// Get Chronicle backend URL from localStorage or environment
-const getChronicleUrl = (): string => {
-  // Check localStorage first (from Settings page or connection info)
-  const storedUrl = localStorage.getItem(getStorageKey('chronicle_url'))
-  if (storedUrl) {
-    return storedUrl
+  usage: {
+    rest_api: string
+    websocket: string
+    streaming: string
   }
-
-  // Check environment variable
-  if (import.meta.env.VITE_CHRONICLE_URL) {
-    return import.meta.env.VITE_CHRONICLE_URL
-  }
-
-  // Default to localhost:8080 (Chronicle's default port)
-  return 'http://localhost:8080'
 }
-
-// Create Chronicle-specific axios instance
-export const createChronicleApi = () => {
-  const baseURL = getChronicleUrl()
-
-  const instance = axios.create({
-    baseURL,
-    timeout: 60000,
-  })
-
-  // Add request interceptor for Chronicle auth token
-  instance.interceptors.request.use((config) => {
-    const token = localStorage.getItem(getStorageKey('chronicle_token'))
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  })
-
-  // Response interceptor for error handling
-  instance.interceptors.response.use(
-    (response) => response,
-    (error) => {
-      if (error.response?.status === 401) {
-        console.warn('Chronicle API: 401 Unauthorized - token may be expired')
-        // Don't redirect, just reject - let the component handle it
-      } else if (error.code === 'ECONNABORTED') {
-        console.warn('Chronicle API: Request timeout')
-      } else if (!error.response) {
-        console.warn('Chronicle API: Network error - Chronicle backend may be unreachable')
-      }
-      return Promise.reject(error)
-    }
-  )
-
-  return instance
-}
-
-// Get the Chronicle API instance (recreates each time to pick up URL changes)
-export const getChronicleApi = () => createChronicleApi()
-
-// Export the base URL for audio URLs
-export const getChronicleBaseUrl = () => getChronicleUrl()
 
 // Conversation types
 export interface Conversation {
@@ -179,161 +124,152 @@ export interface StreamingStatus {
   timestamp: number
 }
 
-// Auth API
-export const chronicleAuthApi = {
-  /**
-   * Get Chronicle connection info from the generic services endpoint.
-   * Returns URL, port, and availability status.
-   */
-  getConnectionInfo: async (): Promise<ChronicleConnectionInfo> => {
-    const response = await api.get<ChronicleConnectionInfo>('/api/services/chronicle-backend/connection-info')
-    return response.data
-  },
+/**
+ * Get Chronicle connection information.
+ * This provides both proxy_url (for REST) and direct_url (for WebSocket).
+ */
+let connectionInfoCache: ChronicleConnectionInfo | null = null
 
-  /**
-   * Try to authenticate with Chronicle using the ushadow JWT token.
-   * Since both services share AUTH_SECRET_KEY, the ushadow token should work.
-   * Returns true if authentication succeeded.
-   */
-  tryUshadowToken: async (): Promise<boolean> => {
-    // Note: AuthContext stores as 'token', not 'auth_token'
-    const storageKey = getStorageKey('token')
-    console.log('[Chronicle API] tryUshadowToken: looking for key:', storageKey)
-    const ushadowToken = localStorage.getItem(storageKey)
-    if (!ushadowToken) {
-      console.log('[Chronicle API] tryUshadowToken: no token found at', storageKey)
-      return false
-    }
-    console.log('[Chronicle API] tryUshadowToken: found ushadow token, attempting to use it')
+export async function getChronicleConnectionInfo(): Promise<ChronicleConnectionInfo> {
+  if (connectionInfoCache) {
+    return connectionInfoCache
+  }
 
-    try {
-      // Use the ushadow token as the Chronicle token
-      localStorage.setItem(getStorageKey('chronicle_token'), ushadowToken)
+  const response = await api.get<ChronicleConnectionInfo>('/api/services/chronicle-backend/connection-info')
+  connectionInfoCache = response.data
+  return connectionInfoCache
+}
 
-      // Verify it works by calling /users/me
-      const chronicleApi = getChronicleApi()
-      console.log('[Chronicle API] tryUshadowToken: calling /users/me to verify token...')
-      const response = await chronicleApi.get('/users/me')
-      console.log('[Chronicle API] tryUshadowToken: SUCCESS - token accepted, user =', response.data?.email || response.data)
+/**
+ * Clear connection info cache (call when service is restarted or port changes).
+ */
+export function clearConnectionInfoCache() {
+  connectionInfoCache = null
+}
 
-      return true
-    } catch (error: any) {
-      // Token didn't work, clear it
-      console.log('[Chronicle API] tryUshadowToken: FAILED -', error.response?.status, error.response?.data || error.message)
-      localStorage.removeItem(getStorageKey('chronicle_token'))
-      return false
-    }
-  },
+/**
+ * Get the proxy URL for REST API calls.
+ * All REST API calls should use this (conversations, queue, config, etc.)
+ */
+export async function getChronicleProxyUrl(): Promise<string> {
+  const info = await getChronicleConnectionInfo()
+  console.log('[ChronicleAPI] Connection info:', info)
+  if (!info.proxy_url) {
+    console.error('[ChronicleAPI] No proxy_url in connection info!')
+    throw new Error('Chronicle proxy URL not available')
+  }
+  console.log('[ChronicleAPI] Using proxy URL:', info.proxy_url)
+  return info.proxy_url
+}
 
-  /**
-   * Initialize Chronicle with the best available URL and auth.
-   * 1. Fetches connection info from backend (gets optimal URL)
-   * 2. Tries to use ushadow token for auth
-   * 3. Returns success status
-   */
-  autoConnect: async (): Promise<{ connected: boolean; url: string; needsLogin: boolean }> => {
-    console.log('[Chronicle API] autoConnect: starting...')
-    try {
-      // Get connection info from backend
-      console.log('[Chronicle API] autoConnect: fetching connection info from backend...')
-      const info = await chronicleAuthApi.getConnectionInfo()
-      console.log('[Chronicle API] autoConnect: connection info =', info)
+/**
+ * Get the direct URL for WebSocket/streaming connections.
+ * Use this for ws_pcm and other real-time streaming.
+ */
+export async function getChronicleDirectUrl(): Promise<string> {
+  const info = await getChronicleConnectionInfo()
+  if (!info.direct_url) {
+    throw new Error('Chronicle direct URL not available')
+  }
+  return info.direct_url
+}
 
-      // Store the URL from backend
-      if (info.url) {
-        setChronicleUrl(info.url)
-      }
+/**
+ * Get the port for direct WebSocket connections.
+ */
+export async function getChroniclePort(): Promise<number> {
+  const info = await getChronicleConnectionInfo()
+  if (!info.port) {
+    throw new Error('Chronicle port not available')
+  }
+  return info.port
+}
 
-      if (!info.available) {
-        console.log('[Chronicle API] autoConnect: Chronicle not available')
-        return { connected: false, url: info.url ?? null, needsLogin: false }
-      }
+/**
+ * Check if Chronicle is available.
+ */
+export async function isChronicleAvailable(): Promise<boolean> {
+  try {
+    const info = await getChronicleConnectionInfo()
+    return info.available
+  } catch {
+    return false
+  }
+}
 
-      // Try using ushadow token (auth is always compatible when sharing AUTH_SECRET_KEY)
-      console.log('[Chronicle API] autoConnect: trying ushadow token...')
-      const tokenWorked = await chronicleAuthApi.tryUshadowToken()
-      if (tokenWorked) {
-        console.log('[Chronicle API] autoConnect: ushadow token worked!')
-        return { connected: true, url: info.url ?? null, needsLogin: false }
-      }
-      console.log('[Chronicle API] autoConnect: ushadow token did not work')
+// =============================================================================
+// REST APIs - All use proxy through ushadow backend
+// =============================================================================
 
-      // Check if we have an existing Chronicle token
-      console.log('[Chronicle API] autoConnect: checking for existing chronicle_token...')
-      if (chronicleAuthApi.isAuthenticated()) {
-        console.log('[Chronicle API] autoConnect: found existing token, verifying...')
-        try {
-          await chronicleAuthApi.getMe()
-          console.log('[Chronicle API] autoConnect: existing token is valid')
-          return { connected: true, url: info.url ?? null, needsLogin: false }
-        } catch {
-          // Token expired
-          console.log('[Chronicle API] autoConnect: existing token expired, clearing')
-          chronicleAuthApi.logout()
-        }
-      } else {
-        console.log('[Chronicle API] autoConnect: no existing chronicle_token')
-      }
-
-      console.log('[Chronicle API] autoConnect: needs manual login')
-      return { connected: false, url: info.url ?? null, needsLogin: true }
-    } catch (error) {
-      console.warn('[Chronicle API] autoConnect: failed to get connection info:', error)
-      // Fall back to stored/default URL
-      return { connected: false, url: getChronicleUrl(), needsLogin: true }
-    }
-  },
-
-  login: async (email: string, password: string) => {
-    const chronicleApi = getChronicleApi()
-    const formData = new FormData()
-    formData.append('username', email)
-    formData.append('password', password)
-    const response = await chronicleApi.post('/auth/jwt/login', formData)
-    // Store the Chronicle token
-    if (response.data?.access_token) {
-      localStorage.setItem(getStorageKey('chronicle_token'), response.data.access_token)
-    }
+/**
+ * Conversations API - All proxied through ushadow
+ */
+export const chronicleConversationsApi = {
+  async getAll() {
+    const proxyUrl = await getChronicleProxyUrl()
+    console.log('[ChronicleAPI] Fetching conversations from:', `${proxyUrl}/api/conversations`)
+    const response = await api.get(`${proxyUrl}/api/conversations`)
+    console.log('[ChronicleAPI] Conversations response:', response)
     return response
   },
-  logout: () => {
-    localStorage.removeItem(getStorageKey('chronicle_token'))
+
+  async getById(id: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    const url = `${proxyUrl}/api/conversations/${id}`
+    console.log('[ChronicleAPI] Fetching conversation detail from:', url)
+    const response = await api.get(url)
+    console.log('[ChronicleAPI] Conversation detail response:', response)
+    return response
   },
-  isAuthenticated: () => {
-    return !!localStorage.getItem(getStorageKey('chronicle_token'))
+
+  async delete(id: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.delete(`${proxyUrl}/api/conversations/${id}`)
   },
-  getMe: () => getChronicleApi().get('/users/me'),
+
+  async reprocessTranscript(conversationId: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(`${proxyUrl}/api/conversations/${conversationId}/reprocess-transcript`)
+  },
+
+  async reprocessMemory(conversationId: string, transcriptVersionId: string = 'active') {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(
+      `${proxyUrl}/api/conversations/${conversationId}/reprocess-memory`,
+      null,
+      { params: { transcript_version_id: transcriptVersionId } }
+    )
+  },
+
+  async activateTranscriptVersion(conversationId: string, versionId: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(`${proxyUrl}/api/conversations/${conversationId}/activate-transcript/${versionId}`)
+  },
+
+  async activateMemoryVersion(conversationId: string, versionId: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(`${proxyUrl}/api/conversations/${conversationId}/activate-memory/${versionId}`)
+  },
+
+  async getVersionHistory(conversationId: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.get(`${proxyUrl}/api/conversations/${conversationId}/versions`)
+  },
 }
 
-// Conversations API
-export const chronicleConversationsApi = {
-  getAll: () => getChronicleApi().get('/api/conversations'),
-  getById: (id: string) => getChronicleApi().get(`/api/conversations/${id}`),
-  delete: (id: string) => getChronicleApi().delete(`/api/conversations/${id}`),
-  reprocessTranscript: (conversationId: string) =>
-    getChronicleApi().post(`/api/conversations/${conversationId}/reprocess-transcript`),
-  reprocessMemory: (conversationId: string, transcriptVersionId: string = 'active') =>
-    getChronicleApi().post(`/api/conversations/${conversationId}/reprocess-memory`, null, {
-      params: { transcript_version_id: transcriptVersionId }
-    }),
-  activateTranscriptVersion: (conversationId: string, versionId: string) =>
-    getChronicleApi().post(`/api/conversations/${conversationId}/activate-transcript/${versionId}`),
-  activateMemoryVersion: (conversationId: string, versionId: string) =>
-    getChronicleApi().post(`/api/conversations/${conversationId}/activate-memory/${versionId}`),
-  getVersionHistory: (conversationId: string) =>
-    getChronicleApi().get(`/api/conversations/${conversationId}/versions`),
-}
-
-// Queue API
+/**
+ * Queue API - All proxied through ushadow
+ */
 export const chronicleQueueApi = {
-  getDashboard: async (expandedSessions: string[] = []) => {
+  async getDashboard(expandedSessions: string[] = []) {
+    const proxyUrl = await getChronicleProxyUrl()
+
     // Fetch both endpoints and combine the data
-    const api = getChronicleApi()
     const [queueResponse, streamingResponse] = await Promise.all([
-      api.get('/api/queue/dashboard', {
+      api.get(`${proxyUrl}/api/queue/dashboard`, {
         params: { expanded_sessions: expandedSessions.join(',') }
       }),
-      api.get('/api/streaming/status')
+      api.get(`${proxyUrl}/api/streaming/status`)
     ])
 
     // Compute stats from rq_queues
@@ -383,33 +319,138 @@ export const chronicleQueueApi = {
       }
     }
   },
-  getJob: (jobId: string) => getChronicleApi().get(`/api/queue/jobs/${jobId}`),
-  retryJob: (jobId: string, force: boolean = false) =>
-    getChronicleApi().post(`/api/queue/jobs/${jobId}/retry`, { force }),
-  cancelJob: (jobId: string) => getChronicleApi().delete(`/api/queue/jobs/${jobId}`),
-  cleanupStuckWorkers: () => getChronicleApi().post('/api/streaming/cleanup'),
-  cleanupOldSessions: (maxAgeSeconds: number = 3600) =>
-    getChronicleApi().post(`/api/streaming/cleanup-sessions?max_age_seconds=${maxAgeSeconds}`),
-  flushJobs: (flushAll: boolean, body: any) => {
+
+  async getJob(jobId: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.get(`${proxyUrl}/api/queue/jobs/${jobId}`)
+  },
+
+  async retryJob(jobId: string, force: boolean = false) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(`${proxyUrl}/api/queue/jobs/${jobId}/retry`, { force })
+  },
+
+  async cancelJob(jobId: string) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.delete(`${proxyUrl}/api/queue/jobs/${jobId}`)
+  },
+
+  async cleanupStuckWorkers() {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(`${proxyUrl}/api/streaming/cleanup`)
+  },
+
+  async cleanupOldSessions(maxAgeSeconds: number = 3600) {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.post(`${proxyUrl}/api/streaming/cleanup-sessions?max_age_seconds=${maxAgeSeconds}`)
+  },
+
+  async flushJobs(flushAll: boolean, body: any) {
+    const proxyUrl = await getChronicleProxyUrl()
     const endpoint = flushAll ? '/api/queue/flush-all' : '/api/queue/flush'
-    return getChronicleApi().post(endpoint, body)
+    return api.post(`${proxyUrl}${endpoint}`, body)
   },
 }
 
-// System API
+/**
+ * System API - Health checks via proxy
+ */
 export const chronicleSystemApi = {
-  getHealth: () => getChronicleApi().get('/health'),
-  getReadiness: () => getChronicleApi().get('/readiness'),
+  async getHealth() {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.get(`${proxyUrl}/health`)
+  },
+
+  async getReadiness() {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.get(`${proxyUrl}/readiness`)
+  },
 }
 
-// Helper to set Chronicle URL
-export const setChronicleUrl = (url: string) => {
-  localStorage.setItem(getStorageKey('chronicle_url'), url)
+// =============================================================================
+// WebSocket/Streaming - Use direct connection
+// =============================================================================
+
+/**
+ * Get WebSocket URL for real-time audio streaming (ws_pcm).
+ * This uses direct connection through Tailscale Serve for low latency.
+ */
+export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promise<string> {
+  const info = await getChronicleConnectionInfo()
+  if (!info.direct_url) {
+    throw new Error('Chronicle direct URL not available')
+  }
+
+  // Convert HTTP(S) URL to WebSocket URL
+  // direct_url is like "https://red.spangled-kettle.ts.net"
+  const wsUrl = info.direct_url.replace('https:', 'wss:').replace('http:', 'ws:')
+
+  // Append the WebSocket path (configured in Tailscale Serve)
+  return `${wsUrl}${path}`
 }
 
-// Helper to get audio URL with token
-export const getChronicleAudioUrl = (conversationId: string, cropped: boolean = true): string => {
-  const baseUrl = getChronicleBaseUrl()
-  const token = localStorage.getItem(getStorageKey('chronicle_token')) || ''
-  return `${baseUrl}/api/audio/get_audio/${conversationId}?cropped=${cropped}&token=${token}`
+/**
+ * Get audio URL for playback.
+ *
+ * STRATEGY 1 (Current): Use proxy with token in query string
+ * The proxy forwards the request to Chronicle with the token parameter.
+ * This works because the proxy just forwards the entire URL including query params.
+ *
+ * STRATEGY 2 (Fallback): If proxy doesn't work, try direct URL with token
+ */
+export async function getChronicleAudioUrl(conversationId: string, cropped: boolean = true): Promise<string> {
+  const proxyUrl = await getChronicleProxyUrl()
+  const token = localStorage.getItem(getStorageKey('token')) || ''
+
+  if (!token) {
+    console.warn('[ChronicleAPI] No auth token found for audio URL')
+  }
+
+  // Use proxy URL with token in query string
+  // The proxy will forward the entire request including the token parameter
+  const url = `${proxyUrl}/api/audio/get_audio/${conversationId}?cropped=${cropped}&token=${encodeURIComponent(token)}`
+  console.log('[ChronicleAPI] Generated audio URL:', url.substring(0, 100) + '...')
+  return url
+}
+
+// =============================================================================
+// Legacy compatibility exports
+// =============================================================================
+
+/**
+ * @deprecated Use isChronicleAvailable() instead
+ */
+export const getChronicleBaseUrl = async () => {
+  const proxyUrl = await getChronicleProxyUrl()
+  return proxyUrl
+}
+
+/**
+ * @deprecated Auth is now handled automatically via proxy
+ */
+export const chronicleAuthApi = {
+  autoConnect: async () => {
+    const available = await isChronicleAvailable()
+    const info = await getChronicleConnectionInfo()
+    return {
+      connected: available,
+      url: info.proxy_url || '',
+      needsLogin: false  // Auth handled by ushadow proxy
+    }
+  },
+  login: async (_email: string, _password: string) => {
+    throw new Error('Use ushadow login instead - auth is unified')
+  },
+  logout: () => {
+    // No-op - handled by ushadow logout
+  },
+  isAuthenticated: () => {
+    return !!localStorage.getItem('token')
+  },
+  getMe: async () => {
+    const proxyUrl = await getChronicleProxyUrl()
+    return api.get(`${proxyUrl}/users/me`)
+  },
+  tryUshadowToken: async () => true,  // Always works via proxy
+  getConnectionInfo: getChronicleConnectionInfo,
 }

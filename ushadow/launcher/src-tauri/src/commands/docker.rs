@@ -14,6 +14,7 @@ fn find_uv_executable() -> String {
         let userprofile = std::env::var("USERPROFILE").unwrap_or_default();
 
         let possible_paths = vec![
+            format!("{}\\.local\\bin\\uv.exe", userprofile),  // Official installer location (first priority)
             format!("{}\\Programs\\uv\\uv.exe", localappdata),
             format!("{}\\.cargo\\bin\\uv.exe", userprofile),
             "uv".to_string(), // Try PATH as fallback
@@ -102,8 +103,11 @@ impl AppState {
 /// Set the project root directory
 #[tauri::command]
 pub fn set_project_root(path: String, state: State<AppState>) -> Result<(), String> {
+    use super::utils::normalize_path;
+
     let mut root = state.project_root.lock().map_err(|e| e.to_string())?;
-    *root = Some(path);
+    // Normalize path separators (critical on Windows where frontend sends forward slashes)
+    *root = Some(normalize_path(&path));
     Ok(())
 }
 

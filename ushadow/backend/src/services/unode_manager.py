@@ -18,7 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import get_auth_secret_key
-from src.services.tailscale_serve import get_tailscale_status, TailscaleStatus
+from src.utils.tailscale_serve import get_tailscale_status, TailscaleStatus
 from src.models.unode import (
     UNode,
     UNodeInDB,

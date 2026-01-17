@@ -1,28 +1,10 @@
 use crate::models::PrerequisiteStatus;
 use super::utils::{silent_command, shell_command};
-use std::env;
-
-/// Check if we're in mock mode
-fn is_mock_mode() -> bool {
-    env::var("MOCK_MODE").unwrap_or_default() == "true"
-}
 
 /// Check if Docker is installed and running
 /// Tries login shell first, then falls back to known paths
 pub fn check_docker() -> (bool, bool, Option<String>) {
     use std::path::Path;
-
-    // Mock mode for testing
-    if is_mock_mode() {
-        let installed = env::var("MOCK_DOCKER_INSTALLED").unwrap_or_default() == "true";
-        let running = env::var("MOCK_DOCKER_RUNNING").unwrap_or_default() == "true";
-        let version = if installed {
-            Some("Docker version 24.0.0 (MOCKED)".to_string())
-        } else {
-            None
-        };
-        return (installed, running, version);
-    }
 
     // Try login shell first (silent to avoid window flash on Windows)
     let version_output = shell_command("docker --version")
@@ -91,17 +73,6 @@ pub fn check_docker() -> (bool, bool, Option<String>) {
 /// Check if Git is installed
 /// Uses bash login shell to ensure shell profile is sourced and PATH includes git
 pub fn check_git() -> (bool, Option<String>) {
-    // Mock mode for testing
-    if is_mock_mode() {
-        let installed = env::var("MOCK_GIT_INSTALLED").unwrap_or_default() == "true";
-        let version = if installed {
-            Some("git version 2.40.0 (MOCKED)".to_string())
-        } else {
-            None
-        };
-        return (installed, version);
-    }
-
     let version_output = shell_command("git --version")
         .output();
 
@@ -117,18 +88,6 @@ pub fn check_git() -> (bool, Option<String>) {
 /// Check if Tailscale is installed and connected
 /// Uses bash login shell to ensure shell profile is sourced and PATH includes tailscale
 pub fn check_tailscale() -> (bool, bool, Option<String>) {
-    // Mock mode for testing
-    if is_mock_mode() {
-        let installed = env::var("MOCK_TAILSCALE_INSTALLED").unwrap_or_default() == "true";
-        let connected = installed; // If installed, assume connected in mock mode
-        let version = if installed {
-            Some("1.56.0 (MOCKED)".to_string())
-        } else {
-            None
-        };
-        return (installed, connected, version);
-    }
-
     let version_output = shell_command("tailscale --version")
         .output();
 
@@ -174,17 +133,6 @@ pub fn check_tailscale() -> (bool, bool, Option<String>) {
 /// Check if Python 3 is installed
 /// Uses bash login shell to ensure shell profile is sourced and PATH includes python
 pub fn check_python() -> (bool, Option<String>) {
-    // Mock mode for testing
-    if is_mock_mode() {
-        let installed = env::var("MOCK_PYTHON_INSTALLED").unwrap_or_default() == "true";
-        let version = if installed {
-            Some("Python 3.11.0 (MOCKED)".to_string())
-        } else {
-            None
-        };
-        return (installed, version);
-    }
-
     // Try python3 first (recommended)
     eprintln!("DEBUG: Checking python3 with shell_command");
     let version_output = shell_command("python3 --version")
@@ -225,22 +173,26 @@ pub fn check_python() -> (bool, Option<String>) {
     }
 }
 
+/// Check if uv (Python package installer) is installed
+/// Uses bash login shell to ensure shell profile is sourced and PATH includes uv
+pub fn check_uv() -> (bool, Option<String>) {
+    let version_output = shell_command("uv --version")
+        .output();
+
+    match version_output {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (true, Some(version))
+        }
+        _ => (false, None),
+    }
+}
+
 /// Check if Homebrew is installed (macOS only)
 /// Tries login shell first, then falls back to known paths
 #[cfg(target_os = "macos")]
 pub fn check_homebrew() -> (bool, Option<String>) {
     use std::path::Path;
-    
-    // Mock mode for testing
-    if is_mock_mode() {
-        let installed = env::var("MOCK_HOMEBREW_INSTALLED").unwrap_or_default() == "true";
-        let version = if installed {
-            Some("Homebrew 5.0.0 (MOCKED)".to_string())
-        } else {
-            None
-        };
-        return (installed, version);
-    }
 
     // Try login shell first
     let version_output = shell_command("brew --version")
@@ -368,6 +320,7 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
     let (tailscale_installed, tailscale_connected, tailscale_version) = check_tailscale();
     let (git_installed, git_version) = check_git();
     let (python_installed, python_version) = check_python();
+    let (uv_installed, uv_version) = check_uv();
     let (workmux_installed, workmux_version) = check_workmux();
     let (tmux_installed, tmux_version) = check_tmux();
 
@@ -379,6 +332,7 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
         tailscale_connected,
         git_installed,
         python_installed,
+        uv_installed,
         workmux_installed,
         tmux_installed,
         homebrew_version,
@@ -386,6 +340,7 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
         tailscale_version,
         git_version,
         python_version,
+        uv_version,
         workmux_version,
         tmux_version,
     })
@@ -394,13 +349,6 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
 /// Get OS type for platform-specific instructions
 #[tauri::command]
 pub fn get_os_type() -> Result<String, String> {
-    // Mock mode for testing
-    if is_mock_mode() {
-        if let Ok(mock_platform) = env::var("MOCK_PLATFORM") {
-            return Ok(mock_platform);
-        }
-    }
-
     #[cfg(target_os = "macos")]
     return Ok("macos".to_string());
 
@@ -412,39 +360,4 @@ pub fn get_os_type() -> Result<String, String> {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     return Ok("unknown".to_string());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_check_docker_returns_tuple() {
-        let (installed, running, version) = check_docker();
-        // Just verify it returns without panicking
-        // Actual values depend on system state
-        if installed {
-            assert!(version.is_some());
-        }
-        println!("Docker: installed={}, running={}, version={:?}", installed, running, version);
-    }
-
-    #[test]
-    fn test_check_tailscale_returns_tuple() {
-        let (installed, connected, version) = check_tailscale();
-        if installed {
-            assert!(version.is_some());
-        }
-        println!("Tailscale: installed={}, connected={}, version={:?}", installed, connected, version);
-    }
-
-    #[test]
-    fn test_check_prerequisites_returns_status() {
-        let result = check_prerequisites();
-        assert!(result.is_ok());
-        let status = result.unwrap();
-        println!("Prerequisites: docker={}/{}, tailscale={}/{}",
-            status.docker_installed, status.docker_running,
-            status.tailscale_installed, status.tailscale_connected);
-    }
 }

@@ -8,6 +8,7 @@ import { ChronicleProvider } from './contexts/ChronicleContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
 import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
+import { VibeKanbanWebCompanion } from 'vibe-kanban-web-companion'
 
 // Get router basename from Vite build config (for path-based deployments like /wiz/)
 // Runtime detection was removed because it incorrectly treated app routes (/settings, /services)
@@ -34,6 +35,7 @@ import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
+import InstancesPage from './pages/InstancesPage'
 import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
 import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
@@ -101,6 +103,7 @@ function AppContent() {
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
                 <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
                 <Route path="services" element={<ServicesPage />} />
+                <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><InstancesPage /></FeatureRoute>} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />
@@ -122,6 +125,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
+        <VibeKanbanWebCompanion />
         <AuthProvider>
           <FeatureFlagsProvider>
             <WizardProvider>
@@ -139,3 +143,5 @@ function App() {
 }
 
 export default App
+// HMR test at Sat 17 Jan 2026 12:59:49 GMT
+// HMR polling test 1768654877

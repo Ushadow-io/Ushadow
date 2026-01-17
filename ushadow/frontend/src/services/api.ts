@@ -70,10 +70,21 @@ api.interceptors.response.use(
   (error) => {
     // Only clear token and redirect on actual 401 responses, not on timeouts
     if (error.response?.status === 401) {
-      // Token expired or invalid, redirect to login
-      console.warn('🔐 API: 401 Unauthorized - clearing token and redirecting to login')
-      localStorage.removeItem(getStorageKey('token'))
-      window.location.href = '/login'
+      const url = error.config?.url || ''
+
+      // Don't logout on 401s from proxied services (Chronicle, etc.)
+      // These services may have their own auth issues that shouldn't affect ushadow login
+      const isServiceProxy = url.includes('/api/services/') && url.includes('/proxy/')
+
+      if (isServiceProxy) {
+        console.warn('🔐 API: 401 from proxied service - not logging out:', url)
+        // Let the component handle the service-specific auth error
+      } else {
+        // Token expired or invalid on core ushadow endpoints, redirect to login
+        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
+        localStorage.removeItem(getStorageKey('token'))
+        window.location.href = '/login'
+      }
     } else if (error.code === 'ECONNABORTED') {
       // Request timeout - don't logout, just log it
       console.warn('⏱️ API: Request timeout - server may be busy')
@@ -626,6 +637,7 @@ export interface PlatformInfo {
   os_version: string
   architecture: string
   is_docker: boolean
+  tailscale_installed: boolean
 }
 
 export interface EnvironmentInfo {
@@ -840,16 +852,33 @@ import type {
 } from '../types/memory'
 
 /** Convert API response to internal Memory format */
-const adaptMemoryItem = (item: ApiMemoryItem): Memory => ({
-  id: item.id,
-  memory: item.content,
-  created_at: new Date(item.created_at).getTime(),
-  state: item.state as Memory['state'],
-  metadata: item.metadata_ || {},
-  categories: item.categories as Memory['categories'],
-  client: 'api',
-  app_name: item.app_name,
-})
+const adaptMemoryItem = (item: ApiMemoryItem): Memory => {
+  // Handle both ISO strings and Unix timestamps (seconds or milliseconds)
+  let timestamp: number
+  if (typeof item.created_at === 'string') {
+    // Try parsing as ISO string first
+    timestamp = new Date(item.created_at).getTime()
+  } else {
+    // Numeric timestamp - check if it's in seconds or milliseconds
+    const numericTimestamp = Number(item.created_at)
+    // If timestamp is less than year 2000 in milliseconds (946684800000),
+    // it's likely in seconds, so convert to milliseconds
+    timestamp = numericTimestamp < 946684800000
+      ? numericTimestamp * 1000
+      : numericTimestamp
+  }
+
+  return {
+    id: item.id,
+    memory: item.content,
+    created_at: timestamp,
+    state: item.state as Memory['state'],
+    metadata: item.metadata_ || {},
+    categories: item.categories as Memory['categories'],
+    client: 'api',
+    app_name: item.app_name,
+  }
+}
 
 export const memoriesApi = {
   /** Get OpenMemory server URL from settings or use default */
@@ -994,6 +1023,198 @@ export const memoriesApi = {
   },
 }
 
+// =============================================================================
+// Instances API (templates, instances, wiring)
+// =============================================================================
+
+/** Template source - where the template was discovered from */
+export type TemplateSource = 'compose' | 'provider'
+
+/** Instance status */
+export type InstanceStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
+
+/** Template - discovered from compose or provider files */
+export interface Template {
+  id: string
+  source: TemplateSource
+  name: string
+  description?: string
+  requires: string[]
+  optional: string[]
+  provides?: string
+  config_schema: Array<{
+    key: string
+    type: string
+    label?: string
+    required?: boolean
+    default?: string
+    env_var?: string
+    settings_path?: string
+    has_value?: boolean  // Whether settings has a value
+    value?: string       // Current value (non-secrets only)
+  }>
+  compose_file?: string
+  service_name?: string
+  provider_file?: string
+  mode?: 'cloud' | 'local'
+  icon?: string
+  tags: string[]
+  configured: boolean  // Whether required config fields are set (for providers)
+  available: boolean   // Whether local service is running (for local providers)
+}
+
+/** Instance config values */
+export interface InstanceConfig {
+  values: Record<string, any>
+}
+
+/** Instance outputs after deployment */
+export interface InstanceOutputs {
+  access_url?: string
+  env_vars: Record<string, string>
+  capability_values: Record<string, any>
+}
+
+/** Instance - configured deployment of a template */
+export interface Instance {
+  id: string
+  template_id: string
+  name: string
+  description?: string
+  config: InstanceConfig
+  deployment_target?: string
+  status: InstanceStatus
+  outputs: InstanceOutputs
+  container_id?: string
+  container_name?: string
+  deployment_id?: string
+  created_at?: string
+  deployed_at?: string
+  updated_at?: string
+  error?: string
+  // Integration-specific fields (present only for integrations)
+  integration_type?: string
+  sync_enabled?: boolean
+  sync_interval?: number
+  last_sync_at?: string
+  last_sync_status?: string
+  last_sync_items_count?: number
+  last_sync_error?: string
+  next_sync_at?: string
+}
+
+/** Instance summary for list views */
+export interface InstanceSummary {
+  id: string
+  template_id: string
+  name: string
+  status: InstanceStatus
+  provides?: string
+  deployment_target?: string
+  access_url?: string
+}
+
+/** Wiring connection between instances */
+export interface Wiring {
+  id: string
+  source_instance_id: string
+  source_capability: string
+  target_instance_id: string
+  target_capability: string
+  created_at?: string
+}
+
+/** Request to create an instance */
+export interface InstanceCreateRequest {
+  id: string
+  template_id: string
+  name: string
+  description?: string
+  config?: Record<string, any>
+  deployment_target?: string
+}
+
+/** Request to update an instance */
+export interface InstanceUpdateRequest {
+  name?: string
+  description?: string
+  config?: Record<string, any>
+  deployment_target?: string
+}
+
+/** Request to create wiring */
+export interface WiringCreateRequest {
+  source_instance_id: string
+  source_capability: string
+  target_instance_id: string
+  target_capability: string
+}
+
+export const instancesApi = {
+  // Templates
+  /** List all templates (compose services + providers) */
+  getTemplates: (source?: TemplateSource) =>
+    api.get<Template[]>('/api/instances/templates', { params: source ? { source } : {} }),
+
+  /** Get a template by ID */
+  getTemplate: (templateId: string) =>
+    api.get<Template>(`/api/instances/templates/${templateId}`),
+
+  // Instances
+  /** List all instances */
+  getInstances: () =>
+    api.get<InstanceSummary[]>('/api/instances'),
+
+  /** Get an instance by ID */
+  getInstance: (instanceId: string) =>
+    api.get<Instance>(`/api/instances/${instanceId}`),
+
+  /** Create a new instance */
+  createInstance: (data: InstanceCreateRequest) =>
+    api.post<Instance>('/api/instances', data),
+
+  /** Update an instance */
+  updateInstance: (instanceId: string, data: InstanceUpdateRequest) =>
+    api.put<Instance>(`/api/instances/${instanceId}`, data),
+
+  /** Delete an instance */
+  deleteInstance: (instanceId: string) =>
+    api.delete(`/api/instances/${instanceId}`),
+
+  /** Deploy/start an instance */
+  deployInstance: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/deploy`),
+
+  /** Undeploy/stop an instance */
+  undeployInstance: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/undeploy`),
+
+  // Wiring
+  /** List all wiring connections */
+  getWiring: () =>
+    api.get<Wiring[]>('/api/instances/wiring/all'),
+
+  /** Get default capability mappings */
+  getDefaults: () =>
+    api.get<Record<string, string>>('/api/instances/wiring/defaults'),
+
+  /** Set default instance for a capability */
+  setDefault: (capability: string, instanceId: string) =>
+    api.put(`/api/instances/wiring/defaults/${capability}`, null, { params: { instance_id: instanceId } }),
+
+  /** Create a wiring connection */
+  createWiring: (data: WiringCreateRequest) =>
+    api.post<Wiring>('/api/instances/wiring', data),
+
+  /** Delete a wiring connection */
+  deleteWiring: (wiringId: string) =>
+    api.delete(`/api/instances/wiring/${wiringId}`),
+
+  /** Get wiring for a specific instance */
+  getInstanceWiring: (instanceId: string) =>
+    api.get<Wiring[]>(`/api/instances/${instanceId}/wiring`),
+}
+
 export const graphApi = {
   /** Fetch graph data for visualization */
   fetchGraphData: async (
@@ -1060,6 +1281,18 @@ export const tailscaleApi = {
       details?: { tailscale: { status: string }; caddy: { status: string }; routing: { status: string } }
     }>('/api/tailscale/container/start-with-caddy'),
   clearAuth: () => api.post<{ status: string; message: string }>('/api/tailscale/container/clear-auth'),
+  reset: () => api.post<{
+    status: string
+    message: string
+    details: {
+      routes_cleared: boolean
+      certs_removed: boolean
+      auth_cleared: boolean
+      config_removed: boolean
+    }
+    errors?: string[]
+    note: string
+  }>('/api/tailscale/container/reset'),
   getTailnetSettings: () => api.get<TailnetSettings>('/api/tailscale/container/tailnet-settings'),
   enableHttps: () => api.post<{ status: string; message: string }>('/api/tailscale/container/enable-https'),
   getAuthUrl: (regenerate: boolean = false) =>
@@ -1068,11 +1301,6 @@ export const tailscaleApi = {
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
-  configureCaddyRouting: (hostname?: string) =>
-    api.post<{ status: string; message: string; cors_origin_added?: string }>(
-      '/api/tailscale/configure-caddy-routing',
-      hostname ? { hostname } : undefined
-    ),
   updateCorsOrigins: (hostname: string) =>
     api.post<{
       status: string
@@ -1161,4 +1389,302 @@ export const chatApi = {
 
   /** Get the streaming endpoint URL (for direct fetch) */
   getStreamUrl: () => `${BACKEND_URL}/api/chat`,
+}
+
+// =============================================================================
+// Integration API - Integration sync and connection management
+// =============================================================================
+
+export interface IntegrationSyncResult {
+  success: boolean
+  items_synced?: number
+  last_sync_at?: string
+  error?: string
+}
+
+export interface IntegrationSyncStatus {
+  integration_id: string
+  integration_type: string
+  sync_enabled: boolean | null
+  sync_interval: number | null
+  last_sync_at: string | null
+  last_sync_status: string
+  last_sync_items_count: number | null
+  last_sync_error: string | null
+  next_sync_at: string | null
+}
+
+export interface IntegrationConnectionResult {
+  success: boolean
+  message: string
+}
+
+export const integrationApi = {
+  /** Test connection to an integration */
+  testConnection: (instanceId: string) =>
+    api.post<IntegrationConnectionResult>(`/api/instances/${instanceId}/test-connection`),
+
+  /** Manually trigger sync for an integration */
+  syncNow: (instanceId: string) =>
+    api.post<IntegrationSyncResult>(`/api/instances/${instanceId}/sync`),
+
+  /** Get current sync status for an integration */
+  getSyncStatus: (instanceId: string) =>
+    api.get<IntegrationSyncStatus>(`/api/instances/${instanceId}/sync-status`),
+
+  /** Enable automatic syncing for an integration */
+  enableAutoSync: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/enable`),
+
+  /** Disable automatic syncing for an integration */
+  disableAutoSync: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/disable`),
+}
+
+// =============================================================================
+// GitHub Import API - Import docker-compose from GitHub repositories
+// =============================================================================
+
+export interface GitHubUrlInfo {
+  owner: string
+  repo: string
+  branch: string
+  path: string
+}
+
+export interface DetectedComposeFile {
+  path: string
+  name: string
+  download_url: string
+  size: number
+}
+
+export interface GitHubScanResponse {
+  success: boolean
+  github_info?: GitHubUrlInfo
+  compose_files: DetectedComposeFile[]
+  message?: string
+  error?: string
+}
+
+export interface ComposeEnvVarInfo {
+  name: string
+  has_default: boolean
+  default_value?: string
+  is_required: boolean
+  description?: string
+}
+
+export interface ComposeServiceInfo {
+  name: string
+  image?: string
+  ports: Array<{ host?: string; container?: string }>
+  environment: ComposeEnvVarInfo[]
+  depends_on: string[]
+  volumes: string[]
+  networks: string[]
+  command?: string
+  healthcheck?: Record<string, any>
+}
+
+export interface ComposeParseResponse {
+  success: boolean
+  compose_path: string
+  services: ComposeServiceInfo[]
+  networks: string[]
+  volumes: string[]
+  message?: string
+  error?: string
+}
+
+export interface ShadowHeaderConfig {
+  enabled: boolean
+  header_name: string
+  header_value?: string
+  route_path?: string
+}
+
+export interface EnvVarConfigItem {
+  name: string
+  source: 'literal' | 'setting' | 'default'
+  value?: string
+  setting_path?: string
+  is_secret: boolean
+}
+
+export interface ImportedServiceConfig {
+  service_name: string
+  display_name?: string
+  description?: string
+  source_url: string  // GitHub URL or Docker Hub URL
+  compose_path?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides (e.g., ['llm', 'tts'])
+}
+
+export interface ImportServiceRequest {
+  github_url: string
+  compose_path: string
+  service_name: string
+  config: ImportedServiceConfig
+}
+
+export interface ImportServiceResponse {
+  success: boolean
+  service_id?: string
+  service_name?: string
+  message: string
+  compose_file_path?: string
+}
+
+export interface ImportedService {
+  id: string
+  source_type?: 'github' | 'dockerhub'
+  source_url?: string
+  github_url?: string
+  compose_path?: string
+  compose_file: string
+  docker_image?: string
+  service_name: string
+  display_name?: string
+  description?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  ports?: PortConfig[]
+  volumes?: VolumeConfig[]
+  enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides
+}
+
+export interface PortConfig {
+  host_port: number
+  container_port: number
+  protocol?: string
+}
+
+export interface VolumeConfig {
+  name: string
+  container_path: string
+  is_named_volume?: boolean
+}
+
+export interface DockerHubImageInfo {
+  namespace: string
+  repository: string
+  tag: string
+  full_image_name?: string
+}
+
+export interface DockerHubScanResponse {
+  success: boolean
+  image_info?: DockerHubImageInfo
+  description?: string
+  stars?: number
+  pulls?: number
+  available_tags: string[]
+  message?: string
+  error?: string
+}
+
+export interface UnifiedScanResponse {
+  success: boolean
+  source_type: 'github' | 'dockerhub'
+  // GitHub-specific
+  github_info?: GitHubUrlInfo
+  compose_files?: DetectedComposeFile[]
+  // Docker Hub-specific
+  dockerhub_info?: DockerHubImageInfo
+  available_tags?: string[]
+  image_description?: string
+  // Common
+  message?: string
+  error?: string
+}
+
+export interface DockerHubRegisterRequest {
+  service_name: string
+  dockerhub_url: string
+  tag?: string
+  display_name?: string
+  description?: string
+  ports?: PortConfig[]
+  volumes?: VolumeConfig[]
+  env_vars?: EnvVarConfigItem[]
+  shadow_header_enabled?: boolean
+  shadow_header_name?: string
+  shadow_header_value?: string
+  route_path?: string
+  capabilities?: string[]  // Capabilities this service provides
+}
+
+export const githubImportApi = {
+  /** Scan a GitHub repository for docker-compose files */
+  scan: (github_url: string, branch?: string, compose_path?: string) =>
+    api.post<GitHubScanResponse>('/api/github-import/scan', {
+      github_url,
+      branch,
+      compose_path
+    }),
+
+  /** Parse a docker-compose file and extract service/env information */
+  parse: (github_url: string, compose_path: string) =>
+    api.post<ComposeParseResponse>('/api/github-import/parse', null, {
+      params: { github_url, compose_path }
+    }),
+
+  /** Register an imported service */
+  register: (request: ImportServiceRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/register', request),
+
+  /** List all imported services */
+  listImported: () =>
+    api.get<ImportedService[]>('/api/github-import/imported'),
+
+  /** Delete an imported service */
+  deleteImported: (serviceId: string) =>
+    api.delete<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}`),
+
+  /** Update configuration for an imported service */
+  updateConfig: (serviceId: string, config: ImportedServiceConfig) =>
+    api.put<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}/config`, config),
+
+  // Docker Hub endpoints
+  /** Scan a Docker Hub image for information */
+  scanDockerHub: (dockerhub_url: string, tag?: string) =>
+    api.post<DockerHubScanResponse>('/api/github-import/dockerhub/scan', {
+      dockerhub_url,
+      tag
+    }),
+
+  /** Register a service from Docker Hub */
+  registerDockerHub: (request: DockerHubRegisterRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/dockerhub/register', null, {
+      params: {
+        service_name: request.service_name,
+        dockerhub_url: request.dockerhub_url,
+        tag: request.tag,
+        display_name: request.display_name,
+        description: request.description,
+        shadow_header_enabled: request.shadow_header_enabled ?? true,
+        shadow_header_name: request.shadow_header_name ?? 'X-Shadow-Service',
+        shadow_header_value: request.shadow_header_value,
+        route_path: request.route_path,
+        ports: request.ports ? JSON.stringify(request.ports) : undefined,
+        volumes: request.volumes ? JSON.stringify(request.volumes) : undefined,
+        env_vars: request.env_vars ? JSON.stringify(request.env_vars) : undefined,
+        capabilities: request.capabilities ? JSON.stringify(request.capabilities) : undefined,
+      }
+    }),
+
+  // Unified endpoints (auto-detect source type)
+  /** Scan any supported source (GitHub or Docker Hub) */
+  unifiedScan: (url: string, branch?: string, tag?: string, compose_path?: string) =>
+    api.post<UnifiedScanResponse>('/api/github-import/unified/scan', {
+      url,
+      branch,
+      tag,
+      compose_path
+    }),
 }

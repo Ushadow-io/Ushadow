@@ -20,6 +20,7 @@ from datetime import datetime
 import docker
 from docker.errors import DockerException, NotFound, APIError
 
+from src.config.secrets import mask_if_secret
 from src.services.compose_registry import get_compose_registry
 
 logger = logging.getLogger(__name__)
@@ -575,13 +576,13 @@ class DockerManager:
         try:
             # Use docker_service_name if specified (e.g., "mem0" for "openmemory" service)
             docker_container_name = service_config.get("docker_service_name", service_name)
-            logger.info(f"[get_service_info] Looking for docker_container_name: {docker_container_name}")
+            logger.debug(f"[get_service_info] Looking for docker_container_name: {docker_container_name}")
 
             # Try to find container by exact name first
             container = None
             try:
                 container = self._client.containers.get(docker_container_name)
-                logger.info(f"[get_service_info] Found by exact name: {container.name}, status: {container.status}")
+                logger.debug(f"[get_service_info] Found by exact name: {container.name}, status: {container.status}")
             except NotFound:
                 # Container name may have project prefix (e.g., "ushadow-wiz-frame-chronicle-backend")
                 # Search by compose service label, preferring declared namespace
@@ -595,15 +596,15 @@ class DockerManager:
                     target_projects.append(service_namespace)
                 target_projects.append(current_project)
 
-                logger.info(f"[get_service_info] Searching by label, target_projects: {target_projects}")
+                logger.debug(f"[get_service_info] Searching by label, target_projects: {target_projects}")
 
                 containers = self._client.containers.list(
                     all=True,
                     filters={"label": f"com.docker.compose.service={docker_container_name}"}
                 )
-                logger.info(f"[get_service_info] Found {len(containers)} containers with label com.docker.compose.service={docker_container_name}")
+                logger.debug(f"[get_service_info] Found {len(containers)} containers with label com.docker.compose.service={docker_container_name}")
                 for c in containers:
-                    logger.info(f"[get_service_info]   - {c.name}, project: {c.labels.get('com.docker.compose.project', 'unknown')}, status: {c.status}")
+                    logger.debug(f"[get_service_info]   - {c.name}, project: {c.labels.get('com.docker.compose.project', 'unknown')}, status: {c.status}")
                 if containers:
                     # Match containers from declared namespace or current project
                     for target_project in target_projects:
@@ -612,7 +613,7 @@ class DockerManager:
                             container_project = labels.get("com.docker.compose.project", "")
                             if container_project == target_project:
                                 container = c
-                                logger.info(f"[get_service_info] Matched container {c.name} in project {container_project}")
+                                logger.debug(f"[get_service_info] Matched container {c.name} in project {container_project}")
                                 break
                         if container:
                             break
@@ -847,17 +848,18 @@ class DockerManager:
 
         return conflicts
 
-    async def start_service(self, service_name: str) -> tuple[bool, str]:
+    async def start_service(self, service_name: str, instance_id: Optional[str] = None) -> tuple[bool, str]:
         """
         Start a Docker service.
 
         Args:
             service_name: Name of the service to start
+            instance_id: Optional instance ID for wiring-aware env resolution
 
         Returns:
             Tuple of (success: bool, message: str)
         """
-        logger.info(f"start_service called with: {repr(service_name)}")
+        logger.info(f"start_service called with: {repr(service_name)}, instance_id={instance_id}")
 
         # Validate service name first
         valid, error_msg = self.validate_service_name(service_name)
@@ -885,7 +887,7 @@ class DockerManager:
             # Container doesn't exist - try to start via compose if compose_file is specified
             compose_file = self.MANAGEABLE_SERVICES[service_name].get("compose_file")
             if compose_file:
-                return await self._start_service_via_compose(service_name, compose_file)
+                return await self._start_service_via_compose(service_name, compose_file, instance_id)
 
             logger.error(f"Container not found for service: {service_name}")
             return False, "Service not found"
@@ -961,7 +963,7 @@ class DockerManager:
         return resolved
 
     async def _build_env_vars_for_service(
-        self, service_name: str
+        self, service_name: str, instance_id: Optional[str] = None
     ) -> tuple[Dict[str, str], Dict[str, str]]:
         """
         Build environment variables for a service.
@@ -971,6 +973,7 @@ class DockerManager:
 
         Args:
             service_name: Name of the service
+            instance_id: Optional instance ID for wiring-aware resolution
 
         Returns:
             Tuple of (subprocess_env, container_env):
@@ -1000,16 +1003,29 @@ class DockerManager:
                     resolver = get_capability_resolver()
                     resolver.reload()
 
-                    # Get additional env vars from capability resolver
-                    # This handles the case where user hasn't explicitly configured
-                    # all env vars but has configured providers
+                    # Get env vars from capability resolver
+                    # Capability resolver takes priority over compose config because:
+                    # - Wired provider instances may have custom config overrides
+                    # - Instance-specific config should override global defaults
                     try:
-                        cap_env = await resolver.resolve_for_service(service_name)
-                        # Only add vars not already configured
+                        # Use instance-aware resolution if instance_id provided
+                        if instance_id:
+                            cap_env = await resolver.resolve_for_instance(instance_id)
+                        else:
+                            cap_env = await resolver.resolve_for_service(service_name)
+
+                        # OVERRIDE compose config with capability resolver values
+                        # This allows wired instances to override global provider config
                         for key, value in cap_env.items():
-                            if key not in container_env:
-                                container_env[key] = value
-                                subprocess_env[key] = value
+                            if key in container_env and container_env[key] != value:
+                                old_val = mask_if_secret(key, container_env[key])
+                                new_val = mask_if_secret(key, value)
+                                logger.info(
+                                    f"[Override] {key}: {old_val} -> {new_val} "
+                                    f"(capability resolver overrides compose config)"
+                                )
+                            container_env[key] = value
+                            subprocess_env[key] = value
                     except Exception as e:
                         logger.debug(f"CapabilityResolver fallback for {service_name}: {e}")
 
@@ -1068,14 +1084,18 @@ class DockerManager:
                 logger.warning(f"Service {service_name}: {warning}")
 
             # Resolve all env vars for the container
-            container_env = await resolver.resolve_for_service(service_name)
+            # Use instance-aware resolution if instance_id provided
+            if instance_id:
+                container_env = await resolver.resolve_for_instance(instance_id)
+            else:
+                container_env = await resolver.resolve_for_service(service_name)
 
             # Also add to subprocess env for compose file substitution
             subprocess_env.update(container_env)
 
             logger.info(
                 f"Resolved {len(container_env)} env vars for {service_name} "
-                f"via capability resolver"
+                f"via capability resolver" + (f" (instance={instance_id})" if instance_id else "")
             )
 
         except ValueError:
@@ -1144,13 +1164,14 @@ class DockerManager:
             logger.error(f"Error starting infra services: {e}")
             return False, f"Failed to start infrastructure: {str(e)}"
 
-    async def _start_service_via_compose(self, service_name: str, compose_file: str) -> tuple[bool, str]:
+    async def _start_service_via_compose(self, service_name: str, compose_file: str, instance_id: Optional[str] = None) -> tuple[bool, str]:
         """
         Start a service using docker-compose.
 
         Args:
             service_name: Name of the service to start
             compose_file: Relative path to the compose file (from project root)
+            instance_id: Optional instance ID for wiring-aware env resolution
 
         Returns:
             Tuple of (success: bool, message: str)
@@ -1211,13 +1232,13 @@ class DockerManager:
 
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution
-            subprocess_env, container_env = await self._build_env_vars_for_service(service_name)
+            subprocess_env, container_env = await self._build_env_vars_for_service(service_name, instance_id)
 
             # Suppress orphan warnings when running services from different compose files
             # in the same project namespace (e.g., chronicle + main backend share auth)
             subprocess_env["COMPOSE_IGNORE_ORPHANS"] = "true"
 
-            logger.info(f"Resolved {len(container_env)} env vars for {service_name} (passing directly)")
+            logger.info(f"━━━ Starting {service_name} with {len(container_env)} environment variables ━━━")
 
             # Build docker compose command with explicit env var passing
             # Using --env-file /dev/null to clear default .env loading
@@ -1229,13 +1250,9 @@ class DockerManager:
                 cmd.extend(["--profile", compose_profile])
             cmd.extend(["up", "-d", docker_service_name])
 
-            # Log which env vars are being passed (without values for secrets)
-            secret_keys = {'API_KEY', 'SECRET', 'PASSWORD', 'TOKEN'}
-            logged_vars = []
-            for key in container_env:
-                is_secret = any(s in key.upper() for s in secret_keys)
-                logged_vars.append(f"{key}={'***' if is_secret else container_env[key][:20]+'...' if len(container_env.get(key, '')) > 20 else container_env.get(key, '')}")
-            logger.debug(f"Container env vars for {service_name}: {logged_vars}")
+            # Log final env vars being passed to service (with secrets masked)
+            logged_vars = [f"{key}={mask_if_secret(key, value)}" for key, value in sorted(container_env.items())]
+            logger.info(f"[Final Config] {service_name}: {', '.join(logged_vars)}")
 
             result = subprocess.run(
                 cmd,
