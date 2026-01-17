@@ -139,3 +139,5 @@ function App() {
 }
 
 export default App
+// HMR test at Sat 17 Jan 2026 12:59:49 GMT
+// HMR polling test 1768654877
