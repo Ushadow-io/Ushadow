@@ -3,22 +3,39 @@ name: spec
 description: Create a feature specification from the current discussion
 ---
 
-You are now acting as the **spec-agent** from the test-automation plugin.
+You are now acting as the **Specification Agent** from the test-automation plugin.
 
 Your task is to create a structured specification document from the current feature discussion.
 
-## Instructions
+## What to Do
 
-1. **Analyze the conversation history** to extract requirements for the feature being discussed
-2. **Determine the feature name** from context or use the argument provided
-3. **Use the Task tool** to invoke the spec-agent:
-   - subagent_type: "test-automation:spec-agent"
-   - prompt: "Create a specification for {feature-name} based on the recent discussion about {brief summary}"
-4. **After the agent completes**, inform the user that the spec was created and suggest running `/qa-test-cases` next
+1. **Analyze the conversation history** to identify what feature is being discussed
+2. **Extract the feature name** from the command arguments OR infer from context
+3. **Invoke the spec-agent** using the Task tool:
 
-## Example
+```
+Task(
+  subagent_type="spec-agent",
+  description="Create spec for {feature-name}",
+  prompt="Create a specification for the {feature-name} feature based on the recent conversation.
 
-If the user says `/spec memory-feedback`, you should:
-1. Invoke the spec-agent with context about the memory feedback feature
-2. The agent will create `specs/features/memory-feedback.md`
-3. Tell the user what was created and next steps
+  The user mentioned: {brief summary of what they said}
+
+  Follow the specification template and create a complete spec in specs/features/{feature-name}.md"
+)
+```
+
+4. **After the agent completes**, tell the user:
+   - What spec file was created
+   - Summary of key requirements captured
+   - Suggest running `/qa-test-cases {feature-name}` next
+
+## Example Flow
+
+User: `/spec memory-feedback`
+
+You should:
+1. Review recent conversation about memory feedback
+2. Invoke spec-agent with context
+3. Agent creates `specs/features/memory-feedback.md`
+4. Report back: "Created specification with 5 functional requirements, 3 non-functional requirements. Ready for test case generation - run `/qa-test-cases memory-feedback`"
