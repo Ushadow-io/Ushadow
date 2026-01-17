@@ -150,8 +150,8 @@ export default function Layout() {
             </div>
 
             {/* Search Bar */}
-            <div className="flex-1 max-w-xl mx-8 hidden md:flex items-center gap-2">
-              <div className="relative flex-1">
+            <div className="flex-1 max-w-xl mx-8 hidden md:block">
+              <div className="relative">
                 <Search
                   className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4"
                   style={{ color: 'var(--text-muted)' }}
@@ -161,7 +161,7 @@ export default function Layout() {
                   placeholder="Search services, workflows..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg text-sm transition-all focus:outline-none focus:ring-2"
+                  className="w-full pl-10 pr-32 py-2 rounded-lg text-sm transition-all focus:outline-none focus:ring-2"
                   style={{
                     backgroundColor: isDark ? 'var(--surface-700)' : '#f5f5f5',
                     border: isDark ? '1px solid var(--surface-500)' : '1px solid transparent',
@@ -170,8 +170,10 @@ export default function Layout() {
                   } as React.CSSProperties}
                   data-testid="search-input"
                 />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <StatusBadge variant="not-implemented" testId="badge-search" />
+                </div>
               </div>
-              <StatusBadge variant="not-implemented" testId="badge-search" />
             </div>
 
             {/* Header Actions */}
@@ -228,22 +230,22 @@ export default function Layout() {
               )}
 
               {/* Search Icon (Mobile) */}
-              <div className="flex items-center gap-2 md:hidden">
-                <button
-                  className="p-2.5 rounded-lg transition-colors"
-                  style={{
-                    color: isDark ? 'var(--text-secondary)' : '#525252',
-                  }}
-                  aria-label="Search"
-                  data-testid="mobile-search-btn"
-                >
-                  <Search className="h-5 w-5" />
-                </button>
-                <StatusBadge variant="not-implemented" testId="badge-search-mobile" />
-              </div>
+              <button
+                className="p-2.5 rounded-lg md:hidden transition-colors relative"
+                style={{
+                  color: isDark ? 'var(--text-secondary)' : '#525252',
+                }}
+                aria-label="Search"
+                data-testid="mobile-search-btn"
+              >
+                <Search className="h-5 w-5" />
+                <div className="absolute -top-1 -right-1">
+                  <StatusBadge variant="not-implemented" testId="badge-search-mobile" />
+                </div>
+              </button>
 
               {/* Notifications */}
-              <div className="flex items-center gap-2">
+              {isEnabled('notifications') && (
                 <button
                   className="p-2.5 rounded-lg relative transition-colors"
                   style={{
@@ -254,8 +256,7 @@ export default function Layout() {
                 >
                   <Bell className="h-5 w-5" />
                 </button>
-                <StatusBadge variant="not-implemented" testId="badge-notifications" />
-              </div>
+              )}
 
               {/* Feature Flags */}
               <button
