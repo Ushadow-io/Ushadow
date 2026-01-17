@@ -848,18 +848,18 @@ class DockerManager:
 
         return conflicts
 
-    async def start_service(self, service_name: str, instance_id: Optional[str] = None) -> tuple[bool, str]:
+    async def start_service(self, service_name: str, config_id: Optional[str] = None) -> tuple[bool, str]:
         """
         Start a Docker service.
 
         Args:
             service_name: Name of the service to start
-            instance_id: Optional instance ID for wiring-aware env resolution
+            config_id: Optional instance ID for wiring-aware env resolution
 
         Returns:
             Tuple of (success: bool, message: str)
         """
-        logger.info(f"start_service called with: {repr(service_name)}, instance_id={instance_id}")
+        logger.info(f"start_service called with: {repr(service_name)}, config_id={config_id}")
 
         # Validate service name first
         valid, error_msg = self.validate_service_name(service_name)
@@ -887,7 +887,7 @@ class DockerManager:
             # Container doesn't exist - try to start via compose if compose_file is specified
             compose_file = self.MANAGEABLE_SERVICES[service_name].get("compose_file")
             if compose_file:
-                return await self._start_service_via_compose(service_name, compose_file, instance_id)
+                return await self._start_service_via_compose(service_name, compose_file, config_id)
 
             logger.error(f"Container not found for service: {service_name}")
             return False, "Service not found"
@@ -963,7 +963,7 @@ class DockerManager:
         return resolved
 
     async def _build_env_vars_for_service(
-        self, service_name: str, instance_id: Optional[str] = None
+        self, service_name: str, config_id: Optional[str] = None
     ) -> tuple[Dict[str, str], Dict[str, str]]:
         """
         Build environment variables for a service.
@@ -973,7 +973,7 @@ class DockerManager:
 
         Args:
             service_name: Name of the service
-            instance_id: Optional instance ID for wiring-aware resolution
+            config_id: Optional instance ID for wiring-aware resolution
 
         Returns:
             Tuple of (subprocess_env, container_env):
@@ -1006,11 +1006,11 @@ class DockerManager:
                     # Get env vars from capability resolver
                     # Capability resolver takes priority over compose config because:
                     # - Wired provider instances may have custom config overrides
-                    # - Instance-specific config should override global defaults
+                    # - ServiceConfig-specific config should override global defaults
                     try:
-                        # Use instance-aware resolution if instance_id provided
-                        if instance_id:
-                            cap_env = await resolver.resolve_for_instance(instance_id)
+                        # Use instance-aware resolution if config_id provided
+                        if config_id:
+                            cap_env = await resolver.resolve_for_instance(config_id)
                         else:
                             cap_env = await resolver.resolve_for_service(service_name)
 
@@ -1028,6 +1028,41 @@ class DockerManager:
                             subprocess_env[key] = value
                     except Exception as e:
                         logger.debug(f"CapabilityResolver fallback for {service_name}: {e}")
+
+                # Apply ServiceConfig-specific env var overrides (highest priority)
+                if config_id:
+                    from src.services.service_config_manager import get_service_config_manager
+                    sc_manager = get_service_config_manager()
+                    service_config = sc_manager.get_service_config(config_id)
+
+                    if service_config and service_config.config.values:
+                        for key, value in service_config.config.values.items():
+                            # Skip internal metadata fields (prefixed with _)
+                            if key.startswith('_'):
+                                continue
+
+                            # Handle _from_setting references
+                            if isinstance(value, dict) and '_from_setting' in value:
+                                # Resolve the setting path
+                                from src.config.omegaconf_settings import get_settings_store
+                                settings = get_settings_store()
+                                setting_path = value['_from_setting']
+                                resolved_value = await settings.get(setting_path)
+                                if resolved_value:
+                                    value = str(resolved_value)
+                                else:
+                                    continue
+
+                            # Apply the override
+                            if key in container_env and str(container_env[key]) != str(value):
+                                old_val = mask_if_secret(key, container_env[key])
+                                new_val = mask_if_secret(key, value)
+                                logger.info(
+                                    f"[ServiceConfig Override] {key}: {old_val} -> {new_val} "
+                                    f"(config_id={config_id})"
+                                )
+                            container_env[key] = str(value)
+                            subprocess_env[key] = str(value)
 
                 # Apply port overrides from services.{name}.ports
                 from src.config.omegaconf_settings import get_settings_store
@@ -1084,9 +1119,9 @@ class DockerManager:
                 logger.warning(f"Service {service_name}: {warning}")
 
             # Resolve all env vars for the container
-            # Use instance-aware resolution if instance_id provided
-            if instance_id:
-                container_env = await resolver.resolve_for_instance(instance_id)
+            # Use instance-aware resolution if config_id provided
+            if config_id:
+                container_env = await resolver.resolve_for_instance(config_id)
             else:
                 container_env = await resolver.resolve_for_service(service_name)
 
@@ -1095,7 +1130,7 @@ class DockerManager:
 
             logger.info(
                 f"Resolved {len(container_env)} env vars for {service_name} "
-                f"via capability resolver" + (f" (instance={instance_id})" if instance_id else "")
+                f"via capability resolver" + (f" (instance={config_id})" if config_id else "")
             )
 
         except ValueError:
@@ -1164,14 +1199,14 @@ class DockerManager:
             logger.error(f"Error starting infra services: {e}")
             return False, f"Failed to start infrastructure: {str(e)}"
 
-    async def _start_service_via_compose(self, service_name: str, compose_file: str, instance_id: Optional[str] = None) -> tuple[bool, str]:
+    async def _start_service_via_compose(self, service_name: str, compose_file: str, config_id: Optional[str] = None) -> tuple[bool, str]:
         """
         Start a service using docker-compose.
 
         Args:
             service_name: Name of the service to start
             compose_file: Relative path to the compose file (from project root)
-            instance_id: Optional instance ID for wiring-aware env resolution
+            config_id: Optional instance ID for wiring-aware env resolution
 
         Returns:
             Tuple of (success: bool, message: str)
@@ -1232,7 +1267,7 @@ class DockerManager:
 
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution
-            subprocess_env, container_env = await self._build_env_vars_for_service(service_name, instance_id)
+            subprocess_env, container_env = await self._build_env_vars_for_service(service_name, config_id)
 
             # Suppress orphan warnings when running services from different compose files
             # in the same project namespace (e.g., chronicle + main backend share auth)

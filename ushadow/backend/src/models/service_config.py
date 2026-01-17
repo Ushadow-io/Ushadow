@@ -1,11 +1,11 @@
 """
-Instance and Wiring Models
+ServiceConfig and Wiring Models
 
 Unified model for service/provider instances and capability wiring.
 
 Core concepts:
 - Template: Discovered from compose/*.yaml or providers/*.yaml
-- Instance: Template + Config Set + Deployment Target
+- ServiceConfig: Template + Config Set + Deployment Target
 - Wiring: Connects instance outputs to instance inputs
 """
 
@@ -24,7 +24,7 @@ class TemplateSource(str, Enum):
     PROVIDER = "provider"    # providers/*.yaml
 
 
-class InstanceStatus(str, Enum):
+class ServiceConfigStatus(str, Enum):
     """Status of an instance."""
     PENDING = "pending"          # Created but not deployed
     DEPLOYING = "deploying"      # Deployment in progress
@@ -79,47 +79,67 @@ class Template(BaseModel):
     installed: bool = Field(default=True, description="Whether service is installed (default or user-added)")
 
 
-class InstanceConfig(BaseModel):
+class ConfigValues(BaseModel):
     """Configuration values for an instance."""
     values: Dict[str, Any] = Field(default_factory=dict, description="Config key-value pairs")
 
 
-class InstanceOutputs(BaseModel):
+class EnvVarSource(str, Enum):
+    """Source of an environment variable value."""
+    OS_ENVIRON = "os.environ"          # From host environment variables
+    DEFAULT = "default"                # From template default value
+    SETTINGS = "settings"              # From global settings store
+    PROVIDER = "provider"              # From wired provider instance
+    OVERRIDE = "override"              # From ServiceConfig-specific override
+    INFRASTRUCTURE = "infrastructure"  # From K8s/deployment backend
+
+
+class EnvVarValue(BaseModel):
+    """Environment variable with source tracking."""
+    value: str = Field(..., description="Resolved value")
+    source: EnvVarSource = Field(..., description="Where this value came from")
+    source_path: Optional[str] = Field(None, description="Path/identifier in the source (e.g., settings path, provider ID)")
+
+
+class ServiceOutputs(BaseModel):
     """Outputs from an instance after deployment."""
     access_url: Optional[str] = Field(None, description="URL to access the service")
-    env_vars: Dict[str, str] = Field(default_factory=dict, description="Resolved environment variables")
+    env_vars: Dict[str, EnvVarValue] = Field(
+        default_factory=dict,
+        description="Resolved environment variables with source tracking"
+    )
     capability_values: Dict[str, Any] = Field(
         default_factory=dict,
         description="Values for the capability this instance provides"
     )
 
 
-class Instance(BaseModel):
+class ServiceConfig(BaseModel):
     """
-    An instance of a template with configuration applied.
+    An service configuration of a template with configuration applied.
 
-    Instance = Template + Config Set + Deployment Target
+    ServiceConfig = Template + Config Set + Deployment Target
 
-    Instances have inputs (config values, capability requirements)
+    ServiceConfigs have inputs (config values, capability requirements)
     and outputs (resolved config + access URL after deployment).
     """
     id: str = Field(..., description="Unique instance identifier (e.g., 'openmemory-prod')")
     template_id: str = Field(..., description="Reference to the template")
     name: str = Field(..., description="Display name for this instance")
-    description: Optional[str] = Field(None, description="Instance description")
+    description: Optional[str] = Field(None, description="ServiceConfig description")
 
     # Configuration
-    config: InstanceConfig = Field(default_factory=InstanceConfig, description="Config values")
+    config: ConfigValues = Field(default_factory=ConfigValues, description="Config values")
 
     # Deployment
     deployment_target: Optional[str] = Field(
         None,
         description="Deployment target: None=local docker, hostname=u-node, 'cloud'=no deployment"
     )
-    status: InstanceStatus = Field(default=InstanceStatus.PENDING, description="Current status")
+    status: ServiceConfigStatus = Field(default=ServiceConfigStatus.PENDING, description="Current status")
 
     # Outputs (populated after deployment or for cloud providers)
-    outputs: InstanceOutputs = Field(default_factory=InstanceOutputs, description="Instance outputs")
+    outputs: ServiceOutputs = Field(default_factory=ServiceOutputs, description="ServiceConfig outputs")
 
     # Deployment tracking
     container_id: Optional[str] = Field(None, description="Docker container ID when deployed")
@@ -163,11 +183,11 @@ class Wiring(BaseModel):
     id: str = Field(..., description="Unique wiring identifier")
 
     # Source (provides the capability)
-    source_instance_id: str = Field(..., description="Instance providing the capability")
+    source_config_id: str = Field(..., description="ServiceConfig providing the capability")
     source_capability: str = Field(..., description="Capability being provided (e.g., 'llm', 'memory')")
 
     # Target (consumes the capability)
-    target_instance_id: str = Field(..., description="Instance consuming the capability")
+    target_config_id: str = Field(..., description="ServiceConfig consuming the capability")
     target_capability: str = Field(..., description="Capability slot being filled")
 
     # Metadata
@@ -177,7 +197,7 @@ class Wiring(BaseModel):
 
 # API Request/Response Models
 
-class InstanceCreate(BaseModel):
+class ServiceConfigCreate(BaseModel):
     """Request to create a new instance."""
     id: str = Field(..., min_length=1, max_length=100, pattern=r'^[a-z0-9-]+$')
     template_id: str = Field(..., description="Template to instantiate")
@@ -187,7 +207,7 @@ class InstanceCreate(BaseModel):
     deployment_target: Optional[str] = Field(None, description="Where to deploy")
 
 
-class InstanceUpdate(BaseModel):
+class ServiceConfigUpdate(BaseModel):
     """Request to update an instance."""
     name: Optional[str] = None
     description: Optional[str] = None
@@ -197,18 +217,18 @@ class InstanceUpdate(BaseModel):
 
 class WiringCreate(BaseModel):
     """Request to create a wiring connection."""
-    source_instance_id: str
+    source_config_id: str
     source_capability: str
-    target_instance_id: str
+    target_config_id: str
     target_capability: str
 
 
-class InstanceSummary(BaseModel):
+class ServiceConfigSummary(BaseModel):
     """Lightweight instance info for listings."""
     id: str
     template_id: str
     name: str
-    status: InstanceStatus
+    status: ServiceConfigStatus
     provides: Optional[str] = None
     deployment_target: Optional[str] = None
     access_url: Optional[str] = None

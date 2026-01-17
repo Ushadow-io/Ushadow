@@ -3,7 +3,7 @@ Deployment models for service orchestration across u-nodes.
 
 This module defines:
 - ServiceDefinition: A deployable service configuration (Docker container spec)
-- Deployment: An instance of a service deployed to a specific node
+- Deployment: A service config of a service deployed to a specific node
 """
 
 from datetime import datetime
@@ -152,7 +152,7 @@ class Deployment(BaseModel):
     id: str = Field(..., description="Unique deployment ID")
     service_id: str = Field(..., description="Reference to ServiceDefinition")
     unode_hostname: str = Field(..., description="Target u-node hostname")
-    instance_id: Optional[str] = Field(None, description="Instance ID (for instance-based deployments)")
+    config_id: Optional[str] = Field(None, description="ServiceConfig ID (for instance-based deployments)")
 
     # Status
     status: DeploymentStatus = Field(

@@ -5,23 +5,23 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.models.instance import (
-    Instance,
-    InstanceCreate,
-    InstanceSummary,
-    InstanceUpdate,
+from src.models.service_config import (
+    ServiceConfig,
+    ServiceConfigCreate,
+    ServiceConfigSummary,
+    ServiceConfigUpdate,
     Template,
     TemplateSource,
     Wiring,
     WiringCreate,
 )
 from src.services.auth import get_current_user
-from src.services.instance_manager import get_instance_manager
+from src.services.service_config_manager import get_service_config_manager
 from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/instances", tags=["instances"])
+router = APIRouter(prefix="/api/svc-configs", tags=["instances"])
 
 
 async def _check_provider_configured(provider) -> bool:
@@ -197,23 +197,23 @@ async def get_template(
 
 
 # =============================================================================
-# Instance Endpoints
+# ServiceConfig Endpoints
 # =============================================================================
 
-@router.get("", response_model=List[InstanceSummary])
-async def list_instances(
+@router.get("", response_model=List[ServiceConfigSummary])
+async def list_service_configs(
     current_user: dict = Depends(get_current_user),
-) -> List[InstanceSummary]:
+) -> List[ServiceConfigSummary]:
     """List all instances."""
-    manager = get_instance_manager()
-    return manager.list_instances()
+    manager = get_service_config_manager()
+    return manager.list_service_configs()
 
 
-@router.get("/{instance_id}", response_model=Instance)
+@router.get("/{config_id}", response_model=ServiceConfig)
 async def get_instance(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
-) -> Instance:
+) -> ServiceConfig:
     """Get an instance by ID.
 
     The config.values will only contain override values - values that differ
@@ -221,13 +221,13 @@ async def get_instance(
     1. OmegaConf.is_interpolation to identify inherited values (interpolations)
     2. Comparison with template defaults for direct values
     """
-    manager = get_instance_manager()
-    instance = manager.get_instance(instance_id)
+    manager = get_service_config_manager()
+    instance = manager.get_service_config(config_id)
     if not instance:
-        raise HTTPException(status_code=404, detail=f"Instance not found: {instance_id}")
+        raise HTTPException(status_code=404, detail=f"ServiceConfig not found: {config_id}")
 
     # Get raw overrides (non-interpolation values)
-    overrides = manager.get_config_overrides(instance_id)
+    overrides = manager.get_config_overrides(config_id)
 
     # For existing instances with direct values, also compare with template defaults
     # to filter out values that match the template
@@ -267,11 +267,11 @@ async def get_instance(
     return instance
 
 
-@router.post("", response_model=Instance)
+@router.post("", response_model=ServiceConfig)
 async def create_instance(
-    data: InstanceCreate,
+    data: ServiceConfigCreate,
     current_user: dict = Depends(get_current_user),
-) -> Instance:
+) -> ServiceConfig:
     """Create a new instance from a template.
 
     Config values that match template defaults are filtered out,
@@ -314,10 +314,10 @@ async def create_instance(
             # Fall back to using all provided config
 
     # Create instance with filtered config
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
     try:
         # Create a modified data object with filtered config
-        from src.models.instance import InstanceCreate as IC
+        from src.models.service_config import ServiceConfigCreate as IC
         filtered_data = IC(
             id=data.id,
             template_id=data.template_id,
@@ -331,18 +331,18 @@ async def create_instance(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/{instance_id}", response_model=Instance)
+@router.put("/{config_id}", response_model=ServiceConfig)
 async def update_instance(
-    instance_id: str,
-    data: InstanceUpdate,
+    config_id: str,
+    data: ServiceConfigUpdate,
     current_user: dict = Depends(get_current_user),
-) -> Instance:
+) -> ServiceConfig:
     """Update an instance.
 
     Config values that match template defaults are filtered out,
     so only actual overrides are stored.
     """
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
 
     # If config is being updated, filter to only include overrides
     if data.config is not None:
@@ -350,8 +350,8 @@ async def update_instance(
 
         if filtered_config:
             try:
-                # Get the instance to find its template_id
-                instance = manager.get_instance(instance_id)
+                # Get the service config to find its template_id
+                instance = manager.get_service_config(config_id)
                 if instance:
                     from src.services.capability_resolver import get_capability_resolver
                     settings = get_settings_store()
@@ -382,7 +382,7 @@ async def update_instance(
                 logger.debug(f"Could not filter against template defaults: {e}")
 
         # Create a modified data object with filtered config
-        from src.models.instance import InstanceUpdate as IU
+        from src.models.service_config import ServiceConfigUpdate as IU
         data = IU(
             name=data.name,
             description=data.description,
@@ -391,52 +391,52 @@ async def update_instance(
         )
 
     try:
-        return manager.update_instance(instance_id, data)
+        return manager.update_instance(config_id, data)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/{instance_id}")
+@router.delete("/{config_id}")
 async def delete_instance(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Delete an instance."""
-    manager = get_instance_manager()
-    if not manager.delete_instance(instance_id):
-        raise HTTPException(status_code=404, detail=f"Instance not found: {instance_id}")
-    return {"success": True, "message": f"Instance {instance_id} deleted"}
+    manager = get_service_config_manager()
+    if not manager.delete_instance(config_id):
+        raise HTTPException(status_code=404, detail=f"ServiceConfig not found: {config_id}")
+    return {"success": True, "message": f"ServiceConfig {config_id} deleted"}
 
 
-@router.post("/{instance_id}/deploy")
+@router.post("/{config_id}/deploy")
 async def deploy_instance(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Deploy/start an instance.
 
     For compose services, this starts the docker container.
-    For cloud providers, this marks the instance as active.
+    For cloud providers, this marks the service config as active.
     """
-    manager = get_instance_manager()
-    success, message = await manager.deploy_instance(instance_id)
+    manager = get_service_config_manager()
+    success, message = await manager.deploy_instance(config_id)
     if not success:
         raise HTTPException(status_code=400, detail=message)
     return {"success": True, "message": message}
 
 
-@router.post("/{instance_id}/undeploy")
+@router.post("/{config_id}/undeploy")
 async def undeploy_instance(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Stop/undeploy an instance.
 
     For compose services, this stops the docker container.
-    For cloud providers, this marks the instance as inactive.
+    For cloud providers, this marks the service config as inactive.
     """
-    manager = get_instance_manager()
-    success, message = await manager.undeploy_instance(instance_id)
+    manager = get_service_config_manager()
+    success, message = await manager.undeploy_instance(config_id)
     if not success:
         raise HTTPException(status_code=400, detail=message)
     return {"success": True, "message": message}
@@ -451,7 +451,7 @@ async def list_wiring(
     current_user: dict = Depends(get_current_user),
 ) -> List[Wiring]:
     """List all wiring connections."""
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
     return manager.list_wiring()
 
 
@@ -460,21 +460,21 @@ async def get_defaults(
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, str]:
     """Get default capability -> instance mappings."""
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
     return manager.get_defaults()
 
 
 @router.put("/wiring/defaults/{capability}")
 async def set_default(
     capability: str,
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Set default instance for a capability."""
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
     try:
-        manager.set_default(capability, instance_id)
-        return {"success": True, "capability": capability, "instance_id": instance_id}
+        manager.set_default(capability, config_id)
+        return {"success": True, "capability": capability, "config_id": config_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -485,7 +485,7 @@ async def create_wiring(
     current_user: dict = Depends(get_current_user),
 ) -> Wiring:
     """Create a wiring connection."""
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
     try:
         return manager.create_wiring(data)
     except ValueError as e:
@@ -498,32 +498,32 @@ async def delete_wiring(
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Delete a wiring connection."""
-    manager = get_instance_manager()
+    manager = get_service_config_manager()
     if not manager.delete_wiring(wiring_id):
         raise HTTPException(status_code=404, detail=f"Wiring not found: {wiring_id}")
     return {"success": True, "message": f"Wiring {wiring_id} deleted"}
 
 
-@router.get("/{instance_id}/wiring", response_model=List[Wiring])
+@router.get("/{config_id}/wiring", response_model=List[Wiring])
 async def get_instance_wiring(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> List[Wiring]:
     """Get wiring connections for an instance."""
-    manager = get_instance_manager()
-    instance = manager.get_instance(instance_id)
+    manager = get_service_config_manager()
+    instance = manager.get_service_config(config_id)
     if not instance:
-        raise HTTPException(status_code=404, detail=f"Instance not found: {instance_id}")
-    return manager.get_wiring_for_instance(instance_id)
+        raise HTTPException(status_code=404, detail=f"ServiceConfig not found: {config_id}")
+    return manager.get_wiring_for_instance(config_id)
 
 
 # =============================================================================
 # Integration-Specific Endpoints
 # =============================================================================
 
-@router.post("/{instance_id}/test-connection")
+@router.post("/{config_id}/test-connection")
 async def test_integration_connection(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -534,14 +534,14 @@ async def test_integration_connection(
     from src.services.integration_operations import get_integration_operations
 
     ops = get_integration_operations()
-    success, message = await ops.test_connection(instance_id)
+    success, message = await ops.test_connection(config_id)
 
     return {"success": success, "message": message}
 
 
-@router.post("/{instance_id}/sync")
+@router.post("/{config_id}/sync")
 async def trigger_integration_sync(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -552,7 +552,7 @@ async def trigger_integration_sync(
     from src.services.integration_operations import get_integration_operations
 
     ops = get_integration_operations()
-    result = await ops.sync_now(instance_id)
+    result = await ops.sync_now(config_id)
 
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Sync failed"))
@@ -560,9 +560,9 @@ async def trigger_integration_sync(
     return result
 
 
-@router.get("/{instance_id}/sync-status")
+@router.get("/{config_id}/sync-status")
 async def get_integration_sync_status(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -573,7 +573,7 @@ async def get_integration_sync_status(
     from src.services.integration_operations import get_integration_operations
 
     ops = get_integration_operations()
-    result = ops.get_sync_status(instance_id)
+    result = ops.get_sync_status(config_id)
 
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
@@ -581,21 +581,21 @@ async def get_integration_sync_status(
     return result
 
 
-@router.post("/{instance_id}/sync/enable")
+@router.post("/{config_id}/sync/enable")
 async def enable_integration_auto_sync(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Enable automatic syncing for an integration.
 
     Only works for integration instances (instances with integration_type set).
-    Requires sync_interval to be configured on the instance.
+    Requires sync_interval to be configured on the service config.
     """
     from src.services.integration_operations import get_integration_operations
 
     ops = get_integration_operations()
-    success, message = await ops.enable_auto_sync(instance_id)
+    success, message = await ops.enable_auto_sync(config_id)
 
     if not success:
         raise HTTPException(status_code=400, detail=message)
@@ -603,9 +603,9 @@ async def enable_integration_auto_sync(
     return {"success": True, "message": message}
 
 
-@router.post("/{instance_id}/sync/disable")
+@router.post("/{config_id}/sync/disable")
 async def disable_integration_auto_sync(
-    instance_id: str,
+    config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -616,7 +616,7 @@ async def disable_integration_auto_sync(
     from src.services.integration_operations import get_integration_operations
 
     ops = get_integration_operations()
-    success, message = await ops.disable_auto_sync(instance_id)
+    success, message = await ops.disable_auto_sync(config_id)
 
     if not success:
         raise HTTPException(status_code=400, detail=message)

@@ -157,6 +157,12 @@ class KubernetesDeploymentSpec(BaseModel):
         description="HTTP path for liveness/readiness probes. Set to None to disable health checks. Default: /health"
     )
 
+    # DNS configuration
+    dns_policy: Optional[str] = Field(
+        None,
+        description="DNS policy for pod (ClusterFirst, Default, ClusterFirstWithHostNet, None). Default: ClusterFirst"
+    )
+
     # Advanced options
     annotations: Dict[str, str] = Field(default_factory=dict)
     labels: Dict[str, str] = Field(default_factory=dict)

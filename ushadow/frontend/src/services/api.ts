@@ -573,7 +573,7 @@ export const kubernetesApi = {
       `/api/kubernetes/${clusterId}/envmap`,
       { namespace: 'default', ...data }
     ),
-  deployService: (clusterId: string, data: { service_id: string; namespace?: string; k8s_spec?: any; instance_id?: string }) =>
+  deployService: (clusterId: string, data: { service_id: string; namespace?: string; k8s_spec?: any; config_id?: string }) =>
     api.post<{ success: boolean; message: string; service_id: string; namespace: string }>(
       `/api/kubernetes/${clusterId}/deploy`,
       { namespace: 'default', ...data }
@@ -1063,14 +1063,14 @@ export const memoriesApi = {
 }
 
 // =============================================================================
-// Instances API (templates, instances, wiring)
+// ServiceConfigs API (templates, instances, wiring)
 // =============================================================================
 
 /** Template source - where the template was discovered from */
 export type TemplateSource = 'compose' | 'provider'
 
-/** Instance status */
-export type InstanceStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
+/** ServiceConfig status */
+export type ServiceConfigStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
 
 /** Template - discovered from compose or provider files */
 export interface Template {
@@ -1103,28 +1103,28 @@ export interface Template {
   installed: boolean   // Whether service is installed (for compose services)
 }
 
-/** Instance config values */
-export interface InstanceConfig {
+/** ServiceConfig config values */
+export interface ConfigValues {
   values: Record<string, any>
 }
 
-/** Instance outputs after deployment */
-export interface InstanceOutputs {
+/** ServiceConfig outputs after deployment */
+export interface ServiceOutputs {
   access_url?: string
   env_vars: Record<string, string>
   capability_values: Record<string, any>
 }
 
-/** Instance - configured deployment of a template */
-export interface Instance {
+/** ServiceConfig - configured deployment of a template */
+export interface ServiceConfig {
   id: string
   template_id: string
   name: string
   description?: string
-  config: InstanceConfig
+  config: ConfigValues
   deployment_target?: string
-  status: InstanceStatus
-  outputs: InstanceOutputs
+  status: ServiceConfigStatus
+  outputs: ServiceOutputs
   container_id?: string
   container_name?: string
   deployment_id?: string
@@ -1143,12 +1143,12 @@ export interface Instance {
   next_sync_at?: string
 }
 
-/** Instance summary for list views */
-export interface InstanceSummary {
+/** ServiceConfig summary for list views */
+export interface ServiceConfigSummary {
   id: string
   template_id: string
   name: string
-  status: InstanceStatus
+  status: ServiceConfigStatus
   provides?: string
   deployment_target?: string
   access_url?: string
@@ -1157,15 +1157,15 @@ export interface InstanceSummary {
 /** Wiring connection between instances */
 export interface Wiring {
   id: string
-  source_instance_id: string
+  source_config_id: string
   source_capability: string
-  target_instance_id: string
+  target_config_id: string
   target_capability: string
   created_at?: string
 }
 
 /** Request to create an instance */
-export interface InstanceCreateRequest {
+export interface ServiceConfigCreateRequest {
   id: string
   template_id: string
   name: string
@@ -1175,7 +1175,7 @@ export interface InstanceCreateRequest {
 }
 
 /** Request to update an instance */
-export interface InstanceUpdateRequest {
+export interface ServiceConfigUpdateRequest {
   name?: string
   description?: string
   config?: Record<string, any>
@@ -1184,75 +1184,75 @@ export interface InstanceUpdateRequest {
 
 /** Request to create wiring */
 export interface WiringCreateRequest {
-  source_instance_id: string
+  source_config_id: string
   source_capability: string
-  target_instance_id: string
+  target_config_id: string
   target_capability: string
 }
 
-export const instancesApi = {
+export const svcConfigsApi = {
   // Templates
   /** List all templates (compose services + providers) */
   getTemplates: (source?: TemplateSource) =>
-    api.get<Template[]>('/api/instances/templates', { params: source ? { source } : {} }),
+    api.get<Template[]>('/api/svc-configs/templates', { params: source ? { source } : {} }),
 
   /** Get a template by ID */
   getTemplate: (templateId: string) =>
-    api.get<Template>(`/api/instances/templates/${templateId}`),
+    api.get<Template>(`/api/svc-configs/templates/${templateId}`),
 
-  // Instances
+  // ServiceConfigs
   /** List all instances */
-  getInstances: () =>
-    api.get<InstanceSummary[]>('/api/instances'),
+  getServiceConfigs: () =>
+    api.get<ServiceConfigSummary[]>('/api/svc-configs'),
 
   /** Get an instance by ID */
-  getInstance: (instanceId: string) =>
-    api.get<Instance>(`/api/instances/${instanceId}`),
+  getServiceConfig: (instanceId: string) =>
+    api.get<ServiceConfig>(`/api/svc-configs/${instanceId}`),
 
   /** Create a new instance */
-  createInstance: (data: InstanceCreateRequest) =>
-    api.post<Instance>('/api/instances', data),
+  createServiceConfig: (data: ServiceConfigCreateRequest) =>
+    api.post<ServiceConfig>('/api/svc-configs', data),
 
   /** Update an instance */
-  updateInstance: (instanceId: string, data: InstanceUpdateRequest) =>
-    api.put<Instance>(`/api/instances/${instanceId}`, data),
+  updateServiceConfig: (instanceId: string, data: ServiceConfigUpdateRequest) =>
+    api.put<ServiceConfig>(`/api/svc-configs/${instanceId}`, data),
 
   /** Delete an instance */
-  deleteInstance: (instanceId: string) =>
-    api.delete(`/api/instances/${instanceId}`),
+  deleteServiceConfig: (instanceId: string) =>
+    api.delete(`/api/svc-configs/${instanceId}`),
 
   /** Deploy/start an instance */
-  deployInstance: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/deploy`),
+  deployServiceConfig: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/deploy`),
 
   /** Undeploy/stop an instance */
-  undeployInstance: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/undeploy`),
+  undeployServiceConfig: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/undeploy`),
 
   // Wiring
   /** List all wiring connections */
   getWiring: () =>
-    api.get<Wiring[]>('/api/instances/wiring/all'),
+    api.get<Wiring[]>('/api/svc-configs/wiring/all'),
 
   /** Get default capability mappings */
   getDefaults: () =>
-    api.get<Record<string, string>>('/api/instances/wiring/defaults'),
+    api.get<Record<string, string>>('/api/svc-configs/wiring/defaults'),
 
   /** Set default instance for a capability */
   setDefault: (capability: string, instanceId: string) =>
-    api.put(`/api/instances/wiring/defaults/${capability}`, null, { params: { instance_id: instanceId } }),
+    api.put(`/api/svc-configs/wiring/defaults/${capability}`, null, { params: { config_id: instanceId } }),
 
   /** Create a wiring connection */
   createWiring: (data: WiringCreateRequest) =>
-    api.post<Wiring>('/api/instances/wiring', data),
+    api.post<Wiring>('/api/svc-configs/wiring', data),
 
   /** Delete a wiring connection */
   deleteWiring: (wiringId: string) =>
-    api.delete(`/api/instances/wiring/${wiringId}`),
+    api.delete(`/api/svc-configs/wiring/${wiringId}`),
 
   /** Get wiring for a specific instance */
-  getInstanceWiring: (instanceId: string) =>
-    api.get<Wiring[]>(`/api/instances/${instanceId}/wiring`),
+  getServiceConfigWiring: (instanceId: string) =>
+    api.get<Wiring[]>(`/api/svc-configs/${instanceId}/wiring`),
 }
 
 export const graphApi = {
@@ -1467,21 +1467,21 @@ export interface IntegrationConnectionResult {
 export const integrationApi = {
   /** Test connection to an integration */
   testConnection: (instanceId: string) =>
-    api.post<IntegrationConnectionResult>(`/api/instances/${instanceId}/test-connection`),
+    api.post<IntegrationConnectionResult>(`/api/svc-configs/${instanceId}/test-connection`),
 
   /** Manually trigger sync for an integration */
   syncNow: (instanceId: string) =>
-    api.post<IntegrationSyncResult>(`/api/instances/${instanceId}/sync`),
+    api.post<IntegrationSyncResult>(`/api/svc-configs/${instanceId}/sync`),
 
   /** Get current sync status for an integration */
   getSyncStatus: (instanceId: string) =>
-    api.get<IntegrationSyncStatus>(`/api/instances/${instanceId}/sync-status`),
+    api.get<IntegrationSyncStatus>(`/api/svc-configs/${instanceId}/sync-status`),
 
   /** Enable automatic syncing for an integration */
   enableAutoSync: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/enable`),
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/sync/enable`),
 
   /** Disable automatic syncing for an integration */
   disableAutoSync: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/disable`),
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/sync/disable`),
 }

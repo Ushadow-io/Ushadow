@@ -21,7 +21,7 @@ interface EnvVarEditorProps {
  * Used by:
  * - ServicesPage (for Docker service configuration)
  * - DeployToK8sModal (for K8s deployment configuration)
- * - InstancesPage (for instance configuration)
+ * - ServiceConfigsPage (for instance configuration)
  */
 export default function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
   const [editing, setEditing] = useState(false)
@@ -177,9 +177,9 @@ export default function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorP
           // Value input
           <input
             type={isSecret ? 'password' : 'text'}
-            value={config.source === 'setting' ? '' : config.value || ''}
+            value={config.source === 'setting' ? '' : config.value || envVar.resolved_value || ''}
             onChange={(e) => handleValueChange(e.target.value)}
-            placeholder="enter value"
+            placeholder={envVar.resolved_value ? `using: ${envVar.resolved_value}` : 'enter value'}
             className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
             autoFocus={editing}
             onBlur={() => {

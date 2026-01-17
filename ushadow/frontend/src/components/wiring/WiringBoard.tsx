@@ -73,9 +73,9 @@ interface ConsumerInfo {
 
 interface WiringInfo {
   id: string
-  source_instance_id: string
+  source_config_id: string
   source_capability: string
-  target_instance_id: string
+  target_config_id: string
   target_capability: string
 }
 
@@ -92,8 +92,8 @@ interface WiringBoardProps {
   onProviderDrop: (dropInfo: DropInfo) => void
   onDeleteWiring: (consumerId: string, capability: string) => Promise<void>
   onEditProvider: (providerId: string, isTemplate: boolean) => void
-  onCreateInstance: (templateId: string) => void
-  onDeleteInstance: (instanceId: string) => void
+  onCreateServiceConfig: (templateId: string) => void
+  onDeleteServiceConfig: (instanceId: string) => void
   onStartProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
   onStopProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
   // Consumer/Service callbacks
@@ -110,8 +110,8 @@ export default function WiringBoard({
   onProviderDrop,
   onDeleteWiring,
   onEditProvider,
-  onCreateInstance,
-  onDeleteInstance,
+  onCreateServiceConfig,
+  onDeleteServiceConfig,
   onStartProvider,
   onStopProvider,
   onEditConsumer,
@@ -214,11 +214,11 @@ export default function WiringBoard({
   // Get provider for a specific consumer's capability slot
   const getProviderForSlot = (consumerId: string, capability: string) => {
     const wire = wiring.find(
-      (w) => w.target_instance_id === consumerId && w.target_capability === capability
+      (w) => w.target_config_id === consumerId && w.target_capability === capability
     )
     if (wire) {
       return {
-        provider: providers.find((p) => p.id === wire.source_instance_id),
+        provider: providers.find((p) => p.id === wire.source_config_id),
         capability,
       }
     }
@@ -262,7 +262,7 @@ export default function WiringBoard({
                 {Object.values(templates).map(({ template, instances }) => {
                   if (!template) return null // Skip if template not loaded
                   const templateConnectionCount = wiring.filter(
-                    (w) => w.source_instance_id === template.id
+                    (w) => w.source_config_id === template.id
                   ).length
                   return (
                     <div key={template.id} className="space-y-1">
@@ -271,7 +271,7 @@ export default function WiringBoard({
                         provider={template}
                         connectionCount={templateConnectionCount}
                         onEdit={() => onEditProvider(template.id, true)}
-                        onCreateInstance={() => onCreateInstance(template.id)}
+                        onCreateServiceConfig={() => onCreateServiceConfig(template.id)}
                         onStart={onStartProvider ? () => onStartProvider(template.id, true) : undefined}
                         onStop={onStopProvider ? () => onStopProvider(template.id, true) : undefined}
                       />
@@ -280,7 +280,7 @@ export default function WiringBoard({
                         <div className="ml-6 space-y-1 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
                           {instances.map((instance) => {
                             const instanceConnectionCount = wiring.filter(
-                              (w) => w.source_instance_id === instance.id
+                              (w) => w.source_config_id === instance.id
                             ).length
                             return (
                               <DraggableProvider
@@ -288,7 +288,7 @@ export default function WiringBoard({
                                 provider={instance}
                                 connectionCount={instanceConnectionCount}
                                 onEdit={() => onEditProvider(instance.id, false)}
-                                onDelete={() => onDeleteInstance(instance.id)}
+                                onDelete={() => onDeleteServiceConfig(instance.id)}
                                 onStart={onStartProvider ? () => onStartProvider(instance.id, false) : undefined}
                                 onStop={onStopProvider ? () => onStopProvider(instance.id, false) : undefined}
                               />
@@ -391,13 +391,13 @@ interface DraggableProviderProps {
   provider: ProviderInfo
   connectionCount: number
   onEdit: () => void
-  onCreateInstance?: () => void // Only for templates
+  onCreateServiceConfig?: () => void // Only for templates
   onDelete?: () => void // Only for instances
   onStart?: () => Promise<void>
   onStop?: () => Promise<void>
 }
 
-function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance, onDelete, onStart, onStop }: DraggableProviderProps) {
+function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceConfig, onDelete, onStart, onStop }: DraggableProviderProps) {
   const [isStarting, setIsStarting] = useState(false)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: provider.id,
@@ -528,9 +528,9 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
-          {provider.isTemplate && onCreateInstance && (
+          {provider.isTemplate && onCreateServiceConfig && (
             <button
-              onClick={(e) => handleButtonClick(e, onCreateInstance)}
+              onClick={(e) => handleButtonClick(e, onCreateServiceConfig)}
               className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
               title="Create new instance"
               data-testid={`provider-create-instance-${provider.id}`}

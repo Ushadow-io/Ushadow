@@ -34,7 +34,7 @@ import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
 import ServicesPage from './pages/ServicesPage'
 import SettingsPage from './pages/SettingsPage'
-import InstancesPage from './pages/InstancesPage'
+import ServiceConfigsPage from './pages/ServiceConfigsPage'
 import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
 import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
@@ -102,7 +102,7 @@ function AppContent() {
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
                 <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
                 <Route path="services" element={<ServicesPage />} />
-                <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><InstancesPage /></FeatureRoute>} />
+                <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><ServiceConfigsPage /></FeatureRoute>} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
                 <Route path="cluster" element={<ClusterPage />} />

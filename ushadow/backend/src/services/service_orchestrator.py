@@ -367,9 +367,9 @@ class ServiceOrchestrator:
     # Lifecycle Methods
     # =========================================================================
 
-    async def start_service(self, name: str, instance_id: Optional[str] = None) -> ActionResult:
+    async def start_service(self, name: str, config_id: Optional[str] = None) -> ActionResult:
         """Start a service container."""
-        success, message = await self.docker_manager.start_service(name, instance_id)
+        success, message = await self.docker_manager.start_service(name, config_id)
         if success:
             # Regenerate Tailscale Serve routes for newly started service
             self._regenerate_tailscale_routes()
@@ -891,7 +891,7 @@ class ServiceOrchestrator:
 
 
 # =============================================================================
-# Singleton Instance
+# Singleton ServiceConfig
 # =============================================================================
 
 _orchestrator: Optional[ServiceOrchestrator] = None

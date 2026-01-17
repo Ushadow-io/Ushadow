@@ -462,7 +462,7 @@ class ComposeServiceRegistry:
 
 
 # ============================================================================
-# Global Instance
+# Global ServiceConfig
 # ============================================================================
 
 _registry: Optional[ComposeServiceRegistry] = None

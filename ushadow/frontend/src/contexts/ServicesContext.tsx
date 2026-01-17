@@ -7,7 +7,7 @@ import type { PortConflict } from '../hooks/useServiceStart'
 // Types
 // ============================================================================
 
-export interface ServiceInstance {
+export interface ServiceServiceConfig {
   service_id: string
   name: string
   description: string
@@ -58,7 +58,7 @@ export interface PortConflictDialogState {
 
 interface ServicesContextType {
   // State
-  serviceInstances: ComposeService[]
+  serviceServiceConfigs: ComposeService[]
   serviceConfigs: Record<string, Record<string, any>>
   serviceStatuses: Record<string, ContainerStatus>
   loading: boolean
@@ -106,7 +106,7 @@ const ServicesContext = createContext<ServicesContextType | undefined>(undefined
 
 export function ServicesProvider({ children }: { children: ReactNode }) {
   // Core state
-  const [serviceInstances, setServiceInstances] = useState<ComposeService[]>([])
+  const [serviceServiceConfigs, setServiceServiceConfigs] = useState<ComposeService[]>([])
   const [serviceConfigs, setServiceConfigs] = useState<Record<string, Record<string, any>>>({})
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, ContainerStatus>>({})
 
@@ -190,7 +190,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
       instances.forEach((service) => {
         effectiveConfigs[service.service_id] = {}
 
-        // Note: config_schema is available on ServiceInstance (legacy), not ComposeService
+        // Note: config_schema is available on ServiceServiceConfig (legacy), not ComposeService
         const configSchema = (service as any).config_schema as ConfigField[] | undefined
         configSchema?.forEach((field: ConfigField) => {
           if (field.env_var) {
@@ -208,7 +208,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
         })
       })
 
-      setServiceInstances(instances)
+      setServiceServiceConfigs(instances)
       setServiceConfigs(effectiveConfigs)
       await loadServiceStatuses(instances, effectiveConfigs)
     } catch (error) {
@@ -223,7 +223,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   // --------------------------------------------------------------------------
 
   const startService = useCallback(async (serviceId: string) => {
-    const service = serviceInstances.find(s => s.service_id === serviceId)
+    const service = serviceServiceConfigs.find(s => s.service_id === serviceId)
     setStartingService(serviceId)
 
     try {
@@ -255,16 +255,16 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to start service' })
       setStartingService(null)
     }
-  }, [serviceInstances])
+  }, [serviceServiceConfigs])
 
   const stopService = useCallback((serviceId: string) => {
-    const service = serviceInstances.find(s => s.service_id === serviceId)
+    const service = serviceServiceConfigs.find(s => s.service_id === serviceId)
     setConfirmDialog({
       isOpen: true,
       serviceId,
       serviceName: service?.service_name || serviceId,
     })
-  }, [serviceInstances])
+  }, [serviceServiceConfigs])
 
   const confirmStopService = useCallback(async () => {
     const { serviceId } = confirmDialog
@@ -328,7 +328,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
       const newEnabled = !currentEnabled
       await servicesApi.setEnabled(serviceId, newEnabled)
 
-      setServiceInstances(prev =>
+      setServiceServiceConfigs(prev =>
         prev.map(s => s.service_id === serviceId ? { ...s, enabled: newEnabled } : s)
       )
 
@@ -353,7 +353,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   }, [serviceConfigs])
 
   const saveConfig = useCallback(async (serviceId: string) => {
-    const service = serviceInstances.find(s => s.service_id === serviceId)
+    const service = serviceServiceConfigs.find(s => s.service_id === serviceId)
     if (!service) return
 
     setValidationErrors({})
@@ -391,7 +391,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false)
     }
-  }, [serviceInstances, editForm])
+  }, [serviceServiceConfigs, editForm])
 
   const cancelEditing = useCallback(() => {
     setEditingService(null)
@@ -437,7 +437,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
 
   const value: ServicesContextType = {
     // State
-    serviceInstances,
+    serviceServiceConfigs,
     serviceConfigs,
     serviceStatuses,
     loading,

@@ -30,6 +30,7 @@ class ScanInfraRequest(BaseModel):
 class DeployServiceRequest(BaseModel):
     service_id: str
     namespace: str = "default"
+    config_id: Optional[str] = Field(None, description="ServiceConfig ID with env var overrides")
     node_name: Optional[str] = Field(None, description="Target K8s node name for deployment (uses nodeSelector)")
     k8s_spec: Optional[KubernetesDeploymentSpec] = None
 
@@ -291,10 +292,11 @@ async def deploy_service_to_cluster(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
-    # Resolve service with all variables substituted
+    # Resolve service with all variables substituted (including ServiceConfig overrides if provided)
     try:
         resolved_service = await deployment_manager.resolve_service_for_deployment(
-            request.service_id
+            request.service_id,
+            config_id=request.config_id
         )
     except ValueError as e:
         logger.error(f"Failed to resolve service {request.service_id}: {e}")
@@ -307,7 +309,17 @@ async def deploy_service_to_cluster(
         "image": resolved_service.image,
         "environment": resolved_service.environment,
         "ports": resolved_service.ports,  # Already in ["3002:3000"] format
+        "volumes": resolved_service.volumes,  # Volume mounts for config files
     }
+
+    # Update ServiceConfig status to DEPLOYING if config_id provided
+    if request.config_id:
+        from src.services.service_config_manager import get_service_config_manager
+        from src.models.service_config import ServiceConfigStatus
+
+        sc_manager = get_service_config_manager()
+        sc_manager.update_instance_status(request.config_id, ServiceConfigStatus.DEPLOYING)
+        logger.info(f"Updated ServiceConfig {request.config_id} status to DEPLOYING")
 
     # Add node selector if node_name specified
     k8s_spec = request.k8s_spec or KubernetesDeploymentSpec()
@@ -327,7 +339,39 @@ async def deploy_service_to_cluster(
     )
 
     if not success:
+        # Update ServiceConfig status to ERROR if deployment failed
+        if request.config_id:
+            from src.services.service_config_manager import get_service_config_manager
+            from src.models.service_config import ServiceConfigStatus
+
+            sc_manager = get_service_config_manager()
+            sc_manager.update_instance_status(
+                request.config_id,
+                ServiceConfigStatus.ERROR,
+                error=message
+            )
+            logger.error(f"Updated ServiceConfig {request.config_id} status to ERROR: {message}")
+
         raise HTTPException(status_code=500, detail=message)
+
+    # Update ServiceConfig status if config_id was provided
+    if request.config_id:
+        from src.services.service_config_manager import get_service_config_manager
+        from src.models.service_config import ServiceConfigStatus
+
+        sc_manager = get_service_config_manager()
+
+        # Build access URL (use service name if available)
+        service_name = resolved_service.name
+        access_url = f"http://{service_name}.{request.namespace}.svc.cluster.local"
+
+        # Update status to RUNNING after successful deployment
+        sc_manager.update_instance_status(
+            request.config_id,
+            ServiceConfigStatus.RUNNING,
+            access_url=access_url
+        )
+        logger.info(f"Updated ServiceConfig {request.config_id} status to RUNNING")
 
     return {
         "success": True,

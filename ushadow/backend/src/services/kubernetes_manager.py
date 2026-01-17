@@ -623,6 +623,15 @@ class KubernetesManager:
                         "annotations": spec.annotations
                     },
                     "spec": {
+                        # Use ClusterFirst for K8s service DNS resolution
+                        "dnsPolicy": spec.dns_policy or "ClusterFirst",
+                        # Fix ndots:5 breaking uv/Rust DNS while keeping ClusterFirst
+                        # See: docs/IPV6_DNS_FIX.md for why ndots:1 is needed for uv
+                        "dnsConfig": {
+                            "options": [
+                                {"name": "ndots", "value": "1"}
+                            ]
+                        },
                         "containers": [{
                             "name": name,
                             "image": image,
@@ -759,17 +768,28 @@ class KubernetesManager:
 
         Returns True if namespace exists or was created successfully.
         """
-        try:
-            core_api, _ = self._get_kube_client(cluster_id)
+        import asyncio
 
-            # Check if namespace exists
+        try:
+            logger.info(f"Getting K8s client for cluster {cluster_id}...")
+            core_api, _ = self._get_kube_client(cluster_id)
+            logger.info(f"K8s client obtained successfully")
+
+            # Check if namespace exists (run in executor to avoid blocking)
             try:
-                core_api.read_namespace(name=namespace)
+                logger.info(f"Checking if namespace {namespace} exists...")
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    core_api.read_namespace,
+                    namespace
+                )
                 logger.info(f"Namespace {namespace} already exists")
                 return True
             except ApiException as e:
+                logger.info(f"Namespace check failed with status {e.status}: {e.reason}")
                 if e.status == 404:
                     # Namespace doesn't exist, create it
+                    logger.info(f"Namespace {namespace} not found, creating...")
                     namespace_manifest = {
                         "apiVersion": "v1",
                         "kind": "Namespace",
@@ -780,15 +800,28 @@ class KubernetesManager:
                             }
                         }
                     }
-                    core_api.create_namespace(body=namespace_manifest)
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        core_api.create_namespace,
+                        namespace_manifest
+                    )
                     logger.info(f"Created namespace {namespace}")
                     return True
                 else:
                     # Some other error occurred
+                    logger.error(f"API error checking namespace: status={e.status}, reason={e.reason}")
                     raise
 
+        except ApiException as e:
+            logger.error(f"K8s API exception in ensure_namespace_exists: {e}")
+            logger.error(f"Status: {e.status}, Reason: {e.reason}")
+            if hasattr(e, 'body'):
+                logger.error(f"Body: {e.body}")
+            raise
         except Exception as e:
-            logger.error(f"Error ensuring namespace exists: {e}")
+            logger.error(f"Error ensuring namespace exists: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
     async def scan_cluster_for_infra_services(
@@ -1166,10 +1199,24 @@ class KubernetesManager:
             logger.info(f"Service definition: image={service_def.get('image')}, ports={service_def.get('ports')}")
 
             # Ensure namespace exists first
-            await self.ensure_namespace_exists(cluster_id, namespace)
+            logger.info(f"Ensuring namespace {namespace} exists...")
+            import asyncio
+            try:
+                await asyncio.wait_for(
+                    self.ensure_namespace_exists(cluster_id, namespace),
+                    timeout=15.0  # 15 second timeout for namespace check
+                )
+                logger.info(f"Namespace {namespace} ready")
+            except asyncio.TimeoutError:
+                raise Exception(
+                    f"Timeout connecting to Kubernetes cluster. "
+                    f"The cluster may be unreachable. Check network connectivity and kubeconfig."
+                )
 
             # Compile manifests
+            logger.info(f"Compiling K8s manifests for {service_name}...")
             manifests = await self.compile_service_to_k8s(service_def, namespace, k8s_spec)
+            logger.info(f"Manifests compiled successfully")
 
             # Log generated manifests for debugging
             logger.info(f"Generated manifests for {service_name}:")

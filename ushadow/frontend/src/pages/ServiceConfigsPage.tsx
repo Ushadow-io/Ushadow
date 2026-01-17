@@ -25,7 +25,7 @@ import {
   Lock,
 } from 'lucide-react'
 import {
-  instancesApi,
+  svcConfigsApi,
   integrationApi,
   settingsApi,
   servicesApi,
@@ -33,10 +33,10 @@ import {
   clusterApi,
   deploymentsApi,
   Template,
-  Instance,
-  InstanceSummary,
+  ServiceConfig,
+  ServiceConfigSummary,
   Wiring,
-  InstanceCreateRequest,
+  ServiceConfigCreateRequest,
   EnvVarInfo,
   EnvVarConfig,
 } from '../services/api'
@@ -66,15 +66,15 @@ function getErrorMessage(error: any, fallback: string): string {
   return fallback
 }
 
-export default function InstancesPage() {
+export default function ServiceConfigsPage() {
   // Templates state
   const [templates, setTemplates] = useState<Template[]>([])
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set())
 
-  // Instances state
-  const [instances, setInstances] = useState<InstanceSummary[]>([])
-  const [expandedInstances, setExpandedInstances] = useState<Set<string>>(new Set())
-  const [instanceDetails, setInstanceDetails] = useState<Record<string, Instance>>({})
+  // ServiceConfigs state
+  const [instances, setServiceConfigs] = useState<ServiceConfigSummary[]>([])
+  const [expandedServiceConfigs, setExpandedServiceConfigs] = useState<Set<string>>(new Set())
+  const [instanceDetails, setServiceConfigDetails] = useState<Record<string, ServiceConfig>>({})
 
   // Wiring state (per-service connections)
   const [wiring, setWiring] = useState<Wiring[]>([])
@@ -95,7 +95,7 @@ export default function InstancesPage() {
   const [addedProviderIds, setAddedProviderIds] = useState<Set<string>>(new Set())
 
   // Unified instance creation state (used by both + button and drag-drop)
-  const [createInstanceState, setCreateInstanceState] = useState<{
+  const [createServiceConfigState, setCreateServiceConfigState] = useState<{
     isOpen: boolean
     template: Template | null
     form: {
@@ -159,7 +159,7 @@ export default function InstancesPage() {
 
   // ESC key to close modals
   const closeAllModals = useCallback(() => {
-    setCreateInstanceState({
+    setCreateServiceConfigState({
       isOpen: false,
       template: null,
       form: { id: '', name: '', deployment_target: 'local', config: {} },
@@ -188,9 +188,9 @@ export default function InstancesPage() {
     try {
       setLoading(true)
       const [templatesRes, instancesRes, wiringRes, statusesRes] = await Promise.all([
-        instancesApi.getTemplates(),
-        instancesApi.getInstances(),
-        instancesApi.getWiring(),
+        svcConfigsApi.getTemplates(),
+        svcConfigsApi.getServiceConfigs(),
+        svcConfigsApi.getWiring(),
         servicesApi.getAllStatuses().catch(() => ({ data: {} })),
       ])
 
@@ -199,30 +199,30 @@ export default function InstancesPage() {
       console.log('Compose templates (after installed filter):', templatesRes.data.filter((t: any) => t.source === 'compose' && t.installed))
 
       setTemplates(templatesRes.data)
-      setInstances(instancesRes.data)
+      setServiceConfigs(instancesRes.data)
       setWiring(wiringRes.data)
       setServiceStatuses(statusesRes.data || {})
 
       // Load details for provider instances (instances that provide capabilities)
       // This enables the wiring board to show config overrides
       const providerTemplates = templatesRes.data.filter((t) => t.provides && t.source === 'provider')
-      const providerInstances = instancesRes.data.filter((i) =>
+      const providerServiceConfigs = instancesRes.data.filter((i) =>
         providerTemplates.some((t) => t.id === i.template_id)
       )
 
-      if (providerInstances.length > 0) {
-        const detailsPromises = providerInstances.map((i) =>
-          instancesApi.getInstance(i.id).catch(() => null)
+      if (providerServiceConfigs.length > 0) {
+        const detailsPromises = providerServiceConfigs.map((i) =>
+          svcConfigsApi.getServiceConfig(i.id).catch(() => null)
         )
         const detailsResults = await Promise.all(detailsPromises)
 
-        const newDetails: Record<string, Instance> = {}
+        const newDetails: Record<string, ServiceConfig> = {}
         detailsResults.forEach((res, idx) => {
           if (res?.data) {
-            newDetails[providerInstances[idx].id] = res.data
+            newDetails[providerServiceConfigs[idx].id] = res.data
           }
         })
-        setInstanceDetails((prev) => ({ ...prev, ...newDetails }))
+        setServiceConfigDetails((prev) => ({ ...prev, ...newDetails }))
       }
     } catch (error) {
       console.error('Error loading data:', error)
@@ -255,7 +255,7 @@ export default function InstancesPage() {
       await servicesApi.install(serviceId)
       // Reload templates and catalog
       const [templatesRes, catalogRes] = await Promise.all([
-        instancesApi.getTemplates(),
+        svcConfigsApi.getTemplates(),
         servicesApi.getCatalog()
       ])
       setTemplates(templatesRes.data)
@@ -274,7 +274,7 @@ export default function InstancesPage() {
       await servicesApi.uninstall(serviceId)
       // Reload templates and catalog
       const [templatesRes, catalogRes] = await Promise.all([
-        instancesApi.getTemplates(),
+        svcConfigsApi.getTemplates(),
         servicesApi.getCatalog()
       ])
       setTemplates(templatesRes.data)
@@ -301,7 +301,7 @@ export default function InstancesPage() {
   }
 
   // Generate next available instance ID for a template
-  const generateInstanceId = (templateId: string): string => {
+  const generateServiceConfigId = (templateId: string): string => {
     // Find all existing instances that start with this template ID
     const existingIds = instances
       .map((i) => i.id)
@@ -325,16 +325,16 @@ export default function InstancesPage() {
    * @param template - The template to create instance from
    * @param wiring - Optional wiring info (for drag-drop path)
    */
-  const openCreateInstanceModal = (
+  const openCreateServiceConfigModal = (
     template: Template,
     wiring?: { capability: string; consumerId: string; consumerName: string }
   ) => {
     // Generate unique incremental ID
-    const generatedId = generateInstanceId(template.id)
+    const generatedId = generateServiceConfigId(template.id)
 
     // Start with EMPTY config - defaults are shown in UI but not stored
     // Only user-entered values should be in form state
-    setCreateInstanceState({
+    setCreateServiceConfigState({
       isOpen: true,
       template,
       form: {
@@ -351,42 +351,42 @@ export default function InstancesPage() {
    * Unified handler for creating instances (both + button and drag-drop)
    * If wiring info is present, also creates the wiring connection
    */
-  const handleCreateInstance = async () => {
-    if (!createInstanceState.template) return
+  const handleCreateServiceConfig = async () => {
+    if (!createServiceConfigState.template) return
 
-    setCreating(createInstanceState.template.id)
+    setCreating(createServiceConfigState.template.id)
     try {
       // Filter out empty values - only send actual overrides
       const filteredConfig = Object.fromEntries(
-        Object.entries(createInstanceState.form.config).filter(([, v]) => v && v.trim() !== '')
+        Object.entries(createServiceConfigState.form.config).filter(([, v]) => v && v.trim() !== '')
       )
 
-      const data: InstanceCreateRequest = {
-        id: createInstanceState.form.id,
-        template_id: createInstanceState.template.id,
-        name: createInstanceState.form.name,
-        deployment_target: createInstanceState.form.deployment_target,
+      const data: ServiceConfigCreateRequest = {
+        id: createServiceConfigState.form.id,
+        template_id: createServiceConfigState.template.id,
+        name: createServiceConfigState.form.name,
+        deployment_target: createServiceConfigState.form.deployment_target,
         config: filteredConfig,
       }
 
-      // Step 1: Create the instance
-      await instancesApi.createInstance(data)
+      // Step 1: Create the service config
+      await svcConfigsApi.createServiceConfig(data)
 
       // Step 2: If wiring info exists, create the wiring connection (drag-drop path)
-      if (createInstanceState.wiring) {
-        const newWiring = await instancesApi.createWiring({
-          source_instance_id: createInstanceState.form.id,
-          source_capability: createInstanceState.wiring.capability,
-          target_instance_id: createInstanceState.wiring.consumerId,
-          target_capability: createInstanceState.wiring.capability,
+      if (createServiceConfigState.wiring) {
+        const newWiring = await svcConfigsApi.createWiring({
+          source_config_id: createServiceConfigState.form.id,
+          source_capability: createServiceConfigState.wiring.capability,
+          target_config_id: createServiceConfigState.wiring.consumerId,
+          target_capability: createServiceConfigState.wiring.capability,
         })
 
         // Update wiring state
         setWiring((prev) => {
           const existing = prev.findIndex(
             (w) =>
-              w.target_instance_id === createInstanceState.wiring!.consumerId &&
-              w.target_capability === createInstanceState.wiring!.capability
+              w.target_config_id === createServiceConfigState.wiring!.consumerId &&
+              w.target_capability === createServiceConfigState.wiring!.capability
           )
           if (existing >= 0) {
             const updated = [...prev]
@@ -398,21 +398,21 @@ export default function InstancesPage() {
 
         setMessage({
           type: 'success',
-          text: `Created ${createInstanceState.form.name} and connected to ${createInstanceState.wiring.consumerName}`,
+          text: `Created ${createServiceConfigState.form.name} and connected to ${createServiceConfigState.wiring.consumerName}`,
         })
       } else {
-        setMessage({ type: 'success', text: `Instance "${createInstanceState.form.name}" created` })
+        setMessage({ type: 'success', text: `ServiceConfig "${createServiceConfigState.form.name}" created` })
       }
 
       // Close modal and reload instances
-      setCreateInstanceState({
+      setCreateServiceConfigState({
         isOpen: false,
         template: null,
         form: { id: '', name: '', deployment_target: 'local', config: {} },
       })
 
-      const instancesRes = await instancesApi.getInstances()
-      setInstances(instancesRes.data)
+      const instancesRes = await svcConfigsApi.getServiceConfigs()
+      setServiceConfigs(instancesRes.data)
     } catch (error: any) {
       setMessage({
         type: 'error',
@@ -423,10 +423,10 @@ export default function InstancesPage() {
     }
   }
 
-  // Instance actions
-  const toggleInstance = async (instanceId: string) => {
-    if (expandedInstances.has(instanceId)) {
-      setExpandedInstances((prev) => {
+  // ServiceConfig actions
+  const toggleServiceConfig = async (instanceId: string) => {
+    if (expandedServiceConfigs.has(instanceId)) {
+      setExpandedServiceConfigs((prev) => {
         const next = new Set(prev)
         next.delete(instanceId)
         return next
@@ -435,8 +435,8 @@ export default function InstancesPage() {
       // Load full instance details
       if (!instanceDetails[instanceId]) {
         try {
-          const res = await instancesApi.getInstance(instanceId)
-          setInstanceDetails((prev) => ({
+          const res = await svcConfigsApi.getServiceConfig(instanceId)
+          setServiceConfigDetails((prev) => ({
             ...prev,
             [instanceId]: res.data,
           }))
@@ -444,27 +444,27 @@ export default function InstancesPage() {
           console.error('Failed to load instance details:', error)
         }
       }
-      setExpandedInstances((prev) => new Set(prev).add(instanceId))
+      setExpandedServiceConfigs((prev) => new Set(prev).add(instanceId))
     }
   }
 
-  const handleDeleteInstance = (instanceId: string) => {
+  const handleDeleteServiceConfig = (instanceId: string) => {
     setConfirmDialog({ isOpen: true, instanceId })
   }
 
-  const confirmDeleteInstance = async () => {
+  const confirmDeleteServiceConfig = async () => {
     const { instanceId } = confirmDialog
     if (!instanceId) return
 
     setConfirmDialog({ isOpen: false, instanceId: null })
 
     try {
-      await instancesApi.deleteInstance(instanceId)
-      setMessage({ type: 'success', text: 'Instance deleted' })
+      await svcConfigsApi.deleteServiceConfig(instanceId)
+      setMessage({ type: 'success', text: 'ServiceConfig deleted' })
 
       // Reload instances
-      const instancesRes = await instancesApi.getInstances()
-      setInstances(instancesRes.data)
+      const instancesRes = await svcConfigsApi.getServiceConfigs()
+      setServiceConfigs(instancesRes.data)
     } catch (error: any) {
       setMessage({
         type: 'error',
@@ -474,46 +474,46 @@ export default function InstancesPage() {
   }
 
   // Deploy/undeploy actions
-  const [deployingInstance, setDeployingInstance] = useState<string | null>(null)
+  const [deployingServiceConfig, setDeployingServiceConfig] = useState<string | null>(null)
 
   // Integration sync state
-  const [syncingInstance, setSyncingInstance] = useState<string | null>(null)
+  const [syncingServiceConfig, setSyncingServiceConfig] = useState<string | null>(null)
   const [testingConnection, setTestingConnection] = useState<string | null>(null)
   const [togglingAutoSync, setTogglingAutoSync] = useState<string | null>(null)
 
-  const handleDeployInstance = async (instanceId: string) => {
-    setDeployingInstance(instanceId)
+  const handleDeployServiceConfig = async (instanceId: string) => {
+    setDeployingServiceConfig(instanceId)
     try {
-      await instancesApi.deployInstance(instanceId)
-      setMessage({ type: 'success', text: 'Instance started' })
+      await svcConfigsApi.deployServiceConfig(instanceId)
+      setMessage({ type: 'success', text: 'ServiceConfig started' })
       // Reload instances
-      const instancesRes = await instancesApi.getInstances()
-      setInstances(instancesRes.data)
+      const instancesRes = await svcConfigsApi.getServiceConfigs()
+      setServiceConfigs(instancesRes.data)
     } catch (error: any) {
       setMessage({
         type: 'error',
         text: error.response?.data?.detail || 'Failed to start instance',
       })
     } finally {
-      setDeployingInstance(null)
+      setDeployingServiceConfig(null)
     }
   }
 
-  const handleUndeployInstance = async (instanceId: string) => {
-    setDeployingInstance(instanceId)
+  const handleUndeployServiceConfig = async (instanceId: string) => {
+    setDeployingServiceConfig(instanceId)
     try {
-      await instancesApi.undeployInstance(instanceId)
-      setMessage({ type: 'success', text: 'Instance stopped' })
+      await svcConfigsApi.undeployServiceConfig(instanceId)
+      setMessage({ type: 'success', text: 'ServiceConfig stopped' })
       // Reload instances
-      const instancesRes = await instancesApi.getInstances()
-      setInstances(instancesRes.data)
+      const instancesRes = await svcConfigsApi.getServiceConfigs()
+      setServiceConfigs(instancesRes.data)
     } catch (error: any) {
       setMessage({
         type: 'error',
         text: error.response?.data?.detail || 'Failed to stop instance',
       })
     } finally {
-      setDeployingInstance(null)
+      setDeployingServiceConfig(null)
     }
   }
 
@@ -537,7 +537,7 @@ export default function InstancesPage() {
   }
 
   const handleSyncNow = async (instanceId: string) => {
-    setSyncingInstance(instanceId)
+    setSyncingServiceConfig(instanceId)
     try {
       const response = await integrationApi.syncNow(instanceId)
       if (response.data.success) {
@@ -546,8 +546,8 @@ export default function InstancesPage() {
           text: `Synced ${response.data.items_synced} items`,
         })
         // Reload instance details to show updated sync status
-        const res = await instancesApi.getInstance(instanceId)
-        setInstanceDetails((prev) => ({ ...prev, [instanceId]: res.data }))
+        const res = await svcConfigsApi.getServiceConfig(instanceId)
+        setServiceConfigDetails((prev) => ({ ...prev, [instanceId]: res.data }))
       } else {
         setMessage({
           type: 'error',
@@ -560,7 +560,7 @@ export default function InstancesPage() {
         text: getErrorMessage(error, 'Failed to sync'),
       })
     } finally {
-      setSyncingInstance(null)
+      setSyncingServiceConfig(null)
     }
   }
 
@@ -577,8 +577,8 @@ export default function InstancesPage() {
       })
 
       // Reload instance details to show updated auto-sync status
-      const res = await instancesApi.getInstance(instanceId)
-      setInstanceDetails((prev) => ({ ...prev, [instanceId]: res.data }))
+      const res = await svcConfigsApi.getServiceConfig(instanceId)
+      setServiceConfigDetails((prev) => ({ ...prev, [instanceId]: res.data }))
     } catch (error: any) {
       setMessage({
         type: 'error',
@@ -690,7 +690,7 @@ export default function InstancesPage() {
         const deploymentTarget = unodeHostname
 
         // Step 1: Create instance with deployment target
-        await instancesApi.createInstance({
+        await svcConfigsApi.createServiceConfig({
           id: instanceId,
           template_id: consumerId,
           name: `${template?.name || consumerId} (${unodeHostname})`,
@@ -699,18 +699,18 @@ export default function InstancesPage() {
           deployment_target: deploymentTarget
         })
 
-        // Step 2: Deploy the instance
-        await instancesApi.deployInstance(instanceId)
+        // Step 2: Deploy the service config
+        await svcConfigsApi.deployServiceConfig(instanceId)
 
         console.log('✅ Deployment successful')
         setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to local unode` })
 
         // Refresh instances and service statuses
         const [instancesRes, statusesRes] = await Promise.all([
-          instancesApi.getInstances(),
+          svcConfigsApi.getServiceConfigs(),
           servicesApi.getAllStatuses()
         ])
-        setInstances(instancesRes.data)
+        setServiceConfigs(instancesRes.data)
         setServiceStatuses(statusesRes.data || {})
 
       } catch (err: any) {
@@ -744,7 +744,7 @@ export default function InstancesPage() {
         const deploymentTarget = targetHostname
 
         // Step 1: Create instance with deployment target
-        await instancesApi.createInstance({
+        await svcConfigsApi.createServiceConfig({
           id: instanceId,
           template_id: consumerId,
           name: `${template?.name || consumerId} (${targetHostname})`,
@@ -753,18 +753,18 @@ export default function InstancesPage() {
           deployment_target: deploymentTarget
         })
 
-        // Step 2: Deploy the instance
-        await instancesApi.deployInstance(instanceId)
+        // Step 2: Deploy the service config
+        await svcConfigsApi.deployServiceConfig(instanceId)
 
         console.log('✅ Deployment successful')
         setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to remote unode` })
 
         // Refresh instances and service statuses
         const [instancesRes, statusesRes] = await Promise.all([
-          instancesApi.getInstances(),
+          svcConfigsApi.getServiceConfigs(),
           servicesApi.getAllStatuses()
         ])
-        setInstances(instancesRes.data)
+        setServiceConfigs(instancesRes.data)
         setServiceStatuses(statusesRes.data || {})
 
       } catch (err: any) {
@@ -793,12 +793,12 @@ export default function InstancesPage() {
       setEnvVars(allEnvVars)
 
       // Load wiring connections for this service to get provider-supplied values
-      const wiringConnections = wiring.filter((w) => w.target_instance_id === consumerId)
+      const wiringConnections = wiring.filter((w) => w.target_config_id === consumerId)
       const providerSuppliedValues: Record<string, { value: string; provider: string; locked: boolean }> = {}
 
       // For each wiring connection, determine which env vars it supplies
       for (const conn of wiringConnections) {
-        const provider = [...templates, ...instances].find((p) => p.id === conn.source_instance_id)
+        const provider = [...templates, ...instances].find((p) => p.id === conn.source_config_id)
         if (provider) {
           // Get the capability mapping (e.g., "mongodb" -> MONGODB_URL, MONGODB_NAME)
           const capability = conn.source_capability
@@ -1007,7 +1007,7 @@ export default function InstancesPage() {
           isTemplate: false,
           templateId: i.template_id,
           configVars,
-          configured: template.configured, // Instance inherits template's configured status
+          configured: template.configured, // ServiceConfig inherits template's configured status
         }
       }),
   ]
@@ -1063,15 +1063,15 @@ export default function InstancesPage() {
     // If it's an instance (not a template), wire directly without showing modal
     if (!dropInfo.provider.isTemplate) {
       try {
-        const newWiring = await instancesApi.createWiring({
-          source_instance_id: dropInfo.provider.id,
+        const newWiring = await svcConfigsApi.createWiring({
+          source_config_id: dropInfo.provider.id,
           source_capability: dropInfo.capability,
-          target_instance_id: dropInfo.consumerId,
+          target_config_id: dropInfo.consumerId,
           target_capability: dropInfo.capability,
         })
         setWiring((prev) => {
           const existing = prev.findIndex(
-            (w) => w.target_instance_id === dropInfo.consumerId &&
+            (w) => w.target_config_id === dropInfo.consumerId &&
                    w.target_capability === dropInfo.capability
           )
           if (existing >= 0) {
@@ -1090,7 +1090,7 @@ export default function InstancesPage() {
     // For templates, open the create instance modal with wiring info
     const template = templates.find((t) => t.id === dropInfo.provider.id)
     if (template) {
-      openCreateInstanceModal(template, {
+      openCreateServiceConfigModal(template, {
         capability: dropInfo.capability,
         consumerId: dropInfo.consumerId,
         consumerName: consumer?.name || dropInfo.consumerId,
@@ -1101,12 +1101,12 @@ export default function InstancesPage() {
   const handleDeleteWiringFromBoard = async (consumerId: string, capability: string) => {
     // Find the wiring to delete
     const wire = wiring.find(
-      (w) => w.target_instance_id === consumerId && w.target_capability === capability
+      (w) => w.target_config_id === consumerId && w.target_capability === capability
     )
     if (!wire) return
 
     try {
-      await instancesApi.deleteWiring(wire.id)
+      await svcConfigsApi.deleteWiring(wire.id)
       setWiring((prev) => prev.filter((w) => w.id !== wire.id))
       setMessage({ type: 'success', text: `${capability} disconnected` })
     } catch (error: any) {
@@ -1148,9 +1148,9 @@ export default function InstancesPage() {
       try {
         let details = instanceDetails[providerId]
         if (!details) {
-          const res = await instancesApi.getInstance(providerId)
+          const res = await svcConfigsApi.getServiceConfig(providerId)
           details = res.data
-          setInstanceDetails((prev) => ({ ...prev, [providerId]: details }))
+          setServiceConfigDetails((prev) => ({ ...prev, [providerId]: details }))
         }
 
         const instance = instances.find((i) => i.id === providerId)
@@ -1178,12 +1178,12 @@ export default function InstancesPage() {
               setEnvVars(allEnvVars)
 
               // Load wiring connections for this instance to get provider-supplied values
-              const wiringConnections = wiring.filter((w) => w.target_instance_id === providerId)
+              const wiringConnections = wiring.filter((w) => w.target_config_id === providerId)
               const providerSuppliedValues: Record<string, { value: string; provider: string; locked: boolean }> = {}
 
               // For each wiring connection, determine which env vars it supplies
               for (const conn of wiringConnections) {
-                const provider = [...templates, ...instances].find((p) => p.id === conn.source_instance_id)
+                const provider = [...templates, ...instances].find((p) => p.id === conn.source_config_id)
                 if (provider) {
                   const capability = conn.source_capability
 
@@ -1224,7 +1224,7 @@ export default function InstancesPage() {
                   const instanceValue = initialConfig[envVar.name]
 
                   if (instanceValue !== undefined) {
-                    // Instance has an override
+                    // ServiceConfig has an override
                     initialEnvConfigs[envVar.name] = {
                       name: envVar.name,
                       source: 'new_setting',
@@ -1315,7 +1315,7 @@ export default function InstancesPage() {
         }
 
         // Refresh templates to get updated values
-        const templatesRes = await instancesApi.getTemplates()
+        const templatesRes = await svcConfigsApi.getTemplates()
         setTemplates(templatesRes.data)
       } else {
         // Update instance config
@@ -1342,10 +1342,10 @@ export default function InstancesPage() {
           )
         }
 
-        await instancesApi.updateInstance(editingProvider.id, { config: configToSave })
+        await svcConfigsApi.updateServiceConfig(editingProvider.id, { config: configToSave })
         // Refresh instance details
-        const res = await instancesApi.getInstance(editingProvider.id)
-        setInstanceDetails((prev) => ({ ...prev, [editingProvider.id]: res.data }))
+        const res = await svcConfigsApi.getServiceConfig(editingProvider.id)
+        setServiceConfigDetails((prev) => ({ ...prev, [editingProvider.id]: res.data }))
         setMessage({ type: 'success', text: `${editingProvider.name} updated` })
       }
       setEditingProvider(null)
@@ -1362,10 +1362,10 @@ export default function InstancesPage() {
   }
 
   // Handle create instance from wiring board (via "+" button)
-  const handleCreateInstanceFromBoard = (templateId: string) => {
+  const handleCreateServiceConfigFromBoard = (templateId: string) => {
     const template = templates.find((t) => t.id === templateId)
     if (template) {
-      openCreateInstanceModal(template)
+      openCreateServiceConfigModal(template)
     }
   }
 
@@ -1476,7 +1476,7 @@ export default function InstancesPage() {
         <div>
           <div className="flex items-center space-x-2">
             <Layers className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
-            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Instances</h1>
+            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">ServiceConfigs</h1>
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             Create and manage service instances from templates
@@ -1521,7 +1521,7 @@ export default function InstancesPage() {
           </p>
         </div>
         <div className="card-hover p-4">
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Instances</p>
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">ServiceConfigs</p>
           <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">
             {instances.length}
           </p>
@@ -1561,15 +1561,15 @@ export default function InstancesPage() {
         </div>
       )}
 
-      {/* Instances - Compact list style */}
+      {/* ServiceConfigs - Compact list style */}
       {instances.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-            Active Instances
+            Active ServiceConfigs
           </h2>
           <div className="card divide-y divide-neutral-200 dark:divide-neutral-700">
             {instances.map((instance) => {
-              const isExpanded = expandedInstances.has(instance.id)
+              const isExpanded = expandedServiceConfigs.has(instance.id)
               const details = instanceDetails[instance.id]
 
               return (
@@ -1580,7 +1580,7 @@ export default function InstancesPage() {
                 >
                   <div
                     className="px-4 py-3 cursor-pointer flex items-center justify-between"
-                    onClick={() => toggleInstance(instance.id)}
+                    onClick={() => toggleServiceConfig(instance.id)}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       {getStatusBadge(instance.status)}
@@ -1627,14 +1627,14 @@ export default function InstancesPage() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  handleDeployInstance(instance.id)
+                                  handleDeployServiceConfig(instance.id)
                                 }}
-                                disabled={deployingInstance === instance.id}
+                                disabled={deployingServiceConfig === instance.id}
                                 className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 hover:bg-success-200 dark:hover:bg-success-900/50 disabled:opacity-50"
                                 title="Start"
                                 data-testid={`start-instance-${instance.id}`}
                               >
-                                {deployingInstance === instance.id ? (
+                                {deployingServiceConfig === instance.id ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
                                   <PlayCircle className="h-3 w-3" />
@@ -1647,14 +1647,14 @@ export default function InstancesPage() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  handleUndeployInstance(instance.id)
+                                  handleUndeployServiceConfig(instance.id)
                                 }}
-                                disabled={deployingInstance === instance.id}
+                                disabled={deployingServiceConfig === instance.id}
                                 className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50"
                                 title="Stop"
                                 data-testid={`stop-instance-${instance.id}`}
                               >
-                                {deployingInstance === instance.id ? (
+                                {deployingServiceConfig === instance.id ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
                                   <X className="h-3 w-3" />
@@ -1668,7 +1668,7 @@ export default function InstancesPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleDeleteInstance(instance.id)
+                          handleDeleteServiceConfig(instance.id)
                         }}
                         className="p-1 text-neutral-400 hover:text-error-600 dark:hover:text-error-400 rounded"
                         title="Delete"
@@ -1885,11 +1885,11 @@ export default function InstancesPage() {
                                   e.stopPropagation()
                                   handleSyncNow(instance.id)
                                 }}
-                                disabled={syncingInstance === instance.id || details.last_sync_status === 'in_progress'}
+                                disabled={syncingServiceConfig === instance.id || details.last_sync_status === 'in_progress'}
                                 className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50 disabled:opacity-50"
                                 data-testid={`sync-now-${instance.id}`}
                               >
-                                {syncingInstance === instance.id || details.last_sync_status === 'in_progress' ? (
+                                {syncingServiceConfig === instance.id || details.last_sync_status === 'in_progress' ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
                                   <RefreshCw className="h-3 w-3" />
@@ -1949,7 +1949,7 @@ export default function InstancesPage() {
         </div>
       )}
 
-      {/* Templates - Compose Services with Instances */}
+      {/* Templates - Compose Services with ServiceConfigs */}
       {composeTemplates.length > 0 && (
         <div className="space-y-4">
           <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
@@ -1959,7 +1959,7 @@ export default function InstancesPage() {
           <div className="card p-6">
             <div className="space-y-2">
               {composeTemplates.map((template) => {
-                const templateInstances = instancesByTemplate[template.id] || []
+                const templateServiceConfigs = instancesByTemplate[template.id] || []
                 const isExpanded = expandedTemplates.has(template.id)
 
                 return (
@@ -1997,16 +1997,16 @@ export default function InstancesPage() {
                         )}
                       </div>
 
-                      {templateInstances.length > 0 && (
+                      {templateServiceConfigs.length > 0 && (
                         <span className="px-2 py-0.5 text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
-                          {templateInstances.length} {templateInstances.length === 1 ? 'instance' : 'instances'}
+                          {templateServiceConfigs.length} {templateServiceConfigs.length === 1 ? 'instance' : 'instances'}
                         </span>
                       )}
 
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          openCreateInstanceModal(template)
+                          openCreateServiceConfigModal(template)
                         }}
                         className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
                         data-testid={`deploy-${template.id}`}
@@ -2016,10 +2016,10 @@ export default function InstancesPage() {
                       </button>
                     </div>
 
-                    {/* Service Instances (indented) */}
-                    {isExpanded && templateInstances.length > 0 && (
+                    {/* Service ServiceConfigs (indented) */}
+                    {isExpanded && templateServiceConfigs.length > 0 && (
                       <div className="ml-12 mt-2 space-y-1">
-                        {templateInstances.map((instance) => {
+                        {templateServiceConfigs.map((instance) => {
                           const details = instanceDetails[instance.id]
                           const isRunning = details?.status === 'running'
 
@@ -2064,7 +2064,7 @@ export default function InstancesPage() {
                                       e.stopPropagation()
                                       handleRestartService(instance.id)
                                     }}
-                                    disabled={restartingInstance === instance.id}
+                                    disabled={restartingServiceConfig === instance.id}
                                     className="p-1.5 text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700"
                                     title="Restart"
                                   >
@@ -2086,7 +2086,7 @@ export default function InstancesPage() {
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    handleDeleteInstance(instance.id)
+                                    handleDeleteServiceConfig(instance.id)
                                   }}
                                   className="p-1.5 text-error-600 hover:text-error-700 dark:text-error-400 dark:hover:text-error-300 rounded hover:bg-error-100 dark:hover:bg-error-900/30"
                                   title="Delete"
@@ -2123,7 +2123,7 @@ export default function InstancesPage() {
                     template={template}
                     isExpanded={expandedTemplates.has(template.id)}
                     onToggle={() => toggleTemplate(template.id)}
-                    onCreate={() => openCreateInstanceModal(template)}
+                    onCreate={() => openCreateServiceConfigModal(template)}
                   />
                 ))}
               </div>
@@ -2166,21 +2166,21 @@ export default function InstancesPage() {
             onProviderDrop={handleProviderDrop}
             onDeleteWiring={handleDeleteWiringFromBoard}
             onEditProvider={handleEditProviderFromBoard}
-            onCreateInstance={handleCreateInstanceFromBoard}
-            onDeleteInstance={handleDeleteInstance}
+            onCreateServiceConfig={handleCreateServiceConfigFromBoard}
+            onDeleteServiceConfig={handleDeleteServiceConfig}
             onStartProvider={async (providerId, isTemplate) => {
               if (isTemplate) {
                 // For templates, we can't deploy them directly - need to create instance first
                 // This case shouldn't happen as templates don't have start buttons in current UI
                 return
               }
-              await handleDeployInstance(providerId)
+              await handleDeployServiceConfig(providerId)
             }}
             onStopProvider={async (providerId, isTemplate) => {
               if (isTemplate) {
                 return
               }
-              await handleUndeployInstance(providerId)
+              await handleUndeployServiceConfig(providerId)
             }}
             onEditConsumer={handleEditConsumer}
             onStartConsumer={handleStartConsumer}
@@ -2190,89 +2190,89 @@ export default function InstancesPage() {
         </div>
       </div>
 
-      {/* Unified Create Instance Modal (used by both + button and drag-drop) */}
+      {/* Unified Create ServiceConfig Modal (used by both + button and drag-drop) */}
       <Modal
-        isOpen={createInstanceState.isOpen}
-        onClose={() => setCreateInstanceState({ ...createInstanceState, isOpen: false })}
-        title={createInstanceState.wiring ? 'Connect Provider' : 'Create Instance'}
-        titleIcon={createInstanceState.wiring ? <Plug className="h-5 w-5 text-primary-600" /> : <Plus className="h-5 w-5 text-primary-600" />}
+        isOpen={createServiceConfigState.isOpen}
+        onClose={() => setCreateServiceConfigState({ ...createServiceConfigState, isOpen: false })}
+        title={createServiceConfigState.wiring ? 'Connect Provider' : 'Create ServiceConfig'}
+        titleIcon={createServiceConfigState.wiring ? <Plug className="h-5 w-5 text-primary-600" /> : <Plus className="h-5 w-5 text-primary-600" />}
         maxWidth="lg"
         testId="create-instance-modal"
       >
-        {createInstanceState.template && (
+        {createServiceConfigState.template && (
           <div className="space-y-4">
             {/* Wiring connection visual (only shown for drag-drop path) */}
-            {createInstanceState.wiring && (
+            {createServiceConfigState.wiring && (
               <div className="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
                 <div className="flex-1 text-right">
                   <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                    {createInstanceState.template.name}
+                    {createServiceConfigState.template.name}
                   </p>
-                  <p className="text-xs text-neutral-500">{createInstanceState.wiring.capability}</p>
+                  <p className="text-xs text-neutral-500">{createServiceConfigState.wiring.capability}</p>
                 </div>
                 <ArrowRight className="h-5 w-5 text-primary-500" />
                 <div className="flex-1">
                   <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                    {createInstanceState.wiring.consumerName}
+                    {createServiceConfigState.wiring.consumerName}
                   </p>
-                  <p className="text-xs text-neutral-500">{createInstanceState.wiring.capability} slot</p>
+                  <p className="text-xs text-neutral-500">{createServiceConfigState.wiring.capability} slot</p>
                 </div>
               </div>
             )}
 
             {/* Template info (only shown for + button path) */}
-            {!createInstanceState.wiring && (
+            {!createServiceConfigState.wiring && (
               <div className="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    {createInstanceState.template.source === 'compose' ? (
+                    {createServiceConfigState.template.source === 'compose' ? (
                       <HardDrive className="h-4 w-4 text-purple-600" />
                     ) : (
                       <Cloud className="h-4 w-4 text-blue-600" />
                     )}
                     <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                      {createInstanceState.template.name}
+                      {createServiceConfigState.template.name}
                     </p>
                   </div>
-                  <p className="text-xs text-neutral-500 mt-1">{createInstanceState.template.description}</p>
+                  <p className="text-xs text-neutral-500 mt-1">{createServiceConfigState.template.description}</p>
                 </div>
               </div>
             )}
 
-            {/* Instance Name */}
+            {/* ServiceConfig Name */}
             <div>
               <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                Instance Name
+                ServiceConfig Name
               </label>
               <input
                 type="text"
-                value={createInstanceState.form.name}
+                value={createServiceConfigState.form.name}
                 onChange={(e) =>
-                  setCreateInstanceState((prev) => ({
+                  setCreateServiceConfigState((prev) => ({
                     ...prev,
                     form: { ...prev.form, name: e.target.value },
                   }))
                 }
                 className="input w-full text-sm"
-                placeholder={createInstanceState.form.id}
+                placeholder={createServiceConfigState.form.id}
                 data-testid="create-instance-name"
               />
             </div>
 
             {/* Config fields using ConfigFieldRow */}
-            {createInstanceState.template.config_schema && createInstanceState.template.config_schema.length > 0 && (
+            {createServiceConfigState.template.config_schema && createServiceConfigState.template.config_schema.length > 0 && (
               <div>
                 <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
                   Provider Settings
                 </label>
                 <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden">
-                  {createInstanceState.template.config_schema.map((field: any) => (
+                  {createServiceConfigState.template.config_schema.map((field: any) => (
                     <ConfigFieldRow
                       key={field.key}
                       field={field}
-                      value={createInstanceState.form.config[field.key] || ''}
+                      value={createServiceConfigState.form.config[field.key] || ''}
                       onChange={(value) =>
-                        setCreateInstanceState((prev) => ({
+                        setCreateServiceConfigState((prev) => ({
                           ...prev,
                           form: {
                             ...prev.form,
@@ -2288,49 +2288,49 @@ export default function InstancesPage() {
 
             {/* Help text */}
             <p className="text-xs text-neutral-500">
-              {createInstanceState.wiring
-                ? 'Instance will be created and connected to the service slot.'
+              {createServiceConfigState.wiring
+                ? 'ServiceConfig will be created and connected to the service slot.'
                 : 'Leave fields blank to use default settings. Only modified values will be stored.'}
             </p>
 
             {/* Modal Footer */}
             <div className="flex items-center justify-end gap-2 pt-4 border-t border-neutral-200 dark:border-neutral-700">
               <button
-                onClick={() => setCreateInstanceState({ ...createInstanceState, isOpen: false })}
+                onClick={() => setCreateServiceConfigState({ ...createServiceConfigState, isOpen: false })}
                 className="btn-secondary"
               >
                 Cancel
               </button>
               <button
-                onClick={handleCreateInstance}
-                disabled={!createInstanceState.form.name || creating === createInstanceState.template.id}
+                onClick={handleCreateServiceConfig}
+                disabled={!createServiceConfigState.form.name || creating === createServiceConfigState.template.id}
                 className="btn-primary flex items-center gap-2"
                 data-testid="create-instance-submit"
               >
-                {creating === createInstanceState.template.id ? (
+                {creating === createServiceConfigState.template.id ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                {createInstanceState.wiring ? 'Create & Connect' : 'Create Instance'}
+                {createServiceConfigState.wiring ? 'Create & Connect' : 'Create ServiceConfig'}
               </button>
             </div>
           </div>
         )}
       </Modal>
 
-      {/* Edit Provider/Instance Modal */}
+      {/* Edit Provider/ServiceConfig Modal */}
       <Modal
         isOpen={!!editingProvider}
         onClose={() => setEditingProvider(null)}
-        title={editingProvider?.isTemplate ? 'Edit Provider' : 'Edit Instance'}
+        title={editingProvider?.isTemplate ? 'Edit Provider' : 'Edit ServiceConfig'}
         titleIcon={<Settings className="h-5 w-5 text-primary-600" />}
         maxWidth="lg"
         testId="edit-provider-modal"
       >
         {editingProvider && editingProvider.template && (
           <div className="space-y-4">
-            {/* Provider/Instance name */}
+            {/* Provider/ServiceConfig name */}
             <div className="p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
               <p className="font-medium text-neutral-900 dark:text-neutral-100">
                 {editingProvider.name}
@@ -2475,12 +2475,12 @@ export default function InstancesPage() {
       {/* Confirmation Dialog */}
       <ConfirmDialog
         isOpen={confirmDialog.isOpen}
-        title="Delete Instance"
+        title="Delete ServiceConfig"
         message={`Are you sure you want to delete this instance?`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="warning"
-        onConfirm={confirmDeleteInstance}
+        onConfirm={confirmDeleteServiceConfig}
         onCancel={() => setConfirmDialog({ isOpen: false, instanceId: null })}
       />
 
@@ -2856,7 +2856,7 @@ function TemplateCard({ template, isExpanded, onToggle, onCreate, onRemove }: Te
                   data-testid={`create-from-template-${template.id}`}
                 >
                   <Plus className="h-3 w-3" />
-                  Create Instance
+                  Create ServiceConfig
                 </button>
               )}
             </div>

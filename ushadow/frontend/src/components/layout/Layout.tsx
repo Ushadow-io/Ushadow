@@ -10,6 +10,7 @@ import { useChronicle } from '../../contexts/ChronicleContext'
 import { useMobileQrCode } from '../../hooks/useQrCode'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
 import Modal from '../Modal'
+import TailscaleOriginBanner from '../TailscaleOriginBanner'
 import type { LucideIcon } from 'lucide-react'
 
 interface NavigationItem {
@@ -63,7 +64,7 @@ export default function Layout() {
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
     { path: '/services', label: 'Services', icon: Server },
-    { path: '/instances', label: 'Instances', icon: Layers, featureFlag: 'instances_management' },
+    { path: '/instances', label: 'ServiceConfigs', icon: Layers, featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
@@ -420,6 +421,9 @@ export default function Layout() {
           </div>
         </div>
       </header>
+
+      {/* Tailscale Origin Banner */}
+      <TailscaleOriginBanner />
 
       {/* Main Container */}
       <div className="flex-1 flex">
