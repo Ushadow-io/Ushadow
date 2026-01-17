@@ -23,3 +23,5 @@
 export { SecretInput, type SecretInputProps } from './SecretInput'
 export { SettingField, type SettingFieldProps, type SettingType, type SelectOption } from './SettingField'
 export { SettingsSection, type SettingsSectionProps } from './SettingsSection'
+export { RequiredFieldsSection } from './RequiredFieldsSection'
+export { UnifiedServiceSettings } from './UnifiedServiceSettings'
