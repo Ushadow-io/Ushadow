@@ -29,6 +29,10 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     open_tmux_in_terminal, capture_tmux_pane, get_claude_status,
     // Settings
     load_launcher_settings, save_launcher_settings, write_credentials_to_worktree,
+    // Prerequisites config
+    get_prerequisites_config, get_platform_prerequisites_config,
+    // Generic installer
+    install_prerequisite, start_prerequisite,
     // Permissions
     check_install_path};
 use tauri::{
@@ -174,6 +178,12 @@ fn main() {
             load_launcher_settings,
             save_launcher_settings,
             write_credentials_to_worktree,
+            // Prerequisites config
+            get_prerequisites_config,
+            get_platform_prerequisites_config,
+            // Generic installer
+            install_prerequisite,
+            start_prerequisite,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();
