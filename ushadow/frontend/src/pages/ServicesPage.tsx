@@ -19,7 +19,7 @@ import {
   Package,
   Trash2,
   BookOpen,
-  Github
+  Download
 } from 'lucide-react'
 import {
   settingsApi,
@@ -631,11 +631,11 @@ export default function ServicesPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowGitHubImport(true)}
-            data-testid="import-github-button"
+            data-testid="import-service-button"
             className="btn-secondary flex items-center gap-2"
           >
-            <Github className="h-4 w-4" />
-            Import from GitHub
+            <Download className="h-4 w-4" />
+            Import Service
           </button>
           <button
             onClick={openCatalog}
