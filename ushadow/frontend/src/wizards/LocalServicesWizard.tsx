@@ -413,6 +413,7 @@ export default function LocalServicesWizard() {
       title="Local Services Setup"
       subtitle="Configure completely local AI services"
       icon={Server}
+      titleBadge={<StatusBadge variant="beta" testId="badge-wizard-local" />}
       progress={wizard.progress}
       steps={STEPS}
       currentStepId={wizard.currentStep.id}

@@ -46,6 +46,14 @@ flags:
   n8n_workflows:
     enabled: false
     description: "n8n Workflows - Visual workflow automation and integrations"
+    type: release
+
+  # Speaker Recognition - Speaker identification and diarization
+  speaker_recognition:
+    enabled: false
+    description: "Speaker Recognition - Identify and track speakers in conversations (not implemented)"
+    type: release
+
   # OpenMemory memories page with knowledge graph visualization
   memories_page:
     enabled: true

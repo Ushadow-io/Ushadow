@@ -55,7 +55,7 @@ export default function Layout() {
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
-    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented' },
+    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
@@ -65,7 +65,7 @@ export default function Layout() {
     ] : []),
     { path: '/cluster', label: 'Cluster', icon: Network, badgeVariant: 'beta' },
     { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },
-    { path: '/settings', label: 'Settings', icon: Settings, badgeVariant: 'needs-updating' },
+    { path: '/settings', label: 'Settings', icon: Settings },
     ...(isAdmin ? [
       { path: '/users', label: 'User Management', icon: Users },
     ] : []),
