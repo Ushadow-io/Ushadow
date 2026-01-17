@@ -5,8 +5,8 @@
  * duration timer, and audio level indicator.
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { View, Text, StyleSheet, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
@@ -15,9 +15,12 @@ interface StreamingDisplayProps {
   isConnecting?: boolean;
   audioLevel: number; // 0-100
   startTime?: Date;
+  sourceType?: 'microphone' | 'omi'; // Determines waveform type
   testID?: string;
 }
 
+const WAVEFORM_BARS = 32;
+const WAVEFORM_UPDATE_INTERVAL = 100; // ms
 const MONITOR_POINTS = 40;
 const MONITOR_UPDATE_INTERVAL = 50; // ms - faster for smooth sweep
 
@@ -26,11 +29,24 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
   isConnecting = false,
   audioLevel,
   startTime,
+  sourceType = 'microphone',
   testID = 'streaming-display',
 }) => {
   const [duration, setDuration] = useState<number>(0);
+  const [waveformData, setWaveformData] = useState<number[]>(Array(WAVEFORM_BARS).fill(0.1));
   const [blipPosition, setBlipPosition] = useState<number>(0);
   const [trailData, setTrailData] = useState<number[]>(Array(MONITOR_POINTS).fill(0));
+
+  // Animation values for waveform bars
+  const barAnimations = useRef<Animated.Value[]>(
+    Array(WAVEFORM_BARS).fill(0).map(() => new Animated.Value(0.1))
+  ).current;
+
+  // Store audioLevel in ref so waveform animation can read it without re-triggering
+  const audioLevelRef = useRef(audioLevel);
+  useEffect(() => {
+    audioLevelRef.current = audioLevel;
+  }, [audioLevel]);
 
   // Duration timer
   useEffect(() => {
@@ -48,9 +64,50 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
     return () => clearInterval(interval);
   }, [isStreaming, startTime]);
 
-  // Heartrate monitor animation - blip sweeps across
+  // Waveform animation for phone mic
   useEffect(() => {
-    if (!isStreaming) {
+    if (!isStreaming || sourceType !== 'microphone') {
+      // Reset waveform when not streaming
+      barAnimations.forEach((anim) => {
+        Animated.timing(anim, {
+          toValue: 0.1,
+          duration: 200,
+          useNativeDriver: false,
+        }).start();
+      });
+      return;
+    }
+
+    const interval = setInterval(() => {
+      // Generate new waveform data based on audio level (read from ref to avoid effect restart)
+      const currentLevel = audioLevelRef.current;
+
+      const newData = Array(WAVEFORM_BARS).fill(0).map((_, index) => {
+        // Create wave-like pattern centered around the audio level
+        const baseLevel = currentLevel / 100;
+        const variance = Math.random() * 0.4 - 0.2;
+        const centerBias = 1 - Math.abs(index - WAVEFORM_BARS / 2) / (WAVEFORM_BARS / 2) * 0.3;
+        return Math.max(0.1, Math.min(1, baseLevel * centerBias + variance));
+      });
+
+      setWaveformData(newData);
+
+      // Animate bars
+      newData.forEach((value, index) => {
+        Animated.timing(barAnimations[index], {
+          toValue: value,
+          duration: WAVEFORM_UPDATE_INTERVAL - 10,
+          useNativeDriver: false,
+        }).start();
+      });
+    }, WAVEFORM_UPDATE_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [isStreaming, sourceType, barAnimations]);
+
+  // Heartrate monitor animation for OMI - blip sweeps across
+  useEffect(() => {
+    if (!isStreaming || sourceType !== 'omi') {
       setBlipPosition(0);
       setTrailData(Array(MONITOR_POINTS).fill(0));
       return;
@@ -91,7 +148,7 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
     }, MONITOR_UPDATE_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [isStreaming]);
+  }, [isStreaming, sourceType]);
 
   const formatDuration = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
@@ -134,35 +191,61 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
         </View>
       )}
 
-      {/* Heartrate Monitor Visualization */}
-      <View style={styles.monitorContainer} testID="streaming-waveform">
-        <View style={styles.monitorLine}>
-          {trailData.map((value, index) => (
-            <View
+      {/* Waveform Visualization - Phone Mic or OMI */}
+      {sourceType === 'microphone' ? (
+        // Phone Mic: Animated waveform bars
+        <View style={styles.waveformContainer} testID="streaming-waveform">
+          {barAnimations.map((anim, index) => (
+            <Animated.View
               key={index}
               style={[
-                styles.monitorPoint,
+                styles.waveformBar,
                 {
-                  height: Math.abs(value) * 50 + 2,
-                  marginTop: value < 0 ? 25 : 25 - (value * 50),
-                  backgroundColor: isStreaming
-                    ? index === blipPosition
-                      ? colors.accent[300]
-                      : colors.accent[400]
-                    : theme.textMuted,
-                  opacity: isStreaming
-                    ? index === blipPosition
-                      ? 1
-                      : Math.max(0.2, 1 - Math.abs(index - blipPosition) * 0.08)
-                    : 0.3,
+                  height: anim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['10%', '100%'],
+                  }),
+                  backgroundColor: isStreaming ? colors.accent[400] : theme.textMuted,
+                  opacity: anim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.3, 1],
+                  }),
                 },
               ]}
             />
           ))}
         </View>
-        {/* Baseline */}
-        <View style={styles.monitorBaseline} />
-      </View>
+      ) : (
+        // OMI Device: Heartbeat monitor animation
+        <View style={styles.monitorContainer} testID="streaming-waveform">
+          <View style={styles.monitorLine}>
+            {trailData.map((value, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.monitorPoint,
+                  {
+                    height: Math.abs(value) * 50 + 2,
+                    marginTop: value < 0 ? 25 : 25 - (value * 50),
+                    backgroundColor: isStreaming
+                      ? index === blipPosition
+                        ? colors.accent[300]
+                        : colors.accent[400]
+                      : theme.textMuted,
+                    opacity: isStreaming
+                      ? index === blipPosition
+                        ? 1
+                        : Math.max(0.2, 1 - Math.abs(index - blipPosition) * 0.08)
+                      : 0.3,
+                  },
+                ]}
+              />
+            ))}
+          </View>
+          {/* Baseline */}
+          <View style={styles.monitorBaseline} />
+        </View>
+      )}
 
       {/* Audio Level Indicator with dB - only show when streaming */}
       {isStreaming && (
@@ -229,6 +312,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: theme.textPrimary,
     fontFamily: 'monospace',
+  },
+  waveformContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 60,
+    gap: 2,
+    marginBottom: spacing.md,
+  },
+  waveformBar: {
+    flex: 1,
+    borderRadius: 2,
+    minHeight: 6,
   },
   monitorContainer: {
     height: 60,

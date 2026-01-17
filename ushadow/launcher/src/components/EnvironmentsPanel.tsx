@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, FolderOpen, X, AlertCircle } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, FolderOpen, X, AlertCircle, GitBranch, GitMerge } from 'lucide-react'
 import type { UshadowEnvironment } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
@@ -34,8 +34,16 @@ export function EnvironmentsPanel({
 }: EnvironmentsPanelProps) {
   const [activeTab, setActiveTab] = useState<'running' | 'detected'>('running')
 
-  const runningEnvs = environments.filter(env => env.running)
-  const stoppedEnvs = environments.filter(env => !env.running)
+  // Sort environments: worktrees first, then reverse to show newest first
+  const sortedEnvironments = [...environments].sort((a, b) => {
+    // Worktrees come first
+    if (a.is_worktree && !b.is_worktree) return -1
+    if (!a.is_worktree && b.is_worktree) return 1
+    return 0
+  }).reverse()
+
+  const runningEnvs = sortedEnvironments.filter(env => env.running)
+  const stoppedEnvs = sortedEnvironments.filter(env => !env.running)
 
   return (
     <div className="bg-surface-800 rounded-lg p-4" data-testid="environments-panel">
@@ -240,10 +248,17 @@ interface EnvironmentCardProps {
 function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, isLoading }: EnvironmentCardProps) {
   const colors = getColors(environment.color || environment.name)
 
-  const localhostUrl = environment.localhost_url || `http://localhost:${environment.webui_port || environment.backend_port}`
+  const localhostUrl = environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : null)
 
   const handleOpenUrl = (url: string) => {
     tauri.openBrowser(url)
+  }
+
+  const handleOpenVscode = () => {
+    if (environment.path) {
+      // Pass environment name to setup VSCode colors
+      tauri.openInVscode(environment.path, environment.name)
+    }
   }
 
   return (
@@ -255,16 +270,33 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, isLoading 
       }}
       data-testid={`env-${environment.name}`}
     >
-      {/* Main row */}
-      <div className="flex items-center gap-3">
+      {/* Main content */}
+      <div className="flex items-start gap-3">
         <div
-          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${environment.running ? 'animate-pulse' : ''}`}
+          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1.5 ${environment.running ? 'animate-pulse' : ''}`}
           style={{ backgroundColor: environment.running ? colors.primary : '#4a4a4a' }}
         />
         <div className="flex-1 min-w-0">
-          <span className="text-sm font-semibold" style={{ color: environment.running ? colors.primary : '#888' }}>
-            {environment.name}
-          </span>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-sm font-semibold" style={{ color: environment.running ? colors.primary : '#888' }}>
+              {environment.name}
+            </span>
+            {environment.is_worktree && (
+              <span
+                className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                title="Git worktree environment"
+              >
+                <GitMerge className="w-3 h-3" />
+                <span>Worktree</span>
+              </span>
+            )}
+            {environment.branch && (
+              <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-surface-600/30 text-text-muted">
+                <GitBranch className="w-3 h-3" />
+                {environment.branch}
+              </span>
+            )}
+          </div>
           {/* Container tags */}
           {environment.containers.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap mt-1">
@@ -287,65 +319,83 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, isLoading 
               <span className="truncate" title={environment.path}>{environment.path}</span>
             </div>
           )}
+          {/* URLs when running */}
+          {environment.running && localhostUrl && (
+            <div className="mt-2 space-y-0.5">
+              <button
+                onClick={() => handleOpenUrl(localhostUrl)}
+                className="text-xs text-text-muted hover:text-primary-400 hover:underline truncate block w-full text-left"
+                data-testid={`url-local-${environment.name}`}
+              >
+                {localhostUrl}
+              </button>
+              {environment.tailscale_url && (
+                <button
+                  onClick={() => handleOpenUrl(environment.tailscale_url!)}
+                  className="text-xs text-cyan-500/70 hover:text-cyan-400 hover:underline truncate block w-full text-left"
+                  data-testid={`url-tailscale-${environment.name}`}
+                >
+                  {environment.tailscale_url}
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Open in App - prominent when running */}
-        {environment.running && (
-          <button
-            onClick={onOpenInApp}
-            className="px-3 py-1.5 rounded-lg bg-primary-500 text-white hover:bg-primary-600 transition-colors flex items-center gap-1.5 font-medium shadow-sm"
-            data-testid={`open-in-app-${environment.name}`}
-          >
-            <AppWindow className="w-4 h-4" />
-            <span className="text-sm">Open</span>
-          </button>
-        )}
+        {/* Top right buttons */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* VS Code button - small */}
+          {environment.path && (
+            <button
+              onClick={handleOpenVscode}
+              className="p-2 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors"
+              title="Open in VS Code"
+              data-testid={`vscode-${environment.name}`}
+            >
+              <img src="/vscode48.png" alt="VS Code" className="w-4 h-4" />
+            </button>
+          )}
 
-        {/* Start/Stop button */}
+          {/* Open in App - only when running */}
+          {environment.running && (
+            <button
+              onClick={onOpenInApp}
+              className="px-3 py-1.5 rounded-lg bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors flex items-center gap-1.5 font-medium"
+              data-testid={`open-in-app-${environment.name}`}
+            >
+              <AppWindow className="w-4 h-4" />
+              <span className="text-sm">Open</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Start/Stop button - bottom */}
+      <div className="mt-2 flex justify-end">
         {environment.running ? (
           <button
             onClick={onStop}
             disabled={isLoading}
-            className="p-1.5 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50"
-            title="Stop"
+            className="px-3 py-1.5 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-sm font-medium"
+            title="Stop environment"
             data-testid={`stop-${environment.name}`}
           >
             {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+            <span>Stop</span>
           </button>
         ) : (
           <button
             onClick={onStart}
             disabled={isLoading}
-            className="p-1.5 rounded bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors disabled:opacity-50"
-            title="Start"
+            className="px-3 py-1.5 rounded bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-sm font-medium"
+            title="Start environment"
             data-testid={`start-${environment.name}`}
           >
             {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            <span>Start</span>
           </button>
         )}
       </div>
-
-      {/* URLs when running */}
-      {environment.running && (
-        <div className="mt-2 pl-6 space-y-0.5">
-          <button
-            onClick={() => handleOpenUrl(localhostUrl)}
-            className="text-xs text-text-muted hover:text-primary-400 hover:underline truncate block w-full text-left"
-            data-testid={`url-local-${environment.name}`}
-          >
-            {localhostUrl}
-          </button>
-          {environment.tailscale_url && (
-            <button
-              onClick={() => handleOpenUrl(environment.tailscale_url!)}
-              className="text-xs text-cyan-500/70 hover:text-cyan-400 hover:underline truncate block w-full text-left"
-              data-testid={`url-tailscale-${environment.name}`}
-            >
-              {environment.tailscale_url}
-            </button>
-          )}
-        </div>
-      )}
     </div>
   )
 }

@@ -6,7 +6,8 @@
 mod commands;
 mod models;
 
-use commands::{AppState, check_prerequisites, get_os_type, discover_environments,
+use commands::{AppState, check_prerequisites, discover_environments, get_os_type,
+    discover_environments_with_config,
     start_containers, stop_containers, get_container_status,
     start_infrastructure, stop_infrastructure, restart_infrastructure,
     start_environment, stop_environment, check_ports,
@@ -17,8 +18,12 @@ use commands::{AppState, check_prerequisites, get_os_type, discover_environments
     install_homebrew, check_brew,
     install_docker_windows, install_tailscale_windows, install_tailscale_macos,
     // Project/repo management
-    get_default_project_dir, check_project_dir, check_install_path, clone_ushadow_repo,
-    update_ushadow_repo, install_git_windows, install_git_macos};
+    get_default_project_dir, check_project_dir, clone_ushadow_repo,
+    update_ushadow_repo, install_git_windows, install_git_macos,
+    // Worktree commands
+    list_worktrees, create_worktree, open_in_vscode, remove_worktree,
+    // Permissions
+    check_install_path};
 use tauri::{
     CustomMenuItem, Manager, Menu, MenuItem, SystemTray,
     SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem, Submenu,
@@ -134,6 +139,12 @@ fn main() {
             update_ushadow_repo,
             install_git_windows,
             install_git_macos,
+            // Worktree management
+            discover_environments_with_config,
+            list_worktrees,
+            create_worktree,
+            open_in_vscode,
+            remove_worktree,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

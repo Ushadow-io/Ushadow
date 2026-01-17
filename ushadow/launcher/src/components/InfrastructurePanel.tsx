@@ -1,4 +1,5 @@
-import { Play, Square, RotateCcw, Loader2 } from 'lucide-react'
+import { useState } from 'react'
+import { Play, Square, RotateCcw, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
 import type { InfraService } from '../hooks/useTauri'
 
 interface InfrastructurePanelProps {
@@ -13,10 +14,25 @@ export function InfrastructurePanel({ services, onStart, onStop, onRestart, isLo
   const hasRunningServices = services.some(s => s.running)
   const allRunning = services.length > 0 && services.every(s => s.running)
 
+  // Start collapsed if all infrastructure is running (all green)
+  const [expanded, setExpanded] = useState(!allRunning)
+
   return (
-    <div className="bg-surface-800 rounded-lg p-4" data-testid="infrastructure-panel">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium">Shared Infrastructure</h3>
+    <div className="bg-surface-800 rounded-lg" data-testid="infrastructure-panel">
+      {/* Header */}
+      <div className="flex items-center justify-between p-4">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2"
+        >
+          <span className="font-medium">Shared Infrastructure</span>
+          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </button>
+        {allRunning && services.length > 0 && (
+          <span className="text-xs px-2 py-1 rounded-full bg-success-500/20 text-success-400">
+            {services.length} core service{services.length !== 1 ? 's' : ''} started
+          </span>
+        )}
         <div className="flex gap-1">
           {!allRunning && (
             <button
@@ -54,13 +70,18 @@ export function InfrastructurePanel({ services, onStart, onStop, onRestart, isLo
         </div>
       </div>
 
-      {services.length === 0 ? (
-        <p className="text-xs text-text-muted">No services detected</p>
-      ) : (
-        <div className="space-y-2">
-          {services.map((svc) => (
-            <ServiceCard key={svc.name} service={svc} />
-          ))}
+      {/* Content - only show when expanded */}
+      {expanded && (
+        <div className="px-4 pb-4">
+          {services.length === 0 ? (
+            <p className="text-xs text-text-muted">No services detected</p>
+          ) : (
+            <div className="space-y-2">
+              {services.map((svc) => (
+                <ServiceCard key={svc.name} service={svc} />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

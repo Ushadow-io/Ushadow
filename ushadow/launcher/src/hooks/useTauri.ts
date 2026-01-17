@@ -19,14 +19,17 @@ export interface Prerequisites {
 export interface UshadowEnvironment {
   name: string
   color: string
-  localhost_url: string
+  localhost_url: string | null
   tailscale_url: string | null
-  backend_port: number
+  backend_port: number | null
   webui_port: number | null
   running: boolean
+  status: 'Running' | 'Partial' | 'Stopped' | 'Available'
   tailscale_active: boolean
   containers: string[]
   path: string | null
+  branch: string | null
+  is_worktree: boolean
 }
 
 // Legacy alias for backward compatibility
@@ -76,7 +79,7 @@ export const tauri = {
   discoverEnvironments: () => invoke<Discovery>('discover_environments'),
   createEnvironment: (name: string, mode?: 'dev' | 'prod') => invoke<string>('create_environment', { name, mode }),
   checkPorts: () => invoke<[boolean, boolean, number]>('check_ports'),
-  startEnvironment: (envName: string) => invoke<string>('start_environment', { envName }),
+  startEnvironment: (envName: string, envPath?: string) => invoke<string>('start_environment', { envName, envPath }),
   stopEnvironment: (envName: string) => invoke<string>('stop_environment', { envName }),
 
   // Legacy (for compatibility)
@@ -106,7 +109,20 @@ export const tauri = {
 
   // Utilities
   openBrowser: (url: string) => invoke<void>('open_browser', { url }),
-  focusWindow: () => invoke<void>('focus_window'),
+
+  // Worktree management
+  listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
+  createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
+    invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
+  openInVscode: (path: string, envName?: string) => invoke<void>('open_in_vscode', { path, envName }),
+  removeWorktree: (mainRepo: string, name: string) => invoke<void>('remove_worktree', { mainRepo, name }),
+}
+
+// WorktreeInfo type
+export interface WorktreeInfo {
+  path: string
+  branch: string
+  name: string
 }
 
 export default tauri

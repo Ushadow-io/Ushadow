@@ -114,6 +114,7 @@ export default function RegistrationPage() {
     >
       <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8">
         {/* Decorative background blur circles - brand green and purple */}
+        {/* Using fixed positioning so glows extend to viewport edges, not container edges */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
           <div
             className="absolute -top-40 -right-40 w-96 h-96 rounded-full blur-3xl"

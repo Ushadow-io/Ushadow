@@ -70,10 +70,21 @@ api.interceptors.response.use(
   (error) => {
     // Only clear token and redirect on actual 401 responses, not on timeouts
     if (error.response?.status === 401) {
-      // Token expired or invalid, redirect to login
-      console.warn('🔐 API: 401 Unauthorized - clearing token and redirecting to login')
-      localStorage.removeItem(getStorageKey('token'))
-      window.location.href = '/login'
+      const url = error.config?.url || ''
+
+      // Don't logout on 401s from proxied services (Chronicle, etc.)
+      // These services may have their own auth issues that shouldn't affect ushadow login
+      const isServiceProxy = url.includes('/api/services/') && url.includes('/proxy/')
+
+      if (isServiceProxy) {
+        console.warn('🔐 API: 401 from proxied service - not logging out:', url)
+        // Let the component handle the service-specific auth error
+      } else {
+        // Token expired or invalid on core ushadow endpoints, redirect to login
+        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
+        localStorage.removeItem(getStorageKey('token'))
+        window.location.href = '/login'
+      }
     } else if (error.code === 'ECONNABORTED') {
       // Request timeout - don't logout, just log it
       console.warn('⏱️ API: Request timeout - server may be busy')
@@ -626,6 +637,7 @@ export interface PlatformInfo {
   os_version: string
   architecture: string
   is_docker: boolean
+  tailscale_installed: boolean
 }
 
 export interface EnvironmentInfo {
@@ -840,16 +852,33 @@ import type {
 } from '../types/memory'
 
 /** Convert API response to internal Memory format */
-const adaptMemoryItem = (item: ApiMemoryItem): Memory => ({
-  id: item.id,
-  memory: item.content,
-  created_at: new Date(item.created_at).getTime(),
-  state: item.state as Memory['state'],
-  metadata: item.metadata_ || {},
-  categories: item.categories as Memory['categories'],
-  client: 'api',
-  app_name: item.app_name,
-})
+const adaptMemoryItem = (item: ApiMemoryItem): Memory => {
+  // Handle both ISO strings and Unix timestamps (seconds or milliseconds)
+  let timestamp: number
+  if (typeof item.created_at === 'string') {
+    // Try parsing as ISO string first
+    timestamp = new Date(item.created_at).getTime()
+  } else {
+    // Numeric timestamp - check if it's in seconds or milliseconds
+    const numericTimestamp = Number(item.created_at)
+    // If timestamp is less than year 2000 in milliseconds (946684800000),
+    // it's likely in seconds, so convert to milliseconds
+    timestamp = numericTimestamp < 946684800000
+      ? numericTimestamp * 1000
+      : numericTimestamp
+  }
+
+  return {
+    id: item.id,
+    memory: item.content,
+    created_at: timestamp,
+    state: item.state as Memory['state'],
+    metadata: item.metadata_ || {},
+    categories: item.categories as Memory['categories'],
+    client: 'api',
+    app_name: item.app_name,
+  }
+}
 
 export const memoriesApi = {
   /** Get OpenMemory server URL from settings or use default */
@@ -994,6 +1023,198 @@ export const memoriesApi = {
   },
 }
 
+// =============================================================================
+// Instances API (templates, instances, wiring)
+// =============================================================================
+
+/** Template source - where the template was discovered from */
+export type TemplateSource = 'compose' | 'provider'
+
+/** Instance status */
+export type InstanceStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
+
+/** Template - discovered from compose or provider files */
+export interface Template {
+  id: string
+  source: TemplateSource
+  name: string
+  description?: string
+  requires: string[]
+  optional: string[]
+  provides?: string
+  config_schema: Array<{
+    key: string
+    type: string
+    label?: string
+    required?: boolean
+    default?: string
+    env_var?: string
+    settings_path?: string
+    has_value?: boolean  // Whether settings has a value
+    value?: string       // Current value (non-secrets only)
+  }>
+  compose_file?: string
+  service_name?: string
+  provider_file?: string
+  mode?: 'cloud' | 'local'
+  icon?: string
+  tags: string[]
+  configured: boolean  // Whether required config fields are set (for providers)
+  available: boolean   // Whether local service is running (for local providers)
+}
+
+/** Instance config values */
+export interface InstanceConfig {
+  values: Record<string, any>
+}
+
+/** Instance outputs after deployment */
+export interface InstanceOutputs {
+  access_url?: string
+  env_vars: Record<string, string>
+  capability_values: Record<string, any>
+}
+
+/** Instance - configured deployment of a template */
+export interface Instance {
+  id: string
+  template_id: string
+  name: string
+  description?: string
+  config: InstanceConfig
+  deployment_target?: string
+  status: InstanceStatus
+  outputs: InstanceOutputs
+  container_id?: string
+  container_name?: string
+  deployment_id?: string
+  created_at?: string
+  deployed_at?: string
+  updated_at?: string
+  error?: string
+  // Integration-specific fields (present only for integrations)
+  integration_type?: string
+  sync_enabled?: boolean
+  sync_interval?: number
+  last_sync_at?: string
+  last_sync_status?: string
+  last_sync_items_count?: number
+  last_sync_error?: string
+  next_sync_at?: string
+}
+
+/** Instance summary for list views */
+export interface InstanceSummary {
+  id: string
+  template_id: string
+  name: string
+  status: InstanceStatus
+  provides?: string
+  deployment_target?: string
+  access_url?: string
+}
+
+/** Wiring connection between instances */
+export interface Wiring {
+  id: string
+  source_instance_id: string
+  source_capability: string
+  target_instance_id: string
+  target_capability: string
+  created_at?: string
+}
+
+/** Request to create an instance */
+export interface InstanceCreateRequest {
+  id: string
+  template_id: string
+  name: string
+  description?: string
+  config?: Record<string, any>
+  deployment_target?: string
+}
+
+/** Request to update an instance */
+export interface InstanceUpdateRequest {
+  name?: string
+  description?: string
+  config?: Record<string, any>
+  deployment_target?: string
+}
+
+/** Request to create wiring */
+export interface WiringCreateRequest {
+  source_instance_id: string
+  source_capability: string
+  target_instance_id: string
+  target_capability: string
+}
+
+export const instancesApi = {
+  // Templates
+  /** List all templates (compose services + providers) */
+  getTemplates: (source?: TemplateSource) =>
+    api.get<Template[]>('/api/instances/templates', { params: source ? { source } : {} }),
+
+  /** Get a template by ID */
+  getTemplate: (templateId: string) =>
+    api.get<Template>(`/api/instances/templates/${templateId}`),
+
+  // Instances
+  /** List all instances */
+  getInstances: () =>
+    api.get<InstanceSummary[]>('/api/instances'),
+
+  /** Get an instance by ID */
+  getInstance: (instanceId: string) =>
+    api.get<Instance>(`/api/instances/${instanceId}`),
+
+  /** Create a new instance */
+  createInstance: (data: InstanceCreateRequest) =>
+    api.post<Instance>('/api/instances', data),
+
+  /** Update an instance */
+  updateInstance: (instanceId: string, data: InstanceUpdateRequest) =>
+    api.put<Instance>(`/api/instances/${instanceId}`, data),
+
+  /** Delete an instance */
+  deleteInstance: (instanceId: string) =>
+    api.delete(`/api/instances/${instanceId}`),
+
+  /** Deploy/start an instance */
+  deployInstance: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/deploy`),
+
+  /** Undeploy/stop an instance */
+  undeployInstance: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/undeploy`),
+
+  // Wiring
+  /** List all wiring connections */
+  getWiring: () =>
+    api.get<Wiring[]>('/api/instances/wiring/all'),
+
+  /** Get default capability mappings */
+  getDefaults: () =>
+    api.get<Record<string, string>>('/api/instances/wiring/defaults'),
+
+  /** Set default instance for a capability */
+  setDefault: (capability: string, instanceId: string) =>
+    api.put(`/api/instances/wiring/defaults/${capability}`, null, { params: { instance_id: instanceId } }),
+
+  /** Create a wiring connection */
+  createWiring: (data: WiringCreateRequest) =>
+    api.post<Wiring>('/api/instances/wiring', data),
+
+  /** Delete a wiring connection */
+  deleteWiring: (wiringId: string) =>
+    api.delete(`/api/instances/wiring/${wiringId}`),
+
+  /** Get wiring for a specific instance */
+  getInstanceWiring: (instanceId: string) =>
+    api.get<Wiring[]>(`/api/instances/${instanceId}/wiring`),
+}
+
 export const graphApi = {
   /** Fetch graph data for visualization */
   fetchGraphData: async (
@@ -1060,6 +1281,18 @@ export const tailscaleApi = {
       details?: { tailscale: { status: string }; caddy: { status: string }; routing: { status: string } }
     }>('/api/tailscale/container/start-with-caddy'),
   clearAuth: () => api.post<{ status: string; message: string }>('/api/tailscale/container/clear-auth'),
+  reset: () => api.post<{
+    status: string
+    message: string
+    details: {
+      routes_cleared: boolean
+      certs_removed: boolean
+      auth_cleared: boolean
+      config_removed: boolean
+    }
+    errors?: string[]
+    note: string
+  }>('/api/tailscale/container/reset'),
   getTailnetSettings: () => api.get<TailnetSettings>('/api/tailscale/container/tailnet-settings'),
   enableHttps: () => api.post<{ status: string; message: string }>('/api/tailscale/container/enable-https'),
   getAuthUrl: (regenerate: boolean = false) =>
@@ -1068,11 +1301,6 @@ export const tailscaleApi = {
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
-  configureCaddyRouting: (hostname?: string) =>
-    api.post<{ status: string; message: string; cors_origin_added?: string }>(
-      '/api/tailscale/configure-caddy-routing',
-      hostname ? { hostname } : undefined
-    ),
   updateCorsOrigins: (hostname: string) =>
     api.post<{
       status: string
@@ -1161,4 +1389,54 @@ export const chatApi = {
 
   /** Get the streaming endpoint URL (for direct fetch) */
   getStreamUrl: () => `${BACKEND_URL}/api/chat`,
+}
+
+// =============================================================================
+// Integration API - Integration sync and connection management
+// =============================================================================
+
+export interface IntegrationSyncResult {
+  success: boolean
+  items_synced?: number
+  last_sync_at?: string
+  error?: string
+}
+
+export interface IntegrationSyncStatus {
+  integration_id: string
+  integration_type: string
+  sync_enabled: boolean | null
+  sync_interval: number | null
+  last_sync_at: string | null
+  last_sync_status: string
+  last_sync_items_count: number | null
+  last_sync_error: string | null
+  next_sync_at: string | null
+}
+
+export interface IntegrationConnectionResult {
+  success: boolean
+  message: string
+}
+
+export const integrationApi = {
+  /** Test connection to an integration */
+  testConnection: (instanceId: string) =>
+    api.post<IntegrationConnectionResult>(`/api/instances/${instanceId}/test-connection`),
+
+  /** Manually trigger sync for an integration */
+  syncNow: (instanceId: string) =>
+    api.post<IntegrationSyncResult>(`/api/instances/${instanceId}/sync`),
+
+  /** Get current sync status for an integration */
+  getSyncStatus: (instanceId: string) =>
+    api.get<IntegrationSyncStatus>(`/api/instances/${instanceId}/sync-status`),
+
+  /** Enable automatic syncing for an integration */
+  enableAutoSync: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/enable`),
+
+  /** Disable automatic syncing for an integration */
+  disableAutoSync: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/disable`),
 }

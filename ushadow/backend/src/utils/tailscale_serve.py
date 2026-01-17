@@ -298,25 +298,28 @@ def configure_base_routes(
     backend_container: str = None,
     frontend_container: str = None,
     backend_port: int = 8000,
-    frontend_port: int = None
+    frontend_port: int = None  # Auto-detect from DEV_MODE
 ) -> bool:
     """Configure the base routes for an environment.
 
     Sets up:
     - /api/* -> backend/api (path preserved)
     - /auth/* -> backend/auth (path preserved)
-    - /ws_pcm -> backend/ws_pcm (websocket)
-    - /ws_omi -> backend/ws_omi (websocket)
+    - /ws_pcm -> chronicle-backend/ws_pcm (websocket - direct to Chronicle)
+    - /ws_omi -> chronicle-backend/ws_omi (websocket - direct to Chronicle)
     - /* -> frontend
 
     Note: Tailscale serve strips the path prefix, so we include it in the
-    target URL to preserve the full path at the backend.
+    target URL to preserve the full path at the service.
+
+    Chronicle REST APIs use /api/services/chronicle-backend/proxy/* through
+    the ushadow backend. WebSockets connect directly for low latency.
 
     Args:
         backend_container: Backend container name (defaults to {env}-backend)
         frontend_container: Frontend container name (defaults to {env}-webui)
         backend_port: Backend internal port (default 8000)
-        frontend_port: Frontend internal port (always 5173 for webui container)
+        frontend_port: Frontend internal port (auto-detect: 5173 for dev, 80 for prod)
 
     Returns:
         True if all routes configured successfully
@@ -344,17 +347,28 @@ def configure_base_routes(
 
     # Configure backend routes - include path in target to preserve it
     # (Tailscale serve strips the --set-path prefix from the request)
-    backend_routes = ["/api", "/auth", "/ws_pcm", "/ws_omi"]
+    backend_routes = ["/api", "/auth"]
     for route in backend_routes:
         target = f"{backend_base}{route}"
         if not add_serve_route(route, target):
             success = False
 
-    # Chronicle backend route
-    chronicle_container = "chronicle-backend"
-    chronicle_port = 8000
-    if not add_serve_route("/chronicle", f"http://{chronicle_container}:{chronicle_port}"):
-        success = False
+    # Configure Chronicle WebSocket routes - these go directly to Chronicle for low latency
+    # (REST APIs use /api/services/chronicle-backend/proxy/* through ushadow backend)
+    chronicle_container = f"{env_name}-chronicle-backend"
+    chronicle_port = 8000  # Chronicle's internal port
+    chronicle_base = f"http://{chronicle_container}:{chronicle_port}"
+
+    websocket_routes = ["/ws_pcm", "/ws_omi"]
+    for route in websocket_routes:
+        target = f"{chronicle_base}{route}"
+        if not add_serve_route(route, target):
+            success = False
+
+    # NOTE: Chronicle REST APIs are now accessed via generic proxy pattern:
+    # /api/services/chronicle-backend/proxy/* instead of direct /chronicle routing
+    # This provides unified auth and centralized routing through ushadow backend
+    # WebSockets go directly to Chronicle for low latency
 
     # Frontend catches everything else
     if not add_serve_route("/", frontend_target):
@@ -400,72 +414,3 @@ def remove_service_route(service_id: str, path: str = None) -> bool:
         path = f"/{service_id}"
 
     return remove_serve_route(path)
-
-
-def configure_caddy_proxy_route(caddy_port: int = 8880) -> bool:
-    """Configure Tailscale Serve to route all traffic through Caddy proxy.
-
-    Instead of configuring individual service routes, this sets up a single
-    route that sends all HTTPS traffic to the Caddy reverse proxy.
-
-    Caddy handles the path-based routing:
-    - /chronicle/* -> Chronicle backend (strips prefix)
-    - /api/* -> Ushadow backend
-    - /auth/* -> Ushadow backend
-    - /ws_pcm -> Ushadow WebSocket
-    - /* -> Ushadow frontend
-
-    Args:
-        caddy_port: Caddy's listening port (default 8880)
-
-    Returns:
-        True if successful
-    """
-    caddy_target = f"http://ushadow-caddy:{caddy_port}"
-
-    # Reset any existing routes first
-    reset_serve()
-
-    # Single route - all traffic goes to Caddy
-    success = add_serve_route("/", caddy_target)
-
-    if success:
-        logger.info(f"Configured Tailscale Serve to use Caddy proxy at {caddy_target}")
-    else:
-        logger.error("Failed to configure Caddy proxy route")
-
-    return success
-
-
-def is_caddy_running() -> bool:
-    """Check if the Caddy container is running.
-
-    Returns:
-        True if Caddy container exists and is running
-    """
-    try:
-        container = docker_client.containers.get("ushadow-caddy")
-        return container.status == "running"
-    except docker.errors.NotFound:
-        return False
-    except Exception as e:
-        logger.error(f"Error checking Caddy status: {e}")
-        return False
-
-
-def get_routing_mode() -> str:
-    """Determine the current routing mode.
-
-    Returns:
-        'caddy' if using Caddy proxy, 'direct' if using direct routes, 'none' if not configured
-    """
-    status = get_serve_status()
-    if not status:
-        return "none"
-
-    # If routing to caddy container, we're in caddy mode
-    if "ushadow-caddy" in status or "caddy" in status.lower():
-        return "caddy"
-    elif status.strip():
-        return "direct"
-    return "none"

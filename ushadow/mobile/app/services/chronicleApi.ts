@@ -14,6 +14,7 @@ export interface Conversation {
   user_id: string;
   client_id: string;
   audio_path?: string;
+  cropped_audio_path?: string;
   created_at: string;
   deleted?: boolean;
   title?: string;
@@ -85,24 +86,24 @@ async function getChronicleApiUrl(): Promise<string> {
     return activeUnode.chronicleApiUrl;
   }
 
-  // Construct from apiUrl + /chronicle/api
+  // Use generic proxy pattern (per docs/IMPLEMENTATION-SUMMARY.md)
   if (activeUnode?.apiUrl) {
-    const chronicleUrl = `${activeUnode.apiUrl}/chronicle/api`;
-    console.log(`[ChronicleAPI] Constructed Chronicle URL: ${chronicleUrl}`);
+    const chronicleUrl = `${activeUnode.apiUrl}/api/services/chronicle-backend/proxy`;
+    console.log(`[ChronicleAPI] Using generic proxy: ${chronicleUrl}`);
     return chronicleUrl;
   }
 
   // Fall back to global storage (legacy)
   const storedUrl = await getApiUrl();
   if (storedUrl) {
-    const chronicleUrl = `${storedUrl}/chronicle/api`;
-    console.log(`[ChronicleAPI] Using stored URL + /chronicle/api: ${chronicleUrl}`);
+    const chronicleUrl = `${storedUrl}/api/services/chronicle-backend/proxy`;
+    console.log(`[ChronicleAPI] Using stored URL + generic proxy: ${chronicleUrl}`);
     return chronicleUrl;
   }
 
   // Default fallback
-  console.log('[ChronicleAPI] Using default Chronicle API URL');
-  return 'https://blue.spangled-kettle.ts.net/chronicle/api';
+  console.log('[ChronicleAPI] Using default Chronicle generic proxy');
+  return 'https://blue.spangled-kettle.ts.net/api/services/chronicle-backend/proxy';
 }
 
 /**
@@ -145,6 +146,18 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
   if (!response.ok) {
     const errorText = await response.text();
     console.error(`[ChronicleAPI] Error ${response.status}:`, errorText);
+
+    // Handle 401 Unauthorized - token is invalid or expired
+    if (response.status === 401) {
+      console.log('[ChronicleAPI] Token invalid or expired - clearing auth and prompting re-login');
+
+      // Clear the invalid token from storage
+      const { clearAuthToken } = await import('../utils/authStorage');
+      await clearAuthToken();
+
+      throw new Error('Authentication expired. Please scan QR code to reconnect.');
+    }
+
     throw new Error(`API request failed: ${response.status} ${response.statusText}`);
   }
 
@@ -160,7 +173,7 @@ export async function fetchConversations(
 ): Promise<ConversationsResponse> {
   try {
     const response = await apiRequest<Conversation[] | ConversationsResponse>(
-      `/conversations?page=${page}&limit=${limit}`
+      `/api/conversations?page=${page}&limit=${limit}`
     );
 
     // Handle both array and paginated response formats
@@ -185,7 +198,7 @@ export async function fetchConversations(
  */
 export async function fetchConversation(conversationId: string): Promise<Conversation> {
   try {
-    return await apiRequest<Conversation>(`/conversations/${conversationId}`);
+    return await apiRequest<Conversation>(`/api/conversations/${conversationId}`);
   } catch (error) {
     console.error('[ChronicleAPI] Failed to fetch conversation:', error);
     throw error;
@@ -266,8 +279,8 @@ export async function verifyUnodeAuth(
     const ushadowOk = ushadowResponse.ok;
     console.log(`[ChronicleAPI] Ushadow auth: ${ushadowResponse.status}`);
 
-    // Check chronicle auth at /chronicle/users/me (proxied through ushadow)
-    const chronicleUrl = `${apiUrl}/chronicle/users/me`;
+    // Check chronicle auth using generic proxy pattern
+    const chronicleUrl = `${apiUrl}/api/services/chronicle-backend/proxy/users/me`;
     console.log(`[ChronicleAPI] Verifying chronicle auth at: ${chronicleUrl}`);
 
     const chronicleResponse = await fetch(chronicleUrl, {
@@ -308,4 +321,32 @@ export async function verifyUnodeAuth(
     }
     return { valid: false, error: message };
   }
+}
+
+/**
+ * Get audio URL for playback.
+ *
+ * IMPORTANT: Audio playback uses the proxy with token in query string.
+ * The Chronicle audio endpoint accepts a 'token' query parameter
+ * specifically for media playback where headers can't be sent.
+ *
+ * @param conversationId The conversation ID
+ * @param cropped Whether to use the cropped (speech-only) audio
+ * @returns Promise<string> The full URL to the audio file
+ */
+export async function getChronicleAudioUrl(
+  conversationId: string,
+  cropped: boolean = true
+): Promise<string> {
+  const [chronicleApiUrl, token] = await Promise.all([getChronicleApiUrl(), getToken()]);
+
+  if (!token) {
+    throw new Error('Not authenticated. Please log in first.');
+  }
+
+  // Use proxy URL with token in query string
+  // The proxy will forward the entire request including the token parameter
+  const url = `${chronicleApiUrl}/api/audio/get_audio/${conversationId}?cropped=${cropped}&token=${encodeURIComponent(token)}`;
+  console.log('[ChronicleAPI] Generated audio URL:', url.substring(0, 100) + '...');
+  return url;
 }

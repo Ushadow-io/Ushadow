@@ -28,6 +28,15 @@ Without `data-testid`:
 - Tests become fragile and flaky
 - Debugging is harder (no semantic selectors)
 - Our automation agents can't write reliable tests
+## Service Integration
+
+**CRITICAL**: Before adding any service integration endpoints, read `docs/SERVICE-INTEGRATION-CHECKLIST.md`.
+
+- ushadow uses a **generic proxy** at `/api/services/{name}/proxy/{path}` that automatically forwards all requests
+- **DO NOT** add custom service endpoints unless absolutely necessary (transformation, aggregation, special auth)
+- Always check swagger docs first: `http://localhost:${BACKEND_PORT}/docs`
+- Test if the generic proxy already works before writing custom code
+- Service cards have an "API" button to view each service's swagger documentation
 
 ## Frontend Testing: data-testid and Playwright POM
 
