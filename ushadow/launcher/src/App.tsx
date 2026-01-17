@@ -3,6 +3,7 @@ import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment } fr
 import { useAppStore } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
+import { writeText, readText } from '@tauri-apps/api/clipboard'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
@@ -12,8 +13,9 @@ import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
+import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders } from 'lucide-react'
 import { getColors } from './utils/colors'
 
 function App() {
@@ -45,8 +47,9 @@ function App() {
   const [showProjectDialog, setShowProjectDialog] = useState(false)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [logExpanded, setLogExpanded] = useState(true)
-  const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string } | null>(null)
+  const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string; envPath: string | null } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
@@ -113,6 +116,87 @@ function App() {
       }
     }
   }, [isResizing, handleMouseMove, handleMouseUp])
+
+  // Enable keyboard shortcuts for copy/paste
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+      const modifier = isMac ? e.metaKey : e.ctrlKey
+
+      // Only handle copy/paste/cut if modifier key is pressed
+      if (!modifier) return
+
+      // Get the active element
+      const target = e.target as HTMLElement
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+
+      try {
+        if (e.key.toLowerCase() === 'c') {
+          // Copy: get selection from input field or window selection
+          let textToCopy = ''
+          if (isInputField && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+            const start = target.selectionStart || 0
+            const end = target.selectionEnd || 0
+            textToCopy = target.value.substring(start, end)
+          } else {
+            const selection = window.getSelection()
+            textToCopy = selection?.toString() || ''
+          }
+
+          if (textToCopy) {
+            await writeText(textToCopy)
+            e.preventDefault()
+          }
+        } else if (e.key.toLowerCase() === 'v') {
+          // Paste: handle input fields specially, but allow pasting anywhere
+          const text = await readText()
+          if (!text) return
+
+          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+            // Paste into input/textarea
+            const start = target.selectionStart || 0
+            const end = target.selectionEnd || 0
+            const currentValue = target.value
+            target.value = currentValue.substring(0, start) + text + currentValue.substring(end)
+            target.selectionStart = target.selectionEnd = start + text.length
+
+            // Trigger input event so React state updates
+            const event = new Event('input', { bubbles: true })
+            target.dispatchEvent(event)
+            e.preventDefault()
+          } else if (target.isContentEditable) {
+            // Paste into contenteditable
+            document.execCommand('insertText', false, text)
+            e.preventDefault()
+          }
+        } else if (e.key.toLowerCase() === 'x') {
+          // Cut: only from input fields
+          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+            const start = target.selectionStart || 0
+            const end = target.selectionEnd || 0
+            const selectedText = target.value.substring(start, end)
+            if (selectedText) {
+              await writeText(selectedText)
+              const currentValue = target.value
+              target.value = currentValue.substring(0, start) + currentValue.substring(end)
+              target.selectionStart = target.selectionEnd = start
+
+              // Trigger input event so React state updates
+              const event = new Event('input', { bubbles: true })
+              target.dispatchEvent(event)
+              e.preventDefault()
+            }
+          }
+        }
+      } catch (err) {
+        // Silently fail if clipboard access is denied
+        console.warn('Clipboard access failed:', err)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown, true) // Use capture phase
+    return () => document.removeEventListener('keydown', handleKeyDown, true)
+  }, [])
 
   // Apply spoofed values to prerequisites
   const getEffectivePrereqs = useCallback((real: Prerequisites | null): Prerequisites | null => {
@@ -620,11 +704,11 @@ function App() {
     }
   }
 
-  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null }) => {
+  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null; path: string | null }) => {
     const url = env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
-    setEmbeddedView({ url, envName: env.name, envColor: colors.primary })
+    setEmbeddedView({ url, envName: env.name, envColor: colors.primary, envPath: env.path })
   }
 
   const handleMerge = async (envName: string) => {
@@ -673,15 +757,25 @@ function App() {
   }
 
   const handleDelete = async (envName: string) => {
+    // Find the environment to check if it's a worktree
+    const env = discovery?.environments.find(e => e.name === envName)
+    const isWorktree = env?.is_worktree || false
+
     // Confirm with user before deleting
-    const confirmed = window.confirm(
-      `Delete environment "${envName}"?\n\n` +
-      `This will:\n` +
-      `• Stop all containers\n` +
-      `• Remove the worktree\n` +
-      `• Close the tmux window\n\n` +
-      `This action cannot be undone!`
-    )
+    const message = isWorktree
+      ? `Delete environment "${envName}"?\n\n` +
+        `This will:\n` +
+        `• Stop all containers\n` +
+        `• Remove the worktree\n` +
+        `• Close the tmux session\n\n` +
+        `This action cannot be undone!`
+      : `Delete environment "${envName}"?\n\n` +
+        `This will:\n` +
+        `• Stop all containers\n` +
+        `• Close the tmux session\n\n` +
+        `This action cannot be undone!`
+
+    const confirmed = window.confirm(message)
 
     if (!confirmed) return
 
@@ -827,6 +921,26 @@ function App() {
         log(`Creating git worktree at ${envPath}...`, 'info')
         const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch || undefined, true)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
+
+        // Step 1.5: Write default admin credentials if configured
+        try {
+          const settings = await tauri.loadLauncherSettings()
+          if (settings.default_admin_email && settings.default_admin_password) {
+            log(`Writing admin credentials to secrets.yaml...`, 'info')
+            await tauri.writeCredentialsToWorktree(
+              worktree.path,
+              settings.default_admin_email,
+              settings.default_admin_password,
+              settings.default_admin_name || undefined
+            )
+            log(`✓ Admin credentials configured`, 'success')
+          } else {
+            log(`⚠ No default credentials configured - you'll need to register a user`, 'warning')
+          }
+        } catch (err) {
+          // Non-critical, user can still register manually
+          log(`Could not write credentials: ${err}`, 'warning')
+        }
 
         // Check if tmux window was created
         try {
@@ -1135,7 +1249,7 @@ function App() {
 
   return (
     <div
-      className="h-screen bg-surface-900 text-text-primary flex flex-col overflow-hidden"
+      className="h-screen bg-surface-900 text-text-primary flex flex-col overflow-hidden relative"
       data-testid="launcher-app"
       style={{ cursor: isResizing ? 'col-resize' : 'default' }}
     >
@@ -1145,6 +1259,7 @@ function App() {
           url={embeddedView.url}
           envName={embeddedView.envName}
           envColor={embeddedView.envColor}
+          envPath={embeddedView.envPath}
           onClose={() => setEmbeddedView(null)}
         />
       )}
@@ -1196,16 +1311,15 @@ function App() {
             <Terminal className="w-4 h-4" />
           </button>
 
-          {/* Dev Tools Toggle */}
+          {/* Settings / Credentials Button */}
           <button
-            onClick={() => setShowDevTools(!showDevTools)}
-            className={`p-2 rounded-lg transition-colors ${
-              showDevTools ? 'bg-yellow-500/20 text-yellow-400' : 'bg-surface-700 hover:bg-surface-600'
-            }`}
-            title="Toggle dev tools"
-            data-testid="dev-tools-toggle"
+            onClick={() => setShowSettingsDialog(true)}
+            className="px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2 font-medium text-sm"
+            title="Configure default credentials"
+            data-testid="open-settings-button"
           >
-            <Settings className="w-4 h-4" />
+            <Sliders className="w-4 h-4" />
+            Credentials
           </button>
 
           {/* Refresh */}
@@ -1219,13 +1333,6 @@ function App() {
           </button>
         </div>
       </header>
-
-      {/* Dev Tools Panel */}
-      {showDevTools && (
-        <div className="px-4 pt-4">
-          <DevToolsPanel />
-        </div>
-      )}
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
@@ -1299,7 +1406,11 @@ function App() {
                   installingItem={installingItem}
                   onInstall={handleInstall}
                   onStartDocker={handleStartDocker}
+                  showDevTools={showDevTools}
+                  onToggleDevTools={() => setShowDevTools(!showDevTools)}
                 />
+                {/* Dev Tools Panel - appears below Prerequisites */}
+                {showDevTools && <DevToolsPanel />}
                 <InfrastructurePanel
                   services={discovery?.infrastructure ?? []}
                   onStart={handleStartInfra}
@@ -1371,6 +1482,12 @@ function App() {
         isOpen={showTmuxManager}
         onClose={() => setShowTmuxManager(false)}
         onRefresh={() => refreshDiscovery(true)}
+      />
+
+      {/* Settings Dialog */}
+      <SettingsDialog
+        isOpen={showSettingsDialog}
+        onClose={() => setShowSettingsDialog(false)}
       />
     </div>
   )

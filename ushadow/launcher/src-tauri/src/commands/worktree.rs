@@ -1,4 +1,4 @@
-use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo};
+use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -169,6 +169,41 @@ pub async fn list_worktrees(main_repo: String) -> Result<Vec<WorktreeInfo>, Stri
     }
 
     Ok(worktrees)
+}
+
+/// List all git branches in a repository
+#[tauri::command]
+pub async fn list_git_branches(main_repo: String) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .args(["branch", "-a", "--format=%(refname:short)"])
+        .current_dir(&main_repo)
+        .output()
+        .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git command failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let branches: Vec<String> = stdout
+        .lines()
+        .map(|line| {
+            // Remove "origin/" prefix from remote branches
+            line.trim()
+                .strip_prefix("origin/")
+                .unwrap_or(line.trim())
+                .to_string()
+        })
+        .filter(|b| !b.is_empty() && b != "HEAD" && !b.contains("->"))
+        .collect();
+
+    // Deduplicate branches (local and remote may have same name)
+    let mut unique_branches: Vec<String> = branches.into_iter().collect();
+    unique_branches.sort();
+    unique_branches.dedup();
+
+    Ok(unique_branches)
 }
 
 /// Create a new git worktree
@@ -656,14 +691,30 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
         }
     }
 
-    // Step 3: Remove the worktree
-    eprintln!("[delete_environment] Removing worktree '{}'...", env_name);
-    match remove_worktree(main_repo, env_name.clone()).await {
-        Ok(_) => {
-            messages.push(format!("✓ Removed worktree '{}'", env_name));
+    // Step 3: Remove the worktree (if it exists)
+    eprintln!("[delete_environment] Checking if worktree '{}' exists...", env_name);
+    match check_worktree_exists(main_repo.clone(), env_name.clone()).await {
+        Ok(Some(_)) => {
+            // Worktree exists, remove it
+            eprintln!("[delete_environment] Removing worktree '{}'...", env_name);
+            match remove_worktree(main_repo, env_name.clone()).await {
+                Ok(_) => {
+                    messages.push(format!("✓ Removed worktree '{}'", env_name));
+                }
+                Err(e) => {
+                    return Err(format!("Failed to remove worktree: {}", e));
+                }
+            }
+        }
+        Ok(None) => {
+            // Worktree doesn't exist, skip removal
+            eprintln!("[delete_environment] No worktree found for '{}', skipping removal", env_name);
+            messages.push(format!("• No worktree to remove for '{}'", env_name));
         }
         Err(e) => {
-            return Err(format!("Failed to remove worktree: {}", e));
+            // Error checking worktree, log but don't fail
+            eprintln!("[delete_environment] Warning: Could not check worktree existence: {}", e);
+            messages.push(format!("⚠ Could not check for worktree"));
         }
     }
 
@@ -685,7 +736,21 @@ pub async fn create_worktree_with_workmux(
 
     eprintln!("[create_worktree_with_workmux] Creating worktree '{}' from branch '{:?}'", name, base_branch);
 
-    // Check if tmux is running - if not, auto-start it
+    // Use the launcher's own worktree creation logic instead of workmux
+    // This ensures consistent directory structure
+    let main_repo_path = PathBuf::from(&main_repo);
+    let worktrees_dir = main_repo_path.parent()
+        .ok_or("Could not determine worktrees directory")?
+        .to_string_lossy()
+        .to_string();
+
+    // Create the worktree directly
+    let worktree = create_worktree(main_repo.clone(), worktrees_dir, name.clone(), base_branch).await?;
+
+    eprintln!("[create_worktree_with_workmux] Worktree created at: {}", worktree.path);
+
+    // Now attach tmux to the worktree
+    // Ensure tmux is running
     let tmux_check = shell_command("tmux list-sessions")
         .output();
 
@@ -693,97 +758,34 @@ pub async fn create_worktree_with_workmux(
 
     if !tmux_available {
         eprintln!("[create_worktree_with_workmux] tmux not running, attempting to start a new session");
-
-        // Try to start a new detached tmux session
-        let start_tmux = shell_command("tmux new-session -d -s workmux")
+        let _start_tmux = shell_command("tmux new-session -d -s workmux")
             .output();
+    }
 
-        match start_tmux {
-            Ok(output) if output.status.success() => {
-                eprintln!("[create_worktree_with_workmux] Successfully started tmux session 'workmux'");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // Session might already exist, which is fine
-                if !stderr.contains("duplicate session") {
-                    eprintln!("[create_worktree_with_workmux] Failed to start tmux: {}", stderr);
-                    eprintln!("[create_worktree_with_workmux] Falling back to regular git worktree");
-                    let main_repo_path = PathBuf::from(&main_repo);
-                    let worktrees_dir = main_repo_path.parent()
-                        .ok_or("Could not determine worktrees directory")?
-                        .to_string_lossy()
-                        .to_string();
+    // Create tmux window for the worktree
+    let window_name = format!("ushadow-{}", name);
+    let create_window = shell_command(&format!(
+        "tmux new-window -t workmux -n {} -c '{}'",
+        window_name, worktree.path
+    ))
+        .output();
 
-                    return create_worktree(main_repo, worktrees_dir, name, base_branch).await;
-                }
-            }
-            Err(e) => {
-                eprintln!("[create_worktree_with_workmux] Failed to start tmux: {}", e);
-                eprintln!("[create_worktree_with_workmux] Falling back to regular git worktree");
-                let main_repo_path = PathBuf::from(&main_repo);
-                let worktrees_dir = main_repo_path.parent()
-                    .ok_or("Could not determine worktrees directory")?
-                    .to_string_lossy()
-                    .to_string();
-
-                return create_worktree(main_repo, worktrees_dir, name, base_branch).await;
-            }
+    match create_window {
+        Ok(output) if output.status.success() => {
+            eprintln!("[create_worktree_with_workmux] Created tmux window '{}'", window_name);
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[create_worktree_with_workmux] Warning: Failed to create tmux window: {}", stderr);
+            // Don't fail the whole operation if tmux fails
+        }
+        Err(e) => {
+            eprintln!("[create_worktree_with_workmux] Warning: Failed to create tmux window: {}", e);
+            // Don't fail the whole operation if tmux fails
         }
     }
 
-    // Build workmux add command
-    let mut cmd_parts = vec!["workmux", "add"];
-
-    if background.unwrap_or(false) {
-        cmd_parts.push("--background");
-    }
-
-    // Skip hooks and pane commands for faster creation (we don't need agent prompts)
-    cmd_parts.extend(&["--no-hooks", "--no-pane-cmds"]);
-
-    if let Some(ref branch) = base_branch {
-        cmd_parts.push("--base");
-        cmd_parts.push(branch);
-    }
-
-    cmd_parts.push(&name);
-
-    let workmux_cmd = cmd_parts.join(" ");
-    eprintln!("[create_worktree_with_workmux] Running: {}", workmux_cmd);
-
-    // Execute workmux add
-    let output = shell_command(&workmux_cmd)
-        .current_dir(&main_repo)
-        .output()
-        .map_err(|e| format!("Failed to run workmux: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // If workmux fails because tmux isn't running, fall back
-        if stderr.contains("tmux is not running") || stderr.contains("tmux") {
-            eprintln!("[create_worktree_with_workmux] Workmux failed (tmux issue), falling back to regular git worktree");
-            let main_repo_path = PathBuf::from(&main_repo);
-            let worktrees_dir = main_repo_path.parent()
-                .ok_or("Could not determine worktrees directory")?
-                .to_string_lossy()
-                .to_string();
-
-            return create_worktree(main_repo, worktrees_dir, name, base_branch).await;
-        }
-
-        return Err(format!("Workmux command failed:\nstdout: {}\nstderr: {}", stdout, stderr));
-    }
-
-    eprintln!("[create_worktree_with_workmux] Workmux add completed successfully");
-
-    // Get worktree info from git
-    let worktrees = list_worktrees(main_repo).await?;
-    worktrees.iter()
-        .find(|wt| wt.name == name)
-        .cloned()
-        .ok_or_else(|| format!("Worktree '{}' was created but not found in list", name))
+    Ok(worktree)
 }
 
 /// Merge a worktree branch and clean up using workmux
@@ -1024,7 +1026,12 @@ pub async fn get_environment_tmux_status(env_name: String) -> Result<crate::mode
     }
 
     // Workmux prefixes windows with "ushadow-"
-    let window_name = format!("ushadow-{}", env_name);
+    // Check if the env_name already has the prefix to avoid double-prefixing
+    let window_name = if env_name.starts_with("ushadow-") {
+        env_name.clone()
+    } else {
+        format!("ushadow-{}", env_name)
+    };
 
     // Get window info: name, current command, and pane tty
     let output = shell_command(&format!(
@@ -1171,4 +1178,317 @@ pub async fn kill_tmux_server() -> Result<String, String> {
     }
 
     Ok("Killed tmux server".to_string())
+}
+
+/// Open a tmux window in iTerm2 (falls back to Terminal.app if not available)
+#[tauri::command]
+pub async fn open_tmux_in_terminal(window_name: String, worktree_path: String) -> Result<String, String> {
+    eprintln!("[open_tmux_in_terminal] Opening tmux window: {} at path: {}", window_name, worktree_path);
+
+    #[cfg(target_os = "macos")]
+    {
+        // Check if iTerm2 is installed and available
+        let iterm_check = Command::new("osascript")
+            .arg("-e")
+            .arg("application \"iTerm\" is running")
+            .output();
+
+        let iterm_available = iterm_check
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if iterm_available {
+            eprintln!("[open_tmux_in_terminal] Using iTerm2");
+
+            // Extract env name from window name (format: "ushadow-{env}")
+            let env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
+            let display_name = format!("Ushadow: {}", env_name);
+
+            // Map env names to RGB colors (0-255)
+            let (r, g, b) = match env_name {
+                "gold" | "yellow" => (255, 215, 0),      // Gold/Yellow
+                "green" => (0, 255, 0),                  // Green
+                "red" => (255, 0, 0),                    // Red
+                "purple" | "pink" => (255, 0, 255),      // Purple/Magenta
+                "orange" => (255, 165, 0),               // Orange
+                "blue" => (0, 0, 255),                   // Blue
+                "cyan" => (0, 255, 255),                 // Cyan
+                "brown" => (165, 42, 42),                // Brown
+                _ => (128, 128, 128),                    // Gray for unknown
+            };
+
+            // Create temp script file with color sequences to avoid quote escaping hell
+            use std::fs;
+            let temp_script = format!("/tmp/ushadow_iterm_{}.sh", window_name.replace("/", "_"));
+
+            let script_content = format!(
+                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Create dedicated session for this environment if it doesn't exist\ntmux has-session -t {} 2>/dev/null || tmux new-session -d -s {} -c '{}'\n# Attach to this environment's dedicated session\nexec tmux attach-session -t {}\n",
+                display_name,
+                r, g, b,
+                window_name,
+                window_name,
+                worktree_path,
+                window_name
+            );
+            fs::write(&temp_script, script_content)
+                .map_err(|e| format!("Failed to write temp script: {}", e))?;
+
+            shell_command(&format!("chmod +x {}", temp_script))
+                .output()
+                .map_err(|e| format!("Failed to chmod: {}", e))?;
+
+            // Simple iTerm2 AppleScript that executes the script
+            let applescript = format!(
+                r#"tell application "iTerm"
+    activate
+    set newWindow to (create window with default profile)
+    tell current session of newWindow
+        set name to "{}"
+        write text "{} && exit"
+    end tell
+end tell"#,
+                display_name,
+                temp_script
+            );
+
+            let output = Command::new("osascript")
+                .arg("-e")
+                .arg(&applescript)
+                .output()
+                .map_err(|e| format!("Failed to run iTerm2 AppleScript: {}", e))?;
+
+            if output.status.success() {
+                eprintln!("[open_tmux_in_terminal] iTerm2 success");
+                return Ok(format!("Opened tmux window '{}' in iTerm2", window_name));
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("[open_tmux_in_terminal] iTerm2 failed: {}, falling back to Terminal.app", stderr);
+            }
+        } else {
+            eprintln!("[open_tmux_in_terminal] iTerm2 not available, using Terminal.app");
+        }
+
+        // Fallback to Terminal.app (macOS default terminal)
+        let env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
+        let display_name = format!("Ushadow: {}", env_name);
+
+        // Create temp script for Terminal.app (simpler than iTerm2, no tab colors)
+        use std::fs;
+        let temp_script = format!("/tmp/ushadow_terminal_{}.sh", window_name.replace("/", "_"));
+        let script_content = format!(
+            "#!/bin/bash\nprintf '\\033]0;{}\\007'\n# Create dedicated session for this environment if it doesn't exist\ntmux has-session -t {} 2>/dev/null || tmux new-session -d -s {} -c '{}'\n# Attach to this environment's dedicated session\nexec tmux attach-session -t {}\n",
+            display_name,
+            window_name,
+            window_name,
+            worktree_path,
+            window_name
+        );
+        fs::write(&temp_script, script_content)
+            .map_err(|e| format!("Failed to write temp script: {}", e))?;
+
+        shell_command(&format!("chmod +x {}", temp_script))
+            .output()
+            .map_err(|e| format!("Failed to chmod: {}", e))?;
+
+        let applescript = format!(
+            r#"tell application "Terminal"
+    activate
+    do script "{}"
+end tell"#,
+            temp_script
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&applescript)
+            .output()
+            .map_err(|e| format!("Failed to run AppleScript: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to open Terminal: {}", stderr));
+        }
+
+        eprintln!("[open_tmux_in_terminal] Terminal.app success");
+        Ok(format!("Opened tmux window '{}' in Terminal.app", window_name))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // For Linux/Windows - create dedicated tmux session per environment
+        // Try common terminal emulators in order of preference
+        let env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
+
+        // Create the tmux session if it doesn't exist
+        let _ = shell_command(&format!(
+            "tmux has-session -t {} 2>/dev/null || tmux new-session -d -s {} -c '{}'",
+            window_name, window_name, worktree_path
+        )).output();
+
+        // Try different terminal emulators
+        let terminals = vec![
+            ("gnome-terminal", vec!["--", "tmux", "attach-session", "-t", &window_name]),
+            ("konsole", vec!["-e", "tmux", "attach-session", "-t", &window_name]),
+            ("xfce4-terminal", vec!["-e", &format!("tmux attach-session -t {}", window_name)]),
+            ("xterm", vec!["-e", &format!("tmux attach-session -t {}", window_name)]),
+        ];
+
+        for (terminal, args) in terminals {
+            if let Ok(_) = Command::new(terminal).args(&args).spawn() {
+                eprintln!("[open_tmux_in_terminal] Opened {} for session {}", terminal, window_name);
+                return Ok(format!("Opened tmux session '{}' in {}", window_name, terminal));
+            }
+        }
+
+        Err("No supported terminal emulator found. Please install gnome-terminal, konsole, xfce4-terminal, or xterm.".to_string())
+    }
+}
+
+/// Capture the visible content of a tmux pane
+#[tauri::command]
+pub async fn capture_tmux_pane(window_name: String) -> Result<String, String> {
+    // Capture the last 100 lines from the pane
+    let output = shell_command(&format!(
+        "tmux capture-pane -t {} -p -S -100",
+        window_name
+    ))
+        .output()
+        .map_err(|e| format!("Failed to capture pane: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to capture pane: {}", stderr));
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(content)
+}
+
+/// Get Claude Code status from a tmux window
+#[tauri::command]
+pub async fn get_claude_status(window_name: String) -> Result<ClaudeStatus, String> {
+    // First check if the window exists
+    let status = get_environment_tmux_status(window_name.clone()).await?;
+
+    if !status.exists {
+        return Ok(ClaudeStatus {
+            is_running: false,
+            current_task: None,
+            last_output: None,
+        });
+    }
+
+    // Always capture the pane content to check for Claude patterns
+    // (Claude might be running inside a shell, so pane_current_command shows "zsh" not "claude")
+    let pane_content = capture_tmux_pane(window_name).await?;
+
+    // Check if the output contains Claude-specific patterns
+    let is_claude_running = pane_content.contains("Claude Code")
+        || pane_content.contains("claude-code")
+        || pane_content.contains("╭─ You")
+        || pane_content.contains("╭─ Claude")
+        || pane_content.contains("╰─")
+        || pane_content.contains("★ Insight")
+        || pane_content.contains("antml:function_calls")
+        || pane_content.contains("<invoke")
+        || pane_content.contains("antml:thinking")
+        || pane_content.contains("Tool use:")
+        || pane_content.contains("Calling tool")
+        || (pane_content.contains("function_calls") && pane_content.contains("invoke"))
+        || (pane_content.contains("You:") && pane_content.contains("Claude:"))
+        || pane_content.contains("Assistant:");
+
+    if !is_claude_running {
+        return Ok(ClaudeStatus {
+            is_running: false,
+            current_task: None,
+            last_output: None,
+        });
+    }
+
+    // Parse the output to find Claude's current task
+    let current_task = parse_claude_task(&pane_content);
+
+    // Get the last few lines as "last output"
+    let lines: Vec<&str> = pane_content.lines().collect();
+    let last_output = if lines.len() > 5 {
+        lines[lines.len() - 5..].join("\n")
+    } else {
+        pane_content.clone()
+    };
+
+    Ok(ClaudeStatus {
+        is_running: true,
+        current_task,
+        last_output: Some(last_output),
+    })
+}
+
+/// Parse Claude Code output to extract current task
+fn parse_claude_task(output: &str) -> Option<String> {
+    // Look for common Claude Code patterns
+    let lines: Vec<&str> = output.lines().collect();
+
+    eprintln!("[parse_claude_task] Parsing {} lines of output", lines.len());
+
+    // Print last few lines for debugging
+    for line in lines.iter().rev().take(5) {
+        eprintln!("[parse_claude_task] Recent line: {}", line);
+    }
+
+    // Look for the most recent non-empty, meaningful line
+    for line in lines.iter().rev() {
+        let trimmed = line.trim();
+
+        // Skip empty lines, shell prompts, and very short lines
+        if trimmed.is_empty()
+            || trimmed.starts_with("$")
+            || trimmed.starts_with("#")
+            || trimmed.starts_with(">")
+            || trimmed.contains("───")
+            || trimmed.len() < 15 {
+            continue;
+        }
+
+        // Look for Claude's action indicators
+        if trimmed.contains("I'll")
+            || trimmed.contains("I'm")
+            || trimmed.contains("I am")
+            || trimmed.contains("Let me")
+            || trimmed.contains("I will") {
+            if trimmed.len() < 200 {
+                eprintln!("[parse_claude_task] Found action: {}", trimmed);
+                return Some(trimmed.to_string());
+            }
+        }
+
+        // Look for tool usage
+        if (trimmed.contains("Using") || trimmed.contains("Running") || trimmed.contains("Calling"))
+            && trimmed.len() < 150 {
+            eprintln!("[parse_claude_task] Found tool usage: {}", trimmed);
+            return Some(trimmed.to_string());
+        }
+
+        // Look for file operations (but skip generic commands)
+        if (trimmed.contains("Reading") || trimmed.contains("Writing") || trimmed.contains("Editing"))
+            && (trimmed.contains(".") || trimmed.contains("/"))
+            && trimmed.len() < 150 {
+            eprintln!("[parse_claude_task] Found file op: {}", trimmed);
+            return Some(trimmed.to_string());
+        }
+    }
+
+    // Look for "You:" prompt to show last user request
+    for line in lines.iter().rev() {
+        if line.trim().starts_with("You:") {
+            let text = line.trim().strip_prefix("You:")?.trim();
+            if !text.is_empty() && text.len() < 150 {
+                eprintln!("[parse_claude_task] Found user prompt: {}", text);
+                return Some(format!("💬 {}", text));
+            }
+        }
+    }
+
+    eprintln!("[parse_claude_task] No meaningful task found");
+    None
 }

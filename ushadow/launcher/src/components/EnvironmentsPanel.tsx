@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, FolderOpen, X, AlertCircle, GitBranch, GitMerge, Trash2, Terminal } from 'lucide-react'
-import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
+import { useState, useEffect } from 'react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, FolderOpen, X, AlertCircle, GitBranch, GitMerge, Trash2, Terminal, ChevronDown, ChevronUp, Bot } from 'lucide-react'
+import type { UshadowEnvironment, TmuxStatus, ClaudeStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
 import { getTmuxStatusIcon, getTmuxStatusText } from '../hooks/useTmuxMonitoring'
+import { TmuxManagerDialog } from './TmuxManagerDialog'
 
 interface CreatingEnv {
   name: string
@@ -42,31 +43,7 @@ export function EnvironmentsPanel({
   tmuxStatuses = {},
 }: EnvironmentsPanelProps) {
   const [activeTab, setActiveTab] = useState<'running' | 'detected'>('running')
-  const [showTmuxInfo, setShowTmuxInfo] = useState(false)
-  const [tmuxInfo, setTmuxInfo] = useState<string>('')
-
-  const handleShowTmux = async () => {
-    try {
-      const info = await tauri.getTmuxInfo()
-      setTmuxInfo(info)
-      setShowTmuxInfo(true)
-    } catch (err) {
-      setTmuxInfo(`Error fetching tmux info: ${err}`)
-      setShowTmuxInfo(true)
-    }
-  }
-
-  const handleStartTmux = async () => {
-    try {
-      const result = await tauri.ensureTmuxRunning()
-      setTmuxInfo(`${result}\n\nTmux server is now ready for worktrees.`)
-      // Refresh the info
-      const info = await tauri.getTmuxInfo()
-      setTmuxInfo(info)
-    } catch (err) {
-      setTmuxInfo(`Error starting tmux: ${err}`)
-    }
-  }
+  const [showTmuxManager, setShowTmuxManager] = useState(false)
 
   // Sort environments: worktrees first, then reverse to show newest first
   const sortedEnvironments = [...environments].sort((a, b) => {
@@ -85,10 +62,10 @@ export function EnvironmentsPanel({
         <h3 className="text-sm font-medium">Ushadow Environments</h3>
         <div className="flex gap-2">
           <button
-            onClick={handleShowTmux}
+            onClick={() => setShowTmuxManager(true)}
             className="text-sm px-3 py-1.5 rounded-lg bg-surface-700 text-text-secondary hover:bg-surface-600 hover:text-text-primary transition-colors flex items-center gap-1.5 font-medium"
             data-testid="show-tmux-button"
-            title="Show tmux sessions and windows"
+            title="Manage tmux sessions and windows"
           >
             <Terminal className="w-4 h-4" />
             Tmux
@@ -189,54 +166,11 @@ export function EnvironmentsPanel({
         )
       )}
 
-      {/* Tmux Info Dialog */}
-      {showTmuxInfo && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={() => setShowTmuxInfo(false)}
-        >
-          <div
-            className="bg-surface-800 rounded-xl p-6 w-full max-w-2xl mx-4 shadow-xl max-h-[80vh] overflow-hidden flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Terminal className="w-5 h-5" />
-                Tmux Sessions
-              </h2>
-              <button
-                onClick={() => setShowTmuxInfo(false)}
-                className="p-1 rounded hover:bg-surface-700 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="overflow-y-auto flex-1">
-              <pre className="text-xs font-mono bg-surface-900 p-4 rounded whitespace-pre-wrap break-words">
-                {tmuxInfo}
-              </pre>
-            </div>
-            <div className="mt-4 flex justify-between items-center">
-              {tmuxInfo.includes('No tmux server running') && (
-                <button
-                  onClick={handleStartTmux}
-                  className="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2"
-                >
-                  <Terminal className="w-4 h-4" />
-                  Start Tmux Server
-                </button>
-              )}
-              <div className="flex-1" />
-              <button
-                onClick={() => setShowTmuxInfo(false)}
-                className="px-4 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Tmux Manager Dialog */}
+      <TmuxManagerDialog
+        isOpen={showTmuxManager}
+        onClose={() => setShowTmuxManager(false)}
+      />
     </div>
   )
 }
@@ -354,7 +288,38 @@ interface EnvironmentCardProps {
 function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, onDelete, onAttachTmux, isLoading, tmuxStatus }: EnvironmentCardProps) {
   const [showTmuxWindows, setShowTmuxWindows] = useState(false)
   const [tmuxWindows, setTmuxWindows] = useState<Array<{ name: string; index: string; active: boolean }>>([])
+  const [showTmuxOutput, setShowTmuxOutput] = useState(false)
+  const [tmuxOutput, setTmuxOutput] = useState<string>('')
+  const [claudeStatus, setClaudeStatus] = useState<ClaudeStatus | null>(null)
+  const [loadingClaudeStatus, setLoadingClaudeStatus] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const colors = getColors(environment.color || environment.name)
+
+  // Load Claude status when tmux is active
+  useEffect(() => {
+    if (tmuxStatus && tmuxStatus.exists && environment.is_worktree) {
+      loadClaudeStatus()
+      // Poll every 10 seconds
+      const interval = setInterval(loadClaudeStatus, 10000)
+      return () => clearInterval(interval)
+    }
+  }, [tmuxStatus?.exists, environment.name])
+
+  const loadClaudeStatus = async () => {
+    if (loadingClaudeStatus) return
+    setLoadingClaudeStatus(true)
+    try {
+      const windowName = `ushadow-${environment.name.toLowerCase()}`
+      console.log(`[${environment.name}] Checking Claude status for window: ${windowName}`)
+      const status = await tauri.getClaudeStatus(windowName)
+      console.log(`[${environment.name}] Claude status:`, status)
+      setClaudeStatus(status)
+    } catch (err) {
+      console.error('Failed to load Claude status:', err)
+    } finally {
+      setLoadingClaudeStatus(false)
+    }
+  }
 
   const localhostUrl = environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : null)
 
@@ -405,12 +370,62 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
     }
   }
 
+  const handleOpenTmuxWindow = async (windowName: string) => {
+    try {
+      await tauri.openTmuxInTerminal(windowName)
+    } catch (err) {
+      console.error('Failed to open tmux window:', err)
+    }
+  }
+
+  const handleToggleTmuxOutput = async () => {
+    if (!showTmuxOutput) {
+      // Load tmux output
+      try {
+        const windowName = `ushadow-${environment.name.toLowerCase()}`
+        const output = await tauri.captureTmuxPane(windowName)
+        setTmuxOutput(output)
+      } catch (err) {
+        console.error('Failed to capture tmux output:', err)
+        setTmuxOutput('Failed to capture tmux output')
+      }
+    }
+    setShowTmuxOutput(!showTmuxOutput)
+  }
+
+  const handleRefreshTmuxOutput = async () => {
+    try {
+      const windowName = `ushadow-${environment.name.toLowerCase()}`
+      const output = await tauri.captureTmuxPane(windowName)
+      setTmuxOutput(output)
+    } catch (err) {
+      console.error('Failed to capture tmux output:', err)
+    }
+  }
+
+  const handleDelete = () => {
+    if (onDelete) {
+      setIsDeleting(true)
+      // Wait for animation to complete before actually deleting
+      setTimeout(() => {
+        onDelete()
+      }, 300) // Match animation duration
+    }
+  }
+
   return (
     <div
-      className="p-3 rounded-lg transition-all"
+      className={`p-3 rounded-lg transition-all duration-300 ${
+        isDeleting ? 'opacity-0 scale-95 -translate-y-2' : 'opacity-100 scale-100'
+      }`}
       style={{
         backgroundColor: environment.running ? `${colors.dark}15` : 'transparent',
         borderLeft: `3px solid ${environment.running ? colors.primary : '#4a4a4a'}`,
+        maxHeight: isDeleting ? '0' : '1000px',
+        overflow: isDeleting ? 'hidden' : 'visible',
+        marginBottom: isDeleting ? '0' : undefined,
+        paddingTop: isDeleting ? '0' : undefined,
+        paddingBottom: isDeleting ? '0' : undefined,
       }}
       data-testid={`env-${environment.name}`}
     >
@@ -449,7 +464,24 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
                 {getTmuxStatusIcon(tmuxStatus)} {tmuxStatus.current_command || 'tmux'}
               </span>
             )}
+            {/* Claude Code status badge */}
+            {claudeStatus && claudeStatus.is_running && (
+              <span
+                className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 cursor-pointer hover:bg-blue-500/30 transition-colors"
+                title={claudeStatus.current_task || 'Claude Code is running'}
+                onClick={handleToggleTmuxOutput}
+              >
+                <Bot className="w-3 h-3" />
+                <span>Claude</span>
+              </span>
+            )}
           </div>
+          {/* Claude current task */}
+          {claudeStatus && claudeStatus.is_running && (
+            <div className="mt-1 text-xs text-blue-400 truncate" title={claudeStatus.current_task || 'Claude is active'}>
+              🤖 {claudeStatus.current_task || 'Active (click Claude badge to view output)'}
+            </div>
+          )}
           {/* Container tags */}
           {environment.containers.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap mt-1">
@@ -497,31 +529,18 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
 
         {/* Top right buttons */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Tmux windows toggle - for worktrees */}
-          {environment.is_worktree && tmuxStatus && tmuxStatus.exists && (
+          {/* Terminal button - Opens iTerm2 or Terminal.app for all worktrees */}
+          {environment.is_worktree && environment.path && (
             <button
-              onClick={handleToggleTmuxWindows}
-              className={`p-2 rounded transition-colors ${
-                showTmuxWindows
-                  ? 'bg-purple-500/30 text-purple-400'
-                  : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-              }`}
-              title="Show/hide tmux windows"
-              data-testid={`tmux-windows-${environment.name}`}
+              onClick={async () => {
+                const windowName = `ushadow-${environment.name}`
+                await tauri.openTmuxInTerminal(windowName, environment.path)
+              }}
+              className="p-2 rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors"
+              title="Open in iTerm2 / Terminal.app"
+              data-testid={`terminal-${environment.name}`}
             >
-              <Terminal className="w-4 h-4" />
-            </button>
-          )}
-
-          {/* Tmux attach button - for worktrees without existing tmux */}
-          {environment.is_worktree && environment.path && onAttachTmux && (!tmuxStatus || !tmuxStatus.exists) && (
-            <button
-              onClick={onAttachTmux}
-              className="p-2 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors"
-              title="Open VS Code with tmux terminal"
-              data-testid={`tmux-${environment.name}`}
-            >
-              <Terminal className="w-4 h-4" />
+              <img src="/iterm-icon.png" alt="Terminal" className="w-4 h-4" />
             </button>
           )}
 
@@ -572,14 +591,24 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
                     </span>
                     {window.active && <span className="text-purple-400">(active)</span>}
                   </div>
-                  <button
-                    onClick={() => handleKillWindow(window.name)}
-                    className="px-2 py-1 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors text-xs font-medium"
-                    title="Kill this window"
-                    data-testid={`kill-window-${window.name}`}
-                  >
-                    Kill
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleOpenTmuxWindow(window.name)}
+                      className="px-2 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors text-xs font-medium"
+                      title="Open this window in Terminal.app"
+                      data-testid={`open-window-${window.name}`}
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => handleKillWindow(window.name)}
+                      className="px-2 py-1 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors text-xs font-medium"
+                      title="Kill this window"
+                      data-testid={`kill-window-${window.name}`}
+                    >
+                      Kill
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -587,9 +616,35 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
         </div>
       )}
 
-      {/* Start/Stop and Merge buttons - bottom */}
+      {/* Tmux output drawer */}
+      {showTmuxOutput && (
+        <div className="mt-3 pt-3 border-t border-surface-600/50">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-medium text-text-muted">Terminal Output:</div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleRefreshTmuxOutput}
+                className="text-xs px-2 py-1 rounded bg-surface-700 text-text-300 hover:bg-surface-600 transition-colors"
+              >
+                Refresh
+              </button>
+              <button
+                onClick={() => setShowTmuxOutput(false)}
+                className="text-xs px-2 py-1 rounded bg-surface-700 text-text-300 hover:bg-surface-600 transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+          <div className="bg-black/50 rounded p-3 font-mono text-xs text-green-400 max-h-96 overflow-y-auto whitespace-pre-wrap">
+            {tmuxOutput || 'Loading...'}
+          </div>
+        </div>
+      )}
+
+      {/* Action buttons - bottom */}
       <div className="mt-2 flex justify-between items-center">
-        {/* Merge and Delete buttons - left side, only for worktrees */}
+        {/* Left side: Merge, Stop, Delete buttons */}
         <div className="flex gap-2">
           {environment.is_worktree && onMerge && (
             <button
@@ -603,10 +658,22 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
               <span>Merge & Cleanup</span>
             </button>
           )}
-          {environment.is_worktree && onDelete && (
+          {environment.running && (
             <button
-              onClick={onDelete}
+              onClick={onStop}
               disabled={isLoading}
+              className="px-3 py-1.5 rounded bg-surface-600/50 text-text-secondary hover:bg-surface-600 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-sm font-medium"
+              title="Stop environment"
+              data-testid={`stop-${environment.name}`}
+            >
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+              <span>Stop</span>
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={handleDelete}
+              disabled={isLoading || isDeleting}
               className="px-3 py-1.5 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-sm font-medium"
               title="Delete environment (stop containers, remove worktree, close tmux)"
               data-testid={`delete-${environment.name}`}
@@ -617,20 +684,9 @@ function EnvironmentCard({ environment, onStart, onStop, onOpenInApp, onMerge, o
           )}
         </div>
 
-        {/* Start/Stop button - right side */}
+        {/* Right side: Start button */}
         <div>
-          {environment.running ? (
-            <button
-              onClick={onStop}
-              disabled={isLoading}
-              className="px-3 py-1.5 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-sm font-medium"
-              title="Stop environment"
-              data-testid={`stop-${environment.name}`}
-            >
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-              <span>Stop</span>
-            </button>
-          ) : (
+          {!environment.running && (
             <button
               onClick={onStart}
               disabled={isLoading}

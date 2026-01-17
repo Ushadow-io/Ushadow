@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Enable text selection by default everywhere */
+* {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Disable selection only for UI controls */
+button,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* Custom scrollbar for dark theme */
 ::-webkit-scrollbar {
   width: 8px;

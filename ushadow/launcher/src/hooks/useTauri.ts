@@ -60,6 +60,13 @@ export interface Discovery {
   tailscale_ok: boolean
 }
 
+// Launcher settings
+export interface LauncherSettings {
+  default_admin_email: string | null
+  default_admin_password: string | null
+  default_admin_name: string | null
+}
+
 // Tauri command wrappers with proper typing
 export const tauri = {
   // System checks
@@ -116,6 +123,7 @@ export const tauri = {
 
   // Worktree management
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
+  listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),
   checkWorktreeExists: (mainRepo: string, branch: string) => invoke<WorktreeInfo | null>('check_worktree_exists', { mainRepo, branch }),
   createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
     invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
@@ -138,6 +146,15 @@ export const tauri = {
   getTmuxSessions: () => invoke<TmuxSessionInfo[]>('get_tmux_sessions'),
   killTmuxWindow: (windowName: string) => invoke<string>('kill_tmux_window', { windowName }),
   killTmuxServer: () => invoke<string>('kill_tmux_server'),
+  openTmuxInTerminal: (windowName: string, worktreePath: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath }),
+  captureTmuxPane: (windowName: string) => invoke<string>('capture_tmux_pane', { windowName }),
+  getClaudeStatus: (windowName: string) => invoke<ClaudeStatus>('get_claude_status', { windowName }),
+
+  // Settings
+  loadLauncherSettings: () => invoke<LauncherSettings>('load_launcher_settings'),
+  saveLauncherSettings: (settings: LauncherSettings) => invoke<void>('save_launcher_settings', { settings }),
+  writeCredentialsToWorktree: (worktreePath: string, adminEmail: string, adminPassword: string, adminName?: string) =>
+    invoke<void>('write_credentials_to_worktree', { worktreePath, adminEmail, adminPassword, adminName }),
 }
 
 // WorktreeInfo type
@@ -169,6 +186,13 @@ export interface TmuxSessionInfo {
   name: string
   window_count: number
   windows: TmuxWindowInfo[]
+}
+
+// Claude Code status types
+export interface ClaudeStatus {
+  is_running: boolean
+  current_task: string | null
+  last_output: string | null
 }
 
 export default tauri

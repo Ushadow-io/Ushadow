@@ -78,6 +78,7 @@ pub struct UshadowEnvironment {
     pub tailscale_active: bool,
     pub containers: Vec<String>,
     pub is_worktree: bool,  // True if this environment is a git worktree
+    pub created_at: Option<i64>,  // Unix timestamp (seconds since epoch)
 }
 
 /// Infrastructure service status
@@ -130,4 +131,12 @@ pub struct TmuxWindowInfo {
     pub index: String,
     pub active: bool,
     pub panes: usize,
+}
+
+/// Claude Code status from tmux
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ClaudeStatus {
+    pub is_running: bool,
+    pub current_task: Option<String>,
+    pub last_output: Option<String>,
 }

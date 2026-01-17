@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X, GitBranch } from 'lucide-react'
 import { tauri } from '../hooks/useTauri'
+import { BranchSelector } from './BranchSelector'
 
 interface NewEnvironmentDialogProps {
   isOpen: boolean
@@ -19,9 +20,12 @@ export function NewEnvironmentDialog({
 }: NewEnvironmentDialogProps) {
   const [name, setName] = useState('')
   const [branch, setBranch] = useState('')
+  const [branches, setBranches] = useState<string[]>([])
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false)
   const [showConflictDialog, setShowConflictDialog] = useState(false)
   const [existingWorktree, setExistingWorktree] = useState<{ path: string; name: string } | null>(null)
   const [isChecking, setIsChecking] = useState(false)
+  const [manualNameEdit, setManualNameEdit] = useState(false)
 
   // Reset form when dialog closes
   useEffect(() => {
@@ -30,8 +34,60 @@ export function NewEnvironmentDialog({
       setBranch('')
       setShowConflictDialog(false)
       setExistingWorktree(null)
+      setManualNameEdit(false)
     }
   }, [isOpen])
+
+  // Load branches when dialog opens
+  useEffect(() => {
+    if (isOpen && projectRoot) {
+      setIsLoadingBranches(true)
+      tauri.listGitBranches(projectRoot)
+        .then(setBranches)
+        .catch(err => {
+          console.error('Failed to load branches:', err)
+          setBranches([])
+        })
+        .finally(() => setIsLoadingBranches(false))
+    }
+  }, [isOpen, projectRoot])
+
+  /**
+   * Clean branch name for environment name
+   * Examples:
+   *   "claude/github-docker-import-SlXNo" -> "github-docker-import-slxno"
+   *   "feature/auth" -> "auth"
+   *   "main" -> "main"
+   */
+  const cleanBranchNameForEnv = (branchName: string): string => {
+    // Remove "claude/" prefix if present
+    let cleaned = branchName.replace(/^claude\//, '')
+
+    // For other prefixes like "feature/", "fix/", etc., take the part after the last "/"
+    const parts = cleaned.split('/')
+    cleaned = parts[parts.length - 1]
+
+    // Convert to lowercase and remove the random suffix pattern (e.g., "-SlXNo")
+    cleaned = cleaned.toLowerCase().replace(/-[a-z0-9]{5}$/i, '')
+
+    return cleaned
+  }
+
+  // Auto-fill environment name from branch if not manually edited
+  const handleBranchChange = (newBranch: string) => {
+    setBranch(newBranch)
+
+    // Auto-fill name from branch if user hasn't manually edited it
+    if (!manualNameEdit && newBranch) {
+      setName(cleanBranchNameForEnv(newBranch))
+    }
+  }
+
+  // Track manual edits to the name field
+  const handleNameChange = (newName: string) => {
+    setName(newName)
+    setManualNameEdit(true)
+  }
 
   if (!isOpen) return null
 
@@ -171,42 +227,39 @@ export function NewEnvironmentDialog({
           <span className="text-text-secondary">Repository:</span> {projectRoot || 'Not set'}
         </div>
 
-        {/* Environment Name */}
+        {/* Branch Name - Now first to enable auto-naming */}
         <div className="mb-4">
           <label className="block text-sm text-text-secondary mb-2">
-            Environment Name
+            Branch <span className="text-text-muted">(select existing or type new)</span>
+          </label>
+          <BranchSelector
+            branches={branches}
+            value={branch}
+            onChange={handleBranchChange}
+            placeholder={isLoadingBranches ? 'Loading branches...' : 'Type or select branch...'}
+            testId="branch-selector"
+          />
+          <p className="text-xs text-text-muted mt-1">
+            Select a Claude-created branch or any existing branch, or type a new name. If it doesn't exist, it will be created from main.
+          </p>
+        </div>
+
+        {/* Environment Name - Auto-filled from branch */}
+        <div className="mb-4">
+          <label className="block text-sm text-text-secondary mb-2">
+            Environment Name <span className="text-text-muted">(auto-filled, editable)</span>
           </label>
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && isValid && !isChecking && handleSubmit()}
             className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
             placeholder="e.g., dev, staging, feature-x"
-            autoFocus
             data-testid="env-name-input"
           />
           <p className="text-xs text-text-muted mt-1">
-            Names will be converted to lowercase (e.g., "Orange" → "orange")
-          </p>
-        </div>
-
-        {/* Branch Name */}
-        <div className="mb-4">
-          <label className="block text-sm text-text-secondary mb-2">
-            Branch Name <span className="text-text-muted">(optional, defaults to env name)</span>
-          </label>
-          <input
-            type="text"
-            value={branch}
-            onChange={(e) => setBranch(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && isValid && !isChecking && handleSubmit()}
-            className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-            placeholder={name || 'feature/my-branch'}
-            data-testid="branch-input"
-          />
-          <p className="text-xs text-text-muted mt-1">
-            Branch names will be converted to lowercase
+            Auto-filled from branch name. Edit if you prefer a different name.
           </p>
         </div>
 
