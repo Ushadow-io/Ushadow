@@ -37,6 +37,7 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { WiringBoard } from '../components/wiring'
+import { useSound } from '../hooks/useSound'
 
 /**
  * Extract error message from FastAPI response.
@@ -60,6 +61,9 @@ function getErrorMessage(error: any, fallback: string): string {
 }
 
 export default function InstancesPage() {
+  // Sound effects
+  const { playCreateSound, playDeleteSound } = useSound()
+
   // Templates state
   const [templates, setTemplates] = useState<Template[]>([])
   const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set())
@@ -279,6 +283,9 @@ export default function InstancesPage() {
       // Step 1: Create the instance
       await instancesApi.createInstance(data)
 
+      // Play success sound
+      playCreateSound()
+
       // Step 2: If wiring info exists, create the wiring connection (drag-drop path)
       if (createInstanceState.wiring) {
         const newWiring = await instancesApi.createWiring({
@@ -367,6 +374,10 @@ export default function InstancesPage() {
 
     try {
       await instancesApi.deleteInstance(instanceId)
+
+      // Play delete sound
+      playDeleteSound()
+
       setMessage({ type: 'success', text: 'Instance deleted' })
 
       // Reload instances
