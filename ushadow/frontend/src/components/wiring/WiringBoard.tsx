@@ -288,6 +288,7 @@ export default function WiringBoard({
                                 onDelete={() => onDeleteInstance(instance.id)}
                                 onStart={onStartProvider ? () => onStartProvider(instance.id, false) : undefined}
                                 onStop={onStopProvider ? () => onStopProvider(instance.id, false) : undefined}
+                                templateProvider={template}
                               />
                             )
                           })}
@@ -391,9 +392,10 @@ interface DraggableProviderProps {
   onDelete?: () => void // Only for instances
   onStart?: () => Promise<void>
   onStop?: () => Promise<void>
+  templateProvider?: ProviderInfo // Parent template for instances
 }
 
-function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance, onDelete, onStart, onStop }: DraggableProviderProps) {
+function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance, onDelete, onStart, onStop, templateProvider }: DraggableProviderProps) {
   const [isStarting, setIsStarting] = useState(false)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: provider.id,
@@ -452,7 +454,7 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
     >
       {/* Draggable header */}
       <div
-        className="px-3 py-2 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+        className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
         {...attributes}
         {...listeners}
       >
@@ -463,14 +465,13 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
               {provider.name}
             </span>
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* Capability tag */}
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                {provider.capability}
+              </span>
               {isConnected && (
                 <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
                   {connectionCount}
-                </span>
-              )}
-              {provider.isTemplate && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400">
-                  default
                 </span>
               )}
             </div>
@@ -570,18 +571,24 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
                 +{missingRequiredVars.length - 2} required
               </span>
             )}
-            {/* Configured fields */}
-            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => (
-              <span
-                key={v.key}
-                className="text-xs text-neutral-500 dark:text-neutral-400"
-                title={`${v.label}: ${v.value}`}
-              >
-                {v.required && <span className="text-error-500 mr-0.5">*</span>}
-                <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
-                <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-              </span>
-            ))}
+            {/* Configured fields - color code overrides */}
+            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
+              // Check if this value is overridden from template
+              const isOverridden = templateProvider &&
+                templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
+
+              return (
+                <span
+                  key={v.key}
+                  className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
+                  title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
+                >
+                  {v.required && <span className="text-error-500 mr-0.5">*</span>}
+                  <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                  <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                </span>
+              )
+            })}
             {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
               <span className="text-xs text-neutral-400">
                 +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
@@ -831,30 +838,28 @@ function CapabilitySlot({
   const isOrphaned = connection && !connection.provider
 
   return (
-    <div>
-      {/* Capability label */}
-      <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-1">
-        {capability}
-      </div>
-      {/* Drop zone */}
-      <div
-        ref={setNodeRef}
-        className={`
-          relative rounded-lg border-2 transition-all p-3 min-h-[48px] flex items-center
-          ${isOver && isDropTarget ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30' : ''}
-          ${isDropTarget && !isOver ? 'border-primary-300 dark:border-primary-600 border-dashed bg-primary-50/50 dark:bg-primary-900/10' : ''}
-          ${hasProvider ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20' : ''}
-          ${isOrphaned ? 'border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20' : ''}
-          ${!hasProvider && !isOrphaned && !isDropTarget ? 'border-neutral-200 dark:border-neutral-700 border-dashed' : ''}
-        `}
-        data-testid={`capability-slot-${consumerId}-${capability}`}
-      >
-        {hasProvider ? (
-          <div className="flex items-center justify-between w-full">
+    <div
+      ref={setNodeRef}
+      className={`
+        relative rounded-lg border-2 transition-all p-3 min-h-[48px] flex items-center
+        ${isOver && isDropTarget ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30' : ''}
+        ${isDropTarget && !isOver ? 'border-primary-300 dark:border-primary-600 border-dashed bg-primary-50/50 dark:bg-primary-900/10' : ''}
+        ${hasProvider ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20' : ''}
+        ${isOrphaned ? 'border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20' : ''}
+        ${!hasProvider && !isOrphaned && !isDropTarget ? 'border-neutral-200 dark:border-neutral-700 border-dashed' : ''}
+      `}
+      data-testid={`capability-slot-${consumerId}-${capability}`}
+    >
+      {hasProvider ? (
+        <div className="w-full">
+          <div className="flex items-center justify-between w-full mb-1.5">
             <div className="flex items-center gap-2">
               <Cloud className="h-4 w-4 text-success-500" />
               <span className="font-medium text-neutral-900 dark:text-neutral-100">
                 {connection.provider!.name}
+              </span>
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                {capability}
               </span>
             </div>
             <button
@@ -865,29 +870,59 @@ function CapabilitySlot({
               <X className="h-4 w-4" />
             </button>
           </div>
-        ) : isOrphaned ? (
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2 text-warning-600 dark:text-warning-400">
-              <AlertCircle className="h-4 w-4" />
-              <span className="text-sm">Provider missing</span>
+          {/* Show provider config vars */}
+          {connection.provider!.configVars.filter(v => v.value).length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-6">
+              {connection.provider!.configVars
+                .filter(v => v.value)
+                .slice(0, 2)
+                .map((v) => (
+                  <span
+                    key={v.key}
+                    className="text-xs text-neutral-500 dark:text-neutral-400"
+                    title={`${v.label}: ${v.value}`}
+                  >
+                    <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                    <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                  </span>
+                ))}
+              {connection.provider!.configVars.filter(v => v.value).length > 2 && (
+                <span className="text-xs text-neutral-400">
+                  +{connection.provider!.configVars.filter(v => v.value).length - 2} more
+                </span>
+              )}
             </div>
-            <button
-              onClick={onClear}
-              className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Clear"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-neutral-400 dark:text-neutral-500">
-            <Plug className="h-4 w-4" />
-            <span className="text-sm">
-              {isDropTarget ? 'Drop provider here' : 'Drag a provider here'}
+          )}
+        </div>
+      ) : isOrphaned ? (
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2 text-warning-600 dark:text-warning-400">
+            <AlertCircle className="h-4 w-4" />
+            <span className="text-sm">Provider missing</span>
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+              {capability}
             </span>
           </div>
-        )}
-      </div>
+          <button
+            onClick={onClear}
+            className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+            title="Clear"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-neutral-400 dark:text-neutral-500">
+          <Plug className="h-4 w-4" />
+          <span className="text-sm">
+            {isDropTarget ? 'Drop ' : 'Drag '}
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+              {capability}
+            </span>
+            {isDropTarget ? ' here' : ' provider here'}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

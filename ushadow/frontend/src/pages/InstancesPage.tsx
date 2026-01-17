@@ -564,7 +564,8 @@ export default function InstancesPage() {
                 } else if (field.value) {
                   displayValue = String(field.value)
                 } else if (field.has_value) {
-                  displayValue = '(configured)'
+                  // Has a value but we can't display it - show brief indicator
+                  displayValue = '(set)'
                 }
               }
               return {
@@ -587,9 +588,18 @@ export default function InstancesPage() {
           status = t.available ? 'running' : 'stopped'
         }
 
+        // For LLM providers, append model to name for clarity
+        let displayName = t.name
+        if (t.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${t.name}-${modelVar.value}`
+          }
+        }
+
         return {
           id: t.id,
-          name: t.name,
+          name: displayName,
           capability: t.provides!,
           status,
           mode: t.mode,
@@ -618,11 +628,14 @@ export default function InstancesPage() {
           const isSecret = field.type === 'secret'
           let displayValue = ''
           if (overrideValue) {
+            // Instance has an override value
             displayValue = isSecret ? '••••••' : String(overrideValue)
-          } else if (field.has_value) {
-            displayValue = isSecret ? '••••••' : '(default)'
           } else if (field.value) {
+            // Inherited from template - show the actual value
             displayValue = isSecret ? '••••••' : String(field.value)
+          } else if (field.has_value) {
+            // Template has a value but we can't display it
+            displayValue = isSecret ? '••••••' : '(set)'
           }
           configVars.push({
             key: field.key,
@@ -649,9 +662,18 @@ export default function InstancesPage() {
           instanceStatus = i.status === 'running' ? 'running' : i.status
         }
 
+        // For LLM providers, append model to name for clarity
+        let displayName = i.name
+        if (template.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${i.name}-${modelVar.value}`
+          }
+        }
+
         return {
           id: i.id,
-          name: i.name,
+          name: displayName,
           capability: template.provides!,
           status: instanceStatus,
           mode: template.mode,
