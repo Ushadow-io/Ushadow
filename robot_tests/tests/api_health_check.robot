@@ -12,12 +12,14 @@ Documentation    Health Check API Tests
 
 Library          RequestsLibrary
 Library          Collections
+Library          ../resources/EnvConfig.py
 
-Suite Setup      Create Session    health_api    http://localhost:8001    verify=True
-Suite Teardown   Delete All Sessions
+Suite Setup      Setup Health Tests
+Suite Teardown   Teardown Health Tests
 
 *** Variables ***
 ${HEALTH_ENDPOINT}    /health
+${SESSION}            health_session
 
 *** Test Cases ***
 Health Endpoint Returns 200 OK
@@ -26,7 +28,7 @@ Health Endpoint Returns 200 OK
     ...                This allows monitoring systems to detect the service is running
     [Tags]    health    smoke    api
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ...             expected_status=200
 
     Status Should Be    200    ${response}
@@ -37,7 +39,7 @@ Health Response Has Required Top-Level Fields
     ...                Required: status, timestamp, services, config, overall_healthy, critical_services_healthy
     [Tags]    health    api    schema
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
 
     # Core fields
@@ -63,7 +65,7 @@ Health Status Is Valid
     [Documentation]    Status should be one of: healthy, degraded, unhealthy
     [Tags]    health    api
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
 
     ${valid_statuses}=    Create List    healthy    degraded    unhealthy
@@ -75,7 +77,7 @@ Health Timestamp Is Recent
     [Documentation]    Timestamp should be within last 10 seconds (recent health check)
     [Tags]    health    api
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
 
     ${current_time}=    Get Time    epoch
@@ -91,7 +93,7 @@ Critical Services Field Exists
     ...                for the application to function
     [Tags]    health    api    critical
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
 
     ${critical_healthy}=    Get From Dictionary    ${json}    critical_services_healthy
@@ -105,7 +107,7 @@ Services Dictionary Contains Expected Services
     ...                Expected services: mongodb, redis
     [Tags]    health    api    services
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
     ${services}=    Get From Dictionary    ${json}    services
 
@@ -120,7 +122,7 @@ Each Service Has Status And Healthy Fields
     [Documentation]    Every service in services dict should have status and healthy fields
     [Tags]    health    api    services    schema
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
     ${services}=    Get From Dictionary    ${json}    services
 
@@ -143,7 +145,7 @@ MongoDB Service Health Check
     [Documentation]    MongoDB is a critical service and should be healthy
     [Tags]    health    api    mongodb    critical
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
     ${services}=    Get From Dictionary    ${json}    services
     ${mongodb}=     Get From Dictionary    ${services}    mongodb
@@ -158,7 +160,7 @@ Redis Service Health Check
     [Documentation]    Redis is a critical service and should be healthy
     [Tags]    health    api    redis    critical
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
     ${services}=    Get From Dictionary    ${json}    services
     ${redis}=       Get From Dictionary    ${services}    redis
@@ -173,7 +175,7 @@ Config Section Contains Environment Info
     [Documentation]    Config section should contain environment configuration details
     [Tags]    health    api    config
 
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
     ${config}=      Get From Dictionary    ${json}    config
 
@@ -193,7 +195,7 @@ Health Check Response Time Is Acceptable
     [Tags]    health    api    performance
 
     ${start}=       Get Time    epoch
-    ${response}=    GET On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${end}=         Get Time    epoch
 
     ${elapsed}=     Evaluate    ${end} - ${start}
@@ -205,12 +207,26 @@ Health Check With Invalid Method Returns 405
     [Documentation]    POST to health endpoint should return 405 Method Not Allowed
     [Tags]    health    api    error-handling    negative
 
-    ${response}=    POST On Session    health_api    ${HEALTH_ENDPOINT}
+    ${response}=    POST On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ...             expected_status=405
 
     Status Should Be    405    ${response}
 
 *** Keywords ***
+Setup Health Tests
+    [Documentation]    Setup API session for health tests (no auth required)
+
+    # Get API URL from .env file (uses BACKEND_PORT)
+    ${api_url}=    Get Api Url
+
+    # Create session - health endpoint is public, no auth needed
+    Create Session    ${SESSION}    ${api_url}    verify=True
+
+Teardown Health Tests
+    [Documentation]    Cleanup after tests
+
+    Delete All Sessions
+
 Status Should Be
     [Documentation]    Helper keyword to verify HTTP status code
     [Arguments]    ${expected}    ${response}

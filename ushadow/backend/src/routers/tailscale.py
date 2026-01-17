@@ -21,7 +21,8 @@ from pydantic import BaseModel, Field
 from src.services.auth import get_current_user, generate_jwt_for_service
 from src.models.user import User
 from src.config.omegaconf_settings import get_settings_store
-from src.services.tailscale_serve import get_tailscale_status
+from src.utils.tailscale_serve import get_tailscale_status
+from src.services.tailscale_manager import get_tailscale_manager
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -29,7 +30,7 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tailscale", tags=["tailscale"])
 
-# Docker client for container management
+# Docker client for container management (legacy - being phased out)
 docker_client = docker.from_env()
 
 def get_environment_name() -> str:
@@ -73,6 +74,7 @@ class PlatformInfo(BaseModel):
     os_version: str
     architecture: str
     is_docker: bool
+    tailscale_installed: bool = False
 
 class DeploymentMode(BaseModel):
     """Deployment mode configuration"""
@@ -86,7 +88,7 @@ class TailscaleConfig(BaseModel):
     https_enabled: bool = True
     use_caddy_proxy: bool = Field(..., description="True for multi-env, False for single-env")
     backend_port: int = 8000
-    frontend_port: int = 3000
+    frontend_port: Optional[int] = None  # Auto-detect: 5173 for dev, 80 for prod
     environments: List[str] = Field(default_factory=lambda: ["dev", "test", "prod"])
 
 class InstallationGuide(BaseModel):
@@ -189,11 +191,27 @@ async def detect_platform(
         # Check if running in Docker
         is_docker = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
+        # Check if Tailscale is installed on host (not the container)
+        tailscale_installed = False
+        try:
+            # Try to run tailscale command on host
+            # This runs from within the container, so we check the host via docker socket
+            result = subprocess.run(
+                ["which", "tailscale"],
+                capture_output=True,
+                timeout=2,
+                check=False
+            )
+            tailscale_installed = result.returncode == 0
+        except Exception:
+            tailscale_installed = False
+
         return PlatformInfo(
             os_type=os_type,
             os_version=platform.version(),
             architecture=platform.machine(),
-            is_docker=is_docker
+            is_docker=is_docker,
+            tailscale_installed=tailscale_installed
         )
     except Exception as e:
         logger.error(f"Error detecting platform: {e}")
@@ -618,27 +636,16 @@ async def get_container_status(
 ) -> ContainerStatus:
     """Get Tailscale container status"""
     try:
-        container_name = get_tailscale_container_name()
-        try:
-            container = docker_client.containers.get(container_name)
-            container.reload()  # Refresh status
-            is_running = container.status == 'running'
+        manager = get_tailscale_manager()
+        status = manager.get_container_status()
 
-            if not is_running:
-                return ContainerStatus(exists=True, running=False)
-
-            # Use shared utility for status (single source of truth)
-            ts_status = get_tailscale_status()
-            return ContainerStatus(
-                exists=True,
-                running=True,
-                authenticated=ts_status.authenticated,
-                hostname=ts_status.hostname,
-                ip_address=ts_status.ip
-            )
-
-        except docker.errors.NotFound:
-            return ContainerStatus(exists=False, running=False)
+        return ContainerStatus(
+            exists=status.exists,
+            running=status.running,
+            authenticated=status.authenticated,
+            hostname=status.hostname,
+            ip_address=status.ip_address
+        )
 
     except Exception as e:
         logger.error(f"Error checking container status: {e}", exc_info=True)
@@ -660,64 +667,39 @@ async def get_mobile_connection_qr(
     After scanning, the mobile app fetches full details from /api/unodes/leader/info
     """
     try:
-        container_name = get_tailscale_container_name()
+        manager = get_tailscale_manager()
+        status = manager.get_container_status()
 
-        try:
-            container = docker_client.containers.get(container_name)
-            if container.status != 'running':
-                raise HTTPException(
-                    status_code=400,
-                    detail="Tailscale is not running. Complete Tailscale setup first."
-                )
-        except docker.errors.NotFound:
+        # Validate container is ready
+        if not status.exists:
             raise HTTPException(
                 status_code=400,
                 detail="Tailscale is not configured. Complete Tailscale setup first."
             )
 
-        # Get Tailscale status to get IP
-        exit_code, stdout, _ = await exec_in_container("tailscale status --json")
+        if not status.running:
+            raise HTTPException(
+                status_code=400,
+                detail="Tailscale is not running. Complete Tailscale setup first."
+            )
 
-        if exit_code != 0 or not stdout.strip():
+        if not status.authenticated:
             raise HTTPException(
                 status_code=400,
                 detail="Tailscale is not authenticated. Complete authentication first."
             )
 
-        status_data = json.loads(stdout)
-        self_node = status_data.get('Self')
-
-        if not self_node:
+        if not status.hostname or not status.ip_address:
             raise HTTPException(
                 status_code=400,
-                detail="Could not get Tailscale status. Please try again."
+                detail="Could not get Tailscale connection details. Please try again."
             )
-
-        hostname = self_node.get('DNSName', '').rstrip('.')
-        tailscale_ips = self_node.get('TailscaleIPs', [])
-
-        if not tailscale_ips:
-            raise HTTPException(
-                status_code=400,
-                detail="No Tailscale IP found. Please ensure Tailscale is connected."
-            )
-
-        # Use the IPv4 address (first one that starts with 100.)
-        tailscale_ip = None
-        for ip in tailscale_ips:
-            if ip.startswith('100.'):
-                tailscale_ip = ip
-                break
-
-        if not tailscale_ip:
-            tailscale_ip = tailscale_ips[0]  # Fallback to first IP
 
         config = get_settings_store()
         api_port = config.get_sync("network.backend_public_port") or 8000
-        final_hostname = hostname or get_tailscale_hostname()
 
         # Build full API URL for leader info endpoint
-        api_url = f"https://{final_hostname}/api/unodes/leader/info"
+        api_url = f"https://{status.hostname}/api/unodes/leader/info"
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match
@@ -731,8 +713,8 @@ async def get_mobile_connection_qr(
         connection_data = {
             "type": "ushadow-connect",
             "v": 3,  # Version 3 includes auth token
-            "hostname": final_hostname,
-            "ip": tailscale_ip,
+            "hostname": status.hostname,
+            "ip": status.ip_address,
             "port": api_port,
             "api_url": api_url,
             "auth_token": auth_token,
@@ -758,8 +740,8 @@ async def get_mobile_connection_qr(
         return MobileConnectionQR(
             qr_code_data=qr_code_data,
             connection_data=connection_data,
-            hostname=final_hostname,
-            tailscale_ip=tailscale_ip,
+            hostname=status.hostname,
+            tailscale_ip=status.ip_address,
             api_port=api_port,
             api_url=api_url,
             auth_token=auth_token,
@@ -790,93 +772,10 @@ async def clear_tailscale_auth(
     until you manually delete it at https://login.tailscale.com/admin/machines
     """
     try:
-        container_name = get_tailscale_container_name()
-        volume_name = get_tailscale_volume_name()
+        manager = get_tailscale_manager()
+        result = manager.clear_auth()
 
-        # Step 1: Try to logout from Tailscale first (removes from admin panel)
-        try:
-            container = docker_client.containers.get(container_name)
-            if container.status == 'running':
-                logger.info("Logging out from Tailscale...")
-                result = container.exec_run("tailscale logout", demux=False)
-
-                # Decode output
-                output = result.output.decode() if result.output else ""
-                logger.info(f"Logout exit code: {result.exit_code}")
-                logger.info(f"Logout output: {output}")
-
-                if result.exit_code == 0:
-                    logger.info("Successfully logged out from Tailscale")
-                else:
-                    logger.warning(f"Logout command returned non-zero exit code: {result.exit_code}, output: {output}")
-            else:
-                logger.info(f"Container status is {container.status}, starting it to logout...")
-                container.start()
-                await asyncio.sleep(2)  # Wait for container to start
-
-                result = container.exec_run("tailscale logout", demux=False)
-                output = result.output.decode() if result.output else ""
-                logger.info(f"Logout after start - exit code: {result.exit_code}, output: {output}")
-        except docker.errors.NotFound:
-            logger.info("Container not found, skipping logout step")
-        except Exception as e:
-            logger.warning(f"Could not logout from Tailscale: {e}", exc_info=True)
-
-        # Step 2: Stop and remove container (force removal to ensure it's gone)
-        container_removed = False
-        try:
-            container = docker_client.containers.get(container_name)
-            logger.info(f"Stopping container {container_name}...")
-            container.stop(timeout=5)
-            logger.info(f"Removing container {container_name}...")
-            container.remove(force=True)  # Force removal
-            logger.info("Container removed successfully")
-            container_removed = True
-        except docker.errors.NotFound:
-            logger.info("Container not found, skipping removal")
-            container_removed = True  # Not existing is same as removed
-        except Exception as e:
-            logger.error(f"FAILED to remove container: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Failed to remove container: {str(e)}")
-
-        # Give Docker a moment to release the volume
-        await asyncio.sleep(1)
-
-        # Step 3: Delete the volume (this clears all auth state)
-        try:
-            volume = docker_client.volumes.get(volume_name)
-            logger.info(f"Removing volume {volume_name}...")
-            volume.remove(force=True)  # Force removal
-            logger.info("Volume removed successfully - all auth state cleared")
-        except docker.errors.NotFound:
-            logger.info("Volume not found, already cleared")
-        except Exception as e:
-            # Volume might still be in use - try via docker CLI
-            logger.warning(f"Could not remove volume via API: {e}, trying docker CLI...")
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ["docker", "volume", "rm", "-f", volume_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                if result.returncode == 0:
-                    logger.info("Volume removed via docker CLI")
-                else:
-                    logger.error(f"Failed to remove volume via CLI: {result.stderr}")
-                    return {
-                        "status": "partial",
-                        "message": f"Logged out and removed container, but volume still exists. Manual cleanup: docker volume rm -f {volume_name}"
-                    }
-            except Exception as cli_err:
-                logger.error(f"CLI removal also failed: {cli_err}")
-                return {
-                    "status": "partial",
-                    "message": f"Logged out and removed container, but volume still exists. Manual cleanup: docker volume rm -f {volume_name}"
-                }
-
-        # Step 4: Delete the Tailscale config file (contains hostname)
+        # Delete the Tailscale config file (contains hostname)
         try:
             if TAILSCALE_CONFIG_FILE.exists():
                 logger.info(f"Removing Tailscale config file {TAILSCALE_CONFIG_FILE}...")
@@ -885,11 +784,16 @@ async def clear_tailscale_auth(
         except Exception as e:
             logger.warning(f"Could not remove config file: {e}")
 
-        return {
-            "status": "success",
-            "message": "Local authentication cleared. To complete removal, manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines"
-        }
+        if result["status"] == "success":
+            return {
+                "status": "success",
+                "message": "Local authentication cleared. To complete removal, manually delete this machine from your Tailscale admin panel at https://login.tailscale.com/admin/machines"
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.get("message", "Failed to clear auth"))
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error clearing Tailscale auth: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to clear auth: {str(e)}")
@@ -1328,42 +1232,6 @@ async def get_caddy_status(
         return {"exists": False, "running": False, "error": str(e)}
 
 
-@router.post("/configure-caddy-routing")
-async def configure_caddy_routing(
-    current_user: User = Depends(get_current_user)
-) -> Dict[str, str]:
-    """Configure Tailscale Serve to route all traffic through Caddy.
-
-    This replaces direct service routes with a single route to Caddy,
-    which then handles path-based routing to individual services.
-    """
-    try:
-        from src.services.tailscale_serve import configure_caddy_proxy_route, is_caddy_running
-
-        if not is_caddy_running():
-            return {
-                "status": "error",
-                "message": "Caddy is not running. Start it first with /container/start-caddy"
-            }
-
-        success = configure_caddy_proxy_route()
-
-        if success:
-            return {
-                "status": "configured",
-                "message": "Tailscale Serve configured to route through Caddy"
-            }
-        else:
-            return {
-                "status": "error",
-                "message": "Failed to configure Tailscale Serve routing"
-            }
-
-    except Exception as e:
-        logger.error(f"Error configuring Caddy routing: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/container/auth-url", response_model=AuthUrlResponse)
 async def get_auth_url(
     current_user: User = Depends(get_current_user),
@@ -1375,86 +1243,11 @@ async def get_auth_url(
         regenerate: If True, logout first to force a new auth URL
     """
     try:
-        # If regenerate requested, force a fresh authentication
-        if regenerate:
-            logger.info("Regenerating auth URL - forcing re-authentication")
-            # Use --force-reauth to get a completely new auth URL
-            exit_code, stdout, stderr = await exec_in_container("tailscale up --force-reauth --timeout=5s")
-            output = stdout + stderr
-            logger.info(f"Tailscale up --force-reauth output: {output}")
-            url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
-        else:
-            # Try to get status first (shows login URL if logged out)
-            exit_code, stdout, stderr = await exec_in_container("tailscale status")
+        manager = get_tailscale_manager()
+        return manager.get_auth_url(regenerate=regenerate)
 
-            output = stdout + stderr
-            logger.info(f"Tailscale status output: {output}")
-
-            # Extract URL from status output (appears when logged out)
-            url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
-
-            if not url_match:
-                # Status didn't have URL - use tailscale up which prints URL
-                # The URL is generated immediately, but tailscale up waits for auth to complete
-                # Use short timeout (3s) since we only need the URL output, not auth completion
-                # exec_in_container will automatically wrap in sh -c for || and 2>&1
-                exit_code, stdout, stderr = await exec_in_container("tailscale up --timeout=3s 2>&1 || true")
-                output = stdout + stderr
-                logger.info(f"Tailscale up output: {output}")
-
-                # Try multiple regex patterns to catch different log formats
-                # Pattern 1: "AuthURL is https://..."
-                url_match = re.search(r'AuthURL is (https://login\.tailscale\.com/[^\s]+)', output)
-                if not url_match:
-                    # Pattern 2: "Received auth URL: https://..."
-                    url_match = re.search(r'Received auth URL: (https://login\.tailscale\.com/[^\s]+)', output)
-                if not url_match:
-                    # Pattern 3: Plain URL in output
-                    url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
-
-        if not url_match:
-            raise HTTPException(status_code=500, detail=f"Could not extract auth URL. Output: {output}")
-
-        web_auth_url = url_match.group(1)
-
-        # Use plain HTTPS URL - if Tailscale app is installed,
-        # iOS/Android will automatically prompt "Open in Tailscale?"
-        auth_url = web_auth_url
-
-        # Generate QR code as data URL
-        try:
-            import qrcode
-            import io
-            import base64
-
-            qr = qrcode.QRCode(version=1, box_size=10, border=4)
-            qr.add_data(auth_url)
-            qr.make(fit=True)
-
-            img = qr.make_image(fill_color="black", back_color="white")
-
-            # Convert to data URL
-            buffered = io.BytesIO()
-            img.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-            qr_code_data = f"data:image/png;base64,{img_str}"
-
-            return AuthUrlResponse(
-                auth_url=auth_url,
-                web_url=web_auth_url,
-                qr_code_data=qr_code_data
-            )
-
-        except ImportError:
-            # qrcode not available - return URL only
-            return AuthUrlResponse(
-                auth_url=auth_url,
-                web_url=web_auth_url,
-                qr_code_data=""
-            )
-
-    except HTTPException:
-        raise
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting auth URL: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get auth URL: {str(e)}")
@@ -1469,50 +1262,19 @@ async def get_tailnet_settings(
     Returns information about which features are enabled and links to enable them.
     """
     try:
-        # Get status JSON to check MagicDNS
-        exit_code, stdout, stderr = await exec_in_container("tailscale status --json")
+        manager = get_tailscale_manager()
+        settings = manager.get_tailnet_settings()
 
-        magic_dns_enabled = False
-        magic_dns_suffix = None
-
-        if exit_code == 0 and stdout.strip():
-            import json
-            status_data = json.loads(stdout)
-            magic_dns_suffix = status_data.get("MagicDNSSuffix")
-            magic_dns_enabled = bool(magic_dns_suffix)
-
-        # Check if HTTPS cert support is enabled using `tailscale cert`
-        # This gives a clear message if cert support is not enabled
-        https_enabled = None
-        https_error = None
-
-        exit_code, stdout, stderr = await exec_in_container("tailscale cert 2>&1")
-        output = stdout + stderr
-
-        if "not enabled" in output.lower() or "not configured" in output.lower():
-            https_enabled = False
-            https_error = "HTTPS cert support is not enabled/configured for your tailnet"
-        elif "usage:" in output.lower():
-            # Got usage message - cert support is enabled but no domain specified
-            https_enabled = True
-        else:
-            # Some other error occurred
-            https_enabled = None
-            https_error = output.strip() if output.strip() else "Unknown error checking HTTPS"
+        if settings is None:
+            raise HTTPException(status_code=500, detail="Failed to retrieve tailnet settings")
 
         return {
-            "magic_dns": {
-                "enabled": magic_dns_enabled,
-                "suffix": magic_dns_suffix,
-                "admin_url": "https://login.tailscale.com/admin/dns"
-            },
-            "https_serve": {
-                "enabled": https_enabled,
-                "error": https_error,
-                "admin_url": "https://login.tailscale.com/admin/dns"
-            }
+            "magic_dns": settings.magic_dns,
+            "https_serve": settings.https_serve
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error checking tailnet settings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to check tailnet settings: {str(e)}")
@@ -1561,61 +1323,18 @@ async def provision_cert_in_container(
 ) -> CertificateStatus:
     """Provision certificate via Tailscale container"""
     try:
-        # Ensure certs directory exists
-        CERTS_DIR.mkdir(parents=True, exist_ok=True)
+        manager = get_tailscale_manager()
+        result = manager.provision_cert(hostname, CERTS_DIR)
 
-        # Check if already exists
-        cert_file = CERTS_DIR / f"{hostname}.crt"
-        key_file = CERTS_DIR / f"{hostname}.key"
+        return CertificateStatus(
+            provisioned=result.provisioned,
+            cert_path=result.cert_path,
+            key_path=result.key_path,
+            error=result.error
+        )
 
-        if cert_file.exists() and key_file.exists():
-            return CertificateStatus(provisioned=True, cert_path=str(cert_file), key_path=str(key_file))
-
-        # Provision in container - explicitly save to /certs directory
-        cert_cmd = f"tailscale cert --cert-file /certs/{hostname}.crt --key-file /certs/{hostname}.key {hostname}"
-        exit_code, stdout, stderr = await exec_in_container(cert_cmd)
-
-        if exit_code == 0:
-            # Copy files from Tailscale container's /certs to backend's /config/SECRETS/certs
-            container_name = get_tailscale_container_name()
-            container = docker_client.containers.get(container_name)
-
-            import tarfile
-            import io
-
-            # Copy cert file from /certs in Tailscale container
-            cert_data, _ = container.get_archive(f"/certs/{hostname}.crt")
-            tar_stream = io.BytesIO(b''.join(cert_data))
-            with tarfile.open(fileobj=tar_stream) as tar:
-                cert_content = tar.extractfile(f"{hostname}.crt").read()
-
-            # Copy key file
-            key_data, _ = container.get_archive(f"/certs/{hostname}.key")
-            tar_stream = io.BytesIO(b''.join(key_data))
-            with tarfile.open(fileobj=tar_stream) as tar:
-                key_content = tar.extractfile(f"{hostname}.key").read()
-
-            # Write to backend's config/SECRETS/certs
-            with open(cert_file, 'wb') as f:
-                f.write(cert_content)
-            with open(key_file, 'wb') as f:
-                f.write(key_content)
-
-            # Set proper permissions
-            os.chmod(cert_file, 0o644)
-            os.chmod(key_file, 0o600)
-
-            logger.info(f"Certificates copied from Tailscale container to {CERTS_DIR}")
-
-            return CertificateStatus(provisioned=True, cert_path=str(cert_file), key_path=str(key_file))
-        else:
-            error = stderr or stdout or "Unknown error"
-            return CertificateStatus(provisioned=False, error=error)
-
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error provisioning certificate in container: {e}", exc_info=True)
+        logger.error(f"Error provisioning certificate: {e}", exc_info=True)
         return CertificateStatus(provisioned=False, error=str(e))
 
 
@@ -1630,12 +1349,12 @@ async def configure_tailscale_serve(
 ) -> Dict[str, Any]:
     """Configure Tailscale serve for routing.
 
-    Sets up base routes: /api/* and /auth/* to backend, /* to frontend.
-    Enables HTTPS first, then configures routes.
+    Sets up base routes: /api/* and /auth/* to backend, /* to frontend,
+    and WebSocket routes /ws_pcm and /ws_omi direct to Chronicle.
     Also saves the Tailscale configuration to disk.
     """
     try:
-        from src.services.tailscale_serve import configure_base_routes, get_serve_status
+        manager = get_tailscale_manager()
 
         # Save configuration to disk first
         config_data = config.model_dump()
@@ -1643,17 +1362,20 @@ async def configure_tailscale_serve(
             yaml.dump(config_data, f, default_flow_style=False)
         logger.info(f"Tailscale configuration saved to {TAILSCALE_CONFIG_FILE}")
 
-        # Configure base routes for this environment
-        # This includes HTTPS on 443 and proper routing to backend/frontend containers
-        success = configure_base_routes()
+        # Configure base routes using TailscaleManager
+        # This sets up Layer 1 routing: /api, /auth, /ws_pcm, /ws_omi, /
+        success = manager.configure_base_routes(
+            backend_port=config.backend_port,
+            frontend_port=config.frontend_port
+        )
 
         # Get the current serve status to return actual routes
-        status = get_serve_status() or ""
+        status = manager.get_serve_status() or ""
 
         if success:
             return {
                 "status": "configured",
-                "message": "Tailscale serve configured successfully",
+                "message": "Tailscale serve configured successfully with base routes",
                 "routes": status,
                 "hostname": config.hostname
             }
@@ -1774,130 +1496,3 @@ async def update_cors_origins(
 # ============================================================================
 # Route Management
 # ============================================================================
-
-class RegenerateRoutesResponse(BaseModel):
-    """Response from route regeneration."""
-    success: bool
-    message: str
-    routes_count: int = 0
-    config_path: Optional[str] = None
-
-
-@router.post("/routes/regenerate", response_model=RegenerateRoutesResponse)
-async def regenerate_serve_routes(
-    current_user: User = Depends(get_current_user)
-) -> RegenerateRoutesResponse:
-    """Regenerate Tailscale Serve routes from all deployed services.
-
-    This scans all compose files for route definitions, checks which services
-    are running, and generates/applies the tailscale-serve.json configuration.
-
-    Routes are defined in x-ushadow section of compose files:
-        x-ushadow:
-          service-name:
-            routes:
-              - path: /chronicle
-                internal_port: 8000
-                preserve_path: true
-    """
-    try:
-        from src.services.tailscale_serve_config import (
-            generate_serve_config,
-            write_serve_config,
-            apply_serve_config,
-        )
-
-        # Generate config from current state
-        config = generate_serve_config()
-
-        # Write to file
-        config_path = write_serve_config(config)
-
-        # Apply via set-raw
-        success = apply_serve_config(config)
-
-        if success:
-            return RegenerateRoutesResponse(
-                success=True,
-                message=f"Successfully regenerated {len(config.routes)} routes",
-                routes_count=len(config.routes),
-                config_path=config_path,
-            )
-        else:
-            return RegenerateRoutesResponse(
-                success=False,
-                message="Generated config but failed to apply via set-raw",
-                routes_count=len(config.routes),
-                config_path=config_path,
-            )
-
-    except ValueError as e:
-        # Missing hostname or other config issue
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error regenerating routes: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to regenerate routes: {str(e)}")
-
-
-class ServeRoutesStatus(BaseModel):
-    """Current Tailscale Serve routes status."""
-    hostname: Optional[str] = None
-    routes: List[Dict[str, Any]] = []
-    config_exists: bool = False
-    tailscale_configured: bool = False
-
-
-@router.get("/routes/status", response_model=ServeRoutesStatus)
-async def get_serve_routes_status(
-    current_user: User = Depends(get_current_user)
-) -> ServeRoutesStatus:
-    """Get current Tailscale Serve routes status.
-
-    Returns the current hostname, configured routes, and whether
-    Tailscale Serve is properly configured.
-    """
-    try:
-        import yaml as pyyaml
-
-        # Check if tailscale config exists
-        config_path = "/config/tailscale.yaml"
-        hostname = None
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                ts_config = pyyaml.safe_load(f)
-                hostname = ts_config.get('hostname')
-
-        # Check if serve config exists
-        serve_config_path = "/config/tailscale-serve.json"
-        config_exists = os.path.exists(serve_config_path)
-        routes = []
-
-        if config_exists:
-            with open(serve_config_path, 'r') as f:
-                serve_config = json.load(f)
-                # Extract routes from config
-                web = serve_config.get("Web", {})
-                for host_port, handler_config in web.items():
-                    handlers = handler_config.get("Handlers", {})
-                    for path, proxy_config in handlers.items():
-                        routes.append({
-                            "path": path,
-                            "proxy": proxy_config.get("Proxy", ""),
-                            "host": host_port,
-                        })
-
-        # Check if Tailscale Serve is configured (has routes)
-        from src.services.tailscale_serve import get_serve_status
-        serve_status = get_serve_status()
-        tailscale_configured = bool(serve_status and serve_status.strip())
-
-        return ServeRoutesStatus(
-            hostname=hostname,
-            routes=routes,
-            config_exists=config_exists,
-            tailscale_configured=tailscale_configured,
-        )
-
-    except Exception as e:
-        logger.error(f"Error getting routes status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get routes status: {str(e)}")
