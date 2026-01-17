@@ -4,6 +4,7 @@ import { useWizard } from '../contexts/WizardContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 import { getAllWizards } from '../wizards'
+import { StatusBadge } from '../components/StatusBadge'
 
 export default function WizardStartPage() {
   const navigate = useNavigate()
@@ -164,12 +165,15 @@ export default function WizardStartPage() {
             </div>
 
             {/* Title & Description */}
-            <h3
-              className="text-2xl font-bold mb-3"
-              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
-            >
-              Completely Local
-            </h3>
+            <div className="flex items-center gap-3 mb-3">
+              <h3
+                className="text-2xl font-bold"
+                style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+              >
+                Completely Local
+              </h3>
+              <StatusBadge variant="beta" testId="badge-wizard-local-option" />
+            </div>
             <p
               className="mb-6 flex-1"
               style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
@@ -233,12 +237,15 @@ export default function WizardStartPage() {
             </div>
 
             {/* Title & Description */}
-            <h3
-              className="text-2xl font-bold mb-3"
-              style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
-            >
-              Customise
-            </h3>
+            <div className="flex items-center gap-3 mb-3">
+              <h3
+                className="text-2xl font-bold"
+                style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+              >
+                Customise
+              </h3>
+              <StatusBadge variant="beta" testId="badge-wizard-customise" />
+            </div>
             <p
               className="mb-6 flex-1"
               style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}

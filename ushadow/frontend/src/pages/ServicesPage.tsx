@@ -33,6 +33,7 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { PortConflictDialog } from '../components/services'
+import { StatusBadge } from '../components/StatusBadge'
 
 export default function ServicesPage() {
   // Compose services state
@@ -737,9 +738,14 @@ export default function ServicesPage() {
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
-                                {provider.name}
-                              </h4>
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                                  {provider.name}
+                                </h4>
+                                {(provider.id === 'ollama' || provider.id === 'parakeet') && (
+                                  <StatusBadge variant="beta" testId={`badge-provider-${provider.id}`} />
+                                )}
+                              </div>
                               <span className="text-xs text-neutral-500">
                                 {provider.mode === 'cloud' ? 'Cloud' : 'Self-Hosted'}
                               </span>

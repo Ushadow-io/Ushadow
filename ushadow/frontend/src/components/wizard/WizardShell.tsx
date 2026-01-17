@@ -48,6 +48,8 @@ export interface WizardShellProps {
   subtitle?: string;
   /** Optional icon component to display next to the title */
   icon?: LucideIcon;
+  /** Optional badge to display next to the title */
+  titleBadge?: ReactNode;
   /** Progress percentage (0-100) for the progress bar */
   progress: number;
   /** Callback for back button within wizard steps. */
@@ -83,6 +85,7 @@ export function WizardShell({
   title,
   subtitle,
   icon: Icon,
+  titleBadge,
   progress,
   onBack,
   exitPath = '/wizard/start',
@@ -213,6 +216,7 @@ export function WizardShell({
                 >
                   {title}
                 </h1>
+                {titleBadge}
               </div>
               {headerActions && (
                 <div className="flex items-center gap-2">
