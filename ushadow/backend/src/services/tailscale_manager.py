@@ -31,6 +31,8 @@ from pathlib import Path
 
 import docker
 
+from src.utils.qrcode import generate_qr_code_data_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -262,9 +264,8 @@ class TailscaleManager:
         try:
             # Try to logout first (if container is running)
             try:
-                exit_code, _, _ = self.exec_command("tailscale logout")
-                if exit_code == 0:
-                    logger.info("Logged out from Tailscale")
+                self.logout()
+                logger.info("Logged out from Tailscale")
             except Exception as e:
                 logger.debug(f"Could not logout (container may not be running): {e}")
 
@@ -468,14 +469,17 @@ class TailscaleManager:
     def get_auth_url(self, regenerate: bool = False) -> AuthUrlResponse:
         """Get Tailscale authentication URL with QR code.
 
+        Uses CLI to trigger auth flow and extracts the URL.
+        QR code generation separated to utility function for cleanliness.
+
         Args:
-            regenerate: If True, force generation of new auth URL
+            regenerate: If True, force generation of new auth URL (clears cache)
 
         Returns:
             AuthUrlResponse with auth_url, web_url, qr_code_data
 
         Raises:
-            RuntimeError: If container not running or command fails
+            RuntimeError: If container not running, already authenticated, or command fails
         """
         import re
 
@@ -496,13 +500,12 @@ class TailscaleManager:
             else:
                 logger.debug(f"Cached auth URL expired (age: {age:.1f}s)")
 
-        # Use timeout long enough for auth URL to appear (daemon logs show ~6s)
-        # Don't use 2>&1 - let Docker's demux separate stdout/stderr for us
+        # Use timeout long enough for auth URL to appear
         cmd = "tailscale up --auth-key= --timeout=6s"
         if regenerate:
             cmd += " --force-reauth"
 
-        # Execute and capture output (will take ~6s)
+        # Execute and capture output
         exit_code, stdout, stderr = self.exec_command(cmd, timeout=15)
 
         # Parse output for URL - try multiple patterns
@@ -514,19 +517,17 @@ class TailscaleManager:
         # Pattern 1: "AuthURL is https://..."
         url_match = re.search(r'AuthURL is (https://login\.tailscale\.com/[^\s]+)', output)
         if not url_match:
-            # Pattern 2: "To authenticate, visit:" followed by URL (handles tabs and newlines)
+            # Pattern 2: "To authenticate, visit:" followed by URL
             url_match = re.search(r'To authenticate, visit:[\s\n\t]+(https://login\.tailscale\.com/[^\s]+)', output)
         if not url_match:
             # Pattern 3: Plain URL in output
             url_match = re.search(r'(https://login\.tailscale\.com/[^\s]+)', output)
 
         if not url_match:
-            # Try getting URL from tailscale status (when logged out, it shows "Log in at: URL")
+            # Try getting URL from tailscale status
             logger.debug("URL not found in 'tailscale up' output, trying 'tailscale status'")
             status_exit, status_stdout, status_stderr = self.exec_command("tailscale status", timeout=5)
             status_output = status_stdout + status_stderr
-
-            # Pattern for status output: "Log in at: https://..."
             url_match = re.search(r'Log in at:\s+(https://login\.tailscale\.com/[^\s]+)', status_output)
 
             if not url_match:
@@ -535,55 +536,96 @@ class TailscaleManager:
                 logger.error(f"'status' output ({len(status_output)} chars): {status_output[:500]}")
                 raise RuntimeError(f"Could not extract auth URL from output: {output[:500]}")
 
-        web_auth_url = url_match.group(1)
-        auth_url = web_auth_url
+        auth_url = url_match.group(1)
 
-        # Generate QR code as data URL
+        # Generate QR code using utility function (separated for cleanliness)
+        qr_code_data = generate_qr_code_data_url(auth_url) or ""
+
+        # Build response
+        response = AuthUrlResponse(
+            auth_url=auth_url,
+            web_url=auth_url,
+            qr_code_data=qr_code_data
+        )
+
+        # Cache the response
+        self._cached_auth_url = response
+        self._auth_url_timestamp = time.time()
+        logger.debug("Cached new auth URL")
+
+        return response
+
+    def authenticate_with_key(self, auth_key: str, accept_routes: bool = True) -> bool:
+        """Authenticate Tailscale using a pre-generated auth key.
+
+        This is for automated authentication (testing, CI/CD, etc.) without
+        requiring interactive user login.
+
+        Args:
+            auth_key: Tailscale auth key (e.g., "tskey-auth-...")
+            accept_routes: Accept subnet routes from other nodes
+
+        Returns:
+            True if authentication succeeded
+
+        Raises:
+            RuntimeError: If authentication fails
+
+        Example:
+            >>> manager = TailscaleManager()
+            >>> manager.authenticate_with_key("tskey-auth-k123...")
+        """
         try:
-            import qrcode
-            import io
-            import base64
+            # Build command
+            cmd = f"tailscale up --authkey={auth_key}"
+            if accept_routes:
+                cmd += " --accept-routes"
 
-            qr = qrcode.QRCode(version=1, box_size=10, border=4)
-            qr.add_data(auth_url)
-            qr.make(fit=True)
+            # Execute
+            exit_code, stdout, stderr = self.exec_command(cmd, timeout=30)
 
-            img = qr.make_image(fill_color="black", back_color="white")
+            if exit_code == 0:
+                logger.info("Successfully authenticated with auth key")
+                # Clear cached auth URL since we're now authenticated
+                self._cached_auth_url = None
+                self._auth_url_timestamp = None
+                return True
+            else:
+                logger.error(f"Authentication failed: {stderr}")
+                raise RuntimeError(f"Authentication with auth key failed: {stderr}")
 
-            # Convert to data URL
-            buffered = io.BytesIO()
-            img.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-            qr_code_data = f"data:image/png;base64,{img_str}"
+        except Exception as e:
+            logger.error(f"Error during auth key authentication: {e}")
+            raise RuntimeError(f"Authentication failed: {e}")
 
-            response = AuthUrlResponse(
-                auth_url=auth_url,
-                web_url=web_auth_url,
-                qr_code_data=qr_code_data
-            )
+    def logout(self) -> bool:
+        """Logout from Tailscale (de-authenticate).
 
-            # Cache the response
-            self._cached_auth_url = response
-            self._auth_url_timestamp = time.time()
-            logger.debug("Cached new auth URL")
+        This logs out the local machine but does NOT remove the device from
+        the Tailscale admin console. To fully remove, use Control API.
 
-            return response
+        Returns:
+            True if logout succeeded
 
-        except ImportError:
-            # qrcode not available - return URL only
-            logger.warning("qrcode module not available, returning URL without QR code")
-            response = AuthUrlResponse(
-                auth_url=auth_url,
-                web_url=web_auth_url,
-                qr_code_data=""
-            )
+        Raises:
+            RuntimeError: If logout fails
+        """
+        try:
+            exit_code, stdout, stderr = self.exec_command("tailscale logout", timeout=10)
 
-            # Cache the response
-            self._cached_auth_url = response
-            self._auth_url_timestamp = time.time()
-            logger.debug("Cached new auth URL (no QR code)")
+            if exit_code == 0:
+                logger.info("Successfully logged out from Tailscale")
+                # Clear cached auth URL
+                self._cached_auth_url = None
+                self._auth_url_timestamp = None
+                return True
+            else:
+                logger.error(f"Logout failed: {stderr}")
+                raise RuntimeError(f"Logout failed: {stderr}")
 
-            return response
+        except Exception as e:
+            logger.error(f"Error during logout: {e}")
+            raise RuntimeError(f"Logout failed: {e}")
 
     # ========================================================================
     # Layer 1: Base Route Configuration

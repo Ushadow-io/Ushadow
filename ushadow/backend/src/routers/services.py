@@ -402,7 +402,7 @@ async def get_service_connection_info(
     # WebSocket routes like /ws_pcm are configured in Tailscale Serve
     direct_url = None
     try:
-        from src.services.tailscale_serve import get_tailscale_status
+        from src.utils.tailscale_serve import get_tailscale_status
         ts_status = get_tailscale_status()
         if ts_status.hostname:
             # Use HTTPS (Tailscale Serve provides TLS)
