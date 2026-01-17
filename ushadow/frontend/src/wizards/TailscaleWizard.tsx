@@ -564,7 +564,6 @@ export default function TailscaleWizard() {
       setMessage({ type: 'info', text: 'Enabling HTTPS on Tailscale...' })
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
-      }
 
       // Step 2: Provision the certificate (HTTPS is now enabled)
       setMessage({
