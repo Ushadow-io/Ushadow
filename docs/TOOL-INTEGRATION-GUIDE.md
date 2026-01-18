@@ -23,6 +23,7 @@ How to use Vibe Kanban, Claude Code, Workmux, and Graphite together with your wo
 - Creates branches like `5cb0-nodes`, `6a8c-unified-user-log`
 - Each task card = separate worktree
 - Tracks task status independently of git state
+- **Has custom tags (prompt templates)** for workflow automation
 
 **How to use with this workflow:**
 
@@ -40,21 +41,39 @@ git push origin vk/abc123-task-name
 integrate-to-dev  # Use helper script
 ```
 
-**Configuration recommendations:**
+---
 
-```json
-// vibe-kanban config (if customizable)
-{
-  "worktree_base_path": "/tmp/vibe-kanban/worktrees",
-  "branch_prefix": "vk/",
-  "default_base_branch": "dev",  // ← Create from dev, not main
-  "auto_cleanup": false  // Let user decide when to remove
-}
-```
+### Vibe Kanban Git Workflow Tags
+
+Custom tags have been created to integrate with your git workflow. Apply these to tasks:
+
+| Tag | When to Use | What It Does |
+|-----|-------------|--------------|
+| `integrate_to_dev` | Feature ready for integration testing | Guides merging branch to dev |
+| `sync_from_dev` | Need other features' changes | Guides pulling dev into branch |
+| `create_pr` | Ready to create Pull Request | Guides PR creation to main |
+| `ready_for_review` | PR ready for code review | Review readiness checklist |
+
+**Using Tags:**
+1. Open task in Vibe Kanban
+2. Click "Add Tag" or similar
+3. Select the workflow tag
+4. Claude will receive the tag's prompt as guidance
+
+**Example Workflow with Tags:**
+1. Work on feature → commit regularly
+2. Apply `integrate_to_dev` tag → merge to dev
+3. Apply `sync_from_dev` in other worktrees → get your changes
+4. Apply `create_pr` tag → create PR to main
+5. Apply `ready_for_review` tag → request reviews
+6. Move task to "Done" after PR merges
+
+---
 
 **Best practices:**
 - ✅ Use Vibe Kanban for task creation and tracking
 - ✅ Let it create worktrees automatically
+- ✅ Use workflow tags for git integration guidance
 - ✅ Use git CLI for all merge operations
 - ❌ Don't rely on Vibe Kanban for git operations beyond creation
 
