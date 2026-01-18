@@ -26,7 +26,6 @@ import {
   Cloud,
   HardDrive,
   AlertCircle,
-  Plug,
   X,
   GripVertical,
   Pencil,
@@ -38,6 +37,9 @@ import {
   Loader2,
   Package,
 } from 'lucide-react'
+import { ServiceTemplateCard } from './ServiceTemplateCard'
+import { ServiceInstanceCard } from './ServiceInstanceCard'
+import { StatusIndicator } from './StatusIndicator'
 // Per-service wiring model - each consumer has its own connections
 
 interface ConfigVar {
@@ -69,6 +71,8 @@ interface ConsumerInfo {
   configVars?: ConfigVar[]
   configured?: boolean
   description?: string // Service description
+  isTemplate?: boolean // True for templates, false for instances
+  templateId?: string // For templates: own ID; for instances: parent template ID
 }
 
 interface WiringInfo {
@@ -93,6 +97,7 @@ interface WiringBoardProps {
   onDeleteWiring: (consumerId: string, capability: string) => Promise<void>
   onEditProvider: (providerId: string, isTemplate: boolean) => void
   onCreateServiceConfig: (templateId: string) => void
+  onUpdateTemplateConfigVars?: (templateId: string, configVars: ConfigVar[]) => Promise<void>
   onDeleteServiceConfig: (instanceId: string) => void
   onStartProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
   onStopProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
@@ -111,6 +116,7 @@ export default function WiringBoard({
   onDeleteWiring,
   onEditProvider,
   onCreateServiceConfig,
+  onUpdateTemplateConfigVars,
   onDeleteServiceConfig,
   onStartProvider,
   onStopProvider,
@@ -319,34 +325,76 @@ export default function WiringBoard({
 
           {consumers.length > 0 ? (
             <div className="space-y-4">
-              {consumers.map((consumer) => {
-                const configVars = consumer.configVars || []
-                const missingRequiredVars = configVars.filter((v) => v.required && !v.value)
-                const configuredVars = configVars.filter((v) => v.value)
-                const needsSetup = consumer.configured === false || missingRequiredVars.length > 0
-                const isCloud = consumer.mode === 'cloud'
-                const canStart = !isCloud && (consumer.status === 'stopped' || consumer.status === 'pending' || consumer.status === 'exited' || consumer.status === 'not_running' || consumer.status === 'not_found')
-                const canStop = !isCloud && (consumer.status === 'running' || consumer.status === 'starting')
+              {/* Group consumers by template */}
+              {(() => {
+                // Separate templates and instances
+                const templates = consumers.filter((c) => c.isTemplate)
+                const instances = consumers.filter((c) => !c.isTemplate)
 
-                return (
-                  <ConsumerCard
-                    key={consumer.id}
-                    consumer={consumer}
-                    missingRequiredVars={missingRequiredVars}
-                    configuredVars={configuredVars}
-                    needsSetup={needsSetup}
-                    canStart={canStart}
-                    canStop={canStop}
-                    activeProvider={activeProvider}
-                    getProviderForSlot={getProviderForSlot}
-                    onDeleteWiring={onDeleteWiring}
-                    onEdit={onEditConsumer}
-                    onStart={onStartConsumer}
-                    onStop={onStopConsumer}
-                    onDeploy={onDeployConsumer}
-                  />
-                )
-              })}
+                // Group instances by template
+                const instancesByTemplate = instances.reduce((acc, instance) => {
+                  const templateId = instance.templateId || 'unknown'
+                  if (!acc[templateId]) acc[templateId] = []
+                  acc[templateId].push(instance)
+                  return acc
+                }, {} as Record<string, ConsumerInfo[]>)
+
+                return templates.map((template) => {
+                  const templateInstances = instancesByTemplate[template.id] || []
+
+                  return (
+                    <div key={template.id} className="space-y-2">
+                      {/* Template - no slots, just + button */}
+                      <ServiceTemplateCard
+                        template={{
+                          id: template.id,
+                          name: template.name,
+                          description: template.description,
+                          requires: template.requires,
+                        }}
+                        configVars={template.configVars}
+                        onCreateInstance={() => onCreateServiceConfig(template.id)}
+                        onUpdateConfigVars={
+                          onUpdateTemplateConfigVars
+                            ? (vars) => onUpdateTemplateConfigVars(template.id, vars)
+                            : undefined
+                        }
+                        alwaysShowConfig={true}
+                      />
+
+                      {/* Nested instances - these have the capability slots */}
+                      {templateInstances.length > 0 && (
+                        <div className="ml-6 space-y-2 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
+                          {templateInstances.map((instance) => {
+                            return (
+                              <ServiceInstanceCard
+                                key={instance.id}
+                                instance={{
+                                  id: instance.id,
+                                  name: instance.name,
+                                  requires: instance.requires,
+                                  status: instance.status,
+                                  mode: instance.mode,
+                                  description: instance.description,
+                                }}
+                                configVars={instance.configVars}
+                                activeProvider={activeProvider}
+                                getProviderForSlot={getProviderForSlot}
+                                onDeleteWiring={onDeleteWiring}
+                                onEdit={onEditConsumer}
+                                onStart={onStartConsumer}
+                                onStop={onStopConsumer}
+                                onDeploy={onDeployConsumer}
+                                onDelete={() => onDeleteServiceConfig(instance.id)}
+                              />
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              })()}
             </div>
           ) : (
             <div className="p-4 text-center text-neutral-400 dark:text-neutral-500 text-sm border-2 border-dashed border-neutral-200 dark:border-neutral-700 rounded-lg">
@@ -599,431 +647,4 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceC
   )
 }
 
-// =============================================================================
-// Service Card Component (vertical slot layout per wireframe)
-// =============================================================================
 
-interface ServiceCardProps {
-  consumer: ConsumerInfo
-  missingRequiredVars: ConfigVar[]
-  configuredVars: ConfigVar[]
-  needsSetup: boolean
-  canStart: boolean
-  canStop: boolean
-  activeProvider: ProviderInfo | null
-  getProviderForSlot: (consumerId: string, capability: string) => { provider?: ProviderInfo; capability: string } | null
-  onDeleteWiring: (consumerId: string, capability: string) => Promise<void>
-  onEdit?: (consumerId: string) => void
-  onStart?: (consumerId: string) => Promise<void>
-  onStop?: (consumerId: string) => Promise<void>
-  onDeploy?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
-}
-
-function ConsumerCard({
-  consumer,
-  missingRequiredVars,
-  configuredVars,
-  needsSetup,
-  canStart,
-  canStop,
-  activeProvider,
-  getProviderForSlot,
-  onDeleteWiring,
-  onEdit,
-  onStart,
-  onStop,
-  onDeploy,
-}: ServiceCardProps) {
-  const [isStarting, setIsStarting] = useState(false)
-  const [showDeployMenu, setShowDeployMenu] = useState(false)
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
-
-  // Close deploy menu when clicking outside
-  useEffect(() => {
-    if (!showDeployMenu) return
-
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      if (!target.closest('[data-deploy-menu]')) {
-        setShowDeployMenu(false)
-      }
-    }
-
-    document.addEventListener('click', handleClickOutside)
-    return () => document.removeEventListener('click', handleClickOutside)
-  }, [showDeployMenu])
-
-  const handleDeployClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    const button = e.currentTarget
-    const rect = button.getBoundingClientRect()
-    setMenuPosition({
-      top: rect.bottom + 4,
-      left: rect.right - 192 // 192px = 48 * 4 (w-48)
-    })
-    setShowDeployMenu(!showDeployMenu)
-  }
-
-  const handleStartClick = async () => {
-    if (!onStart) return
-    setIsStarting(true)
-    try {
-      await onStart(consumer.id)
-    } finally {
-      setIsStarting(false)
-    }
-  }
-
-  const handleStopClick = async () => {
-    if (!onStop) return
-    setIsStarting(true)
-    try {
-      await onStop(consumer.id)
-    } finally {
-      setIsStarting(false)
-    }
-  }
-
-  // Status-based border styling
-  const getCardClasses = () => {
-    if (consumer.status === 'running') {
-      return 'border-success-400 dark:border-success-600'
-    }
-    return 'border-neutral-200 dark:border-neutral-700'
-  }
-
-  const isCloud = consumer.mode === 'cloud'
-
-  return (
-    <div
-      className={`rounded-lg border ${getCardClasses()} bg-white dark:bg-neutral-900 overflow-hidden transition-all shadow-sm`}
-      data-testid={`consumer-card-${consumer.id}`}
-    >
-      {/* Header: Service name + mode badge + actions */}
-      <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            {/* Mode badge - purple for local, blue for cloud */}
-            <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded ${
-              isCloud
-                ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800'
-                : 'bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800'
-            }`}>
-              {isCloud ? (
-                <Cloud className={`h-3.5 w-3.5 text-blue-600 dark:text-blue-400`} />
-              ) : (
-                <HardDrive className={`h-3.5 w-3.5 text-purple-600 dark:text-purple-400`} />
-              )}
-              <span className={`font-medium text-sm ${
-                isCloud
-                  ? 'text-blue-900 dark:text-blue-100'
-                  : 'text-purple-900 dark:text-purple-100'
-              }`}>
-                {consumer.name}
-              </span>
-            </div>
-            <StatusIndicator status={consumer.status} />
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Start/Stop button - only for local services */}
-            {!isCloud && onStart && onStop && (
-              <>
-                {isStarting ? (
-                  <span className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-500">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  </span>
-                ) : needsSetup && canStart ? (
-                  <button
-                    onClick={() => onEdit?.(consumer.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 hover:bg-warning-200"
-                    data-testid={`consumer-setup-${consumer.id}`}
-                  >
-                    <Settings className="h-4 w-4" />
-                    Setup
-                  </button>
-                ) : canStart ? (
-                  <button
-                    onClick={handleStartClick}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 hover:bg-success-200"
-                    data-testid={`consumer-start-${consumer.id}`}
-                  >
-                    <PlayCircle className="h-4 w-4" />
-                    Start
-                  </button>
-                ) : canStop ? (
-                  <button
-                    onClick={handleStopClick}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200"
-                    data-testid={`consumer-stop-${consumer.id}`}
-                  >
-                    <StopCircle className="h-4 w-4" />
-                    Stop
-                  </button>
-                ) : null}
-              </>
-            )}
-            {onDeploy && (
-              <>
-                <button
-                  onClick={handleDeployClick}
-                  className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
-                  title="Deploy service"
-                  data-testid={`consumer-deploy-${consumer.id}`}
-                  data-deploy-menu
-                >
-                  <Plus className="h-3 w-3" />
-                  Deploy
-                </button>
-                {showDeployMenu && menuPosition && createPortal(
-                  <div
-                    className="fixed w-48 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl z-[9998]"
-                    style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
-                    data-deploy-menu
-                  >
-                    <button
-                      onClick={() => {
-                        onDeploy(consumer.id, { type: 'local' })
-                        setShowDeployMenu(false)
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-t-lg flex items-center gap-2"
-                    >
-                      <HardDrive className="h-4 w-4" />
-                      Local (Leader uNode)
-                    </button>
-                    <button
-                      onClick={() => {
-                        onDeploy(consumer.id, { type: 'remote' })
-                        setShowDeployMenu(false)
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-2"
-                    >
-                      <Cloud className="h-4 w-4" />
-                      Remote uNode
-                    </button>
-                    <button
-                      onClick={() => {
-                        onDeploy(consumer.id, { type: 'kubernetes' })
-                        setShowDeployMenu(false)
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-b-lg flex items-center gap-2"
-                    >
-                      <Package className="h-4 w-4" />
-                      Kubernetes
-                    </button>
-                  </div>,
-                  document.body
-                )}
-              </>
-            )}
-            {onEdit && (
-              <button
-                onClick={() => onEdit(consumer.id)}
-                className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-                title="Edit settings"
-                data-testid={`consumer-edit-${consumer.id}`}
-              >
-                <Pencil className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        </div>
-        {/* Description */}
-        {consumer.description && (
-          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-2">
-            {consumer.description}
-          </p>
-        )}
-      </div>
-
-      {/* Capability slots - each capability gets its own labeled drop zone */}
-      <div className="p-4 space-y-3">
-        {consumer.requires.map((capability) => {
-          const connection = getProviderForSlot(consumer.id, capability)
-          const isDropTarget = activeProvider?.capability === capability
-
-          return (
-            <CapabilitySlot
-              key={capability}
-              consumerId={consumer.id}
-              capability={capability}
-              connection={connection}
-              isDropTarget={isDropTarget}
-              onClear={() => onDeleteWiring(consumer.id, capability)}
-            />
-          )
-        })}
-      </div>
-
-      {/* Service config vars at bottom */}
-      {(missingRequiredVars.length > 0 || configuredVars.length > 0) && (
-        <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50">
-          <div className="space-y-1">
-            {/* Missing required fields first */}
-            {missingRequiredVars.map((v) => (
-              <div
-                key={v.key}
-                className="text-sm text-warning-600 dark:text-warning-400"
-              >
-                <span className="text-error-500">*</span>
-                <span className="font-medium">{v.label}:</span>{' '}
-                <span className="italic text-neutral-400">Not set</span>
-              </div>
-            ))}
-            {/* Configured fields */}
-            {configuredVars.slice(0, 4).map((v) => (
-              <div
-                key={v.key}
-                className="text-sm text-neutral-600 dark:text-neutral-400"
-              >
-                {v.required && <span className="text-error-500">*</span>}
-                <span className="font-medium">{v.label}:</span>{' '}
-                <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-              </div>
-            ))}
-            {configuredVars.length > 4 && (
-              <div className="text-xs text-neutral-400">
-                +{configuredVars.length - 4} more
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// =============================================================================
-// Capability Slot Component (full-width drop zone for each capability)
-// =============================================================================
-
-interface CapabilitySlotProps {
-  consumerId: string
-  capability: string
-  connection: { provider?: ProviderInfo; capability: string } | null
-  isDropTarget: boolean
-  onClear: () => void
-}
-
-function CapabilitySlot({
-  consumerId,
-  capability,
-  connection,
-  isDropTarget,
-  onClear,
-}: CapabilitySlotProps) {
-  const dropId = `slot::${consumerId}::${capability}`
-  const { isOver, setNodeRef } = useDroppable({ id: dropId })
-
-  const hasProvider = connection?.provider
-  const isOrphaned = connection && !connection.provider
-
-  return (
-    <div>
-      {/* Capability label */}
-      <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-1">
-        {capability}
-      </div>
-      {/* Drop zone */}
-      <div
-        ref={setNodeRef}
-        className={`
-          relative rounded-lg border-2 transition-all p-3 min-h-[48px] flex items-center
-          ${isOver && isDropTarget ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30' : ''}
-          ${isDropTarget && !isOver ? 'border-primary-300 dark:border-primary-600 border-dashed bg-primary-50/50 dark:bg-primary-900/10' : ''}
-          ${hasProvider ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20' : ''}
-          ${isOrphaned ? 'border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20' : ''}
-          ${!hasProvider && !isOrphaned && !isDropTarget ? 'border-neutral-200 dark:border-neutral-700 border-dashed' : ''}
-        `}
-        data-testid={`capability-slot-${consumerId}-${capability}`}
-      >
-        {hasProvider ? (
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2">
-              <Cloud className="h-4 w-4 text-success-500" />
-              <span className="font-medium text-neutral-900 dark:text-neutral-100">
-                {connection.provider!.name}
-              </span>
-            </div>
-            <button
-              onClick={onClear}
-              className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Disconnect"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : isOrphaned ? (
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2 text-warning-600 dark:text-warning-400">
-              <AlertCircle className="h-4 w-4" />
-              <span className="text-sm">Provider missing</span>
-            </div>
-            <button
-              onClick={onClear}
-              className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Clear"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-neutral-400 dark:text-neutral-500">
-            <Plug className="h-4 w-4" />
-            <span className="text-sm">
-              {isDropTarget ? 'Drop provider here' : 'Drag a provider here'}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// =============================================================================
-// Status Indicator
-// =============================================================================
-
-function StatusIndicator({ status }: { status: string }) {
-  switch (status) {
-    case 'running':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-success-500 animate-pulse" />
-          Running
-        </span>
-      )
-    case 'configured':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-success-500" />
-          Ready
-        </span>
-      )
-    case 'needs_setup':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300">
-          <Settings className="h-3 w-3" />
-          Setup
-        </span>
-      )
-    case 'stopped':
-    case 'not_running':
-      return (
-        <span className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-          Stopped
-        </span>
-      )
-    case 'error':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300">
-          <AlertCircle className="h-3 w-3" />
-          Error
-        </span>
-      )
-    default:
-      return (
-        <span className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-          {status}
-        </span>
-      )
-  }
-}
