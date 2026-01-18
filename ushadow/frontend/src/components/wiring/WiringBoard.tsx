@@ -692,162 +692,165 @@ function DraggableProvider({
     <div
       ref={setNodeRef}
       className={`
-        group relative rounded-lg border transition-all
+        group relative rounded-lg border transition-all flex
         ${isDragging ? 'opacity-30 border-dashed border-primary-400 dark:border-primary-500' : 'border-neutral-200 dark:border-neutral-700'}
         ${isConnected ? 'bg-primary-50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800' : 'bg-white dark:bg-neutral-900'}
         hover:border-primary-300 dark:hover:border-primary-600
       `}
       data-testid={`provider-drag-${provider.id}`}
     >
-      {/* Draggable header */}
-      <div
-        className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical className="h-4 w-4 text-neutral-400 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
-              {provider.name}
-            </span>
-            <div className="flex items-center gap-1.5 ml-auto">
-              {/* Capability tag */}
-              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
-                {provider.capability}
+      {/* Left side: Main content */}
+      <div className="flex-1 min-w-0">
+        {/* Draggable header */}
+        <div
+          className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4 text-neutral-400 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
+                {provider.name}
               </span>
-              {isConnected && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
-                  {connectionCount}
+              <div className="flex items-center gap-1.5 ml-auto">
+                {/* Capability tag */}
+                <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                  {provider.capability}
+                </span>
+                {isConnected && (
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
+                    {connectionCount}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Start/Stop/Setup buttons for local providers */}
+            {!isCloud && onStart && onStop && (
+              <>
+                {isStarting ? (
+                  <span className="p-1">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
+                  </span>
+                ) : needsSetup && canStart ? (
+                  <button
+                    onClick={(e) => handleButtonClick(e, onEdit)}
+                    className="p-1 text-warning-500 hover:text-warning-600 hover:bg-warning-100 dark:hover:bg-warning-900/30 rounded"
+                    title="Configure required settings"
+                    data-testid={`provider-setup-${provider.id}`}
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                  </button>
+                ) : canStart ? (
+                  <button
+                    onClick={handleStartClick}
+                    className="p-1 text-success-500 hover:text-success-600 hover:bg-success-100 dark:hover:bg-success-900/30 rounded"
+                    title="Start"
+                    data-testid={`provider-start-${provider.id}`}
+                  >
+                    <PlayCircle className="h-3.5 w-3.5" />
+                  </button>
+                ) : canStop ? (
+                  <button
+                    onClick={handleStopClick}
+                    className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                    title="Stop"
+                    data-testid={`provider-stop-${provider.id}`}
+                  >
+                    <StopCircle className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </>
+            )}
+            <button
+              onClick={(e) => handleButtonClick(e, onEdit)}
+              className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+              title="Edit settings"
+              data-testid={`provider-edit-${provider.id}`}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            {provider.isTemplate && onCreateInstance && (
+              <button
+                onClick={(e) => handleButtonClick(e, onCreateInstance)}
+                className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                title="Create new instance"
+                data-testid={`provider-create-instance-${provider.id}`}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {!provider.isTemplate && onDelete && (
+              <button
+                onClick={(e) => handleButtonClick(e, onDelete)}
+                className="p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                title="Delete instance"
+                data-testid={`provider-delete-${provider.id}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <StatusIndicator status={provider.status} />
+        </div>
+
+        {/* Config vars display - show missing required first, then configured */}
+        {(missingRequiredVars.length > 0 || configuredVars.length > 0) && (
+          <div className="px-3 pb-2 pt-0">
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {/* Missing required fields - shown first with warning */}
+              {missingRequiredVars.slice(0, 2).map((v) => (
+                <span
+                  key={v.key}
+                  className="text-xs text-warning-600 dark:text-warning-400"
+                  title={`${v.label}: Required - not set`}
+                >
+                  <span className="text-error-500 mr-0.5">*</span>
+                  <span>{v.label}:</span>{' '}
+                  <span className="italic">Not set</span>
+                </span>
+              ))}
+              {missingRequiredVars.length > 2 && (
+                <span className="text-xs text-warning-500">
+                  +{missingRequiredVars.length - 2} required
+                </span>
+              )}
+              {/* Configured fields - color code overrides */}
+              {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
+                // Check if this value is overridden from template
+                const isOverridden = templateProvider &&
+                  templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
+
+                return (
+                  <span
+                    key={v.key}
+                    className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
+                    title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
+                  >
+                    {v.required && <span className="text-error-500 mr-0.5">*</span>}
+                    <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                    <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                  </span>
+                )
+              })}
+              {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
+                <span className="text-xs text-neutral-400">
+                  +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
                 </span>
               )}
             </div>
           </div>
-        </div>
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {/* Start/Stop/Setup buttons for local providers */}
-          {!isCloud && onStart && onStop && (
-            <>
-              {isStarting ? (
-                <span className="p-1">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
-                </span>
-              ) : needsSetup && canStart ? (
-                <button
-                  onClick={(e) => handleButtonClick(e, onEdit)}
-                  className="p-1 text-warning-500 hover:text-warning-600 hover:bg-warning-100 dark:hover:bg-warning-900/30 rounded"
-                  title="Configure required settings"
-                  data-testid={`provider-setup-${provider.id}`}
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                </button>
-              ) : canStart ? (
-                <button
-                  onClick={handleStartClick}
-                  className="p-1 text-success-500 hover:text-success-600 hover:bg-success-100 dark:hover:bg-success-900/30 rounded"
-                  title="Start"
-                  data-testid={`provider-start-${provider.id}`}
-                >
-                  <PlayCircle className="h-3.5 w-3.5" />
-                </button>
-              ) : canStop ? (
-                <button
-                  onClick={handleStopClick}
-                  className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-                  title="Stop"
-                  data-testid={`provider-stop-${provider.id}`}
-                >
-                  <StopCircle className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-            </>
-          )}
-          <button
-            onClick={(e) => handleButtonClick(e, onEdit)}
-            className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-            title="Edit settings"
-            data-testid={`provider-edit-${provider.id}`}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          {provider.isTemplate && onCreateInstance && (
-            <button
-              onClick={(e) => handleButtonClick(e, onCreateInstance)}
-              className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Create new instance"
-              data-testid={`provider-create-instance-${provider.id}`}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {!provider.isTemplate && onDelete && (
-            <button
-              onClick={(e) => handleButtonClick(e, onDelete)}
-              className="p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Delete instance"
-              data-testid={`provider-delete-${provider.id}`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
-        <StatusIndicator status={provider.status} />
+        )}
       </div>
 
-      {/* Config vars display - show missing required first, then configured */}
-      {(missingRequiredVars.length > 0 || configuredVars.length > 0) && (
-        <div className="px-3 pb-2 pt-0">
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {/* Missing required fields - shown first with warning */}
-            {missingRequiredVars.slice(0, 2).map((v) => (
-              <span
-                key={v.key}
-                className="text-xs text-warning-600 dark:text-warning-400"
-                title={`${v.label}: Required - not set`}
-              >
-                <span className="text-error-500 mr-0.5">*</span>
-                <span>{v.label}:</span>{' '}
-                <span className="italic">Not set</span>
-              </span>
-            ))}
-            {missingRequiredVars.length > 2 && (
-              <span className="text-xs text-warning-500">
-                +{missingRequiredVars.length - 2} required
-              </span>
-            )}
-            {/* Configured fields - color code overrides */}
-            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
-              // Check if this value is overridden from template
-              const isOverridden = templateProvider &&
-                templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
-
-              return (
-                <span
-                  key={v.key}
-                  className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
-                  title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
-                >
-                  {v.required && <span className="text-error-500 mr-0.5">*</span>}
-                  <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
-                  <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-                </span>
-              )
-            })}
-            {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
-              <span className="text-xs text-neutral-400">
-                +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Output ports for wiring - show when provider has outputs */}
+      {/* Right side: Output ports for wiring */}
       {provider.outputs && onOutputDragStart && (
-        <OutputPortsSection
+        <OutputPortsSidePanel
           provider={provider}
           outputWiring={outputWiring}
           onOutputDragStart={onOutputDragStart}
@@ -939,6 +942,75 @@ function OutputPortsSection({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// =============================================================================
+// Output Ports Side Panel - Shows outputs on the right side of provider cards
+// =============================================================================
+
+function OutputPortsSidePanel({
+  provider,
+  outputWiring,
+  onOutputDragStart,
+  onOutputDragEnd,
+  outputPortRefs,
+}: OutputPortsSectionProps) {
+  const outputs = provider.outputs
+  if (!outputs) return null
+
+  // Build list of available outputs
+  const outputList: Array<{ key: string; label: string; value?: string }> = []
+
+  if (outputs.access_url) {
+    outputList.push({ key: 'access_url', label: 'URL', value: outputs.access_url })
+  }
+
+  if (outputs.env_vars) {
+    Object.entries(outputs.env_vars).forEach(([key, value]) => {
+      outputList.push({ key: `env_vars.${key}`, label: key, value })
+    })
+  }
+
+  if (outputs.capability_values) {
+    Object.entries(outputs.capability_values).forEach(([key, value]) => {
+      outputList.push({
+        key: `capability_values.${key}`,
+        label: key,
+        value: typeof value === 'string' ? value : JSON.stringify(value),
+      })
+    })
+  }
+
+  if (outputList.length === 0) return null
+
+  return (
+    <div className="flex flex-col justify-center gap-1 px-2 py-2 border-l border-neutral-200 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/30 rounded-r-lg">
+      {outputList.map((output) => {
+        const connectionCount = outputWiring.filter(
+          (w) => w.source_instance_id === provider.id && w.source_output_key === output.key
+        ).length
+
+        return (
+          <OutputPortPill
+            key={output.key}
+            instanceId={provider.id}
+            instanceName={provider.name}
+            outputKey={output.key}
+            outputLabel={output.label}
+            value={output.value}
+            connectionCount={connectionCount}
+            onDragStart={onOutputDragStart}
+            onDragEnd={onOutputDragEnd}
+            portRef={(el) => {
+              if (el && outputPortRefs) {
+                outputPortRefs.set(`output::${provider.id}::${output.key}`, el)
+              }
+            }}
+          />
+        )
+      })}
     </div>
   )
 }
