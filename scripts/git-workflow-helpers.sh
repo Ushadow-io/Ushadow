@@ -185,7 +185,67 @@ git-graph() {
     git log --oneline --graph --all --decorate -20
 }
 
-# 8. Show workflow help
+# 8. Create draft PR for current branch
+create-draft-pr() {
+    local title="$1"
+    local current_branch=$(git branch --show-current)
+
+    if [ -z "$title" ]; then
+        echo -e "${RED}Usage: create-draft-pr \"Feature title\"${NC}"
+        return 1
+    fi
+
+    # Push current branch
+    git push origin "$current_branch"
+
+    # Create draft PR
+    gh pr create --base main --head "$current_branch" \
+      --title "[WIP] $title" \
+      --draft \
+      --body "$(cat <<EOF
+## Feature
+<!-- Describe the feature -->
+
+## Status
+🚧 In Development
+- [ ] Implementation
+- [ ] Tests
+- [ ] Integration testing in dev
+
+## Testing Plan
+Will test in dev with other features before review
+EOF
+)"
+
+    echo -e "${GREEN}✓ Draft PR created for ${current_branch}${NC}"
+    echo -e "${YELLOW}Don't forget to integrate-to-dev for testing!${NC}"
+}
+
+# 9. Mark PR ready for review
+mark-pr-ready() {
+    local current_branch=$(git branch --show-current)
+
+    # Mark PR as ready
+    gh pr ready
+
+    echo -e "${GREEN}✓ PR marked ready for review${NC}"
+    echo -e "${YELLOW}Update the PR description with test results:${NC}"
+    echo -e "${BLUE}  gh pr edit --body \"...\"${NC}"
+}
+
+# 10. Sync dev with main (after PR merges)
+sync-dev-with-main() {
+    echo -e "${BLUE}Syncing dev with main...${NC}"
+
+    git checkout dev
+    git pull origin main
+    git push origin dev
+
+    echo -e "${GREEN}✓ Dev synced with main${NC}"
+    echo -e "${YELLOW}Other worktrees can now sync-from-dev to get latest${NC}"
+}
+
+# 11. Show workflow help
 workflow-help() {
     cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
@@ -202,8 +262,17 @@ workflow-help() {
 ⬆️  integrate-to-dev
    Merge current feature branch into origin/dev
 
+📝 create-draft-pr "Feature title"
+   Create draft PR to main, mark as work-in-progress
+
+✅ mark-pr-ready
+   Mark draft PR as ready for review
+
+🔄 sync-dev-with-main
+   Sync dev with main after a PR merges
+
 🚀 release-dev-to-main "Release Title"
-   Create PR from dev → main
+   Create PR from dev → main (rarely used, see PR-REVIEW-STRATEGY.md)
 
 🧹 cleanup-merged
    Remove local branches that were deleted on remote
@@ -219,16 +288,22 @@ workflow-help() {
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Typical workflow:
+Recommended PR workflow (one PR per feature):
 
 1. new-worktree vk/1234-feature /tmp/my-feature
-2. cd /tmp/my-feature && ... (work work work)
-3. integrate-to-dev        # When ready to share with other worktrees
-4. sync-from-dev           # In other worktrees to get changes
-5. release-dev-to-main "v1.2.3"  # When dev is production-ready
-6. cleanup-merged          # After PR is merged
+2. cd /tmp/my-feature && create-draft-pr "Add feature X"
+3. ... (work work work) ...
+4. integrate-to-dev           # Test with other features
+5. sync-from-dev              # In other worktrees to get changes
+6. mark-pr-ready              # When tested and ready for review
+7. (review happens on GitHub)
+8. gh pr merge vk/1234-feature
+9. sync-dev-with-main         # Update dev with merged changes
+10. cleanup-merged            # Clean up local branches
 
-For full documentation, see docs/GITHUB-WORKTREE-STRATEGY.md
+For full documentation, see:
+- docs/PR-REVIEW-STRATEGY.md (NEW - how to handle PR reviews)
+- docs/GITHUB-WORKTREE-STRATEGY.md
 EOF
 }
 

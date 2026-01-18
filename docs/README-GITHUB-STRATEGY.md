@@ -57,6 +57,20 @@ Visual workflow diagrams including:
 
 ---
 
+### PR Review Strategy (NEW!)
+**→ [PR-REVIEW-STRATEGY.md](./PR-REVIEW-STRATEGY.md)** (16KB)
+
+How to handle code reviews without huge PRs:
+- One PR per feature (small, reviewable)
+- Use `dev` for integration testing only
+- Draft PRs for work in progress
+- Managing multiple concurrent PRs
+- Sync strategies when PRs merge
+
+**Read this for:** Understanding how to keep PRs small while testing in dev.
+
+---
+
 ### Tool Integration
 **→ [TOOL-INTEGRATION-GUIDE.md](./TOOL-INTEGRATION-GUIDE.md)** (15KB)
 
@@ -126,19 +140,28 @@ integrate-to-dev  # Adds B's changes
 
 ---
 
-### Q: "How do I get dev into main as a PR?"
-**A:** Use the `release-dev-to-main` helper:
+### Q: "How do I get features into main? Do I need a huge dev→main PR?"
+**A:** **No!** Each feature creates its own small PR directly to `main`.
 
+**Recommended workflow:**
+1. Create draft PR immediately when starting feature
+2. Test feature in `dev` (with other features)
+3. Mark PR ready for review when tested
+4. Review and merge individual PR to `main`
+5. Sync `dev` with `main` after merge
+
+**Commands:**
 ```bash
-release-dev-to-main "Release v1.2.3: Features A, B, C"
+create-draft-pr "Add feature X"  # Step 1
+integrate-to-dev                 # Step 2
+mark-pr-ready                    # Step 3
+gh pr merge vk/123-feature       # Step 4
+sync-dev-with-main              # Step 5
 ```
 
-Or manually:
-```bash
-gh pr create --base main --head dev --title "Release v1.2.3"
-```
+**Result:** Small PRs (200-400 lines), thoroughly tested in `dev` first.
 
-**See:** [REFERENCE-CARD.md](./REFERENCE-CARD.md#essential-commands)
+**See:** [PR-REVIEW-STRATEGY.md](./PR-REVIEW-STRATEGY.md)
 
 ---
 
