@@ -20,8 +20,9 @@ from omegaconf import OmegaConf, DictConfig
 
 from src.config.secrets import SENSITIVE_PATTERNS, is_secret_key, mask_value, mask_if_secret
 from src.services.provider_registry import get_provider_registry
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, prefix="Settings")
 
 
 # =============================================================================
@@ -292,9 +293,15 @@ class SettingsStore:
 
         Returns:
             Resolved value (interpolations are automatically resolved)
+            Converts OmegaConf containers to regular Python dicts/lists
         """
         config = await self.load_config()
         value = OmegaConf.select(config, key_path, default=default)
+
+        # Convert OmegaConf containers to regular Python types for Pydantic serialization
+        if isinstance(value, (DictConfig, type(OmegaConf.create([])))):
+            return OmegaConf.to_container(value, resolve=True)
+
         return value
 
     def get_sync(self, key_path: str, default: Any = None) -> Any:
@@ -312,7 +319,21 @@ class SettingsStore:
                     configs.append(cfg)
             self._cache = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
             self._cache_timestamp = time.time()
-        return OmegaConf.select(self._cache, key_path, default=default)
+
+        value = OmegaConf.select(self._cache, key_path, default=default)
+
+        # Convert OmegaConf containers to regular Python types for Pydantic serialization
+        if isinstance(value, (DictConfig, type(OmegaConf.create([])))):
+            return OmegaConf.to_container(value, resolve=True)
+
+        return value
+
+    # Well-known env var to settings path mappings
+    # These are checked first before auto-resolution
+    WELL_KNOWN_ENV_MAPPINGS = {
+        "AUTH_SECRET_KEY": "security.auth_secret_key",
+        "ADMIN_PASSWORD": "security.admin_password",
+    }
 
     async def get_by_env_var(self, env_var_name: str, default: Any = None) -> Any:
         """
@@ -321,7 +342,10 @@ class SettingsStore:
         Use this when you just need the value and don't care about the path.
         This is the simpler, faster method for runtime value resolution.
 
-        Converts ENV_VAR_NAME -> env_var_name and searches all sections.
+        Priority:
+        1. Well-known mappings (AUTH_SECRET_KEY -> security.auth_secret_key)
+        2. Auto-conversion (ENV_VAR_NAME -> env_var_name, search all sections)
+
         Example: get_by_env_var("MEMORY_SERVER_URL") → "http://localhost:8765"
 
         Compare to find_setting_for_env_var():
@@ -335,12 +359,28 @@ class SettingsStore:
         Returns:
             Resolved value or default
         """
+        # First check well-known mappings
+        if env_var_name in self.WELL_KNOWN_ENV_MAPPINGS:
+            path = self.WELL_KNOWN_ENV_MAPPINGS[env_var_name]
+            value = await self.get(path)
+            if value is not None:
+                return value
+
+        # Fall back to auto-resolution
         config = await self.load_config()
         value = _env_resolver(env_var_name, config)
         return value if value is not None else default
 
     def get_by_env_var_sync(self, env_var_name: str, default: Any = None) -> Any:
         """Sync version of get_by_env_var for module-level initialization."""
+        # First check well-known mappings
+        if env_var_name in self.WELL_KNOWN_ENV_MAPPINGS:
+            path = self.WELL_KNOWN_ENV_MAPPINGS[env_var_name]
+            value = self.get_sync(path)
+            if value is not None:
+                return value
+
+        # Fall back to auto-resolution
         if self._cache is None:
             configs = []
             for path in [self.defaults_path, self.secrets_path, self.overrides_path]:
@@ -361,6 +401,8 @@ class SettingsStore:
             else:
                 OmegaConf.update(current, key, value, merge=True)
 
+        # Ensure parent directory exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         OmegaConf.save(current, file_path)
         logger.info(f"Saved to {file_path}: {list(updates.keys())}")
 
@@ -791,6 +833,61 @@ class SettingsStore:
                     return env_value
                 logger.info(f"resolve_env_value: {env_name} -> {mask_if_secret(env_name, default_value) if default_value else 'None'} (fallback to default)")
             return default_value
+        return None
+
+    async def resolve_env_value_with_source(
+        self,
+        source: str,
+        setting_path: Optional[str],
+        literal_value: Optional[str],
+        default_value: Optional[str],
+        env_name: str = ""
+    ) -> Optional[tuple[str, str, Optional[str]]]:
+        """
+        Resolve env var value WITH source tracking.
+
+        Args:
+            source: One of "setting", "literal", "default"
+            setting_path: Path to setting if source is "setting"
+            literal_value: Direct value if source is "literal"
+            default_value: Fallback if source is "default"
+            env_name: Env var name for auto-resolution
+
+        Returns:
+            Tuple of (value, source_type, source_path) or None
+            - value: Resolved string value
+            - source_type: One of "settings", "os.environ", "default", "override"
+            - source_path: Settings path or other identifier
+        """
+        from src.models.service_config import EnvVarSource
+
+        if source == "setting" and setting_path:
+            value = await self.get(setting_path)
+            if value:
+                return (str(value), EnvVarSource.SETTINGS.value, setting_path)
+
+        elif source == "literal" and literal_value:
+            return (literal_value, EnvVarSource.OVERRIDE.value, None)
+
+        elif source == "default":
+            if env_name:
+                # First try to resolve from settings
+                resolved = await self.get_by_env_var(env_name)
+                if resolved:
+                    logger.info(f"resolve_env_value_with_source: {env_name} -> {mask_if_secret(env_name, resolved)} (from settings)")
+                    return (str(resolved), EnvVarSource.SETTINGS.value, f"auto:{env_name}")
+
+                # Fall back to os.environ (e.g., from .env file)
+                env_value = os.environ.get(env_name)
+                if env_value:
+                    logger.info(f"resolve_env_value_with_source: {env_name} -> {mask_if_secret(env_name, env_value)} (from os.environ)")
+                    return (env_value, EnvVarSource.OS_ENVIRON.value, None)
+
+                logger.info(f"resolve_env_value_with_source: {env_name} -> {mask_if_secret(env_name, default_value) if default_value else 'None'} (fallback to default)")
+
+            if default_value:
+                return (default_value, EnvVarSource.DEFAULT.value, None)
+
         return None
 
     async def build_env_var_config(

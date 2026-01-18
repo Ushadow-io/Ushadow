@@ -16,7 +16,7 @@ from src.config.secrets import mask_if_secret
 from src.services.provider_registry import get_provider_registry
 from src.services.compose_registry import get_compose_registry
 from src.models.provider import Provider, EnvMap
-from src.config.omegaconf_settings import get_settings
+from src.config.omegaconf_settings import get_settings_store
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="Resolve")
@@ -33,7 +33,7 @@ class CapabilityResolver:
     def __init__(self):
         self._provider_registry = get_provider_registry()
         self._compose_registry = get_compose_registry()
-        self._settings = get_settings()
+        self._settings = get_settings_store()
         self._services_cache: Dict[str, dict] = {}
 
     async def resolve_for_service(self, service_id: str) -> Dict[str, str]:

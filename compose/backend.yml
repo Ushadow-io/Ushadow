@@ -24,7 +24,9 @@ services:
       - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
       # Compose project name for per-environment Tailscale containers
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
+      # Config directory location
+      - CONFIG_DIR=/config
+      - MONGODB_DATABBASE=${MONGODB_DATABASE:-ushadow}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:${WEBUI_PORT}}
     volumes:
       - ../ushadow/backend:/app
@@ -32,7 +34,6 @@ services:
       - ../compose:/compose  # Mount compose files for service management
       - /app/__pycache__
       - /app/.pytest_cache
-      - /app/.venv  # Mask host .venv - container uses its own venv from image
       # Docker socket for container management (Tailscale container control)
       - /var/run/docker.sock:/var/run/docker.sock
     networks:

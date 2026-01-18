@@ -33,9 +33,9 @@ def get_auth_secret_key() -> str:
     """
     import os
     import asyncio
-    from src.config.omegaconf_settings import get_settings
+    from src.config.omegaconf_settings import get_settings_store
 
-    settings = get_settings()
+    settings = get_settings_store()
     key = settings.get_sync("security.auth_secret_key")
 
     if key:
@@ -50,16 +50,16 @@ def get_auth_secret_key() -> str:
             "It will be persisted to /config/secrets.yaml for future restarts."
         )
 
-    # Persist env var to secrets.yaml for future restarts (update auto-routes secrets)
+    # Persist env var to secrets.yaml for future restarts
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.create_task(settings.update({
+            asyncio.create_task(settings.save_to_secrets({
                 "security": {"auth_secret_key": key}
             }))
             logger.info("AUTH_SECRET_KEY from env var will be persisted to secrets.yaml")
         else:
-            loop.run_until_complete(settings.update({
+            loop.run_until_complete(settings.save_to_secrets({
                 "security": {"auth_secret_key": key}
             }))
             logger.info("AUTH_SECRET_KEY from env var persisted to secrets.yaml")

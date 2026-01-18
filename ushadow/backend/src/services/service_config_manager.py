@@ -599,11 +599,11 @@ class ServiceConfigManager:
                 # Local docker deployment - use ServiceOrchestrator
                 from src.services.service_orchestrator import get_service_orchestrator
                 from src.services.docker_manager import get_docker_manager
-                from src.config.omegaconf_settings import get_settings
+                from src.config.omegaconf_settings import get_settings_store
 
                 orchestrator = get_service_orchestrator()
                 docker_mgr = get_docker_manager()
-                settings = get_settings()
+                settings_store = get_settings_store()
 
                 # Update status to deploying
                 instance.status = ServiceConfigStatus.DEPLOYING
@@ -623,7 +623,7 @@ class ServiceConfigManager:
                             # Save port override in service preferences
                             # This matches the pattern from /api/services/{name}/port-override
                             pref_key = f"services.{service_name}.ports.{conflict.env_var}"
-                            await settings.set(pref_key, conflict.suggested_port)
+                            await settings_store.set(pref_key, conflict.suggested_port)
                             logger.info(f"Remapped {conflict.env_var}: {conflict.port} -> {conflict.suggested_port}")
 
                 try:

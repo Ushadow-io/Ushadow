@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket } from 'lucide-react'
-import { kubernetesApi, KubernetesCluster, DeployTarget, deploymentsApi } from '../services/api'
+import { kubernetesApi, KubernetesCluster } from '../services/api'
 import Modal from '../components/Modal'
 import ConfirmDialog from '../components/ConfirmDialog'
-import DeployModal from '../components/DeployModal'
+import DeployToK8sModal from '../components/DeployToK8sModal'
 
 interface InfraService {
   found: boolean
@@ -555,28 +555,13 @@ export default function KubernetesClustersPage() {
 
       {/* Deploy to K8s Modal */}
       {showDeployModal && selectedClusterForDeploy && (
-        <DeployModal
+        <DeployToK8sModal
           isOpen={showDeployModal}
           onClose={() => {
             setShowDeployModal(false)
             setSelectedClusterForDeploy(null)
           }}
-          target={{
-            id: selectedClusterForDeploy.deployment_target_id,
-            type: 'k8s',
-            name: selectedClusterForDeploy.name,
-            identifier: selectedClusterForDeploy.cluster_id,
-            environment: selectedClusterForDeploy.environment || 'unknown',
-            status: selectedClusterForDeploy.status || 'unknown',
-            namespace: selectedClusterForDeploy.namespace,
-            infrastructure: Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))
-              ? scanResults[Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))!].infra_services
-              : undefined,
-            provider: selectedClusterForDeploy.labels?.provider,
-            region: selectedClusterForDeploy.labels?.region,
-            is_leader: undefined,
-            raw_metadata: selectedClusterForDeploy
-          }}
+          cluster={selectedClusterForDeploy}
           infraServices={
             Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))
               ? scanResults[Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))!].infra_services

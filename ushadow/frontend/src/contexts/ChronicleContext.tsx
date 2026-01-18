@@ -68,11 +68,8 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
     setConnectionError(null)
   }, [recording])
 
-  // Auto-check connection on mount so the header record button appears immediately
-  useEffect(() => {
-    // Only check once on mount
-    checkConnection()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Don't auto-check on mount - let Chronicle pages explicitly call checkConnection()
+  // This avoids unnecessary requests when user is on non-Chronicle pages
 
   // Re-check connection periodically (every 5 minutes) if connected
   useEffect(() => {

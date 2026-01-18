@@ -265,14 +265,14 @@ export const servicesApi = {
   getConfig: (name: string) => api.get(`/api/services/${name}/config`),
 
   /** Get environment variable configuration with suggestions */
-  getEnvConfig: (name: string, deployTarget?: string) => api.get<{
+  getEnvConfig: (name: string) => api.get<{
     service_id: string
     service_name: string
     compose_file: string
     requires: string[]
     required_env_vars: EnvVarInfo[]
     optional_env_vars: EnvVarInfo[]
-  }>(`/api/services/${name}/env${deployTarget ? `?deploy_target=${encodeURIComponent(deployTarget)}` : ''}`),
+  }>(`/api/services/${name}/env`),
 
   /** Save environment variable configuration */
   updateEnvConfig: (name: string, envVars: EnvVarConfig[]) =>
@@ -318,12 +318,10 @@ export const servicesApi = {
 // Compose service configuration endpoints
 export interface EnvVarConfig {
   name: string
-  // Old sources: 'setting' | 'new_setting' | 'literal' | 'default'
-  // New v2 sources: 'config_default' | 'compose_default' | 'env_file' | 'capability' | 'deploy_env' | 'user_override' | 'not_found'
-  source: string
+  source: 'setting' | 'new_setting' | 'literal' | 'default'
   setting_path?: string      // For source='setting' - existing setting to map
   new_setting_path?: string  // For source='new_setting' - new setting path to create
-  value?: string             // For source='literal' or 'new_setting', or resolved value
+  value?: string             // For source='literal' or 'new_setting'
   locked?: boolean           // For provider-supplied values that cannot be edited
   provider_name?: string     // Name of the provider supplying this value
 }
@@ -340,12 +338,13 @@ export interface EnvVarSuggestion {
 export interface EnvVarInfo {
   name: string
   is_required: boolean
+  has_default: boolean
+  default_value?: string
   source: string
   setting_path?: string
+  value?: string
   resolved_value?: string
   suggestions: EnvVarSuggestion[]
-  locked?: boolean
-  provider_name?: string
 }
 
 /** Missing key that needs to be configured for a provider */
@@ -550,7 +549,6 @@ export interface KubernetesCluster {
   namespace: string
   labels: Record<string, string>
   infra_scans?: Record<string, any>
-  deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
 }
 
 export const kubernetesApi = {
@@ -642,34 +640,7 @@ export interface Deployment {
   exposed_port?: number
 }
 
-export interface DeployTarget {
-  // Core identity fields (always present)
-  id: string  // deployment_target_id format: {identifier}.{type}.{environment}
-  type: 'docker' | 'k8s'
-  name: string  // Human-readable name
-  identifier: string  // hostname (docker) or cluster_id (k8s)
-  environment: string  // e.g., 'purple', 'production'
-
-  // Status and health
-  status: string  // online/offline/healthy/unknown
-
-  // Platform-specific fields (optional)
-  namespace?: string  // K8s namespace (k8s only)
-  infrastructure?: Record<string, any>  // Infrastructure scan data (k8s only)
-
-  // Common metadata
-  provider?: string  // local/remote/eks/gke/aks
-  region?: string  // Region or location
-  is_leader?: boolean  // Is this the leader node (docker only)
-
-  // Raw data for advanced use cases
-  raw_metadata: Record<string, any>  // Original UNode or KubernetesCluster data
-}
-
 export const deploymentsApi = {
-  // Deployment targets (unified)
-  listTargets: () => api.get<DeployTarget[]>('/api/deployments/targets'),
-
   // Service definitions
   createService: (data: Omit<ServiceDefinition, 'created_at' | 'updated_at' | 'created_by'>) =>
     api.post('/api/deployments/services', data),
@@ -680,8 +651,8 @@ export const deploymentsApi = {
   deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
 
   // Deployments
-  deploy: (serviceId: string, unodeHostname: string, configId?: string) =>
-    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId }),
+  deploy: (serviceId: string, unodeHostname: string) =>
+    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname }),
   listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
@@ -1234,10 +1205,6 @@ export const svcConfigsApi = {
   /** Get a template by ID */
   getTemplate: (templateId: string) =>
     api.get<Template>(`/api/svc-configs/templates/${templateId}`),
-
-  /** Get env var config with suggestions for a template (same process as services) */
-  getTemplateEnvConfig: (templateId: string) =>
-    api.get<EnvVarInfo[]>(`/api/svc-configs/templates/${templateId}/env`),
 
   // ServiceConfigs
   /** List all instances */

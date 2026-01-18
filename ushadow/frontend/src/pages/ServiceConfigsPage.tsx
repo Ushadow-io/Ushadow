@@ -3,6 +3,7 @@ import {
   Layers,
   Plus,
   RefreshCw,
+  ChevronDown,
   ChevronUp,
   AlertCircle,
   CheckCircle,
@@ -12,14 +13,16 @@ import {
   HardDrive,
   Package,
   Pencil,
+  Plug,
   Settings,
   Trash2,
+  PlayCircle,
+  ArrowRight,
   Activity,
   Database,
   Zap,
-  Save,
-  PlayCircle,
-  StopCircle,
+  Clock,
+  Lock,
 } from 'lucide-react'
 import {
   svcConfigsApi,
@@ -29,19 +32,18 @@ import {
   kubernetesApi,
   clusterApi,
   deploymentsApi,
-  DeployTarget,
   Template,
   ServiceConfig,
   ServiceConfigSummary,
   Wiring,
+  ServiceConfigCreateRequest,
   EnvVarInfo,
   EnvVarConfig,
 } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
-import { SystemOverview, FlatServiceCard } from '../components/wiring'
-import DeployModal from '../components/DeployModal'
-import EnvVarEditor from '../components/EnvVarEditor'
+import { WiringBoard } from '../components/wiring'
+import DeployToK8sModal from '../components/DeployToK8sModal'
 
 /**
  * Extract error message from FastAPI response.
@@ -67,9 +69,11 @@ function getErrorMessage(error: any, fallback: string): string {
 export default function ServiceConfigsPage() {
   // Templates state
   const [templates, setTemplates] = useState<Template[]>([])
+  const [expandedTemplates, setExpandedTemplates] = useState<Set<string>>(new Set())
 
   // ServiceConfigs state
   const [instances, setServiceConfigs] = useState<ServiceConfigSummary[]>([])
+  const [expandedServiceConfigs, setExpandedServiceConfigs] = useState<Set<string>>(new Set())
   const [instanceDetails, setServiceConfigDetails] = useState<Record<string, ServiceConfig>>({})
 
   // Wiring state (per-service connections)
@@ -78,13 +82,8 @@ export default function ServiceConfigsPage() {
   // Service status state for consumers
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
 
-  // Deployments state
-  const [deployments, setDeployments] = useState<any[]>([])
-  const [filterCurrentEnvOnly, setFilterCurrentEnvOnly] = useState(true)
-
   // UI state
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'services' | 'providers' | 'overview' | 'deployments'>('services')
   const [creating, setCreating] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -111,25 +110,35 @@ export default function ServiceConfigsPage() {
   const [envConfigs, setEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
   const [loadingEnvConfig, setLoadingEnvConfig] = useState(false)
 
-  // Inline editing state for Providers tab cards
-  const [expandedProviderCard, setExpandedProviderCard] = useState<string | null>(null)
-  const [providerCardEnvVars, setProviderCardEnvVars] = useState<EnvVarInfo[]>([])
-  const [providerCardEnvConfigs, setProviderCardEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
-  const [loadingProviderCard, setLoadingProviderCard] = useState(false)
-  const [savingProviderCard, setSavingProviderCard] = useState(false)
-
-  // Unified deploy modal state
+  // Deploy modal state
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
     serviceId: string | null
-    targetId?: string  // Deploy target ID (for when we have a specific target selected)
+    targetType: 'local' | 'remote' | 'kubernetes' | null
+    selectedClusterId?: string
     infraServices?: Record<string, any>  // Infrastructure data to pass to modal
   }>({
     isOpen: false,
     serviceId: null,
+    targetType: null,
   })
-  const [availableTargets, setAvailableTargets] = useState<DeployTarget[]>([])
-  const [loadingTargets, setLoadingTargets] = useState(false)
+
+  // Simple deploy confirmation modal (for local/remote)
+  const [simpleDeployModal, setSimpleDeployModal] = useState<{
+    isOpen: boolean
+    serviceId: string | null
+    targetType: 'local' | 'remote' | null
+    targetId?: string
+  }>({
+    isOpen: false,
+    serviceId: null,
+    targetType: null,
+  })
+  const [deployEnvVars, setDeployEnvVars] = useState<EnvVarInfo[]>([])
+  const [deployEnvConfigs, setDeployEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
+  const [loadingDeployEnv, setLoadingDeployEnv] = useState(false)
+  const [kubernetesClusters, setKubernetesClusters] = useState<any[]>([])
+  const [loadingClusters, setLoadingClusters] = useState(false)
 
   // Service catalog state
   const [showCatalog, setShowCatalog] = useState(false)
@@ -162,15 +171,11 @@ export default function ServiceConfigsPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [templatesRes, instancesRes, wiringRes, statusesRes, deploymentsRes] = await Promise.all([
+      const [templatesRes, instancesRes, wiringRes, statusesRes] = await Promise.all([
         svcConfigsApi.getTemplates(),
         svcConfigsApi.getServiceConfigs(),
         svcConfigsApi.getWiring(),
         servicesApi.getAllStatuses().catch(() => ({ data: {} })),
-        deploymentsApi.listDeployments().catch((err) => {
-          console.error('Failed to load deployments:', err)
-          return { data: [] }
-        }),
       ])
 
       console.log('Templates loaded:', templatesRes.data)
@@ -181,25 +186,33 @@ export default function ServiceConfigsPage() {
       setServiceConfigs(instancesRes.data)
       setWiring(wiringRes.data)
       setServiceStatuses(statusesRes.data || {})
-      setDeployments(deploymentsRes.data || [])
 
-      // Note: instanceDetails are loaded lazily when needed (e.g., when user
-      // clicks edit or switches to overview tab) to avoid N+1 API calls
+      // Load details for provider instances (instances that provide capabilities)
+      // This enables the wiring board to show config overrides
+      const providerTemplates = templatesRes.data.filter((t) => t.provides && t.source === 'provider')
+      const providerServiceConfigs = instancesRes.data.filter((i) =>
+        providerTemplates.some((t) => t.id === i.template_id)
+      )
+
+      if (providerServiceConfigs.length > 0) {
+        const detailsPromises = providerServiceConfigs.map((i) =>
+          svcConfigsApi.getServiceConfig(i.id).catch(() => null)
+        )
+        const detailsResults = await Promise.all(detailsPromises)
+
+        const newDetails: Record<string, ServiceConfig> = {}
+        detailsResults.forEach((res, idx) => {
+          if (res?.data) {
+            newDetails[providerServiceConfigs[idx].id] = res.data
+          }
+        })
+        setServiceConfigDetails((prev) => ({ ...prev, ...newDetails }))
+      }
     } catch (error) {
       console.error('Error loading data:', error)
       setMessage({ type: 'error', text: 'Failed to load instances data' })
     } finally {
       setLoading(false)
-    }
-  }
-
-  // Lightweight function to refresh just deployments without full page reload
-  const refreshDeployments = async () => {
-    try {
-      const deploymentsRes = await deploymentsApi.listDeployments()
-      setDeployments(deploymentsRes.data || [])
-    } catch (err) {
-      console.error('Failed to refresh deployments:', err)
     }
   }
 
@@ -258,7 +271,145 @@ export default function ServiceConfigsPage() {
     }
   }
 
+  // Template actions
+  const toggleTemplate = (templateId: string) => {
+    setExpandedTemplates((prev) => {
+      const next = new Set(prev)
+      if (next.has(templateId)) {
+        next.delete(templateId)
+      } else {
+        next.add(templateId)
+      }
+      return next
+    })
+  }
+
+  // Generate next available instance ID for a template
+  const generateServiceConfigId = (templateId: string): string => {
+    // Extract clean name from template ID (remove compose file prefix)
+    // For compose services: "chronicle-compose:chronicle-webui" -> "chronicle-webui"
+    // For providers: "openai" -> "openai"
+    const baseName = templateId.includes(':')
+      ? templateId.split(':').pop()!
+      : templateId
+
+    // Find all existing instances that start with this base name
+    const existingIds = instances
+      .map((i) => i.id)
+      .filter((id) => id.startsWith(`${baseName}-`))
+
+    // Extract numbers from existing IDs
+    const numbers = existingIds
+      .map((id) => {
+        const match = id.match(new RegExp(`^${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(\\d+)$`))
+        return match ? parseInt(match[1], 10) : 0
+      })
+      .filter((n) => n > 0)
+
+    // Find next available number
+    const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1
+    return `${baseName}-${nextNum}`
+  }
+
+  /**
+   * Create service config directly - unified for both + button and drag-drop
+   * @param template - The template to create instance from
+   * @param wiring - Optional wiring info (for drag-drop path)
+   */
+  const createServiceConfigDirectly = async (
+    template: Template,
+    wiring?: { capability: string; consumerId: string; consumerName: string }
+  ) => {
+    // Generate unique incremental ID (already uses clean name without compose prefix)
+    const generatedId = generateServiceConfigId(template.id)
+
+    setCreating(template.id)
+    try {
+      const data: ServiceConfigCreateRequest = {
+        id: generatedId,
+        template_id: template.id,
+        name: generatedId,
+        deployment_target: template.mode === 'cloud' ? 'cloud' : 'local',
+        config: {}, // Empty config - will be set during deployment
+      }
+
+      // Step 1: Create the service config
+      await svcConfigsApi.createServiceConfig(data)
+
+      // Step 2: If wiring info exists, create the wiring connection (drag-drop path)
+      if (wiring) {
+        const newWiring = await svcConfigsApi.createWiring({
+          source_config_id: generatedId,
+          source_capability: wiring.capability,
+          target_config_id: wiring.consumerId,
+          target_capability: wiring.capability,
+        })
+
+        // Update wiring state
+        setWiring((prev) => {
+          const existing = prev.findIndex(
+            (w) =>
+              w.target_config_id === wiring.consumerId &&
+              w.target_capability === wiring.capability
+          )
+          if (existing >= 0) {
+            const updated = [...prev]
+            updated[existing] = newWiring.data
+            return updated
+          }
+          return [...prev, newWiring.data]
+        })
+
+        setMessage({
+          type: 'success',
+          text: `Created ${generatedId} and connected to ${wiring.consumerName}`,
+        })
+      } else {
+        setMessage({ type: 'success', text: `Instance "${generatedId}" created` })
+      }
+
+      // Reload instances
+      const instancesRes = await svcConfigsApi.getServiceConfigs()
+      setServiceConfigs(instancesRes.data)
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || 'Failed to create instance',
+      })
+    } finally {
+      setCreating(null)
+    }
+  }
+
   // ServiceConfig actions
+  const toggleServiceConfig = async (instanceId: string) => {
+    if (expandedServiceConfigs.has(instanceId)) {
+      setExpandedServiceConfigs((prev) => {
+        const next = new Set(prev)
+        next.delete(instanceId)
+        return next
+      })
+    } else {
+      // Load full instance details
+      if (!instanceDetails[instanceId]) {
+        try {
+          const res = await svcConfigsApi.getServiceConfig(instanceId)
+          setServiceConfigDetails((prev) => ({
+            ...prev,
+            [instanceId]: res.data,
+          }))
+        } catch (error) {
+          console.error('Failed to load instance details:', error)
+        }
+      }
+      setExpandedServiceConfigs((prev) => new Set(prev).add(instanceId))
+    }
+  }
+
+  const handleDeleteServiceConfig = (instanceId: string) => {
+    setConfirmDialog({ isOpen: true, instanceId })
+  }
+
   const confirmDeleteServiceConfig = async () => {
     const { instanceId } = confirmDialog
     if (!instanceId) return
@@ -396,45 +547,6 @@ export default function ServiceConfigsPage() {
     }
   }
 
-  // Lazy load instance details (for overview tab or when editing)
-  const loadInstanceDetails = async () => {
-    const providerTemplatesList = templates.filter((t) => t.provides && t.source === 'provider')
-    const providerServiceConfigs = instances.filter((i) =>
-      providerTemplatesList.some((t) => t.id === i.template_id)
-    )
-
-    // Only load configs that aren't already loaded
-    const unloadedConfigs = providerServiceConfigs.filter((i) => !instanceDetails[i.id])
-    if (unloadedConfigs.length === 0) return
-
-    try {
-      const detailsPromises = unloadedConfigs.map((i) =>
-        svcConfigsApi.getServiceConfig(i.id).catch(() => null)
-      )
-      const detailsResults = await Promise.all(detailsPromises)
-
-      const newDetails: Record<string, ServiceConfig> = {}
-      detailsResults.forEach((res, idx) => {
-        if (res?.data) {
-          newDetails[unloadedConfigs[idx].id] = res.data
-        }
-      })
-      if (Object.keys(newDetails).length > 0) {
-        setServiceConfigDetails((prev) => ({ ...prev, ...newDetails }))
-      }
-    } catch (error) {
-      console.error('Error loading instance details:', error)
-    }
-  }
-
-  // Handle tab switch - lazy load details for overview tab
-  const handleTabChange = async (tab: 'services' | 'providers' | 'overview') => {
-    setActiveTab(tab)
-    if (tab === 'overview') {
-      await loadInstanceDetails()
-    }
-  }
-
   // Consumer/Service handlers for WiringBoard
   const handleStartConsumer = async (consumerId: string) => {
     try {
@@ -471,31 +583,42 @@ export default function ServiceConfigsPage() {
   }
 
   const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => {
-    // consumerId can be either an instance ID or a template ID (for templates without instances)
-    // Try to find instance first, otherwise treat as template ID
+    // Get the consumer instance to find its template_id
     const consumerInstance = instances.find(inst => inst.id === consumerId)
-    const templateId = consumerInstance?.template_id || consumerId
+    if (!consumerInstance) {
+      setMessage({ type: 'error', text: `Service instance ${consumerId} not found` })
+      return
+    }
 
-    // For Kubernetes, load available targets and filter to K8s only
+    // For Kubernetes, load available clusters first
     if (target.type === 'kubernetes') {
-      setLoadingTargets(true)
+      setLoadingClusters(true)
       try {
-        const targetsResponse = await deploymentsApi.listTargets()
-        const k8sTargets = targetsResponse.data.filter(t => t.type === 'k8s')
-        setAvailableTargets(k8sTargets)
+        const clustersResponse = await kubernetesApi.listClusters()
+        setKubernetesClusters(clustersResponse.data)
 
-        // If there's only one cluster, auto-select it and use its infrastructure from standardized field
-        if (k8sTargets.length === 1) {
-          const deployTarget = k8sTargets[0]
-          const infraData = deployTarget.infrastructure || {}
+        // If there's only one cluster, auto-select it and use its cached infrastructure scan
+        if (clustersResponse.data.length === 1) {
+          const cluster = clustersResponse.data[0]
 
-          console.log(`🏗️ Using K8s infrastructure from ${deployTarget.name}:`, infraData)
+          // Use cached infrastructure scan results from cluster
+          // Infrastructure is cluster-wide, so use any available namespace scan
+          let infraData = {}
+          if (cluster.infra_scans && Object.keys(cluster.infra_scans).length > 0) {
+            // Use the first available scan (infra is typically accessible cluster-wide)
+            const firstNamespace = Object.keys(cluster.infra_scans)[0]
+            infraData = cluster.infra_scans[firstNamespace] || {}
+            console.log(`🏗️ Using cached K8s infrastructure from namespace '${firstNamespace}':`, infraData)
+          } else {
+            console.warn('No cached infrastructure scan found for cluster')
+          }
 
           // Pass template_id as serviceId so the modal loads the right env vars
           setDeployModalState({
             isOpen: true,
-            serviceId: templateId,
-            targetId: deployTarget.id,  // deployment_target_id
+            serviceId: consumerInstance.template_id,
+            targetType: target.type,
+            selectedClusterId: cluster.cluster_id,
             infraServices: infraData,
           })
         } else {
@@ -503,48 +626,131 @@ export default function ServiceConfigsPage() {
           // Infrastructure will be loaded when cluster is selected in modal
           setDeployModalState({
             isOpen: true,
-            serviceId: templateId,
+            serviceId: consumerInstance.template_id,
+            targetType: target.type,
           })
         }
       } catch (err) {
-        console.error('Failed to load K8s targets:', err)
-        setMessage({ type: 'error', text: 'Failed to load deployment targets' })
+        console.error('Failed to load K8s clusters:', err)
+        setMessage({ type: 'error', text: 'Failed to load Kubernetes clusters' })
       } finally {
-        setLoadingTargets(false)
+        setLoadingClusters(false)
       }
     } else if (target.type === 'local' || target.type === 'remote') {
-      // Load Docker targets for unified modal
-      setLoadingTargets(true)
+      // Show deploy confirmation modal with env vars
+      setSimpleDeployModal({
+        isOpen: true,
+        serviceId: consumerId,
+        targetType: target.type,
+        targetId: target.id,
+      })
+
+      // Load env config
+      setLoadingDeployEnv(true)
       try {
-        const targetsResponse = await deploymentsApi.listTargets()
-        const dockerTargets = targetsResponse.data.filter(t => t.type === 'docker')
-        setAvailableTargets(dockerTargets)
+        const response = await servicesApi.getEnvConfig(consumerId)
+        const allVars = [...response.data.required_env_vars, ...response.data.optional_env_vars]
+        setDeployEnvVars(allVars)
 
-        // Determine which target to use
-        let selectedTarget: DeployTarget | undefined
-        if (target.type === 'local') {
-          // Find local leader
-          selectedTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
-        } else if (target.id) {
-          // Use specified remote target
-          selectedTarget = dockerTargets.find(t => t.identifier === target.id || t.id === target.id)
-        }
-
-        // Open unified modal with the selected target
-        setDeployModalState({
-          isOpen: true,
-          serviceId: templateId,
-          targetId: selectedTarget?.id,
+        // Initialize env configs
+        const formData: Record<string, EnvVarConfig> = {}
+        allVars.forEach(ev => {
+          formData[ev.name] = {
+            name: ev.name,
+            source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
+            setting_path: ev.setting_path,
+            value: ev.value
+          }
         })
-      } catch (err) {
-        console.error('Failed to load Docker targets:', err)
-        setMessage({ type: 'error', text: 'Failed to load deployment targets' })
+        setDeployEnvConfigs(formData)
+      } catch (error) {
+        console.error('Failed to load env config:', error)
       } finally {
-        setLoadingTargets(false)
+        setLoadingDeployEnv(false)
       }
     }
   }
 
+  const handleConfirmDeploy = async () => {
+    if (!simpleDeployModal.serviceId || !simpleDeployModal.targetType) return
+
+    const consumerId = simpleDeployModal.serviceId
+    const targetType = simpleDeployModal.targetType
+
+    setCreating(`deploy-${consumerId}`)
+    setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })
+
+    try {
+      let targetHostname: string
+
+      if (targetType === 'local') {
+        const leaderResponse = await clusterApi.getLeaderInfo()
+        targetHostname = leaderResponse.data.hostname
+      } else {
+        // Remote
+        if (!simpleDeployModal.targetId) {
+          setMessage({ type: 'error', text: 'Remote unode deployment requires selecting a target unode.' })
+          setCreating(null)
+          return
+        }
+        targetHostname = simpleDeployModal.targetId
+      }
+
+      console.log(`🚀 Deploying ${consumerId} to ${targetType} unode: ${targetHostname}`)
+
+      // Generate unique instance ID for this deployment
+      const template = templates.find(t => t.id === consumerId)
+      const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
+      const timestamp = Date.now()
+      const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
+
+      // Build config from env var settings
+      const config: Record<string, any> = {}
+      Object.entries(deployEnvConfigs).forEach(([name, envConfig]) => {
+        if (envConfig.source === 'setting' && envConfig.setting_path) {
+          config[name] = { _from_setting: envConfig.setting_path }
+        } else if (envConfig.source === 'new_setting' && envConfig.value) {
+          config[name] = envConfig.value
+          if (envConfig.new_setting_path) {
+            config[`_save_${name}`] = envConfig.new_setting_path
+          }
+        } else if (envConfig.value) {
+          config[name] = envConfig.value
+        }
+      })
+
+      // Step 1: Create instance with deployment target and config
+      await svcConfigsApi.createServiceConfig({
+        id: instanceId,
+        template_id: consumerId,
+        name: `${template?.name || consumerId} (${targetHostname})`,
+        description: `uNode deployment to ${targetHostname}`,
+        config,
+        deployment_target: targetHostname
+      })
+
+      // Step 2: Deploy the service config
+      await svcConfigsApi.deployServiceConfig(instanceId)
+
+      console.log('✅ Deployment successful')
+      setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to ${targetType} unode` })
+
+      // Refresh instances and service statuses
+      const [instancesRes, statusesRes] = await Promise.all([
+        svcConfigsApi.getServiceConfigs(),
+        servicesApi.getAllStatuses()
+      ])
+      setServiceConfigs(instancesRes.data)
+      setServiceStatuses(statusesRes.data || {})
+
+    } catch (err: any) {
+      console.error(`Failed to deploy to ${targetType} unode:`, err)
+      const errorMsg = getErrorMessage(err, `Failed to deploy to ${targetType} unode`)
+      setMessage({ type: 'error', text: errorMsg })
+    } finally {
+      setCreating(null)
+    }
+  }
 
   const handleEditConsumer = async (consumerId: string) => {
     // Edit a consumer service - load its env config and show in modal
@@ -632,12 +838,10 @@ export default function ServiceConfigsPage() {
           // Use API response data (setting mapping or default)
           initialEnvConfigs[envVar.name] = {
             name: envVar.name,
-            source: envVar.source || 'default',
+            source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
             setting_path: envVar.setting_path,
-            value: envVar.resolved_value || envVar.value,
+            value: envVar.value,
             new_setting_path: undefined,
-            locked: envVar.locked,
-            provider_name: envVar.provider_name,
           }
         }
       })
@@ -661,85 +865,292 @@ export default function ServiceConfigsPage() {
     }
   }
 
-  // Provider and compose templates
+  // Transform data for WiringBoard
+  // Providers: provider templates (both configured and unconfigured) + custom instances
   const providerTemplates = templates
     .filter((t) => t.source === 'provider' && t.provides)
 
+  const wiringProviders = [
+    // Templates (defaults) - only show configured ones
+    ...providerTemplates
+      .filter((t) => t.configured) // Only show providers that have been set up
+      .map((t) => {
+        // Extract config vars from schema - include all fields with required indicator
+        const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> =
+          t.config_schema
+            ?.map((field: any) => {
+              const isSecret = field.type === 'secret'
+              const hasValue = field.has_value || !!field.value
+              let displayValue = ''
+              if (hasValue) {
+                if (isSecret) {
+                  displayValue = '••••••'
+                } else if (field.value) {
+                  displayValue = String(field.value)
+                } else if (field.has_value) {
+                  // Has a value but we can't display it - show brief indicator
+                  displayValue = '(set)'
+                }
+              }
+              return {
+                key: field.key,
+                label: field.label || field.key,
+                value: displayValue,
+                isSecret,
+                required: field.required,
+              }
+            }) || []
+
+        // Cloud services: status is based on configuration, not Docker
+        // Local services: status is based on Docker availability
+        let status: string
+        if (t.mode === 'cloud') {
+          // Cloud services are either configured or need setup
+          status = t.configured ? 'configured' : 'needs_setup'
+        } else {
+          // Local services use availability (from Docker)
+          status = t.available ? 'running' : 'stopped'
+        }
+
+        // For LLM providers, append model to name for clarity
+        let displayName = t.name
+        if (t.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${t.name}-${modelVar.value}`
+          }
+        }
+
+        return {
+          id: t.id,
+          name: displayName,
+          capability: t.provides!,
+          status,
+          mode: t.mode,
+          isTemplate: true,
+          templateId: t.id,
+          configVars,
+          configured: t.configured,
+        }
+      }),
+    // Custom instances from provider templates
+    ...instances
+      .filter((i) => {
+        const template = providerTemplates.find((t) => t.id === i.template_id)
+        return template && template.provides
+      })
+      .map((i) => {
+        const template = providerTemplates.find((t) => t.id === i.template_id)!
+        // Get instance config from instanceDetails if loaded
+        const details = instanceDetails[i.id]
+        const schema = template.config_schema || []
+        const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> = []
+
+        // Build config vars from schema, merging with instance overrides
+        schema.forEach((field: any) => {
+          const overrideValue = details?.config?.values?.[field.key]
+          const isSecret = field.type === 'secret'
+          let displayValue = ''
+          if (overrideValue) {
+            // Instance has an override value
+            displayValue = isSecret ? '••••••' : String(overrideValue)
+          } else if (field.value) {
+            // Inherited from template - show the actual value
+            displayValue = isSecret ? '••••••' : String(field.value)
+          } else if (field.has_value) {
+            // Template has a value but we can't display it
+            displayValue = isSecret ? '••••••' : '(set)'
+          }
+          configVars.push({
+            key: field.key,
+            label: field.label || field.key,
+            value: displayValue,
+            isSecret,
+            required: field.required,
+          })
+        })
+
+        // Determine status based on mode
+        let instanceStatus: string
+        if (template.mode === 'cloud') {
+          // Cloud instances use config-based status
+          // Check if all required fields have values
+          const hasAllRequired = schema.every((field: any) => {
+            if (!field.required) return true
+            const overrideValue = details?.config?.values?.[field.key]
+            return !!(overrideValue || field.has_value || field.value)
+          })
+          instanceStatus = hasAllRequired ? 'configured' : 'needs_setup'
+        } else {
+          // Local instances use Docker status
+          instanceStatus = i.status === 'running' ? 'running' : i.status
+        }
+
+        // For LLM providers, append model to name for clarity
+        let displayName = i.name
+        if (template.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${i.name}-${modelVar.value}`
+          }
+        }
+
+        return {
+          id: i.id,
+          name: displayName,
+          capability: template.provides!,
+          status: instanceStatus,
+          mode: template.mode,
+          isTemplate: false,
+          templateId: i.template_id,
+          configVars,
+          configured: template.configured, // ServiceConfig inherits template's configured status
+        }
+      }),
+  ]
+
+  // Consumers: compose service templates
   const composeTemplates = templates.filter((t) => t.source === 'compose' && t.installed)
 
-  // Handle inline provider card editing (Providers tab)
-  const handleExpandProviderCard = async (providerId: string) => {
-    if (expandedProviderCard === providerId) {
-      // Collapse
-      setExpandedProviderCard(null)
-      setProviderCardEnvVars([])
-      setProviderCardEnvConfigs({})
+  const wiringConsumers = [
+    // Templates
+    ...composeTemplates.map((t) => {
+      // Get actual status from Docker
+      // Extract service name from template ID (format: "compose_file:service_name")
+      const serviceName = t.id.includes(':') ? t.id.split(':').pop()! : t.id
+      const dockerStatus = serviceStatuses[serviceName]
+      const status = dockerStatus?.status || 'not_running'
+
+      // Build config vars from schema
+      const configVars = (t.config_schema || []).map((field: any) => {
+        const isSecret = field.type === 'secret'
+        let displayValue = ''
+        if (field.has_value) {
+          displayValue = isSecret ? '••••••' : (field.value ? String(field.value) : '(default)')
+        } else if (field.value) {
+          displayValue = isSecret ? '••••••' : String(field.value)
+        }
+        return {
+          key: field.key,
+          label: field.label || field.key,
+          value: displayValue,
+          isSecret,
+          required: field.required,
+        }
+      })
+
+      return {
+        id: t.id,
+        name: t.name,
+        requires: t.requires!,
+        status,
+        mode: t.mode || 'local',
+        configVars,
+        configured: t.configured,
+        description: t.description,
+        isTemplate: true,
+        templateId: t.id,
+      }
+    }),
+    // ServiceConfig instances from compose templates
+    ...instances
+      .filter((i) => {
+        const template = composeTemplates.find((t) => t.id === i.template_id)
+        return template && template.requires
+      })
+      .map((i) => {
+        const template = composeTemplates.find((t) => t.id === i.template_id)!
+        const details = instanceDetails[i.id]
+
+        // Build config vars from instance details if available
+        const configVars = details?.config?.values
+          ? Object.entries(details.config.values).map(([key, value]) => ({
+              key,
+              label: key,
+              value: String(value),
+              isSecret: false,
+              required: false,
+            }))
+          : []
+
+        return {
+          id: i.id,
+          name: i.name,
+          requires: template.requires!,
+          status: i.status,
+          mode: i.deployment_target === 'kubernetes' ? 'cloud' : 'local',
+          configVars,
+          configured: true,
+          description: template.description,
+          isTemplate: false,
+          templateId: i.template_id,
+        }
+      }),
+  ]
+
+  // Handle provider drop - show modal for templates, direct wire for instances
+  const handleProviderDrop = async (dropInfo: {
+    provider: { id: string; name: string; capability: string; isTemplate: boolean; templateId: string }
+    consumerId: string
+    capability: string
+  }) => {
+    const consumer = wiringConsumers.find((c) => c.id === dropInfo.consumerId)
+
+    // If it's an instance (not a template), wire directly without showing modal
+    if (!dropInfo.provider.isTemplate) {
+      try {
+        const newWiring = await svcConfigsApi.createWiring({
+          source_config_id: dropInfo.provider.id,
+          source_capability: dropInfo.capability,
+          target_config_id: dropInfo.consumerId,
+          target_capability: dropInfo.capability,
+        })
+        setWiring((prev) => {
+          const existing = prev.findIndex(
+            (w) => w.target_config_id === dropInfo.consumerId &&
+                   w.target_capability === dropInfo.capability
+          )
+          if (existing >= 0) {
+            const updated = [...prev]
+            updated[existing] = newWiring.data
+            return updated
+          }
+          return [...prev, newWiring.data]
+        })
+      } catch (err) {
+        console.error('Failed to create wiring:', err)
+      }
       return
     }
 
-    // Expand and load env config
-    setExpandedProviderCard(providerId)
-    setLoadingProviderCard(true)
-
-    try {
-      const response = await svcConfigsApi.getTemplateEnvConfig(providerId)
-      const data = response.data
-
-      setProviderCardEnvVars(data)
-
-      // Initialize configs from backend response
-      const initial: Record<string, EnvVarConfig> = {}
-      for (const ev of data) {
-        initial[ev.name] = {
-          name: ev.name,
-          source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
-          setting_path: ev.setting_path,
-          value: ev.value,
-        }
-      }
-      setProviderCardEnvConfigs(initial)
-    } catch (err) {
-      console.error('Failed to load provider env config:', err)
-      setMessage({ type: 'error', text: 'Failed to load provider configuration' })
-    } finally {
-      setLoadingProviderCard(false)
+    // For templates, create instance directly with wiring info
+    const template = templates.find((t) => t.id === dropInfo.provider.id)
+    if (template) {
+      await createServiceConfigDirectly(template, {
+        capability: dropInfo.capability,
+        consumerId: dropInfo.consumerId,
+        consumerName: consumer?.name || dropInfo.consumerId,
+      })
     }
   }
 
-  const handleSaveProviderCard = async (providerId: string) => {
-    setSavingProviderCard(true)
+  const handleDeleteWiringFromBoard = async (consumerId: string, capability: string) => {
+    // Find the wiring to delete
+    const wire = wiring.find(
+      (w) => w.target_config_id === consumerId && w.target_capability === capability
+    )
+    if (!wire) return
+
     try {
-      // Build settings updates from env configs
-      const settingsUpdates: Record<string, Record<string, string>> = {}
-
-      for (const [name, cfg] of Object.entries(providerCardEnvConfigs)) {
-        if (cfg.source === 'new_setting' && cfg.value && cfg.new_setting_path) {
-          const parts = cfg.new_setting_path.split('.')
-          if (parts.length === 2) {
-            const [section, key] = parts
-            if (!settingsUpdates[section]) settingsUpdates[section] = {}
-            settingsUpdates[section][key] = cfg.value
-          }
-        }
-      }
-
-      // Save settings if any
-      if (Object.keys(settingsUpdates).length > 0) {
-        await settingsApi.update(settingsUpdates)
-      }
-
-      // Refresh data
-      await loadData()
-
-      setMessage({ type: 'success', text: 'Provider configuration saved' })
-      setExpandedProviderCard(null)
-      setProviderCardEnvVars([])
-      setProviderCardEnvConfigs({})
-    } catch (err: any) {
-      console.error('Failed to save provider config:', err)
-      setMessage({ type: 'error', text: err.response?.data?.detail || 'Failed to save configuration' })
-    } finally {
-      setSavingProviderCard(false)
+      await svcConfigsApi.deleteWiring(wire.id)
+      setWiring((prev) => prev.filter((w) => w.id !== wire.id))
+      setMessage({ type: 'success', text: `${capability} disconnected` })
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || 'Failed to clear provider',
+      })
+      throw error
     }
   }
 
@@ -861,12 +1272,10 @@ export default function ServiceConfigsPage() {
                     // Use service default configuration
                     initialEnvConfigs[envVar.name] = {
                       name: envVar.name,
-                      source: envVar.source || 'default',
+                      source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
                       setting_path: envVar.setting_path,
-                      value: envVar.resolved_value || envVar.value,
+                      value: envVar.value,
                       new_setting_path: undefined,
-                      locked: envVar.locked,
-                      provider_name: envVar.provider_name,
                     }
                   }
                 }
@@ -890,47 +1299,6 @@ export default function ServiceConfigsPage() {
         console.error('Failed to load instance details:', err)
         setMessage({ type: 'error', text: 'Failed to load instance details' })
       }
-    }
-  }
-
-  // Handle edit saved config from dropdown
-  const handleEditSavedConfig = (configId: string) => {
-    // Use existing handler for editing instances
-    handleEditProviderFromBoard(configId, false)
-  }
-
-  // Handle delete saved config from dropdown
-  const handleDeleteSavedConfig = async (configId: string) => {
-    try {
-      await svcConfigsApi.deleteServiceConfig(configId)
-      // Refresh configs list
-      const instancesRes = await svcConfigsApi.getServiceConfigs()
-      setServiceConfigs(instancesRes.data)
-      // Also refresh wiring in case deleted config was wired
-      const wiringRes = await svcConfigsApi.getWiring()
-      setWiring(wiringRes.data)
-      setMessage({ type: 'success', text: 'Configuration deleted' })
-    } catch (error: any) {
-      setMessage({
-        type: 'error',
-        text: error.response?.data?.detail || 'Failed to delete configuration',
-      })
-    }
-  }
-
-  // Handle update saved config from dropdown submenu
-  const handleUpdateSavedConfig = async (configId: string, configValues: Record<string, any>) => {
-    try {
-      await svcConfigsApi.updateServiceConfig(configId, { config: configValues })
-      // Refresh configs list
-      const instancesRes = await svcConfigsApi.getServiceConfigs()
-      setServiceConfigs(instancesRes.data)
-      setMessage({ type: 'success', text: 'Configuration updated' })
-    } catch (error: any) {
-      setMessage({
-        type: 'error',
-        text: error.response?.data?.detail || 'Failed to update configuration',
-      })
     }
   }
 
@@ -1029,26 +1397,89 @@ export default function ServiceConfigsPage() {
     }
   }
 
+  // Handle update template config vars from wiring board inline editor
+  const handleUpdateTemplateConfigVars = async (
+    templateId: string,
+    configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }>
+  ) => {
+    const template = templates.find((t) => t.id === templateId)
+    if (!template) return
+
+    try {
+      // Check if this is a compose service template (has env vars) or provider template
+      if (template.source === 'compose') {
+        // Compose service template - save env configs
+        const envVarConfigs = configVars
+          .filter((v) => v.value && v.value.trim())
+          .map((v) => ({
+            source: 'new_setting' as const,
+            value: v.value,
+            new_setting_path: `service_env.${template.id}.${v.key}`,
+          }))
+
+        if (envVarConfigs.length > 0) {
+          await servicesApi.updateEnvConfig(template.id, envVarConfigs)
+          setMessage({ type: 'success', text: `${template.name} configuration updated` })
+        }
+      } else {
+        // Provider template - update settings via settings_path
+        const updates: Record<string, Record<string, string>> = {}
+        const schema = template.config_schema || []
+
+        for (const configVar of configVars) {
+          const schemaField = schema.find((f: any) => f.key === configVar.key)
+          if (schemaField?.settings_path && configVar.value && configVar.value.trim()) {
+            const parts = schemaField.settings_path.split('.')
+            if (parts.length === 2) {
+              const [section, key] = parts
+              if (!updates[section]) updates[section] = {}
+              updates[section][key] = configVar.value
+            }
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await settingsApi.update(updates)
+          setMessage({ type: 'success', text: `${template.name} settings updated` })
+        }
+      }
+
+      // Refresh templates to get updated values
+      const templatesRes = await svcConfigsApi.getTemplates()
+      setTemplates(templatesRes.data)
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || 'Failed to update configuration',
+      })
+      throw error
+    }
+  }
+
+  // Handle create instance from wiring board (via "+" button)
+  const handleCreateServiceConfigFromBoard = async (templateId: string) => {
+    const template = templates.find((t) => t.id === templateId)
+    if (template) {
+      await createServiceConfigDirectly(template)
+    }
+  }
+
   // Group templates by source - only show installed services
   const allProviderTemplates = templates.filter((t) => t.source === 'provider')
 
-  // Filter deployments by current environment
-  // Use VITE_ENV_NAME from environment variables (e.g., "purple", "orange")
-  const currentEnv = import.meta.env.VITE_ENV_NAME || 'ushadow'
-  const currentComposeProject = `ushadow-${currentEnv}`
+  // Group instances by their template_id for hierarchical display
+  const instancesByTemplate = instances.reduce((acc, instance) => {
+    if (!acc[instance.template_id]) {
+      acc[instance.template_id] = []
+    }
+    acc[instance.template_id].push(instance)
+    return acc
+  }, {} as Record<string, typeof instances>)
 
-  const filteredDeployments = filterCurrentEnvOnly
-    ? deployments.filter((d) => {
-        // Match deployments from the current environment only
-        // Check if the deployment's hostname matches this environment's compose project or env name
-        return d.unode_hostname && (
-          d.unode_hostname === currentEnv ||
-          d.unode_hostname === currentComposeProject ||
-          d.unode_hostname.startsWith(`${currentComposeProject}.`)
-        )
-      })
-    : deployments
-
+  // Providers shown in grid: configured OR user has added them
+  const visibleProviders = allProviderTemplates.filter(
+    (t) => (t.configured && t.available) || addedProviderIds.has(t.id)
+  )
   // Providers in "Add" menu: not configured and not yet added
   const availableToAdd = allProviderTemplates.filter(
     (t) => (!t.configured || !t.available) && !addedProviderIds.has(t.id)
@@ -1059,100 +1490,64 @@ export default function ServiceConfigsPage() {
     setShowAddProviderModal(false)
   }
 
-  // Deployment action handlers
-  const handleStopDeployment = async (deploymentId: string) => {
-    // Optimistic update
-    setDeployments((prev) =>
-      prev.map((d) => (d.id === deploymentId ? { ...d, status: 'stopping' } : d))
-    )
-
-    try {
-      await deploymentsApi.stopDeployment(deploymentId)
-      setMessage({ type: 'success', text: 'Deployment stopped' })
-      // Refresh just deployments, not entire page
-      await refreshDeployments()
-    } catch (error: any) {
-      console.error('Failed to stop deployment:', error)
-      setMessage({ type: 'error', text: 'Failed to stop deployment' })
-      // Revert optimistic update on error
-      await refreshDeployments()
-    }
-  }
-
-  const handleRestartDeployment = async (deploymentId: string) => {
-    // Optimistic update
-    setDeployments((prev) =>
-      prev.map((d) => (d.id === deploymentId ? { ...d, status: 'starting' } : d))
-    )
-
-    try {
-      await deploymentsApi.restartDeployment(deploymentId)
-      setMessage({ type: 'success', text: 'Deployment restarted' })
-      // Refresh just deployments, not entire page
-      await refreshDeployments()
-    } catch (error: any) {
-      console.error('Failed to restart deployment:', error)
-      setMessage({ type: 'error', text: 'Failed to restart deployment' })
-      // Revert optimistic update on error
-      await refreshDeployments()
-    }
-  }
-
-  const handleRemoveDeployment = async (deploymentId: string, serviceName: string) => {
-    if (!confirm(`Remove deployment ${serviceName}?`)) return
-
-    // Optimistic update - remove from list immediately
-    setDeployments((prev) => prev.filter((d) => d.id !== deploymentId))
-
-    try {
-      await deploymentsApi.removeDeployment(deploymentId)
-      setMessage({ type: 'success', text: 'Deployment removed' })
-      // Refresh to ensure consistency
-      await refreshDeployments()
-    } catch (error: any) {
-      console.error('Failed to remove deployment:', error)
-      setMessage({ type: 'error', text: 'Failed to remove deployment' })
-      // Revert optimistic update on error
-      await refreshDeployments()
-    }
-  }
-
-  const handleEditDeployment = async (deployment: any) => {
-    const template = templates.find((t) => t.id === deployment.service_id)
-    if (!template) return
-
-    try {
-      setLoadingEnvConfig(true)
-
-      // Load environment variable configuration for this service
-      const envResponse = await servicesApi.getEnvConfig(template.id)
-      const envData = envResponse.data
-
-      const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
-      setDeploymentEnvVars(allEnvVars)
-
-      // Initialize env configs from deployment's current config
-      const initialEnvConfigs: Record<string, any> = {}
-      const deployedEnv = deployment.deployed_config?.environment || {}
-
-      allEnvVars.forEach((envVar) => {
-        const currentValue = deployedEnv[envVar.name] || envVar.default_value || ''
-        initialEnvConfigs[envVar.name] = {
-          name: envVar.name,
-          source: 'literal',
-          value: currentValue,
-          setting_path: undefined,
-          new_setting_path: undefined,
-        }
-      })
-
-      setDeploymentEnvConfigs(initialEnvConfigs)
-      setEditingDeployment(deployment)
-    } catch (error) {
-      console.error('Failed to load deployment config:', error)
-      setMessage({ type: 'error', text: 'Failed to load deployment configuration' })
-    } finally {
-      setLoadingEnvConfig(false)
+  // Get status badge for instance
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'running':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
+            <CheckCircle className="h-3 w-3" />
+            Running
+          </span>
+        )
+      case 'deploying':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Starting
+          </span>
+        )
+      case 'pending':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300">
+            <HardDrive className="h-3 w-3" />
+            Pending
+          </span>
+        )
+      case 'stopped':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
+            Stopped
+          </span>
+        )
+      case 'error':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300">
+            <AlertCircle className="h-3 w-3" />
+            Error
+          </span>
+        )
+      case 'n/a':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+            <Cloud className="h-3 w-3" />
+            Cloud
+          </span>
+        )
+      case 'not_found':
+      case 'not_running':
+        return (
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
+            <AlertCircle className="h-3 w-3" />
+            Not Running
+          </span>
+        )
+      default:
+        return (
+          <span className="px-2 py-0.5 text-xs rounded-full bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300">
+            {status}
+          </span>
+        )
     }
   }
 
@@ -1175,10 +1570,7 @@ export default function ServiceConfigsPage() {
         <div>
           <div className="flex items-center space-x-2">
             <Layers className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
-            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-700">
-              BETA
-            </span>
+            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">ServiceConfigs</h1>
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             Create and manage service instances from templates
@@ -1223,7 +1615,7 @@ export default function ServiceConfigsPage() {
           </p>
         </div>
         <div className="card-hover p-4">
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Services</p>
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">ServiceConfigs</p>
           <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">
             {instances.length}
           </p>
@@ -1263,498 +1655,50 @@ export default function ServiceConfigsPage() {
         </div>
       )}
 
-      {/* Tab Navigation */}
-      <div className="border-b border-neutral-200 dark:border-neutral-700">
-        <nav className="flex gap-4" aria-label="View tabs">
-          <button
-            onClick={() => handleTabChange('services')}
-            className={`py-2 px-1 border-b-2 text-sm font-medium transition-colors ${
-              activeTab === 'services'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:hover:text-neutral-300'
-            }`}
-            data-testid="tab-services"
-          >
-            <div className="flex items-center gap-2">
-              <Zap className="h-4 w-4" />
-              Services
-            </div>
-          </button>
-          <button
-            onClick={() => handleTabChange('providers')}
-            className={`py-2 px-1 border-b-2 text-sm font-medium transition-colors ${
-              activeTab === 'providers'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:hover:text-neutral-300'
-            }`}
-            data-testid="tab-providers"
-          >
-            <div className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              Providers
-            </div>
-          </button>
-          <button
-            onClick={() => handleTabChange('overview')}
-            className={`py-2 px-1 border-b-2 text-sm font-medium transition-colors ${
-              activeTab === 'overview'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:hover:text-neutral-300'
-            }`}
-            data-testid="tab-overview"
-          >
-            <div className="flex items-center gap-2">
-              <Activity className="h-4 w-4" />
-              System Overview
-            </div>
-          </button>
-          <button
-            onClick={() => handleTabChange('deployments')}
-            className={`py-2 px-1 border-b-2 text-sm font-medium transition-colors ${
-              activeTab === 'deployments'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:hover:text-neutral-300'
-            }`}
-            data-testid="tab-deployments"
-          >
-            <div className="flex items-center gap-2">
-              <HardDrive className="h-4 w-4" />
-              Deployments ({filteredDeployments.length})
-            </div>
-          </button>
-        </nav>
+      {/* Wiring Board - Drag and Drop Interface */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+            <Plug className="h-5 w-5" />
+            Wiring
+          </h2>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            Drag providers to connect them to service capability slots
+          </p>
+        </div>
+
+        <div className="card p-6">
+          <WiringBoard
+            providers={wiringProviders}
+            consumers={wiringConsumers}
+            wiring={wiring}
+            onProviderDrop={handleProviderDrop}
+            onDeleteWiring={handleDeleteWiringFromBoard}
+            onEditProvider={handleEditProviderFromBoard}
+            onCreateServiceConfig={handleCreateServiceConfigFromBoard}
+            onUpdateTemplateConfigVars={handleUpdateTemplateConfigVars}
+            onDeleteServiceConfig={handleDeleteServiceConfig}
+            onStartProvider={async (providerId, isTemplate) => {
+              if (isTemplate) {
+                // For templates, we can't deploy them directly - need to create instance first
+                // This case shouldn't happen as templates don't have start buttons in current UI
+                return
+              }
+              await handleDeployServiceConfig(providerId)
+            }}
+            onStopProvider={async (providerId, isTemplate) => {
+              if (isTemplate) {
+                return
+              }
+              await handleUndeployServiceConfig(providerId)
+            }}
+            onEditConsumer={handleEditConsumer}
+            onStartConsumer={handleStartConsumer}
+            onStopConsumer={handleStopConsumer}
+            onDeployConsumer={handleDeployConsumer}
+          />
+        </div>
       </div>
-
-      {/* Tab Content */}
-      {activeTab === 'services' ? (
-        /* Services Tab */
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">
-              Select providers for each service capability
-            </p>
-          </div>
-
-          {/* Service Cards Grid */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
-            {composeTemplates
-              .filter((t) => t.requires && t.requires.length > 0)
-              .map((template) => {
-                // Find the config for this template (if any)
-                const config = instances.find((i) => i.template_id === template.id) || null
-                const consumerId = config?.id || template.id
-
-                // Get service status from Docker
-                const serviceName = template.id.includes(':') ? template.id.split(':').pop()! : template.id
-                const status = serviceStatuses[serviceName]
-
-                // Filter wiring for this consumer
-                const consumerWiring = wiring.filter((w) => w.target_config_id === consumerId)
-
-                // Get deployments for this service (filtered by environment)
-                const serviceDeployments = filteredDeployments.filter(d => d.service_id === template.id)
-
-                return (
-                  <FlatServiceCard
-                    key={template.id}
-                    template={template}
-                    config={config ? { ...config, status: status?.status || config.status } : null}
-                    wiring={consumerWiring}
-                    providerTemplates={providerTemplates}
-                    initialConfigs={instances}
-                    instanceCount={config ? 1 : 0}
-                    deployments={serviceDeployments}
-                    onStopDeployment={handleStopDeployment}
-                    onRestartDeployment={handleRestartDeployment}
-                    onRemoveDeployment={handleRemoveDeployment}
-                    onEditDeployment={handleEditDeployment}
-                    onWiringChange={async (capability, sourceConfigId) => {
-                      try {
-                        const newWiring = await svcConfigsApi.createWiring({
-                          source_config_id: sourceConfigId,
-                          source_capability: capability,
-                          target_config_id: consumerId,
-                          target_capability: capability,
-                        })
-                        setWiring((prev) => {
-                          const existing = prev.findIndex(
-                            (w) => w.target_config_id === consumerId && w.target_capability === capability
-                          )
-                          if (existing >= 0) {
-                            const updated = [...prev]
-                            updated[existing] = newWiring.data
-                            return updated
-                          }
-                          return [...prev, newWiring.data]
-                        })
-                        setMessage({ type: 'success', text: `${capability} provider connected` })
-                      } catch (error: any) {
-                        setMessage({
-                          type: 'error',
-                          text: error.response?.data?.detail || 'Failed to connect provider',
-                        })
-                      }
-                    }}
-                    onWiringClear={async (capability) => {
-                      const wire = wiring.find(
-                        (w) => w.target_config_id === consumerId && w.target_capability === capability
-                      )
-                      if (!wire) return
-                      try {
-                        await svcConfigsApi.deleteWiring(wire.id)
-                        setWiring((prev) => prev.filter((w) => w.id !== wire.id))
-                        setMessage({ type: 'success', text: `${capability} provider disconnected` })
-                      } catch (error: any) {
-                        setMessage({
-                          type: 'error',
-                          text: error.response?.data?.detail || 'Failed to disconnect provider',
-                        })
-                      }
-                    }}
-                    onConfigCreate={async (templateId, name, configValues) => {
-                      // Generate valid ID from name (lowercase, alphanumeric + hyphens)
-                      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `config-${Date.now()}`
-                      try {
-                        await svcConfigsApi.createServiceConfig({
-                          id,
-                          template_id: templateId,
-                          name,
-                          deployment_target: 'local',
-                          config: configValues,
-                        })
-                        const instancesRes = await svcConfigsApi.getServiceConfigs()
-                        setServiceConfigs(instancesRes.data)
-                        setMessage({ type: 'success', text: `Configuration "${name}" created` })
-                        return id
-                      } catch (error: any) {
-                        setMessage({
-                          type: 'error',
-                          text: error.response?.data?.detail || 'Failed to create configuration',
-                        })
-                        throw error  // Re-throw so caller knows it failed
-                      }
-                    }}
-                    onEditConfig={handleEditSavedConfig}
-                    onDeleteConfig={handleDeleteSavedConfig}
-                    onUpdateConfig={handleUpdateSavedConfig}
-                    onStart={async () => {
-                      await handleDeployConsumer(template.id, { type: 'local' })
-                    }}
-                    onStop={async () => {
-                      await handleStopConsumer(template.id)
-                    }}
-                    onEdit={() => handleEditConsumer(template.id)}
-                    onDeploy={(target) => handleDeployConsumer(template.id, target)}
-                  />
-                )
-              })}
-          </div>
-
-          {composeTemplates.filter((t) => t.requires && t.requires.length > 0).length === 0 && (
-            <div className="card p-8 text-center">
-              <Package className="h-12 w-12 mx-auto text-neutral-400 mb-4" />
-              <p className="text-neutral-600 dark:text-neutral-400">
-                No services installed yet. Click "Browse Services" to add some.
-              </p>
-            </div>
-          )}
-        </div>
-      ) : activeTab === 'providers' ? (
-        /* Providers Tab - Card-based UI grouped by capability */
-        <div className="space-y-6">
-          {/* Group providers by capability type */}
-          {(() => {
-            const configuredProviders = providerTemplates.filter((p) => p.configured)
-            const grouped = configuredProviders.reduce((acc, provider) => {
-              const capability = provider.provides || 'other'
-              if (!acc[capability]) acc[capability] = []
-              acc[capability].push(provider)
-              return acc
-            }, {} as Record<string, typeof configuredProviders>)
-
-            const capabilityOrder = ['llm', 'transcription', 'memory', 'embedding', 'tts', 'other']
-            const sortedCapabilities = Object.keys(grouped).sort((a, b) => {
-              const aIndex = capabilityOrder.indexOf(a)
-              const bIndex = capabilityOrder.indexOf(b)
-              if (aIndex === -1 && bIndex === -1) return a.localeCompare(b)
-              if (aIndex === -1) return 1
-              if (bIndex === -1) return -1
-              return aIndex - bIndex
-            })
-
-            if (sortedCapabilities.length === 0) {
-              return (
-                <div className="card p-8 text-center">
-                  <Database className="h-12 w-12 mx-auto text-neutral-400 mb-4" />
-                  <p className="text-neutral-600 dark:text-neutral-400">
-                    No providers configured yet.
-                  </p>
-                  <p className="text-sm text-neutral-500 dark:text-neutral-500 mt-2">
-                    Configure a provider from a service's dropdown to see it here.
-                  </p>
-                </div>
-              )
-            }
-
-            return sortedCapabilities.map((capability) => (
-              <div key={capability} data-testid={`provider-group-${capability}`}>
-                <h3 className="text-sm font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider mb-3">
-                  {capability}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {grouped[capability].map((provider) => {
-                    const isExpanded = expandedProviderCard === provider.id
-                    return (
-                      <div
-                        key={provider.id}
-                        className={`rounded-lg border bg-white dark:bg-neutral-900 transition-all ${
-                          isExpanded
-                            ? 'border-primary-400 dark:border-primary-600'
-                            : 'border-neutral-200 dark:border-neutral-700 hover:border-primary-300 dark:hover:border-primary-600'
-                        }`}
-                        data-testid={`provider-card-${provider.id}`}
-                      >
-                        {/* Card Header */}
-                        <div
-                          className="flex items-center gap-3 p-3 cursor-pointer"
-                          onClick={() => handleExpandProviderCard(provider.id)}
-                        >
-                          <div className={`p-1.5 rounded-md flex-shrink-0 ${
-                            provider.mode === 'cloud'
-                              ? 'bg-blue-100 dark:bg-blue-900/30'
-                              : 'bg-purple-100 dark:bg-purple-900/30'
-                          }`}>
-                            {provider.mode === 'cloud' ? (
-                              <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                            ) : (
-                              <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
-                              {provider.name}
-                            </div>
-                            {provider.description && !isExpanded && (
-                              <div className="text-xs text-neutral-500 dark:text-neutral-400 truncate">
-                                {provider.description}
-                              </div>
-                            )}
-                          </div>
-                          <CheckCircle className="h-4 w-4 text-success-500 flex-shrink-0" />
-                          <button
-                            className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 flex-shrink-0"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleExpandProviderCard(provider.id)
-                            }}
-                            data-testid={`provider-edit-${provider.id}`}
-                          >
-                            {isExpanded ? (
-                              <ChevronUp className="h-4 w-4" />
-                            ) : (
-                              <Pencil className="h-4 w-4" />
-                            )}
-                          </button>
-                        </div>
-
-                        {/* Expanded Content - EnvVarEditor */}
-                        {isExpanded && (
-                          <div className="border-t border-neutral-200 dark:border-neutral-700">
-                            {loadingProviderCard ? (
-                              <div className="flex items-center justify-center py-6">
-                                <Loader2 className="h-5 w-5 animate-spin text-primary-600" />
-                                <span className="ml-2 text-sm text-neutral-500">Loading...</span>
-                              </div>
-                            ) : providerCardEnvVars.length > 0 ? (
-                              <>
-                                <div className="max-h-80 overflow-y-auto">
-                                  {providerCardEnvVars.map((envVar) => {
-                                    const config = providerCardEnvConfigs[envVar.name] || {
-                                      name: envVar.name,
-                                      source: 'default',
-                                    }
-                                    return (
-                                      <EnvVarEditor
-                                        key={envVar.name}
-                                        envVar={envVar}
-                                        config={config}
-                                        onChange={(updates) => {
-                                          setProviderCardEnvConfigs((prev) => ({
-                                            ...prev,
-                                            [envVar.name]: { ...prev[envVar.name], ...updates } as EnvVarConfig,
-                                          }))
-                                        }}
-                                      />
-                                    )
-                                  })}
-                                </div>
-                                {/* Footer Actions */}
-                                <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50">
-                                  <button
-                                    onClick={() => {
-                                      setExpandedProviderCard(null)
-                                      setProviderCardEnvVars([])
-                                      setProviderCardEnvConfigs({})
-                                    }}
-                                    className="px-3 py-1.5 text-sm text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded"
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    onClick={() => handleSaveProviderCard(provider.id)}
-                                    disabled={savingProviderCard}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
-                                    data-testid={`provider-save-${provider.id}`}
-                                  >
-                                    {savingProviderCard ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    ) : (
-                                      <Save className="h-3.5 w-3.5" />
-                                    )}
-                                    Save
-                                  </button>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="p-4 text-center text-sm text-neutral-500">
-                                No configuration options available.
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))
-          })()}
-        </div>
-      ) : activeTab === 'overview' ? (
-        /* System Overview - Read-only Visualization */
-        <SystemOverview
-          templates={templates}
-          configs={instances}
-          wiring={wiring}
-        />
-      ) : activeTab === 'deployments' ? (
-        /* Deployments Tab */
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">
-              Active deployments across all services ({filteredDeployments.length} total)
-            </p>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={filterCurrentEnvOnly}
-                onChange={(e) => setFilterCurrentEnvOnly(e.target.checked)}
-                className="rounded border-neutral-300 dark:border-neutral-600 text-primary-600 focus:ring-primary-500"
-                data-testid="filter-current-env-toggle"
-              />
-              <span className="text-sm text-neutral-600 dark:text-neutral-400">
-                Current environment only
-              </span>
-            </label>
-          </div>
-
-          {filteredDeployments.length === 0 ? (
-            <div className="card p-8 text-center">
-              <HardDrive className="h-12 w-12 text-neutral-400 mx-auto mb-4" />
-              <p className="text-neutral-600 dark:text-neutral-400">No deployments found</p>
-              <p className="text-sm text-neutral-500 dark:text-neutral-500 mt-2">
-                Deploy services from the Services tab
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {filteredDeployments.map((deployment) => {
-                const template = templates.find(t => t.id === deployment.service_id)
-                return (
-                  <div key={deployment.id} className="card p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3">
-                          <h3 className="font-medium text-neutral-900 dark:text-neutral-100">
-                            {template?.name || deployment.service_id}
-                          </h3>
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs font-medium ${
-                              deployment.status === 'running'
-                                ? 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400'
-                                : deployment.status === 'deploying'
-                                ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-400'
-                                : deployment.status === 'stopped'
-                                ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
-                                : 'bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-400'
-                            }`}
-                            title={deployment.health_message || undefined}
-                          >
-                            {deployment.status}
-                          </span>
-
-                          {/* Stop/Restart button next to status */}
-                          {(deployment.status === 'running' || deployment.status === 'deploying') ? (
-                            <button
-                              onClick={() => handleStopDeployment(deployment.id)}
-                              className="p-1 text-error-600 dark:text-error-400 hover:text-error-700 dark:hover:text-error-300 hover:bg-error-50 dark:hover:bg-error-900/20 rounded"
-                              title="Stop deployment"
-                              data-testid={`stop-deployment-${deployment.id}`}
-                            >
-                              <StopCircle className="h-3.5 w-3.5" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleRestartDeployment(deployment.id)}
-                              className="p-1 text-success-600 dark:text-success-400 hover:text-success-700 dark:hover:text-success-300 hover:bg-success-50 dark:hover:bg-success-900/20 rounded"
-                              title="Start deployment"
-                              data-testid={`restart-deployment-${deployment.id}`}
-                            >
-                              <PlayCircle className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-4 mt-2 text-sm text-neutral-600 dark:text-neutral-400">
-                          <span className="flex items-center gap-1">
-                            <HardDrive className="h-3.5 w-3.5" />
-                            {deployment.unode_hostname}
-                          </span>
-                          {deployment.exposed_port && (
-                            <span className="px-2 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-mono">
-                              :{deployment.exposed_port}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        {/* Edit */}
-                        <button
-                          onClick={() => handleEditDeployment(deployment)}
-                          className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-                          title="Edit deployment"
-                          data-testid={`edit-deployment-${deployment.id}`}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-
-                        {/* Remove */}
-                        <button
-                          onClick={() => handleRemoveDeployment(deployment.id, template?.name || deployment.service_id)}
-                          className="p-1.5 text-neutral-400 hover:text-error-600 dark:hover:text-error-400 hover:bg-error-50 dark:hover:bg-error-900/20 rounded"
-                          title="Remove deployment"
-                          data-testid={`remove-deployment-${deployment.id}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      ) : null}
       {/* Edit Provider/ServiceConfig Modal */}
       <Modal
         isOpen={!!editingProvider}
@@ -1820,7 +1764,7 @@ export default function ServiceConfigsPage() {
                       }
 
                       return (
-                        <EnvVarEditor
+                        <EnvVarRow
                           key={envVar.name}
                           envVar={envVar}
                           config={config}
@@ -1853,109 +1797,6 @@ export default function ServiceConfigsPage() {
                 ) : (
                   <CheckCircle className="h-4 w-4" />
                 )}
-                Save Changes
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* Edit Deployment Modal */}
-      <Modal
-        isOpen={!!editingDeployment}
-        onClose={() => {
-          setEditingDeployment(null)
-          setDeploymentEnvVars([])
-          setDeploymentEnvConfigs({})
-        }}
-        title="Edit Deployment"
-        titleIcon={<Settings className="h-5 w-5 text-primary-600" />}
-        maxWidth="lg"
-        testId="edit-deployment-modal"
-      >
-        {editingDeployment && (
-          <div className="space-y-4">
-            {/* Deployment info */}
-            <div className="p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
-              <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                {templates.find(t => t.id === editingDeployment.service_id)?.name || editingDeployment.service_id}
-              </p>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-neutral-500">
-                  {editingDeployment.unode_hostname}
-                </span>
-                {editingDeployment.exposed_port && (
-                  <span className="px-2 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-mono">
-                    :{editingDeployment.exposed_port}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Environment variables */}
-            {loadingEnvConfig ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-primary-600" />
-                <span className="ml-2 text-sm text-neutral-600">Loading configuration...</span>
-              </div>
-            ) : deploymentEnvVars.length > 0 ? (
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                  Environment Variables
-                </label>
-                <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
-                  {deploymentEnvVars.map((envVar) => {
-                    const config = deploymentEnvConfigs[envVar.name] || {
-                      name: envVar.name,
-                      source: 'default',
-                      value: undefined,
-                      setting_path: undefined,
-                      new_setting_path: undefined,
-                    }
-
-                    return (
-                      <EnvVarEditor
-                        key={envVar.name}
-                        envVar={envVar}
-                        config={config}
-                        onChange={(updates) => {
-                          setDeploymentEnvConfigs((prev) => ({
-                            ...prev,
-                            [envVar.name]: { ...prev[envVar.name], ...updates },
-                          }))
-                        }}
-                        for_deploy={true}
-                      />
-                    )
-                  })}
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-neutral-500">No environment variables to configure</p>
-            )}
-
-            {/* Action buttons */}
-            <div className="flex justify-end gap-2 pt-4">
-              <button
-                onClick={() => {
-                  setEditingDeployment(null)
-                  setDeploymentEnvVars([])
-                  setDeploymentEnvConfigs({})
-                }}
-                className="btn-ghost"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  // TODO: Implement deployment update API call
-                  setMessage({ type: 'success', text: 'Deployment configuration updated' })
-                  setEditingDeployment(null)
-                  setDeploymentEnvVars([])
-                  setDeploymentEnvConfigs({})
-                }}
-                className="btn-primary"
-              >
                 Save Changes
               </button>
             </div>
@@ -2023,13 +1864,13 @@ export default function ServiceConfigsPage() {
         onCancel={() => setConfirmDialog({ isOpen: false, instanceId: null })}
       />
 
-      {/* Unified Deploy Modal (K8s and Docker) */}
-      {deployModalState.isOpen && (
-        <DeployModal
+      {/* Deploy to Kubernetes Modal */}
+      {deployModalState.isOpen && deployModalState.targetType === 'kubernetes' && (
+        <DeployToK8sModal
           isOpen={true}
-          onClose={() => setDeployModalState({ isOpen: false, serviceId: null })}
-          target={deployModalState.targetId ? availableTargets.find((t) => t.id === deployModalState.targetId) : undefined}
-          availableTargets={availableTargets}
+          onClose={() => setDeployModalState({ isOpen: false, serviceId: null, targetType: null })}
+          cluster={deployModalState.selectedClusterId ? kubernetesClusters.find((c) => c.cluster_id === deployModalState.selectedClusterId) : undefined}
+          availableClusters={kubernetesClusters}
           infraServices={deployModalState.infraServices || {}}
           preselectedServiceId={deployModalState.serviceId || undefined}
         />
@@ -2132,6 +1973,74 @@ export default function ServiceConfigsPage() {
         )}
       </Modal>
 
+      {/* Simple Deploy Modal (for local/remote with env vars) */}
+      <Modal
+        isOpen={simpleDeployModal.isOpen}
+        onClose={() => setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })}
+        title={`Deploy to ${simpleDeployModal.targetType === 'local' ? 'Local' : 'Remote'} uNode`}
+        maxWidth="lg"
+        testId="simple-deploy-modal"
+      >
+        <div className="space-y-4">
+          {loadingDeployEnv && (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-primary-500" />
+              <span className="ml-2 text-sm text-neutral-500">Loading configuration...</span>
+            </div>
+          )}
+
+          {!loadingDeployEnv && deployEnvVars.length > 0 && (
+            <>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Configure environment variables for this deployment:
+              </p>
+              <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 max-h-96 overflow-y-auto">
+                {deployEnvVars.map((ev) => (
+                  <EnvVarRow
+                    key={ev.name}
+                    envVar={ev}
+                    config={deployEnvConfigs[ev.name]}
+                    onChange={(updates) => {
+                      setDeployEnvConfigs((prev) => ({
+                        ...prev,
+                        [ev.name]: { ...prev[ev.name], ...updates },
+                      }))
+                    }}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {!loadingDeployEnv && deployEnvVars.length === 0 && (
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 italic">
+              No environment variables to configure.
+            </p>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+            <button
+              onClick={() => setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })}
+              className="btn-secondary"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmDeploy}
+              disabled={loadingDeployEnv || creating !== null}
+              className="btn-primary flex items-center gap-2"
+              data-testid="confirm-deploy"
+            >
+              {creating !== null ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle className="h-4 w-4" />
+              )}
+              Deploy
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -2242,6 +2151,352 @@ function ConfigFieldRow({ field, value, onChange, readOnly: _readOnly = false }:
               </span>
             )}
           </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
+// Template Card Component
+// =============================================================================
+
+interface TemplateCardProps {
+  template: Template
+  isExpanded: boolean
+  onToggle: () => void
+  onCreate: () => void
+  onRemove?: () => void
+}
+
+function TemplateCard({ template, isExpanded, onToggle, onCreate, onRemove }: TemplateCardProps) {
+  const isCloud = template.mode === 'cloud'
+  // Integrations provide "memory_source" capability and config is per-instance
+  const isIntegration = template.provides === 'memory_source'
+  // Integrations are always "ready" - config is per-instance
+  const isReady = isIntegration ? true : (template.configured && template.available)
+  const needsConfig = isIntegration ? false : !template.configured
+  const notRunning = isIntegration ? false : (template.configured && !template.available)
+
+  return (
+    <div
+      data-testid={`template-card-${template.id}`}
+      className={`rounded-lg border transition-all ${
+        isReady
+          ? 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:border-primary-300 dark:hover:border-primary-600'
+          : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900/50'
+      }`}
+    >
+      <div className="p-4 cursor-pointer" onClick={onToggle}>
+        <div className="flex items-start gap-3">
+          <div
+            className={`p-2 rounded-lg ${
+              isCloud
+                ? 'bg-blue-100 dark:bg-blue-900/30'
+                : 'bg-purple-100 dark:bg-purple-900/30'
+            }`}
+          >
+            {isCloud ? (
+              <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            ) : (
+              <HardDrive className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className={`font-semibold truncate ${isReady ? 'text-neutral-900 dark:text-neutral-100' : 'text-neutral-600 dark:text-neutral-400'}`}>
+              {template.name}
+            </h3>
+            <span className="text-xs text-neutral-500">{isCloud ? 'Cloud' : 'Self-Hosted'}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Status badge */}
+            {needsConfig && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300">
+                <AlertCircle className="h-3 w-3" />
+                Configure
+              </span>
+            )}
+            {notRunning && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-400">
+                <HardDrive className="h-3 w-3" />
+                Not Running
+              </span>
+            )}
+            {isReady && template.provides && (
+              <span className="px-1.5 py-0.5 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 capitalize">
+                {template.provides}
+              </span>
+            )}
+            {isExpanded ? (
+              <ChevronUp className="h-4 w-4 text-neutral-400" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-neutral-400" />
+            )}
+          </div>
+        </div>
+
+        {!isExpanded && template.description && (
+          <p className="mt-2 text-xs text-neutral-500 line-clamp-2">{template.description}</p>
+        )}
+      </div>
+
+      {isExpanded && (
+        <div className="px-4 pb-4 border-t border-neutral-200 dark:border-neutral-700">
+          <div className="mt-3 space-y-2">
+            {template.description && (
+              <p className="text-xs text-neutral-500">{template.description}</p>
+            )}
+
+            {/* Requires */}
+            {template.requires && template.requires.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-neutral-400">Requires:</span>
+                <div className="flex flex-wrap gap-1">
+                  {template.requires.map((req) => (
+                    <span
+                      key={req}
+                      className="px-1.5 py-0.5 text-xs rounded bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 capitalize"
+                    >
+                      {req}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Config schema preview */}
+            {template.config_schema && template.config_schema.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Settings className="h-3 w-3 text-neutral-400" />
+                <span className="text-xs text-neutral-500">
+                  {template.config_schema.length} config field
+                  {template.config_schema.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div className="mt-4 pt-3 border-t border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
+            <div className="flex gap-2">
+              {needsConfig ? (
+                <a
+                  href="/services"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 hover:bg-warning-200 dark:hover:bg-warning-900/50"
+                  data-testid={`configure-template-${template.id}`}
+                >
+                  <Settings className="h-3 w-3" />
+                  Configure Settings
+                </a>
+              ) : notRunning ? (
+                <span className="text-xs text-neutral-500">
+                  Start the service to create an instance
+                </span>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onCreate()
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-primary-600 text-white hover:bg-primary-700"
+                  data-testid={`create-from-template-${template.id}`}
+                >
+                  <Plus className="h-3 w-3" />
+                  Create ServiceConfig
+                </button>
+              )}
+            </div>
+            {onRemove && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRemove()
+                }}
+                className="p-1.5 text-neutral-400 hover:text-error-600 dark:hover:text-error-400 rounded"
+                title="Remove"
+                data-testid={`remove-template-${template.id}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// =============================================================================
+// Env Var Row Component (matches ServicesPage env var editor)
+// =============================================================================
+
+interface EnvVarRowProps {
+  envVar: EnvVarInfo
+  config: EnvVarConfig
+  onChange: (updates: Partial<EnvVarConfig>) => void
+}
+
+function EnvVarRow({ envVar, config, onChange }: EnvVarRowProps) {
+  const [editing, setEditing] = useState(false)
+  const [showMapping, setShowMapping] = useState(config.source === 'setting' && !config.locked)
+
+  const isSecret = envVar.name.includes('KEY') || envVar.name.includes('SECRET') || envVar.name.includes('PASSWORD')
+  const hasDefault = envVar.has_default && envVar.default_value
+  const isUsingDefault = config.source === 'default' || (!config.value && !config.setting_path && hasDefault)
+  const isLocked = config.locked || false
+
+  // Generate setting path from env var name for auto-creating settings
+  const autoSettingPath = () => {
+    const name = envVar.name.toLowerCase()
+    if (name.includes('api_key') || name.includes('key') || name.includes('secret') || name.includes('token')) {
+      return `api_keys.${name}`
+    }
+    return `settings.${name}`
+  }
+
+  // Handle value input - auto-create setting
+  const handleValueChange = (value: string) => {
+    if (value) {
+      onChange({ source: 'new_setting', new_setting_path: autoSettingPath(), value, setting_path: undefined })
+    } else {
+      onChange({ source: 'default', value: undefined, setting_path: undefined, new_setting_path: undefined })
+    }
+  }
+
+  // Check if there's a matching suggestion for auto-mapping
+  const matchingSuggestion = envVar.suggestions.find((s) => {
+    const envName = envVar.name.toLowerCase()
+    const pathParts = s.path.toLowerCase().split('.')
+    const lastPart = pathParts[pathParts.length - 1]
+    return envName.includes(lastPart) || lastPart.includes(envVar.name.replace(/_/g, ''))
+  })
+
+  // Auto-map if matching and not yet configured
+  const effectiveSettingPath = config.setting_path || (matchingSuggestion?.has_value ? matchingSuggestion.path : undefined)
+
+  // Locked fields - provided by wired providers or infrastructure
+  if (isLocked) {
+    const displayValue = config.value || ''
+    const isMaskedSecret = isSecret && displayValue.length > 0
+    const maskedValue = isMaskedSecret ? '•'.repeat(Math.min(displayValue.length, 20)) : displayValue
+
+    return (
+      <div
+        className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-blue-50 dark:bg-blue-900/10"
+        data-testid={`env-var-editor-${envVar.name}`}
+      >
+        {/* Label */}
+        <span
+          className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0"
+          title={envVar.name}
+        >
+          {envVar.name}
+          {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
+        </span>
+
+        {/* Padlock icon */}
+        <div className="flex-shrink-0" title="Locked - provided by infrastructure or provider">
+          <Lock className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+        </div>
+
+        {/* Value display */}
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono" title={displayValue}>
+            {maskedValue}
+          </span>
+          <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-blue-600/20 text-blue-700 dark:text-blue-300 flex-shrink-0">
+            {config.provider_name || 'infrastructure'}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-white dark:bg-neutral-800">
+      {/* Label */}
+      <span
+        className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0"
+        title={envVar.name}
+      >
+        {envVar.name}
+        {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
+      </span>
+
+      {/* Map button - LEFT of input */}
+      <button
+        onClick={() => setShowMapping(!showMapping)}
+        className={`px-2 py-1 text-xs rounded transition-colors flex-shrink-0 ${
+          showMapping
+            ? 'bg-primary-900/30 text-primary-300'
+            : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700'
+        }`}
+        title={showMapping ? 'Enter value' : 'Map to setting'}
+        data-testid={`map-button-${envVar.name}`}
+      >
+        Map
+      </button>
+
+      {/* Input area */}
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        {showMapping ? (
+          // Mapping mode - styled dropdown
+          <select
+            value={effectiveSettingPath || ''}
+            onChange={(e) => {
+              if (e.target.value) {
+                onChange({
+                  source: 'setting',
+                  setting_path: e.target.value,
+                  value: undefined,
+                  new_setting_path: undefined,
+                })
+              }
+            }}
+            className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer overflow-hidden text-ellipsis"
+            data-testid={`map-select-${envVar.name}`}
+          >
+            <option value="">select...</option>
+            {envVar.suggestions.map((s) => {
+              const displayValue = s.value && s.value.length > 30 ? s.value.substring(0, 30) + '...' : s.value
+              return (
+                <option key={s.path} value={s.path}>
+                  {s.path}
+                  {displayValue ? ` → ${displayValue}` : ''}
+                </option>
+              )
+            })}
+          </select>
+        ) : hasDefault && isUsingDefault && !editing ? (
+          // Default value display
+          <>
+            <button
+              onClick={() => setEditing(true)}
+              className="text-neutral-500 hover:text-neutral-300 flex-shrink-0"
+              title="Edit"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+            <span className="text-xs text-neutral-400 truncate">{envVar.default_value}</span>
+            <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-neutral-700 text-neutral-400 flex-shrink-0">
+              default
+            </span>
+          </>
+        ) : (
+          // Value input
+          <input
+            type={isSecret ? 'password' : 'text'}
+            value={config.source === 'setting' ? '' : config.value || ''}
+            onChange={(e) => handleValueChange(e.target.value)}
+            placeholder="enter value"
+            className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
+            autoFocus={editing}
+            onBlur={() => {
+              if (!config.value && hasDefault) setEditing(false)
+            }}
+            data-testid={`value-input-${envVar.name}`}
+          />
         )}
       </div>
     </div>
