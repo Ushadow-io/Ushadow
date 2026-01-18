@@ -11,6 +11,7 @@ load_dotenv(find_dotenv(usecwd=True))
 import asyncio
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from beanie import init_beanie
@@ -22,12 +23,13 @@ from src.models.user import User  # Beanie document model
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, instances, chat
 from src.routers import kubernetes, tailscale, unodes, docker
-from src.routers import github_import
+from src.routers import github_import, cloud
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
+from src.services.cloud_node_manager import init_cloud_node_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
 from src.config.omegaconf_settings import get_settings_store
@@ -141,6 +143,10 @@ async def lifespan(app: FastAPI):
     await init_kubernetes_manager(db)
     logger.info("✓ Kubernetes manager initialized")
 
+    # Initialize Cloud Node manager
+    await init_cloud_node_manager(db)
+    logger.info("✓ Cloud Node manager initialized")
+
     # Start background task for stale u-node checking
     stale_check_task = asyncio.create_task(check_stale_unodes_task())
 
@@ -181,6 +187,7 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
 app.include_router(github_import.router, prefix="/api/github-import", tags=["github-import"])
+app.include_router(cloud.router, tags=["cloud"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)
