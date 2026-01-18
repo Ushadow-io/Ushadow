@@ -24,6 +24,8 @@ services:
       - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
       # Compose project name for per-environment Tailscale containers
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
+      # Config directory location
+      - CONFIG_DIR=/config
       - MONGODB_DATABBASE=${MONGODB_DATABASE:-ushadow}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:${WEBUI_PORT}}
     volumes:

@@ -49,6 +49,13 @@ class Capability(BaseModel):
     )
 
 
+class ProviderUses(BaseModel):
+    """Declares a capability that a provider requires."""
+    capability: str = Field(..., description="Required capability ID (e.g., 'llm')")
+    required: bool = Field(True, description="Whether this capability is required")
+    purpose: Optional[str] = Field(None, description="Why this capability is needed")
+
+
 class DockerConfig(BaseModel):
     """Docker configuration for local providers."""
     image: str = Field(..., description="Docker image name")
@@ -89,7 +96,7 @@ class Provider(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
     # Requirements (other capabilities this provider needs)
-    uses: List[Dict[str, str]] = Field(
+    uses: List[ProviderUses] = Field(
         default_factory=list,
         description="Capabilities this provider requires"
     )

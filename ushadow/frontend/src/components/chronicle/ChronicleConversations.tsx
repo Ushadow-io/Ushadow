@@ -572,7 +572,7 @@ export default function ChronicleConversations({ onAuthRequired }: ChronicleConv
                   </button>
 
                   {openDropdown === (conversation.conversation_id || conversation.audio_uuid) && (
-                    <div className="absolute right-0 top-8 w-44 bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-700 py-1 z-10">
+                    <div className="absolute right-0 top-8 w-44 bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-700 py-1 z-[9998]">
                       <button
                         onClick={() => handleReprocessTranscript(conversation)}
                         disabled={!conversation.conversation_id || reprocessingTranscript.has(conversation.conversation_id)}

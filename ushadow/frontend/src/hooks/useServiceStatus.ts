@@ -6,7 +6,7 @@ import {
   PlayCircle,
   LucideIcon,
 } from 'lucide-react'
-import type { ServiceInstance, ContainerStatus, ConfigField } from '../contexts/ServicesContext'
+import type { ServiceServiceConfig, ContainerStatus, ConfigField } from '../contexts/ServicesContext'
 
 // ============================================================================
 // Types
@@ -31,7 +31,7 @@ export interface ServiceStatusResult {
 // ============================================================================
 
 function hasRequiredConfig(
-  service: ServiceInstance,
+  service: ServiceServiceConfig,
   config: Record<string, any> | undefined
 ): boolean {
   // No config needed (like mem0-ui) - always "configured"
@@ -72,7 +72,7 @@ function hasRequiredConfig(
  * 3. Local services - Check Docker container status
  */
 export function useServiceStatus(
-  service: ServiceInstance,
+  service: ServiceServiceConfig,
   config: Record<string, any> | undefined,
   containerStatus: ContainerStatus | undefined
 ): ServiceStatusResult {

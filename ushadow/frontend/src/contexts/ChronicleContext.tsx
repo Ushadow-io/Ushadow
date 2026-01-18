@@ -20,7 +20,7 @@ const ChronicleContext = createContext<ChronicleContextType | undefined>(undefin
 
 export function ChronicleProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
-  const [isCheckingConnection, setIsCheckingConnection] = useState(true)
+  const [isCheckingConnection, setIsCheckingConnection] = useState(false)  // Start false - only true during explicit check
   const [connectionError, setConnectionError] = useState<string | null>(null)
 
   // Lift recording hook to context level
@@ -68,10 +68,8 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
     setConnectionError(null)
   }, [recording])
 
-  // Check connection on mount and when URL changes
-  useEffect(() => {
-    checkConnection()
-  }, [checkConnection])
+  // Don't auto-check on mount - let Chronicle pages explicitly call checkConnection()
+  // This avoids unnecessary requests when user is on non-Chronicle pages
 
   // Re-check connection periodically (every 5 minutes) if connected
   useEffect(() => {

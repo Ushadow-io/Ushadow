@@ -73,6 +73,7 @@ export default function TailscaleWizard() {
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Configuration
+  // Note: frontend_port is null to let backend auto-detect (5173 for dev, 80 for prod)
   const [config, setConfig] = useState<TailscaleConfig>({
     hostname: '',
     deployment_mode: {
@@ -82,7 +83,7 @@ export default function TailscaleWizard() {
     https_enabled: true,
     use_caddy_proxy: false,
     backend_port: 8000,
-    frontend_port: 3000,
+    frontend_port: null,
     environments: ['dev', 'test', 'prod'],
   })
 
@@ -152,6 +153,24 @@ export default function TailscaleWizard() {
       updateCorsOrigins()
     }
   }, [wizard.currentStep.id, config.hostname])
+
+  // Fetch routes when arriving at complete step (for returning users)
+  useEffect(() => {
+    if (wizard.currentStep.id === 'complete' && !configuredRoutes) {
+      fetchServeStatus()
+    }
+  }, [wizard.currentStep.id])
+
+  const fetchServeStatus = async () => {
+    try {
+      const response = await tailscaleApi.getServeStatus()
+      if (response.data.routes) {
+        setConfiguredRoutes(response.data.routes)
+      }
+    } catch (err) {
+      console.error('Failed to fetch serve status:', err)
+    }
+  }
 
   const updateCorsOrigins = async () => {
     if (!config.hostname) return
@@ -564,6 +583,11 @@ export default function TailscaleWizard() {
       setMessage({ type: 'info', text: 'Enabling HTTPS on Tailscale...' })
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
+
+      // Save configured routes for display
+      if (serveResponse.data.routes) {
+        setConfiguredRoutes(serveResponse.data.routes)
+      }
 
       // Step 2: Provision the certificate (HTTPS is now enabled)
       setMessage({

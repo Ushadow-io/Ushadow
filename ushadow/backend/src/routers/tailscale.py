@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from src.services.auth import get_current_user, generate_jwt_for_service
 from src.models.user import User
 from src.config.omegaconf_settings import get_settings_store
-from src.utils.tailscale_serve import get_tailscale_status
+from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
@@ -598,7 +598,7 @@ async def exec_in_container(command: str) -> tuple[int, str, str]:
     """
     try:
         container_name = get_tailscale_container_name()
-        container = docker_client.containers.get(container_name)
+        container = _get_docker_client().containers.get(container_name)
         # If command contains pipes or shell operators, wrap in sh -c
         if '|' in command or '&&' in command or '||' in command or '>' in command or '<' in command:
             cmd = ['/bin/sh', '-c', command]
@@ -830,7 +830,7 @@ async def reset_tailscale(
 
         # Step 1: Clear all Tailscale Serve routes
         try:
-            container = docker_client.containers.get(container_name)
+            container = _get_docker_client().containers.get(container_name)
             if container.status == 'running':
                 logger.info("Clearing Tailscale Serve routes...")
                 result = container.exec_run("tailscale serve reset", demux=False)
@@ -865,7 +865,7 @@ async def reset_tailscale(
 
         # Step 3: Logout and clear auth (reuse existing logic)
         try:
-            container = docker_client.containers.get(container_name)
+            container = _get_docker_client().containers.get(container_name)
             if container.status == 'running':
                 logger.info("Logging out from Tailscale...")
                 result = container.exec_run("tailscale logout", demux=False)
@@ -882,7 +882,7 @@ async def reset_tailscale(
 
         # Step 4: Stop and remove container
         try:
-            container = docker_client.containers.get(container_name)
+            container = _get_docker_client().containers.get(container_name)
             logger.info(f"Stopping and removing container {container_name}...")
             container.stop(timeout=5)
             container.remove(force=True)
@@ -897,7 +897,7 @@ async def reset_tailscale(
 
         # Step 5: Delete the volume
         try:
-            volume = docker_client.volumes.get(volume_name)
+            volume = _get_docker_client().volumes.get(volume_name)
             logger.info(f"Removing volume {volume_name}...")
             volume.remove(force=True)
             logger.info("Volume removed successfully")
@@ -972,7 +972,7 @@ async def start_tailscale_container(
 
         # Check if container exists
         try:
-            container = docker_client.containers.get(container_name)
+            container = _get_docker_client().containers.get(container_name)
 
             # Reload to get fresh status
             container.reload()
@@ -991,7 +991,7 @@ async def start_tailscale_container(
 
             # Ensure infra network exists
             try:
-                infra_network = docker_client.networks.get("infra-network")
+                infra_network = _get_docker_client().networks.get("infra-network")
             except docker.errors.NotFound:
                 raise HTTPException(
                     status_code=400,
@@ -1002,16 +1002,16 @@ async def start_tailscale_container(
             env_network_name = f"{env_name}_default"
             env_network = None
             try:
-                env_network = docker_client.networks.get(env_network_name)
+                env_network = _get_docker_client().networks.get(env_network_name)
                 logger.info(f"Connecting to environment network: {env_network_name}")
             except docker.errors.NotFound:
                 logger.debug(f"Environment network '{env_network_name}' not found - using infra-network only")
 
             # Create volume if it doesn't exist (per-environment)
             try:
-                docker_client.volumes.get(volume_name)
+                _get_docker_client().volumes.get(volume_name)
             except docker.errors.NotFound:
-                docker_client.volumes.create(volume_name)
+                _get_docker_client().volumes.create(volume_name)
                 logger.info(f"Created Tailscale volume: {volume_name}")
 
             # Ensure certs directory exists
@@ -1020,7 +1020,7 @@ async def start_tailscale_container(
             # Create container with environment-specific name and hostname
             # The hostname becomes the Tailscale machine name (e.g., wiz.your-tailnet.ts.net)
             # Add Docker Compose labels so the container is part of the compose project
-            container = docker_client.containers.run(
+            container = _get_docker_client().containers.run(
                 image="tailscale/tailscale:latest",
                 name=container_name,
                 hostname=ts_hostname,  # This sets the Tailscale hostname (e.g., "wiz")
@@ -1147,7 +1147,7 @@ async def start_caddy_container() -> Dict[str, str]:
         container_name = "ushadow-caddy"
 
         try:
-            container = docker_client.containers.get(container_name)
+            container = _get_docker_client().containers.get(container_name)
             container.reload()
 
             if container.status == "running":
@@ -1163,7 +1163,7 @@ async def start_caddy_container() -> Dict[str, str]:
 
             # Ensure infra network exists
             try:
-                infra_network = docker_client.networks.get("infra-network")
+                infra_network = _get_docker_client().networks.get("infra-network")
             except docker.errors.NotFound:
                 raise HTTPException(
                     status_code=400,
@@ -1173,9 +1173,9 @@ async def start_caddy_container() -> Dict[str, str]:
             # Create volumes
             for vol_name in ["ushadow-caddy-data", "ushadow-caddy-config"]:
                 try:
-                    docker_client.volumes.get(vol_name)
+                    _get_docker_client().volumes.get(vol_name)
                 except docker.errors.NotFound:
-                    docker_client.volumes.create(vol_name)
+                    _get_docker_client().volumes.create(vol_name)
 
             # Caddyfile path
             caddyfile_path = PROJECT_ROOT / "config" / "Caddyfile"
@@ -1185,7 +1185,7 @@ async def start_caddy_container() -> Dict[str, str]:
                     detail="Caddyfile not found at config/Caddyfile"
                 )
 
-            container = docker_client.containers.run(
+            container = _get_docker_client().containers.run(
                 image="caddy:2-alpine",
                 name=container_name,
                 detach=True,
@@ -1216,7 +1216,7 @@ async def get_caddy_status(
 ) -> Dict[str, Any]:
     """Get Caddy container status."""
     try:
-        container = docker_client.containers.get("ushadow-caddy")
+        container = _get_docker_client().containers.get("ushadow-caddy")
         container.reload()
 
         return {
@@ -1496,3 +1496,27 @@ async def update_cors_origins(
 # ============================================================================
 # Route Management
 # ============================================================================
+
+@router.get("/serve-status")
+async def get_serve_status(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get current Tailscale serve routes configuration.
+
+    Returns the current routes configured in Tailscale serve.
+    """
+    try:
+        manager = get_tailscale_manager()
+        status = manager.get_serve_status()
+
+        return {
+            "status": "ok",
+            "routes": status or "No routes configured"
+        }
+    except Exception as e:
+        logger.error(f"Error getting serve status: {e}")
+        return {
+            "status": "error",
+            "routes": None,
+            "error": str(e)
+        }

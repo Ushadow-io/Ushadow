@@ -91,8 +91,16 @@ def get_service_access_url(unode_hostname: str, port: int, is_local: bool = Fals
             return f"http://{dns_name}:{port}"
     return None
 
-# Docker client
-docker_client = docker.from_env()
+# Docker client (lazy initialized)
+_docker_client = None
+
+
+def _get_docker_client():
+    """Get Docker client, lazily initialized."""
+    global _docker_client
+    if _docker_client is None:
+        _docker_client = docker.from_env()
+    return _docker_client
 
 
 def get_tailscale_container_name() -> str:
@@ -114,7 +122,7 @@ def exec_tailscale_command(command: str) -> tuple[int, str, str]:
     """
     container_name = get_tailscale_container_name()
     try:
-        container = docker_client.containers.get(container_name)
+        container = _get_docker_client().containers.get(container_name)
         # If command contains pipes or shell operators, wrap in sh -c
         if '|' in command or '&&' in command or '||' in command or '>' in command or '<' in command:
             cmd = ['/bin/sh', '-c', command]
