@@ -19,16 +19,15 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import Annotated
 
-# Add clients/python to path
-client_path = Path(__file__).parent.parent / "clients" / "python"
-sys.path.insert(0, str(client_path))
+# Add ushadow to path
+ushadow_path = Path(__file__).parent.parent / "ushadow"
+sys.path.insert(0, str(ushadow_path.parent))
 
-from ushadow_auth_client import UshadowAuthClient
+from ushadow.client.auth import UshadowClient
 
 # Initialize Typer app
 app = typer.Typer(
@@ -50,10 +49,10 @@ verbose_option = Annotated[
 console = Console()
 
 
-def get_client(verbose: bool = False) -> UshadowAuthClient:
+def get_client(verbose: bool = False) -> UshadowClient:
     """Get authenticated client."""
     try:
-        return UshadowAuthClient.from_env(verbose=verbose)
+        return UshadowClient.from_env(verbose=verbose)
     except ValueError as e:
         console.print(f"[red]❌ {e}[/red]")
         raise typer.Exit(code=1)
@@ -62,16 +61,16 @@ def get_client(verbose: bool = False) -> UshadowAuthClient:
         raise typer.Exit(code=1)
 
 
+def get_unauthenticated_client() -> UshadowClient:
+    """Get client for endpoints that don't require auth."""
+    return UshadowClient.from_env()
+
+
 @app.command()
 def health(verbose: verbose_option = False):
     """Check ushadow backend health."""
     try:
-        client = UshadowAuthClient(
-            base_url="http://localhost:8000",
-            email="",
-            password="dummy",  # Health doesn't require auth
-            verbose=verbose
-        )
+        client = get_unauthenticated_client()
         result = client.health()
         console.print("[green]✅ ushadow backend healthy[/green]")
         if verbose:
@@ -85,19 +84,13 @@ def health(verbose: verbose_option = False):
 def services_list(verbose: verbose_option = False):
     """List all services."""
     try:
-        client = UshadowAuthClient(
-            base_url="http://localhost:8000",
-            email="",
-            password="dummy",  # List doesn't require auth
-            verbose=verbose
-        )
+        client = get_unauthenticated_client()
         services = client.list_services()
 
         if not services:
             console.print("[yellow]No services found[/yellow]")
             return
 
-        # Create rich table
         table = Table(title="Services", show_header=True, header_style="bold magenta")
         table.add_column("Name", style="cyan", width=30)
         table.add_column("Status", width=15)
@@ -105,7 +98,6 @@ def services_list(verbose: verbose_option = False):
         table.add_column("Description", overflow="fold")
 
         for svc in services:
-            # Status emoji
             status_icon = {
                 "running": "🟢",
                 "stopped": "🔴",
@@ -113,7 +105,6 @@ def services_list(verbose: verbose_option = False):
                 "not_found": "🔴",
             }.get(svc.status or "unknown", "⚪")
 
-            # Health indicator
             health_icon = {
                 "healthy": "✅",
                 "unhealthy": "⚠️",
@@ -140,12 +131,7 @@ def services_status(
 ):
     """Get status of a specific service."""
     try:
-        client = UshadowAuthClient(
-            base_url="http://localhost:8000",
-            email="",
-            password="dummy",  # Status doesn't require auth
-            verbose=verbose
-        )
+        client = get_unauthenticated_client()
         service = client.get_service(service_name)
 
         if not service:
@@ -229,26 +215,22 @@ def api(
     import httpx
 
     try:
-        # Ensure endpoint starts with /
         if not endpoint.startswith("/"):
             endpoint = "/" + endpoint
 
         base_url = "http://localhost:8000"
         headers = {"Content-Type": "application/json"}
 
-        # Add authentication if needed
         if not no_auth:
             client = get_client(verbose=verbose)
             client._ensure_authenticated()
             headers["Authorization"] = f"Bearer {client._token}"
 
-        # Parse data if provided
         body = json.loads(data) if data else None
 
         if verbose:
             console.print(f"[dim]🔗 {method.upper()} {endpoint}[/dim]")
 
-        # Make request
         response = httpx.request(
             method=method.upper(),
             url=f"{base_url}{endpoint}",
@@ -257,7 +239,6 @@ def api(
             timeout=30.0,
         )
 
-        # Pretty print response
         if response.status_code >= 400:
             console.print(f"[red]❌ Error {response.status_code}[/red]")
 
