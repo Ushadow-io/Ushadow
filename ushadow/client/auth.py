@@ -2,6 +2,7 @@
 Authenticated ushadow API Client
 
 Wrapper around the auto-generated client that handles authentication.
+Uses raw JSON responses to avoid model parsing issues.
 
 Usage:
     from ushadow.client.auth import UshadowClient
@@ -10,9 +11,10 @@ Usage:
     services = client.list_services()
 """
 
+import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from urllib.parse import urlencode
 
 import httpx
@@ -23,33 +25,21 @@ try:
 except ImportError:
     HAS_YAML = False
 
-from .client import Client, AuthenticatedClient
-from .api.default import (
-    health_check,
-    list_services,
-    get_service,
-    start_service,
-    stop_service,
-)
-from .models import Service
-
 
 class UshadowClient:
     """
     Authenticated ushadow client with automatic login.
 
-    Handles:
-    - Credential loading from secrets.yaml or .env
-    - Automatic login and token caching
-    - Convenient methods for common operations
+    Uses httpx directly for simpler, more reliable API access.
+    The auto-generated client models are complex; this wrapper
+    returns raw dicts for flexibility.
     """
 
     def __init__(self, base_url: str, email: str = "", password: str = "", verbose: bool = False):
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
         self.email = email
         self.password = password
         self.verbose = verbose
-        self._client: Optional[AuthenticatedClient] = None
         self._token: Optional[str] = None
 
     @classmethod
@@ -106,10 +96,10 @@ class UshadowClient:
             current = current.parent
         return {}
 
-    def _ensure_authenticated(self) -> AuthenticatedClient:
-        """Login if needed, return authenticated client."""
-        if self._client is not None:
-            return self._client
+    def _ensure_authenticated(self) -> str:
+        """Login if needed, return token."""
+        if self._token is not None:
+            return self._token
 
         if self.verbose:
             print(f"🔐 Logging in as {self.email}...")
@@ -125,49 +115,98 @@ class UshadowClient:
         result = response.json()
 
         self._token = result["access_token"]
-        self._client = AuthenticatedClient(
-            base_url=self.base_url,
-            token=self._token,
-            prefix="Bearer",
-            auth_header_name="Authorization",
-        )
 
         if self.verbose:
             print("✅ Login successful")
 
-        return self._client
+        return self._token
 
-    # API methods
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        data: Optional[dict] = None,
+        auth: bool = False,
+        timeout: float = 30.0,
+    ) -> Any:
+        """Make an API request."""
+        url = f"{self.base_url}{endpoint}"
+        headers = {"Content-Type": "application/json"}
+
+        if auth:
+            token = self._ensure_authenticated()
+            headers["Authorization"] = f"Bearer {token}"
+
+        response = httpx.request(
+            method=method,
+            url=url,
+            json=data,
+            headers=headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+
+        if response.content:
+            return response.json()
+        return {"success": True}
+
+    # =========================================================================
+    # Health
+    # =========================================================================
 
     def health(self) -> dict:
-        """Check backend health (no auth required)."""
-        client = Client(base_url=self.base_url)
-        response = health_check.sync_detailed(client=client)
-        return response.parsed.to_dict() if response.parsed else {"status": "unknown"}
+        """Check backend health."""
+        return self._request("GET", "/health")
 
-    def list_services(self) -> list[Service]:
-        """List all services (no auth required)."""
-        client = Client(base_url=self.base_url)
-        response = list_services.sync_detailed(client=client)
-        return response.parsed or []
+    # =========================================================================
+    # Services
+    # =========================================================================
 
-    def get_service(self, service_name: str) -> Optional[Service]:
-        """Get service details (no auth required)."""
-        client = Client(base_url=self.base_url)
-        response = get_service.sync_detailed(service_name=service_name, client=client)
-        return response.parsed
+    def list_services(self) -> list[dict]:
+        """List all services."""
+        return self._request("GET", "/api/services/")
 
-    def start_service(self, service_name: str) -> dict:
+    def get_service(self, name: str) -> dict:
+        """Get service details."""
+        return self._request("GET", f"/api/services/{name}")
+
+    def get_service_status(self, name: str) -> dict:
+        """Get service status."""
+        return self._request("GET", f"/api/services/{name}/status")
+
+    def start_service(self, name: str) -> dict:
         """Start a service (requires auth)."""
-        client = self._ensure_authenticated()
-        response = start_service.sync_detailed(service_name=service_name, client=client)
-        return response.parsed.to_dict() if response.parsed else {"success": False}
+        return self._request("POST", f"/api/services/{name}/start", auth=True)
 
-    def stop_service(self, service_name: str) -> dict:
+    def stop_service(self, name: str) -> dict:
         """Stop a service (requires auth)."""
-        client = self._ensure_authenticated()
-        response = stop_service.sync_detailed(service_name=service_name, client=client)
-        return {"success": response.status_code == 200}
+        return self._request("POST", f"/api/services/{name}/stop", auth=True)
+
+    def restart_service(self, name: str) -> dict:
+        """Restart a service (requires auth)."""
+        return self._request("POST", f"/api/services/{name}/restart", auth=True)
+
+    def get_service_logs(self, name: str, lines: int = 100) -> dict:
+        """Get service logs."""
+        return self._request("GET", f"/api/services/{name}/logs?lines={lines}")
+
+    def get_service_env(self, name: str) -> dict:
+        """Get service environment config."""
+        return self._request("GET", f"/api/services/{name}/env")
+
+    def export_service_env(self, name: str) -> dict:
+        """Export environment variables for a service."""
+        return self._request("GET", f"/api/services/{name}/env-export", auth=True)
+
+    # =========================================================================
+    # Generic API Access
+    # =========================================================================
+
+    def api(self, method: str, endpoint: str, data: Optional[dict] = None, auth: bool = True) -> Any:
+        """Make a generic API request."""
+        if not endpoint.startswith("/"):
+            endpoint = "/" + endpoint
+        return self._request(method.upper(), endpoint, data=data, auth=auth)
 
 
 # Convenience alias
