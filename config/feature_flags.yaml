@@ -74,7 +74,7 @@ flags:
 
   # ServiceConfigs Management - Service instance deployment and wiring
   instances_management:
-    enabled: true
+    enabled: false
     description: "ServiceConfigs page - Deploy and wire service instances with capability
       resolution"
     type: release

@@ -368,7 +368,7 @@ class ServiceOrchestrator:
 
     async def start_service(self, name: str, config_id: Optional[str] = None) -> ActionResult:
         """Start a service container."""
-        success, message = await self.docker_manager.start_service(name, instance_id)
+        success, message = await self.docker_manager.start_service(name, config_id)
         return ActionResult(success=success, message=message)
 
     def stop_service(self, name: str) -> ActionResult:

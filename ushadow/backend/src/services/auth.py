@@ -35,13 +35,9 @@ config = get_settings_store()
 JWT_LIFETIME_SECONDS = 86400  # 24 hours (matches chronicle)
 ALGORITHM = "HS256"
 
-# Get secret key from OmegaConf (secrets.yaml -> security.auth_secret_key)
-SECRET_KEY = config.get_sync("security.auth_secret_key")
-if not SECRET_KEY:
-    raise ValueError(
-        "AUTH_SECRET_KEY not found in config/SECRETS/secrets.yaml. "
-        "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
-    )
+# Get secret key with env var bootstrap fallback
+from src.config.secrets import get_auth_secret_key
+SECRET_KEY = get_auth_secret_key()
 
 # Environment mode determines cookie security
 ENV_MODE = config.get_sync("environment.mode") or "development"

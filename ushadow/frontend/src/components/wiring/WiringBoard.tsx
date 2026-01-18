@@ -35,6 +35,9 @@ import {
   StopCircle,
   Settings,
   Loader2,
+  ChevronDown,
+  ChevronUp,
+  Plug,
   Package,
 } from 'lucide-react'
 import { ServiceTemplateCard } from './ServiceTemplateCard'
@@ -127,6 +130,42 @@ export default function WiringBoard({
 }: WiringBoardProps) {
   const [activeProvider, setActiveProvider] = useState<ProviderInfo | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [collapsedTemplates, setCollapsedTemplates] = useState<Set<string>>(new Set())
+  // Provider selection modal state (for click-to-select alternative to drag-drop)
+  const [selectingSlot, setSelectingSlot] = useState<{ consumerId: string; capability: string } | null>(null)
+
+  const toggleTemplateCollapse = (templateId: string) => {
+    setCollapsedTemplates(prev => {
+      const next = new Set(prev)
+      if (next.has(templateId)) {
+        next.delete(templateId)
+      } else {
+        next.add(templateId)
+      }
+      return next
+    })
+  }
+
+  // Open provider selection modal for a slot
+  const handleSelectProviderClick = (consumerId: string, capability: string) => {
+    setSelectingSlot({ consumerId, capability })
+  }
+
+  // Get available providers for a specific capability
+  const getProvidersForCapability = (capability: string) => {
+    return providers.filter(p => p.capability === capability)
+  }
+
+  // Handle selecting a provider from the modal
+  const handleProviderSelected = (provider: ProviderInfo) => {
+    if (!selectingSlot) return
+    onProviderDrop({
+      provider,
+      consumerId: selectingSlot.consumerId,
+      capability: selectingSlot.capability,
+    })
+    setSelectingSlot(null)
+  }
 
   // Configure sensors for proper drag handling
   const mouseSensor = useSensor(MouseSensor, {
@@ -270,19 +309,39 @@ export default function WiringBoard({
                   const templateConnectionCount = wiring.filter(
                     (w) => w.source_config_id === template.id
                   ).length
+                  const isCollapsed = collapsedTemplates.has(template.id)
+                  const hasInstances = instances.length > 0
                   return (
                     <div key={template.id} className="space-y-1">
-                      {/* Template (default) */}
-                      <DraggableProvider
-                        provider={template}
-                        connectionCount={templateConnectionCount}
-                        onEdit={() => onEditProvider(template.id, true)}
-                        onCreateServiceConfig={() => onCreateServiceConfig(template.id)}
-                        onStart={onStartProvider ? () => onStartProvider(template.id, true) : undefined}
-                        onStop={onStopProvider ? () => onStopProvider(template.id, true) : undefined}
-                      />
-                      {/* Nested instances */}
-                      {instances.length > 0 && (
+                      {/* Template header with collapse toggle */}
+                      <div className="flex items-center gap-1">
+                        {hasInstances && (
+                          <button
+                            onClick={() => toggleTemplateCollapse(template.id)}
+                            className="p-0.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+                            title={isCollapsed ? `Show ${instances.length} instance(s)` : 'Collapse instances'}
+                            data-testid={`collapse-provider-${template.id}`}
+                          >
+                            {isCollapsed ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                        <div className={`flex-1 ${!hasInstances ? 'ml-5' : ''}`}>
+                          <DraggableProvider
+                            provider={template}
+                            connectionCount={templateConnectionCount}
+                            onEdit={() => onEditProvider(template.id, true)}
+                            onCreateServiceConfig={() => onCreateServiceConfig(template.id)}
+                            onStart={onStartProvider ? () => onStartProvider(template.id, true) : undefined}
+                            onStop={onStopProvider ? () => onStopProvider(template.id, true) : undefined}
+                          />
+                        </div>
+                      </div>
+                      {/* Nested instances - collapsible */}
+                      {hasInstances && !isCollapsed && (
                         <div className="ml-6 space-y-1 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
                           {instances.map((instance) => {
                             const instanceConnectionCount = wiring.filter(
@@ -301,6 +360,15 @@ export default function WiringBoard({
                               />
                             )
                           })}
+                        </div>
+                      )}
+                      {/* Collapsed indicator */}
+                      {hasInstances && isCollapsed && (
+                        <div
+                          className="ml-6 pl-3 text-xs text-neutral-400 dark:text-neutral-500 cursor-pointer hover:text-neutral-600 dark:hover:text-neutral-400"
+                          onClick={() => toggleTemplateCollapse(template.id)}
+                        >
+                          {instances.length} instance{instances.length > 1 ? 's' : ''} hidden
                         </div>
                       )}
                     </div>
@@ -342,29 +410,49 @@ export default function WiringBoard({
 
                 return templates.map((template) => {
                   const templateInstances = instancesByTemplate[template.id] || []
+                  const isCollapsed = collapsedTemplates.has(template.id)
+                  const hasInstances = templateInstances.length > 0
 
                   return (
                     <div key={template.id} className="space-y-2">
-                      {/* Template - no slots, just + button */}
-                      <ServiceTemplateCard
-                        template={{
-                          id: template.id,
-                          name: template.name,
-                          description: template.description,
-                          requires: template.requires,
-                        }}
-                        configVars={template.configVars}
-                        onCreateInstance={() => onCreateServiceConfig(template.id)}
-                        onUpdateConfigVars={
-                          onUpdateTemplateConfigVars
-                            ? (vars) => onUpdateTemplateConfigVars(template.id, vars)
-                            : undefined
-                        }
-                        alwaysShowConfig={true}
-                      />
+                      {/* Template header with collapse toggle */}
+                      <div className="flex items-start gap-1">
+                        {hasInstances && (
+                          <button
+                            onClick={() => toggleTemplateCollapse(template.id)}
+                            className="p-0.5 mt-4 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+                            title={isCollapsed ? `Show ${templateInstances.length} instance(s)` : 'Collapse instances'}
+                            data-testid={`collapse-service-${template.id}`}
+                          >
+                            {isCollapsed ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                        <div className={`flex-1 ${!hasInstances ? 'ml-5' : ''}`}>
+                          <ServiceTemplateCard
+                            template={{
+                              id: template.id,
+                              name: template.name,
+                              description: template.description,
+                              requires: template.requires,
+                            }}
+                            configVars={template.configVars}
+                            onCreateInstance={() => onCreateServiceConfig(template.id)}
+                            onUpdateConfigVars={
+                              onUpdateTemplateConfigVars
+                                ? (vars) => onUpdateTemplateConfigVars(template.id, vars)
+                                : undefined
+                            }
+                            alwaysShowConfig={true}
+                          />
+                        </div>
+                      </div>
 
-                      {/* Nested instances - these have the capability slots */}
-                      {templateInstances.length > 0 && (
+                      {/* Nested instances - collapsible */}
+                      {hasInstances && !isCollapsed && (
                         <div className="ml-6 space-y-2 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
                           {templateInstances.map((instance) => {
                             return (
@@ -382,6 +470,7 @@ export default function WiringBoard({
                                 activeProvider={activeProvider}
                                 getProviderForSlot={getProviderForSlot}
                                 onDeleteWiring={onDeleteWiring}
+                                onSelectProvider={handleSelectProviderClick}
                                 onEdit={onEditConsumer}
                                 onStart={onStartConsumer}
                                 onStop={onStopConsumer}
@@ -390,6 +479,15 @@ export default function WiringBoard({
                               />
                             )
                           })}
+                        </div>
+                      )}
+                      {/* Collapsed indicator */}
+                      {hasInstances && isCollapsed && (
+                        <div
+                          className="ml-6 pl-3 text-xs text-neutral-400 dark:text-neutral-500 cursor-pointer hover:text-neutral-600 dark:hover:text-neutral-400"
+                          onClick={() => toggleTemplateCollapse(template.id)}
+                        >
+                          {templateInstances.length} instance{templateInstances.length > 1 ? 's' : ''} hidden
                         </div>
                       )}
                     </div>
@@ -428,6 +526,81 @@ export default function WiringBoard({
         document.body
       )}
 
+      {/* Provider Selection Modal (click-to-select alternative to drag-drop) */}
+      {selectingSlot && createPortal(
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9998]"
+          onClick={() => setSelectingSlot(null)}
+        >
+          <div
+            className="bg-white dark:bg-neutral-800 rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="provider-selection-modal"
+          >
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                  Select Provider
+                </h3>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                  Choose a <span className="font-medium">{selectingSlot.capability}</span> provider
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectingSlot(null)}
+                className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 rounded"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 max-h-80 overflow-y-auto">
+              {(() => {
+                const availableProviders = getProvidersForCapability(selectingSlot.capability)
+                if (availableProviders.length === 0) {
+                  return (
+                    <div className="text-center py-6 text-neutral-500 dark:text-neutral-400">
+                      <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No providers available for {selectingSlot.capability}</p>
+                      <p className="text-sm mt-1">Add a provider first</p>
+                    </div>
+                  )
+                }
+                return (
+                  <div className="space-y-2">
+                    {availableProviders.map((provider) => (
+                      <button
+                        key={provider.id}
+                        onClick={() => handleProviderSelected(provider)}
+                        className="w-full p-3 text-left rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-400 dark:hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+                        data-testid={`select-provider-${provider.id}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {provider.mode === 'local' ? (
+                            <HardDrive className="h-5 w-5 text-purple-500" />
+                          ) : (
+                            <Cloud className="h-5 w-5 text-blue-500" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                              {provider.name}
+                            </div>
+                            <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                              {provider.isTemplate ? 'Default' : 'Instance'} • {provider.mode}
+                            </div>
+                          </div>
+                          <StatusIndicator status={provider.status} />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
     </DndContext>
   )
 }
@@ -447,7 +620,7 @@ interface DraggableProviderProps {
   templateProvider?: ProviderInfo // Parent template for instances
 }
 
-function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceConfig, onDelete, onStart, onStop }: DraggableProviderProps) {
+function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceConfig, onDelete, onStart, onStop, templateProvider }: DraggableProviderProps) {
   const [isStarting, setIsStarting] = useState(false)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: provider.id,
@@ -921,27 +1094,16 @@ function ConsumerCard({
               </div>
             ))}
             {/* Configured fields */}
-            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => (
-              <span
             {configuredVars.slice(0, 4).map((v) => (
               <div
                 key={v.key}
-                className="text-xs text-neutral-500 dark:text-neutral-400"
-                title={`${v.label}: ${v.value}`}
                 className="text-sm text-neutral-600 dark:text-neutral-400"
               >
-                {v.required && <span className="text-error-500 mr-0.5">*</span>}
-                <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
                 {v.required && <span className="text-error-500">*</span>}
                 <span className="font-medium">{v.label}:</span>{' '}
                 <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-              </span>
               </div>
             ))}
-            {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
-              <span className="text-xs text-neutral-400">
-                +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
-              </span>
             {configuredVars.length > 4 && (
               <div className="text-xs text-neutral-400">
                 +{configuredVars.length - 4} more
@@ -1067,54 +1229,4 @@ function CapabilitySlot({
       )}
     </div>
   )
-}
-
-// =============================================================================
-// Status Indicator
-// =============================================================================
-
-function StatusIndicator({ status }: { status: string }) {
-  switch (status) {
-    case 'running':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-success-500 animate-pulse" />
-          Running
-        </span>
-      )
-    case 'configured':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-success-500" />
-          Ready
-        </span>
-      )
-    case 'needs_setup':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300">
-          <Settings className="h-3 w-3" />
-          Setup
-        </span>
-      )
-    case 'stopped':
-    case 'not_running':
-      return (
-        <span className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-          Stopped
-        </span>
-      )
-    case 'error':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300">
-          <AlertCircle className="h-3 w-3" />
-          Error
-        </span>
-      )
-    default:
-      return (
-        <span className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-          {status}
-        </span>
-      )
-  }
 }

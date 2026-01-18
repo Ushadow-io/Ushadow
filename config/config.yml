@@ -202,3 +202,38 @@ memory:
   mycelia:
     api_url: http://localhost:5173
     timeout: 30
+
+  # Memory sources for LLM tool calling
+  # The LLM can query these sources via function calls when it needs detailed information
+  sources:
+    - type: openmemory
+      source_id: openmemory
+      name: "Central Memory"
+      description: "Main memory store with inference facts and contextual knowledge from previous interactions"
+      enabled: true
+      metadata:
+        base_url: "http://localhost:8765"
+        timeout: 5.0
+
+    # Example: Notion workspace (disabled by default)
+    # - type: notion
+    #   source_id: notion
+    #   name: "Notion Workspace"
+    #   description: "Personal notes, saved snippets, documentation, and knowledge base from Notion"
+    #   enabled: false
+    #   metadata:
+    #     api_token: "${NOTION_API_TOKEN}"  # Create integration at https://notion.so/my-integrations
+    #     notion_version: "2022-06-28"
+    #     timeout: 10.0
+
+    # Example: Documentation source (disabled by default)
+    # - type: documentation
+    #   source_id: docs
+    #   name: "Technical Documentation"
+    #   description: "Official product documentation and API references"
+    #   enabled: false
+    #   metadata:
+    #     api_url: "https://docs.example.com/api"
+    #     api_key: "${DOC_API_KEY}"  # Use env var
+    #     search_endpoint: "/v1/search"
+    #     timeout: 10.0

@@ -30,8 +30,9 @@ from src.models.service_config import (
     Wiring,
     WiringCreate,
 )
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, prefix="Config")
 
 
 def _get_config_dir() -> Path:

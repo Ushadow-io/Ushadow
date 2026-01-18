@@ -38,6 +38,11 @@ const getBackendUrl = () => {
   // Fallback - calculate backend port from frontend port
   // Frontend runs on 3000 + offset, backend on 8000 + offset
   const frontendPort = parseInt(port)
+  if (isNaN(frontendPort)) {
+    // Invalid or empty port - use relative URLs as safest default
+    console.log('Unknown port, using relative URLs via proxy')
+    return ''
+  }
   const backendPort = frontendPort - 3000 + 8000
   console.log('Calculated backend port:', backendPort)
   return `${protocol}//${hostname}:${backendPort}`
@@ -668,7 +673,7 @@ export interface TailscaleConfig {
   https_enabled: boolean
   use_caddy_proxy: boolean
   backend_port: number
-  frontend_port: number
+  frontend_port: number | null  // null = auto-detect (5173 dev, 80 prod)
   environments: string[]
 }
 
@@ -1342,6 +1347,8 @@ export const tailscaleApi = {
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
+  getServeStatus: () =>
+    api.get<{ status: string; routes: string | null; error?: string }>('/api/tailscale/serve-status'),
   updateCorsOrigins: (hostname: string) =>
     api.post<{
       status: string

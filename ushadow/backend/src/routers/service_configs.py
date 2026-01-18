@@ -166,7 +166,7 @@ async def list_templates(
                 source=TemplateSource.PROVIDER,
                 name=provider.name,
                 description=provider.description,
-                requires=[u.get("capability", "") for u in provider.uses] if provider.uses else [],
+                requires=[u.capability for u in provider.uses] if provider.uses else [],
                 provides=provider.capability,
                 config_schema=config_schema,
                 provider_file=f"providers/{provider.capability}.yaml",

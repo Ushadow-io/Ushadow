@@ -23,8 +23,9 @@ from src.models.kubernetes import (
     KubernetesClusterStatus,
     KubernetesDeploymentSpec,
 )
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, prefix="K8s")
 
 
 class KubernetesManager:
@@ -479,10 +480,11 @@ class KubernetesManager:
         # Parse volumes - separate config files from persistent volumes
         # Volumes can be:
         #   - Bind mounts: "/host/path:/container/path:ro" or "${VAR}/path:/container/path"
-        #   - Named volumes: "volume_name:/container/path"
+        #   - Named volumes: "volume_name:/container/path" (creates PVC)
         config_files = {}  # Files to include in ConfigMap
         volume_mounts = []  # Volume mounts for container
         k8s_volumes = []  # Volume definitions for pod
+        pvcs_to_create = []  # PVCs to create as manifests
 
         for volume_def in volumes:
             if isinstance(volume_def, str):
@@ -495,6 +497,11 @@ class KubernetesManager:
                     # Resolve environment variables in source path
                     import os
                     source = os.path.expandvars(source)
+
+                    # Detect volume type:
+                    # - Named volume: simple name without "/" or "." prefix (e.g., "ushadow-config")
+                    # - Path-based: starts with "/" or "." or contains "/" (e.g., "/config", "./data", "host/path")
+                    is_named_volume = not source.startswith(('/', '.')) and '/' not in source
 
                     # Check if source is a file (for config files) or directory (for data volumes)
                     from pathlib import Path
@@ -519,12 +526,38 @@ class KubernetesManager:
                         except Exception as e:
                             logger.warning(f"Could not read config file {source}: {e}")
 
+                    elif is_named_volume:
+                        # Named volume - create PVC for persistent storage
+                        volume_name = source.replace("_", "-")
+
+                        # Only add PVC if not already added
+                        if not any(v.get("name") == volume_name for v in k8s_volumes):
+                            # Add PVC to list for manifest creation
+                            pvcs_to_create.append({
+                                "name": volume_name,
+                                "storage": "10Gi"  # Default size, could be configurable
+                            })
+
+                            # Add PVC reference to pod volumes
+                            k8s_volumes.append({
+                                "name": volume_name,
+                                "persistentVolumeClaim": {
+                                    "claimName": f"{name}-{volume_name}"
+                                }
+                            })
+
+                        volume_mounts.append({
+                            "name": volume_name,
+                            "mountPath": dest,
+                            "readOnly": is_readonly
+                        })
+                        logger.info(f"Adding PVC volume {volume_name} mounted at {dest}")
+
                     elif source_path.is_dir() or not source_path.exists():
-                        # Directory or named volume - create emptyDir for now
-                        # TODO: Could support PVCs for persistent storage in future
+                        # Directory or non-existent path - use emptyDir (non-persistent scratch)
+                        # Note: Named volumes are handled above and create PVCs
                         volume_name = source_path.name.replace("_", "-") if source_path.name else "data"
 
-                        # Only add volume definition if not already added
                         if not any(v.get("name") == volume_name for v in k8s_volumes):
                             k8s_volumes.append({
                                 "name": volume_name,
@@ -595,6 +628,36 @@ class KubernetesManager:
                     "labels": labels
                 },
                 "data": config_files
+            }
+
+        # Debug: Log volumes before creating deployment
+        logger.info(f"Final k8s_volumes list ({len(k8s_volumes)} volumes):")
+        for idx, vol in enumerate(k8s_volumes):
+            logger.info(f"  [{idx}] {vol}")
+        logger.info(f"Final volume_mounts list ({len(volume_mounts)} mounts):")
+        for idx, mount in enumerate(volume_mounts):
+            logger.info(f"  [{idx}] name={mount['name']}, mountPath={mount['mountPath']}")
+
+        # PersistentVolumeClaims for named volumes
+        for i, pvc_info in enumerate(pvcs_to_create):
+            pvc_name = pvc_info["name"]
+            logger.info(f"Creating PVC manifest for: {pvc_name} (claim name: {name}-{pvc_name})")
+            manifests[f"pvc_{pvc_name}"] = {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": f"{name}-{pvc_name}",
+                    "namespace": namespace,
+                    "labels": labels
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "resources": {
+                        "requests": {
+                            "storage": pvc_info["storage"]
+                        }
+                    }
+                }
             }
 
         # Deployment
@@ -1292,8 +1355,28 @@ class KubernetesManager:
                     else:
                         raise
 
+            # Apply PersistentVolumeClaims (must exist before Deployment references them)
+            for manifest_key, manifest in manifests.items():
+                if manifest_key.startswith("pvc_"):
+                    pvc_name = manifest["metadata"]["name"]
+                    try:
+                        core_api.create_namespaced_persistent_volume_claim(
+                            namespace=namespace,
+                            body=manifest
+                        )
+                        logger.info(f"Created PVC {pvc_name} in {namespace}")
+                    except ApiException as e:
+                        if e.status == 409:  # Already exists
+                            logger.info(f"PVC {pvc_name} already exists in {namespace}")
+                        else:
+                            raise
+
             # Apply Deployment
             deployment_name = manifests["deployment"]["metadata"]["name"]
+            deployment_volumes = manifests["deployment"]["spec"]["template"]["spec"].get("volumes", [])
+            logger.info(f"Deployment manifest volumes ({len(deployment_volumes)} volumes):")
+            for idx, vol in enumerate(deployment_volumes):
+                logger.info(f"  manifest[{idx}] = {vol}")
             try:
                 apps_api.create_namespaced_deployment(
                     namespace=namespace,
@@ -1302,12 +1385,18 @@ class KubernetesManager:
                 logger.info(f"Created deployment {deployment_name} in {namespace}")
             except ApiException as e:
                 if e.status == 409:
-                    apps_api.patch_namespaced_deployment(
+                    logger.info(f"Deployment exists, will replace (not patch) to avoid volume merge issues")
+                    # Delete and recreate to avoid merge issues with volumes
+                    apps_api.delete_namespaced_deployment(
                         name=deployment_name,
+                        namespace=namespace
+                    )
+                    logger.info(f"Deleted existing deployment {deployment_name}")
+                    apps_api.create_namespaced_deployment(
                         namespace=namespace,
                         body=manifests["deployment"]
                     )
-                    logger.info(f"Updated deployment {deployment_name} in {namespace}")
+                    logger.info(f"Recreated deployment {deployment_name} in {namespace}")
                 else:
                     raise
 
@@ -1370,7 +1459,25 @@ class KubernetesManager:
         except ApiException as e:
             logger.error(f"K8s API error during deployment: {e}")
             logger.error(f"Response body: {e.body if hasattr(e, 'body') else 'N/A'}")
-            return False, f"Deployment failed: {e.reason}"
+
+            # Extract detailed error message from K8s response
+            error_detail = e.reason
+            if hasattr(e, 'body') and e.body:
+                try:
+                    import json
+                    body = json.loads(e.body)
+                    if 'message' in body:
+                        error_detail = body['message']
+                    # Also extract specific causes if present
+                    if 'details' in body and 'causes' in body['details']:
+                        causes = body['details']['causes']
+                        cause_msgs = [f"{c.get('field', 'unknown')}: {c.get('message', 'unknown')}" for c in causes]
+                        error_detail = f"{body.get('message', e.reason)} | Causes: {'; '.join(cause_msgs)}"
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass  # Keep original error_detail
+
+            logger.error(f"K8s deployment error detail: {error_detail}")
+            return False, f"Deployment failed: {error_detail}"
         except Exception as e:
             logger.error(f"Error deploying to K8s: {e}")
             import traceback

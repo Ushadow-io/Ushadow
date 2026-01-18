@@ -271,21 +271,34 @@ def setup_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         """Handle HTTP exceptions with structured error response."""
-        # For authentication failures (401), add error_type
-        if exc.status_code == 401:
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={
-                    "detail": exc.detail,
-                    "error_type": "authentication_failure",
-                    "error_category": "security"
-                }
-            )
+        # Map status codes to error types for better frontend handling
+        error_type_map = {
+            400: ("bad_request", "validation"),
+            401: ("authentication_failure", "security"),
+            403: ("forbidden", "security"),
+            404: ("not_found", "resource"),
+            409: ("conflict", "resource"),
+            422: ("validation_error", "validation"),
+            429: ("rate_limited", "throttling"),
+            500: ("internal_error", "server"),
+            502: ("bad_gateway", "server"),
+            503: ("service_unavailable", "server"),
+            504: ("gateway_timeout", "server"),
+        }
 
-        # For other HTTP exceptions, return as normal
+        error_type, error_category = error_type_map.get(
+            exc.status_code, ("http_error", "general")
+        )
+
+        # Always return structured error response
         return JSONResponse(
             status_code=exc.status_code,
-            content={"detail": exc.detail}
+            content={
+                "detail": exc.detail,
+                "error_type": error_type,
+                "error_category": error_category,
+                "status_code": exc.status_code
+            }
         )
 
     @app.exception_handler(Exception)

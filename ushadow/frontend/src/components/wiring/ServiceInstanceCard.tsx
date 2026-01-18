@@ -42,6 +42,7 @@ interface ServiceInstanceCardProps {
   activeProvider: { id: string; name: string; capability: string } | null
   getProviderForSlot: (instanceId: string, capability: string) => { provider?: ProviderInfo; capability: string } | null
   onDeleteWiring: (instanceId: string, capability: string) => Promise<void>
+  onSelectProvider?: (instanceId: string, capability: string) => void // Click-to-select
   onEdit?: (instanceId: string) => void
   onStart?: (instanceId: string) => Promise<void>
   onStop?: (instanceId: string) => Promise<void>
@@ -59,6 +60,7 @@ export function ServiceInstanceCard({
   activeProvider,
   getProviderForSlot,
   onDeleteWiring,
+  onSelectProvider,
   onEdit,
   onStart,
   onStop,
@@ -311,6 +313,7 @@ export function ServiceInstanceCard({
                 connection={connection}
                 isDropTarget={isDropTarget}
                 onClear={() => onDeleteWiring(instance.id, capability)}
+                onSelectProvider={onSelectProvider ? () => onSelectProvider(instance.id, capability) : undefined}
               />
             )
           })}

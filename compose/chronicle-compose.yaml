@@ -20,7 +20,7 @@ x-ushadow:
 
 services:
   chronicle-backend:
-    image: ghcr.io/ushadow-io/chronicle/backend:nodeps1
+    image: ghcr.io/ushadow-io/chronicle/backend:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
     # Sidecar mode: Run both workers and backend in same container
     command:
@@ -67,9 +67,9 @@ services:
       - chronicle_debug:/app/debug_dir
 
       # Model registry - defines available LLMs, embeddings, STT, TTS
-      # Note: /config is volume-mounted from host by ushadow backend
-      - /config/config.yml:/app/config/config.yml:ro
-      - /config/defaults.yml:/app/config/defaults.yml:ro
+      # Use PROJECT_ROOT for absolute host paths (relative paths don't work from backend container)
+      - ${PROJECT_ROOT}/config/config.yml:/app/config/config.yml:ro
+      - ${PROJECT_ROOT}/config/defaults.yml:/app/config/defaults.yml:ro
 
     networks:
       - infra-network

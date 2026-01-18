@@ -29,11 +29,13 @@ from pydantic import BaseModel
 
 try:
     from ..config.yaml_parser import ComposeParser, ComposeService, ComposeEnvVar, ParsedCompose
+    from ..utils.logging import get_logger
 except ImportError:
     # Handle direct execution or different import contexts
     from config.yaml_parser import ComposeParser, ComposeService, ComposeEnvVar, ParsedCompose
+    from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, prefix="Registry")
 
 
 def _get_compose_dir() -> Path:

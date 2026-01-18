@@ -21,14 +21,51 @@ SENSITIVE_PATTERNS = ['key', 'secret', 'password', 'token', 'credential', 'auth'
 
 
 def get_auth_secret_key() -> str:
-    """Get AUTH_SECRET_KEY from OmegaConf (secrets.yaml -> security.auth_secret_key)."""
+    """
+    Get AUTH_SECRET_KEY from config store, with env var bootstrap.
+
+    Priority:
+    1. secrets.yaml (security.auth_secret_key) - already persisted
+    2. Environment variable AUTH_SECRET_KEY - copy to secrets.yaml on first use
+
+    On first deploy, provide AUTH_SECRET_KEY via env var. It gets persisted
+    to secrets.yaml so future restarts don't need the env var.
+    """
+    import os
+    import asyncio
     from src.config.omegaconf_settings import get_settings_store
-    key = get_settings_store().get_sync("security.auth_secret_key")
+
+    settings = get_settings_store()
+    key = settings.get_sync("security.auth_secret_key")
+
+    if key:
+        return key
+
+    # Not in store - check environment variable
+    key = os.environ.get("AUTH_SECRET_KEY")
+
     if not key:
         raise ValueError(
-            "AUTH_SECRET_KEY not found in config/SECRETS/secrets.yaml. "
-            "Run ./go.sh or ensure secrets.yaml has security.auth_secret_key"
+            "AUTH_SECRET_KEY not found. Provide via environment variable on first deploy. "
+            "It will be persisted to /config/secrets.yaml for future restarts."
         )
+
+    # Persist env var to secrets.yaml for future restarts
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(settings.save_to_secrets({
+                "security": {"auth_secret_key": key}
+            }))
+            logger.info("AUTH_SECRET_KEY from env var will be persisted to secrets.yaml")
+        else:
+            loop.run_until_complete(settings.save_to_secrets({
+                "security": {"auth_secret_key": key}
+            }))
+            logger.info("AUTH_SECRET_KEY from env var persisted to secrets.yaml")
+    except Exception as e:
+        logger.warning(f"Could not persist AUTH_SECRET_KEY to secrets.yaml: {e}")
+
     return key
 
 

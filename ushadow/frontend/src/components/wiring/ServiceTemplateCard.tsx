@@ -142,9 +142,28 @@ export function ServiceTemplateCard({
       data-testid={`service-template-${template.id}`}
     >
       <div className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          {/* Service Info */}
-          <div className="flex-1 min-w-0">
+        <div className="flex items-start gap-3">
+          {/* Expand/Collapse Arrow - Left side */}
+          {(displayVars.length > 0 || alwaysShowConfig) && (
+            <button
+              onClick={toggleExpanded}
+              className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 flex-shrink-0 mt-0.5"
+              title={isExpanded ? 'Hide configuration' : 'Show configuration'}
+              data-testid={`expand-${template.id}`}
+            >
+              {isExpanded ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </button>
+          )}
+
+          {/* Service Info - clickable to expand */}
+          <div
+            className="flex-1 min-w-0 cursor-pointer"
+            onClick={toggleExpanded}
+          >
             <div className="flex items-center gap-2 mb-1">
               <Package className="h-5 w-5 text-primary-600 dark:text-primary-400 flex-shrink-0" />
               <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
@@ -172,7 +191,10 @@ export function ServiceTemplateCard({
 
           {/* Deploy Button */}
           <button
-            onClick={onCreateInstance}
+            onClick={(e) => {
+              e.stopPropagation()
+              onCreateInstance()
+            }}
             className="flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-lg bg-primary-600 hover:bg-primary-700 text-white transition-colors flex-shrink-0"
             title="Create service instance"
             data-testid={`deploy-${template.id}`}
@@ -182,24 +204,6 @@ export function ServiceTemplateCard({
           </button>
         </div>
       </div>
-
-      {/* Expand/Collapse Handle - Bottom of card */}
-      {(displayVars.length > 0 || alwaysShowConfig) && (
-        <div className="flex justify-center">
-          <button
-            onClick={toggleExpanded}
-            className="p-0.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors rounded-b hover:bg-neutral-100 dark:hover:bg-neutral-700"
-            title={isExpanded ? 'Hide configuration' : 'Show configuration'}
-            data-testid={`expand-${template.id}`}
-          >
-            {isExpanded ? (
-              <ChevronUp className="h-3 w-3" />
-            ) : (
-              <ChevronDown className="h-3 w-3" />
-            )}
-          </button>
-        </div>
-      )}
 
       {/* Expanded Configuration Section */}
       {isExpanded && (displayVars.length > 0 || alwaysShowConfig || isLoadingEnv) && (
@@ -223,7 +227,7 @@ export function ServiceTemplateCard({
                         {v.required && <span className="text-error-500 mr-0.5">*</span>}
                         {v.label}:
                       </span>
-                      <span className={`text-neutral-900 dark:text-neutral-100 ${v.isSecret ? 'font-mono' : ''}`}>
+                      <span className={`text-neutral-900 dark:text-neutral-100 flex-1 min-w-0 break-words ${v.isSecret ? 'font-mono' : ''}`}>
                         {v.isSecret && v.value ? '••••••' : v.value || (
                           <span className="italic text-warning-600 dark:text-warning-400">Not set</span>
                         )}

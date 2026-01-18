@@ -11,6 +11,7 @@ load_dotenv(find_dotenv(usecwd=True))
 import asyncio
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from beanie import init_beanie

@@ -324,6 +324,7 @@ class DockerManager:
             "service_type": ServiceType.APPLICATION,
             "required": True,
             "user_controllable": False,
+            "compose_discovered": True,  # Uses compose file for env var resolution
             "endpoints": [
                 ServiceEndpoint(
                     url="http://ushadow-backend:8010",
@@ -337,6 +338,7 @@ class DockerManager:
             "service_type": ServiceType.APPLICATION,
             "required": True,
             "user_controllable": False,
+            "compose_discovered": True,  # Uses compose file for env var resolution
             "endpoints": []
         },
     }

@@ -17,8 +17,9 @@ from src.services.provider_registry import get_provider_registry
 from src.services.compose_registry import get_compose_registry
 from src.models.provider import Provider, EnvMap
 from src.config.omegaconf_settings import get_settings_store
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, prefix="Resolve")
 
 
 class CapabilityResolver:
@@ -559,14 +560,19 @@ class CapabilityResolver:
         {'uses': [{'capability': 'llm', 'required': True}, ...]}
 
         Matching logic:
-        1. Exact service name match (e.g., 'chronicle-backend')
-        2. Compose file base name match (e.g., 'chronicle' matches chronicle-compose.yaml)
+        1. Exact service ID match (e.g., 'ushadow-compose:ushadow-backend')
+        2. Service name match (e.g., 'chronicle-backend')
+        3. Compose file base name match (e.g., 'chronicle' matches chronicle-compose.yaml)
         """
         if service_id in self._services_cache:
             return self._services_cache[service_id]
 
-        # Try exact service name match first
-        service = self._compose_registry.get_service_by_name(service_id)
+        # Try exact service ID match first (e.g., "ushadow-compose:ushadow-backend")
+        service = self._compose_registry.get_service(service_id)
+
+        # If not found, try matching by service name only
+        if not service:
+            service = self._compose_registry.get_service_by_name(service_id)
 
         # If not found, try matching by compose file base name
         # e.g., 'chronicle' matches services in 'chronicle-compose.yaml'
