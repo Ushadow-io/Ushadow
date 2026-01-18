@@ -26,7 +26,6 @@ import {
   Cloud,
   HardDrive,
   AlertCircle,
-  Plug,
   X,
   GripVertical,
   Pencil,
@@ -38,6 +37,9 @@ import {
   Loader2,
   Package,
 } from 'lucide-react'
+import { ServiceTemplateCard } from './ServiceTemplateCard'
+import { ServiceInstanceCard } from './ServiceInstanceCard'
+import { StatusIndicator } from './StatusIndicator'
 // Per-service wiring model - each consumer has its own connections
 
 interface ConfigVar {
@@ -69,6 +71,8 @@ interface ConsumerInfo {
   configVars?: ConfigVar[]
   configured?: boolean
   description?: string // Service description
+  isTemplate?: boolean // True for templates, false for instances
+  templateId?: string // For templates: own ID; for instances: parent template ID
 }
 
 interface WiringInfo {
@@ -93,6 +97,7 @@ interface WiringBoardProps {
   onDeleteWiring: (consumerId: string, capability: string) => Promise<void>
   onEditProvider: (providerId: string, isTemplate: boolean) => void
   onCreateServiceConfig: (templateId: string) => void
+  onUpdateTemplateConfigVars?: (templateId: string, configVars: ConfigVar[]) => Promise<void>
   onDeleteServiceConfig: (instanceId: string) => void
   onStartProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
   onStopProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
@@ -111,6 +116,7 @@ export default function WiringBoard({
   onDeleteWiring,
   onEditProvider,
   onCreateServiceConfig,
+  onUpdateTemplateConfigVars,
   onDeleteServiceConfig,
   onStartProvider,
   onStopProvider,
@@ -320,34 +326,76 @@ export default function WiringBoard({
 
           {consumers.length > 0 ? (
             <div className="space-y-4">
-              {consumers.map((consumer) => {
-                const configVars = consumer.configVars || []
-                const missingRequiredVars = configVars.filter((v) => v.required && !v.value)
-                const configuredVars = configVars.filter((v) => v.value)
-                const needsSetup = consumer.configured === false || missingRequiredVars.length > 0
-                const isCloud = consumer.mode === 'cloud'
-                const canStart = !isCloud && (consumer.status === 'stopped' || consumer.status === 'pending' || consumer.status === 'exited' || consumer.status === 'not_running' || consumer.status === 'not_found')
-                const canStop = !isCloud && (consumer.status === 'running' || consumer.status === 'starting')
+              {/* Group consumers by template */}
+              {(() => {
+                // Separate templates and instances
+                const templates = consumers.filter((c) => c.isTemplate)
+                const instances = consumers.filter((c) => !c.isTemplate)
 
-                return (
-                  <ConsumerCard
-                    key={consumer.id}
-                    consumer={consumer}
-                    missingRequiredVars={missingRequiredVars}
-                    configuredVars={configuredVars}
-                    needsSetup={needsSetup}
-                    canStart={canStart}
-                    canStop={canStop}
-                    activeProvider={activeProvider}
-                    getProviderForSlot={getProviderForSlot}
-                    onDeleteWiring={onDeleteWiring}
-                    onEdit={onEditConsumer}
-                    onStart={onStartConsumer}
-                    onStop={onStopConsumer}
-                    onDeploy={onDeployConsumer}
-                  />
-                )
-              })}
+                // Group instances by template
+                const instancesByTemplate = instances.reduce((acc, instance) => {
+                  const templateId = instance.templateId || 'unknown'
+                  if (!acc[templateId]) acc[templateId] = []
+                  acc[templateId].push(instance)
+                  return acc
+                }, {} as Record<string, ConsumerInfo[]>)
+
+                return templates.map((template) => {
+                  const templateInstances = instancesByTemplate[template.id] || []
+
+                  return (
+                    <div key={template.id} className="space-y-2">
+                      {/* Template - no slots, just + button */}
+                      <ServiceTemplateCard
+                        template={{
+                          id: template.id,
+                          name: template.name,
+                          description: template.description,
+                          requires: template.requires,
+                        }}
+                        configVars={template.configVars}
+                        onCreateInstance={() => onCreateServiceConfig(template.id)}
+                        onUpdateConfigVars={
+                          onUpdateTemplateConfigVars
+                            ? (vars) => onUpdateTemplateConfigVars(template.id, vars)
+                            : undefined
+                        }
+                        alwaysShowConfig={true}
+                      />
+
+                      {/* Nested instances - these have the capability slots */}
+                      {templateInstances.length > 0 && (
+                        <div className="ml-6 space-y-2 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
+                          {templateInstances.map((instance) => {
+                            return (
+                              <ServiceInstanceCard
+                                key={instance.id}
+                                instance={{
+                                  id: instance.id,
+                                  name: instance.name,
+                                  requires: instance.requires,
+                                  status: instance.status,
+                                  mode: instance.mode,
+                                  description: instance.description,
+                                }}
+                                configVars={instance.configVars}
+                                activeProvider={activeProvider}
+                                getProviderForSlot={getProviderForSlot}
+                                onDeleteWiring={onDeleteWiring}
+                                onEdit={onEditConsumer}
+                                onStart={onStartConsumer}
+                                onStop={onStopConsumer}
+                                onDeploy={onDeployConsumer}
+                                onDelete={() => onDeleteServiceConfig(instance.id)}
+                              />
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              })()}
             </div>
           ) : (
             <div className="p-4 text-center text-neutral-400 dark:text-neutral-500 text-sm border-2 border-dashed border-neutral-200 dark:border-neutral-700 rounded-lg">
@@ -606,9 +654,6 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceC
   )
 }
 
-// =============================================================================
-// Service Card Component (vertical slot layout per wireframe)
-// =============================================================================
 
 interface ServiceCardProps {
   consumer: ConsumerInfo
@@ -876,16 +921,27 @@ function ConsumerCard({
               </div>
             ))}
             {/* Configured fields */}
+            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => (
+              <span
             {configuredVars.slice(0, 4).map((v) => (
               <div
                 key={v.key}
+                className="text-xs text-neutral-500 dark:text-neutral-400"
+                title={`${v.label}: ${v.value}`}
                 className="text-sm text-neutral-600 dark:text-neutral-400"
               >
+                {v.required && <span className="text-error-500 mr-0.5">*</span>}
+                <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
                 {v.required && <span className="text-error-500">*</span>}
                 <span className="font-medium">{v.label}:</span>{' '}
                 <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+              </span>
               </div>
             ))}
+            {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
+              <span className="text-xs text-neutral-400">
+                +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
+              </span>
             {configuredVars.length > 4 && (
               <div className="text-xs text-neutral-400">
                 +{configuredVars.length - 4} more

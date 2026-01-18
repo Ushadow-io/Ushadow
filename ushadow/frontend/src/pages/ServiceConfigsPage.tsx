@@ -94,32 +94,6 @@ export default function ServiceConfigsPage() {
   // Track providers user has added (even if not yet configured)
   const [addedProviderIds, setAddedProviderIds] = useState<Set<string>>(new Set())
 
-  // Unified instance creation state (used by both + button and drag-drop)
-  const [createServiceConfigState, setCreateServiceConfigState] = useState<{
-    isOpen: boolean
-    template: Template | null
-    form: {
-      id: string
-      name: string
-      deployment_target: string
-      config: Record<string, string>
-    }
-    wiring?: {
-      capability: string
-      consumerId: string
-      consumerName: string
-    }
-  }>({
-    isOpen: false,
-    template: null,
-    form: {
-      id: '',
-      name: '',
-      deployment_target: 'local',
-      config: {},
-    },
-  })
-
   // Edit modal state - for editing provider templates or instances from wiring board
   const [editingProvider, setEditingProvider] = useState<{
     id: string
@@ -148,6 +122,21 @@ export default function ServiceConfigsPage() {
     serviceId: null,
     targetType: null,
   })
+
+  // Simple deploy confirmation modal (for local/remote)
+  const [simpleDeployModal, setSimpleDeployModal] = useState<{
+    isOpen: boolean
+    serviceId: string | null
+    targetType: 'local' | 'remote' | null
+    targetId?: string
+  }>({
+    isOpen: false,
+    serviceId: null,
+    targetType: null,
+  })
+  const [deployEnvVars, setDeployEnvVars] = useState<EnvVarInfo[]>([])
+  const [deployEnvConfigs, setDeployEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
+  const [loadingDeployEnv, setLoadingDeployEnv] = useState(false)
   const [kubernetesClusters, setKubernetesClusters] = useState<any[]>([])
   const [loadingClusters, setLoadingClusters] = useState(false)
 
@@ -159,11 +148,6 @@ export default function ServiceConfigsPage() {
 
   // ESC key to close modals
   const closeAllModals = useCallback(() => {
-    setCreateServiceConfigState({
-      isOpen: false,
-      template: null,
-      form: { id: '', name: '', deployment_target: 'local', config: {} },
-    })
     setShowAddProviderModal(false)
     setEditingProvider(null)
     setShowCatalog(false)
@@ -302,91 +286,71 @@ export default function ServiceConfigsPage() {
 
   // Generate next available instance ID for a template
   const generateServiceConfigId = (templateId: string): string => {
-    // Find all existing instances that start with this template ID
+    // Extract clean name from template ID (remove compose file prefix)
+    // For compose services: "chronicle-compose:chronicle-webui" -> "chronicle-webui"
+    // For providers: "openai" -> "openai"
+    const baseName = templateId.includes(':')
+      ? templateId.split(':').pop()!
+      : templateId
+
+    // Find all existing instances that start with this base name
     const existingIds = instances
       .map((i) => i.id)
-      .filter((id) => id.startsWith(`${templateId}-`))
+      .filter((id) => id.startsWith(`${baseName}-`))
 
     // Extract numbers from existing IDs
     const numbers = existingIds
       .map((id) => {
-        const match = id.match(new RegExp(`^${templateId}-(\\d+)$`))
+        const match = id.match(new RegExp(`^${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(\\d+)$`))
         return match ? parseInt(match[1], 10) : 0
       })
       .filter((n) => n > 0)
 
     // Find next available number
     const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1
-    return `${templateId}-${nextNum}`
+    return `${baseName}-${nextNum}`
   }
 
   /**
-   * Open create instance modal - unified for both + button and drag-drop
+   * Create service config directly - unified for both + button and drag-drop
    * @param template - The template to create instance from
    * @param wiring - Optional wiring info (for drag-drop path)
    */
-  const openCreateServiceConfigModal = (
+  const createServiceConfigDirectly = async (
     template: Template,
     wiring?: { capability: string; consumerId: string; consumerName: string }
   ) => {
-    // Generate unique incremental ID
+    // Generate unique incremental ID (already uses clean name without compose prefix)
     const generatedId = generateServiceConfigId(template.id)
 
-    // Start with EMPTY config - defaults are shown in UI but not stored
-    // Only user-entered values should be in form state
-    setCreateServiceConfigState({
-      isOpen: true,
-      template,
-      form: {
-        id: generatedId,
-        name: generatedId, // Default name to the generated ID
-        deployment_target: template.mode === 'cloud' ? 'cloud' : 'local',
-        config: {}, // Empty - only store actual overrides
-      },
-      wiring, // Optional - only present for drag-drop path
-    })
-  }
-
-  /**
-   * Unified handler for creating instances (both + button and drag-drop)
-   * If wiring info is present, also creates the wiring connection
-   */
-  const handleCreateServiceConfig = async () => {
-    if (!createServiceConfigState.template) return
-
-    setCreating(createServiceConfigState.template.id)
+    setCreating(template.id)
     try {
-      // Filter out empty values - only send actual overrides
-      const filteredConfig = Object.fromEntries(
-        Object.entries(createServiceConfigState.form.config).filter(([, v]) => v && v.trim() !== '')
-      )
-
       const data: ServiceConfigCreateRequest = {
-        id: createServiceConfigState.form.id,
-        template_id: createServiceConfigState.template.id,
-        name: createServiceConfigState.form.name,
-        deployment_target: createServiceConfigState.form.deployment_target,
-        config: filteredConfig,
+        id: generatedId,
+        template_id: template.id,
+        name: generatedId,
+        deployment_target: template.mode === 'cloud' ? 'cloud' : 'local',
+        config: {}, // Empty config - will be set during deployment
       }
 
       // Step 1: Create the service config
       await svcConfigsApi.createServiceConfig(data)
 
       // Step 2: If wiring info exists, create the wiring connection (drag-drop path)
-      if (createServiceConfigState.wiring) {
+      if (wiring) {
         const newWiring = await svcConfigsApi.createWiring({
-          source_config_id: createServiceConfigState.form.id,
-          source_capability: createServiceConfigState.wiring.capability,
-          target_config_id: createServiceConfigState.wiring.consumerId,
-          target_capability: createServiceConfigState.wiring.capability,
+          source_config_id: generatedId,
+          source_capability: wiring.capability,
+          target_config_id: wiring.consumerId,
+          target_capability: wiring.capability,
         })
 
         // Update wiring state
         setWiring((prev) => {
           const existing = prev.findIndex(
             (w) =>
-              w.target_config_id === createServiceConfigState.wiring!.consumerId &&
-              w.target_capability === createServiceConfigState.wiring!.capability
+              w.target_config_id === wiring.consumerId &&
+              w.target_capability === wiring.capability
           )
           if (existing >= 0) {
             const updated = [...prev]
@@ -398,25 +362,19 @@ export default function ServiceConfigsPage() {
 
         setMessage({
           type: 'success',
-          text: `Created ${createServiceConfigState.form.name} and connected to ${createServiceConfigState.wiring.consumerName}`,
+          text: `Created ${generatedId} and connected to ${wiring.consumerName}`,
         })
       } else {
-        setMessage({ type: 'success', text: `ServiceConfig "${createServiceConfigState.form.name}" created` })
+        setMessage({ type: 'success', text: `Instance "${generatedId}" created` })
       }
 
-      // Close modal and reload instances
-      setCreateServiceConfigState({
-        isOpen: false,
-        template: null,
-        form: { id: '', name: '', deployment_target: 'local', config: {} },
-      })
-
+      // Reload instances
       const instancesRes = await svcConfigsApi.getServiceConfigs()
       setServiceConfigs(instancesRes.data)
     } catch (error: any) {
       setMessage({
         type: 'error',
-        text: getErrorMessage(error, 'Failed to create instance'),
+        text: error.response?.data?.detail || 'Failed to create instance',
       })
     } finally {
       setCreating(null)
@@ -625,6 +583,13 @@ export default function ServiceConfigsPage() {
   }
 
   const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => {
+    // Get the consumer instance to find its template_id
+    const consumerInstance = instances.find(inst => inst.id === consumerId)
+    if (!consumerInstance) {
+      setMessage({ type: 'error', text: `Service instance ${consumerId} not found` })
+      return
+    }
+
     // For Kubernetes, load available clusters first
     if (target.type === 'kubernetes') {
       setLoadingClusters(true)
@@ -648,10 +613,10 @@ export default function ServiceConfigsPage() {
             console.warn('No cached infrastructure scan found for cluster')
           }
 
-          // Pass infrastructure directly in modal state
+          // Pass template_id as serviceId so the modal loads the right env vars
           setDeployModalState({
             isOpen: true,
-            serviceId: consumerId,
+            serviceId: consumerInstance.template_id,
             targetType: target.type,
             selectedClusterId: cluster.cluster_id,
             infraServices: infraData,
@@ -661,7 +626,7 @@ export default function ServiceConfigsPage() {
           // Infrastructure will be loaded when cluster is selected in modal
           setDeployModalState({
             isOpen: true,
-            serviceId: consumerId,
+            serviceId: consumerInstance.template_id,
             targetType: target.type,
           })
         }
@@ -671,109 +636,119 @@ export default function ServiceConfigsPage() {
       } finally {
         setLoadingClusters(false)
       }
-    } else if (target.type === 'local') {
-      // Deploy to local unode (leader)
+    } else if (target.type === 'local' || target.type === 'remote') {
+      // Show deploy confirmation modal with env vars
+      setSimpleDeployModal({
+        isOpen: true,
+        serviceId: consumerId,
+        targetType: target.type,
+        targetId: target.id,
+      })
+
+      // Load env config
+      setLoadingDeployEnv(true)
       try {
-        setCreating(`deploy-${consumerId}`)
+        const response = await servicesApi.getEnvConfig(consumerId)
+        const allVars = [...response.data.required_env_vars, ...response.data.optional_env_vars]
+        setDeployEnvVars(allVars)
 
-        // Get local unode hostname from leader info
-        const leaderResponse = await clusterApi.getLeaderInfo()
-        const unodeHostname = leaderResponse.data.hostname
-
-        console.log(`🚀 Deploying ${consumerId} to local unode: ${unodeHostname}`)
-
-        // Generate unique instance ID for this deployment
-        const template = templates.find(t => t.id === consumerId)
-        const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
-        const timestamp = Date.now()
-        const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
-        const deploymentTarget = unodeHostname
-
-        // Step 1: Create instance with deployment target
-        await svcConfigsApi.createServiceConfig({
-          id: instanceId,
-          template_id: consumerId,
-          name: `${template?.name || consumerId} (${unodeHostname})`,
-          description: `uNode deployment to ${unodeHostname}`,
-          config: {},
-          deployment_target: deploymentTarget
+        // Initialize env configs
+        const formData: Record<string, EnvVarConfig> = {}
+        allVars.forEach(ev => {
+          formData[ev.name] = {
+            name: ev.name,
+            source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
+            setting_path: ev.setting_path,
+            value: ev.value
+          }
         })
-
-        // Step 2: Deploy the service config
-        await svcConfigsApi.deployServiceConfig(instanceId)
-
-        console.log('✅ Deployment successful')
-        setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to local unode` })
-
-        // Refresh instances and service statuses
-        const [instancesRes, statusesRes] = await Promise.all([
-          svcConfigsApi.getServiceConfigs(),
-          servicesApi.getAllStatuses()
-        ])
-        setServiceConfigs(instancesRes.data)
-        setServiceStatuses(statusesRes.data || {})
-
-      } catch (err: any) {
-        console.error('Failed to deploy to local unode:', err)
-        const errorMsg = getErrorMessage(err, 'Failed to deploy to local unode')
-        setMessage({ type: 'error', text: errorMsg })
+        setDeployEnvConfigs(formData)
+      } catch (error) {
+        console.error('Failed to load env config:', error)
       } finally {
-        setCreating(null)
+        setLoadingDeployEnv(false)
       }
-    } else if (target.type === 'remote') {
-      // Deploy to remote unode
-      try {
-        setCreating(`deploy-${consumerId}`)
+    }
+  }
 
-        // For now, show error - need to implement unode selection modal
-        // In the future, this should show a modal to select which remote unode to deploy to
-        if (!target.id) {
-          setMessage({ type: 'error', text: 'Remote unode deployment requires selecting a target unode. This will be implemented soon.' })
+  const handleConfirmDeploy = async () => {
+    if (!simpleDeployModal.serviceId || !simpleDeployModal.targetType) return
+
+    const consumerId = simpleDeployModal.serviceId
+    const targetType = simpleDeployModal.targetType
+
+    setCreating(`deploy-${consumerId}`)
+    setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })
+
+    try {
+      let targetHostname: string
+
+      if (targetType === 'local') {
+        const leaderResponse = await clusterApi.getLeaderInfo()
+        targetHostname = leaderResponse.data.hostname
+      } else {
+        // Remote
+        if (!simpleDeployModal.targetId) {
+          setMessage({ type: 'error', text: 'Remote unode deployment requires selecting a target unode.' })
           setCreating(null)
           return
         }
-
-        const targetHostname = target.id
-        console.log(`🚀 Deploying ${consumerId} to remote unode: ${targetHostname}`)
-
-        // Generate unique instance ID for this deployment
-        const template = templates.find(t => t.id === consumerId)
-        const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
-        const timestamp = Date.now()
-        const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
-        const deploymentTarget = targetHostname
-
-        // Step 1: Create instance with deployment target
-        await svcConfigsApi.createServiceConfig({
-          id: instanceId,
-          template_id: consumerId,
-          name: `${template?.name || consumerId} (${targetHostname})`,
-          description: `uNode deployment to ${targetHostname}`,
-          config: {},
-          deployment_target: deploymentTarget
-        })
-
-        // Step 2: Deploy the service config
-        await svcConfigsApi.deployServiceConfig(instanceId)
-
-        console.log('✅ Deployment successful')
-        setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to remote unode` })
-
-        // Refresh instances and service statuses
-        const [instancesRes, statusesRes] = await Promise.all([
-          svcConfigsApi.getServiceConfigs(),
-          servicesApi.getAllStatuses()
-        ])
-        setServiceConfigs(instancesRes.data)
-        setServiceStatuses(statusesRes.data || {})
-
-      } catch (err: any) {
-        console.error('Failed to deploy to remote unode:', err)
-        const errorMsg = getErrorMessage(err, 'Failed to deploy to remote unode')
-        setMessage({ type: 'error', text: errorMsg })
-      } finally {
-        setCreating(null)
+        targetHostname = simpleDeployModal.targetId
       }
+
+      console.log(`🚀 Deploying ${consumerId} to ${targetType} unode: ${targetHostname}`)
+
+      // Generate unique instance ID for this deployment
+      const template = templates.find(t => t.id === consumerId)
+      const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
+      const timestamp = Date.now()
+      const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
+
+      // Build config from env var settings
+      const config: Record<string, any> = {}
+      Object.entries(deployEnvConfigs).forEach(([name, envConfig]) => {
+        if (envConfig.source === 'setting' && envConfig.setting_path) {
+          config[name] = { _from_setting: envConfig.setting_path }
+        } else if (envConfig.source === 'new_setting' && envConfig.value) {
+          config[name] = envConfig.value
+          if (envConfig.new_setting_path) {
+            config[`_save_${name}`] = envConfig.new_setting_path
+          }
+        } else if (envConfig.value) {
+          config[name] = envConfig.value
+        }
+      })
+
+      // Step 1: Create instance with deployment target and config
+      await svcConfigsApi.createServiceConfig({
+        id: instanceId,
+        template_id: consumerId,
+        name: `${template?.name || consumerId} (${targetHostname})`,
+        description: `uNode deployment to ${targetHostname}`,
+        config,
+        deployment_target: targetHostname
+      })
+
+      // Step 2: Deploy the service config
+      await svcConfigsApi.deployServiceConfig(instanceId)
+
+      console.log('✅ Deployment successful')
+      setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to ${targetType} unode` })
+
+      // Refresh instances and service statuses
+      const [instancesRes, statusesRes] = await Promise.all([
+        svcConfigsApi.getServiceConfigs(),
+        servicesApi.getAllStatuses()
+      ])
+      setServiceConfigs(instancesRes.data)
+      setServiceStatuses(statusesRes.data || {})
+
+    } catch (err: any) {
+      console.error(`Failed to deploy to ${targetType} unode:`, err)
+      const errorMsg = getErrorMessage(err, `Failed to deploy to ${targetType} unode`)
+      setMessage({ type: 'error', text: errorMsg })
+    } finally {
+      setCreating(null)
     }
   }
 
@@ -1034,10 +1009,12 @@ export default function ServiceConfigsPage() {
       }),
   ]
 
-  // Consumers: all installed compose services (whether they have requirements or not)
-  const wiringConsumers = templates
-    .filter((t) => t.source === 'compose' && t.installed)
-    .map((t) => {
+  // Consumers: compose service templates
+  const composeTemplates = templates.filter((t) => t.source === 'compose' && t.installed)
+
+  const wiringConsumers = [
+    // Templates
+    ...composeTemplates.map((t) => {
       // Get actual status from Docker
       // Extract service name from template ID (format: "compose_file:service_name")
       const serviceName = t.id.includes(':') ? t.id.split(':').pop()! : t.id
@@ -1071,8 +1048,45 @@ export default function ServiceConfigsPage() {
         configVars,
         configured: t.configured,
         description: t.description,
+        isTemplate: true,
+        templateId: t.id,
       }
-    })
+    }),
+    // ServiceConfig instances from compose templates
+    ...instances
+      .filter((i) => {
+        const template = composeTemplates.find((t) => t.id === i.template_id)
+        return template && template.requires
+      })
+      .map((i) => {
+        const template = composeTemplates.find((t) => t.id === i.template_id)!
+        const details = instanceDetails[i.id]
+
+        // Build config vars from instance details if available
+        const configVars = details?.config?.values
+          ? Object.entries(details.config.values).map(([key, value]) => ({
+              key,
+              label: key,
+              value: String(value),
+              isSecret: false,
+              required: false,
+            }))
+          : []
+
+        return {
+          id: i.id,
+          name: i.name,
+          requires: template.requires!,
+          status: i.status,
+          mode: i.deployment_target === 'kubernetes' ? 'cloud' : 'local',
+          configVars,
+          configured: true,
+          description: template.description,
+          isTemplate: false,
+          templateId: i.template_id,
+        }
+      }),
+  ]
 
   // Handle provider drop - show modal for templates, direct wire for instances
   const handleProviderDrop = async (dropInfo: {
@@ -1109,10 +1123,10 @@ export default function ServiceConfigsPage() {
       return
     }
 
-    // For templates, open the create instance modal with wiring info
+    // For templates, create instance directly with wiring info
     const template = templates.find((t) => t.id === dropInfo.provider.id)
     if (template) {
-      openCreateServiceConfigModal(template, {
+      await createServiceConfigDirectly(template, {
         capability: dropInfo.capability,
         consumerId: dropInfo.consumerId,
         consumerName: consumer?.name || dropInfo.consumerId,
@@ -1383,16 +1397,74 @@ export default function ServiceConfigsPage() {
     }
   }
 
+  // Handle update template config vars from wiring board inline editor
+  const handleUpdateTemplateConfigVars = async (
+    templateId: string,
+    configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }>
+  ) => {
+    const template = templates.find((t) => t.id === templateId)
+    if (!template) return
+
+    try {
+      // Check if this is a compose service template (has env vars) or provider template
+      if (template.source === 'compose') {
+        // Compose service template - save env configs
+        const envVarConfigs = configVars
+          .filter((v) => v.value && v.value.trim())
+          .map((v) => ({
+            source: 'new_setting' as const,
+            value: v.value,
+            new_setting_path: `service_env.${template.id}.${v.key}`,
+          }))
+
+        if (envVarConfigs.length > 0) {
+          await servicesApi.updateEnvConfig(template.id, envVarConfigs)
+          setMessage({ type: 'success', text: `${template.name} configuration updated` })
+        }
+      } else {
+        // Provider template - update settings via settings_path
+        const updates: Record<string, Record<string, string>> = {}
+        const schema = template.config_schema || []
+
+        for (const configVar of configVars) {
+          const schemaField = schema.find((f: any) => f.key === configVar.key)
+          if (schemaField?.settings_path && configVar.value && configVar.value.trim()) {
+            const parts = schemaField.settings_path.split('.')
+            if (parts.length === 2) {
+              const [section, key] = parts
+              if (!updates[section]) updates[section] = {}
+              updates[section][key] = configVar.value
+            }
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await settingsApi.update(updates)
+          setMessage({ type: 'success', text: `${template.name} settings updated` })
+        }
+      }
+
+      // Refresh templates to get updated values
+      const templatesRes = await svcConfigsApi.getTemplates()
+      setTemplates(templatesRes.data)
+    } catch (error: any) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || 'Failed to update configuration',
+      })
+      throw error
+    }
+  }
+
   // Handle create instance from wiring board (via "+" button)
-  const handleCreateServiceConfigFromBoard = (templateId: string) => {
+  const handleCreateServiceConfigFromBoard = async (templateId: string) => {
     const template = templates.find((t) => t.id === templateId)
     if (template) {
-      openCreateServiceConfigModal(template)
+      await createServiceConfigDirectly(template)
     }
   }
 
   // Group templates by source - only show installed services
-  const composeTemplates = templates.filter((t) => t.source === 'compose' && t.installed)
   const allProviderTemplates = templates.filter((t) => t.source === 'provider')
 
   // Group instances by their template_id for hierarchical display
@@ -1583,591 +1655,6 @@ export default function ServiceConfigsPage() {
         </div>
       )}
 
-      {/* ServiceConfigs - Compact list style */}
-      {instances.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-            Active ServiceConfigs
-          </h2>
-          <div className="card divide-y divide-neutral-200 dark:divide-neutral-700">
-            {instances.map((instance) => {
-              const isExpanded = expandedServiceConfigs.has(instance.id)
-              const details = instanceDetails[instance.id]
-
-              return (
-                <div
-                  key={instance.id}
-                  data-testid={`instance-card-${instance.id}`}
-                  className="hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
-                >
-                  <div
-                    className="px-4 py-3 cursor-pointer flex items-center justify-between"
-                    onClick={() => toggleServiceConfig(instance.id)}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      {getStatusBadge(instance.status)}
-                      <span className="font-medium text-neutral-900 dark:text-neutral-100 truncate">
-                        {instance.name}
-                      </span>
-                      <span className="text-xs text-neutral-400 hidden sm:inline">
-                        {instance.template_id}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {instance.provides && (
-                        <span className="px-1.5 py-0.5 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 capitalize hidden md:inline">
-                          {instance.provides}
-                        </span>
-                      )}
-                      {/* Start/Stop/Setup buttons for deployable instances (not cloud) */}
-                      {instance.status !== 'n/a' && (() => {
-                        const instanceTemplate = templates.find((t) => t.id === instance.template_id)
-                        const needsSetup = instanceTemplate && !instanceTemplate.configured
-                        const canStart = instance.status === 'stopped' || instance.status === 'pending' || instance.status === 'error'
-                        const canStop = instance.status === 'running' || instance.status === 'deploying'
-
-                        return (
-                          <>
-                            {/* Setup button - when template is not configured */}
-                            {needsSetup && canStart && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  // Open edit modal with full env config loading
-                                  handleEditProviderFromBoard(instance.id, false)
-                                }}
-                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 hover:bg-warning-200 dark:hover:bg-warning-900/50"
-                                title="Configure required settings"
-                                data-testid={`setup-instance-${instance.id}`}
-                              >
-                                <Settings className="h-3 w-3" />
-                                <span className="hidden sm:inline">Setup</span>
-                              </button>
-                            )}
-                            {/* Start button - when configured */}
-                            {!needsSetup && canStart && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleDeployServiceConfig(instance.id)
-                                }}
-                                disabled={deployingServiceConfig === instance.id}
-                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 hover:bg-success-200 dark:hover:bg-success-900/50 disabled:opacity-50"
-                                title="Start"
-                                data-testid={`start-instance-${instance.id}`}
-                              >
-                                {deployingServiceConfig === instance.id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <PlayCircle className="h-3 w-3" />
-                                )}
-                                <span className="hidden sm:inline">Start</span>
-                              </button>
-                            )}
-                            {/* Stop button */}
-                            {canStop && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleUndeployServiceConfig(instance.id)
-                                }}
-                                disabled={deployingServiceConfig === instance.id}
-                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50"
-                                title="Stop"
-                                data-testid={`stop-instance-${instance.id}`}
-                              >
-                                {deployingServiceConfig === instance.id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <X className="h-3 w-3" />
-                                )}
-                                <span className="hidden sm:inline">Stop</span>
-                              </button>
-                            )}
-                          </>
-                        )
-                      })()}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDeleteServiceConfig(instance.id)
-                        }}
-                        className="p-1 text-neutral-400 hover:text-error-600 dark:hover:text-error-400 rounded"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                      {isExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-neutral-400" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4 text-neutral-400" />
-                      )}
-                    </div>
-                  </div>
-
-                  {isExpanded && details && (() => {
-                    const template = templates.find((t) => t.id === instance.template_id)
-                    const configSchema = template?.config_schema || []
-                    const hasConfigSchema = configSchema.length > 0
-                    const configValues = details.config.values || {}
-
-                    return (
-                      <div className="px-4 pb-3 pt-1 bg-neutral-50 dark:bg-neutral-800/30 text-xs space-y-3">
-                        {/* Config Schema with required indicators */}
-                        {hasConfigSchema && (
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-[10px] uppercase tracking-wider text-neutral-400">
-                                Configuration
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  // Open edit modal with full env config loading
-                                  handleEditProviderFromBoard(instance.id, false)
-                                }}
-                                className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-                                data-testid={`edit-instance-config-${instance.id}`}
-                              >
-                                <Pencil className="h-3 w-3" />
-                                Edit
-                              </button>
-                            </div>
-                            {configSchema.map((field) => {
-                              const overrideValue = configValues[field.key]
-                              const displayValue = overrideValue || field.value || field.default || ''
-                              const isSecret = field.type === 'secret'
-                              const isRequired = field.required
-                              const hasValue = field.has_value || !!field.default || !!overrideValue
-                              const needsValue = isRequired && !hasValue
-
-                              return (
-                                <div
-                                  key={field.key}
-                                  className="flex items-baseline gap-2 py-1 border-b border-neutral-100 dark:border-neutral-700 last:border-0"
-                                >
-                                  <span className="text-neutral-500 dark:text-neutral-400 w-28 truncate flex-shrink-0">
-                                    {isRequired && <span className="text-error-500 mr-0.5">*</span>}
-                                    {field.label || field.key}:
-                                  </span>
-                                  <span className="font-mono text-neutral-900 dark:text-neutral-100 flex-1 truncate">
-                                    {needsValue ? (
-                                      <span className="text-warning-600 dark:text-warning-400">Not set</span>
-                                    ) : isSecret ? (
-                                      '••••••••'
-                                    ) : (
-                                      displayValue || <span className="text-neutral-400">—</span>
-                                    )}
-                                  </span>
-                                  {overrideValue && (
-                                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 flex-shrink-0">
-                                      override
-                                    </span>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-
-                        {/* Legacy: Show override values if no schema (shouldn't happen, but fallback) */}
-                        {!hasConfigSchema && Object.entries(configValues).length > 0 && (
-                          <div className="flex flex-wrap gap-x-4 gap-y-1">
-                            {Object.entries(configValues).map(([key, value]) => (
-                              <div key={key} className="flex items-baseline gap-1">
-                                <span className="text-neutral-400">{key}:</span>
-                                <span className="font-mono text-neutral-700 dark:text-neutral-300">
-                                  {String(value).length > 30
-                                    ? String(value).slice(0, 30) + '...'
-                                    : String(value)}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Integration Sync UI - only shown for integrations */}
-                        {details.integration_type && (
-                          <div className="space-y-2 pt-2 border-t border-neutral-200 dark:border-neutral-700">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] uppercase tracking-wider text-neutral-400 flex items-center gap-1">
-                                <Database className="h-3 w-3" />
-                                Integration Sync
-                              </span>
-                              <span className="text-[10px] text-neutral-400 capitalize">
-                                {details.integration_type}
-                              </span>
-                            </div>
-
-                            {/* Sync Status */}
-                            <div className="flex items-center gap-2 py-1">
-                              <span className="text-neutral-500 dark:text-neutral-400 w-28 text-xs">
-                                Status:
-                              </span>
-                              <div className="flex-1 flex items-center gap-2">
-                                {details.last_sync_status === 'success' && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-                                    <CheckCircle className="h-3 w-3" />
-                                    Success
-                                  </span>
-                                )}
-                                {details.last_sync_status === 'error' && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300">
-                                    <AlertCircle className="h-3 w-3" />
-                                    Error
-                                  </span>
-                                )}
-                                {details.last_sync_status === 'in_progress' && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                    Syncing
-                                  </span>
-                                )}
-                                {details.last_sync_status === 'never' && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-400">
-                                    Never synced
-                                  </span>
-                                )}
-                                {details.last_sync_at && (
-                                  <span className="text-xs text-neutral-500">
-                                    {new Date(details.last_sync_at).toLocaleString()}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Last Sync Items Count */}
-                            {details.last_sync_items_count !== null && details.last_sync_items_count !== undefined && (
-                              <div className="flex items-center gap-2 py-1">
-                                <span className="text-neutral-500 dark:text-neutral-400 w-28 text-xs">
-                                  Items Synced:
-                                </span>
-                                <span className="text-xs text-neutral-700 dark:text-neutral-300">
-                                  {details.last_sync_items_count}
-                                </span>
-                              </div>
-                            )}
-
-                            {/* Auto-Sync Status */}
-                            <div className="flex items-center gap-2 py-1">
-                              <span className="text-neutral-500 dark:text-neutral-400 w-28 text-xs">
-                                Auto-Sync:
-                              </span>
-                              <div className="flex-1 flex items-center gap-2">
-                                {details.sync_enabled ? (
-                                  <>
-                                    <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
-                                      <Zap className="h-3 w-3" />
-                                      Enabled
-                                    </span>
-                                    {details.next_sync_at && (
-                                      <span className="text-xs text-neutral-500 flex items-center gap-1">
-                                        <Clock className="h-3 w-3" />
-                                        Next: {new Date(details.next_sync_at).toLocaleString()}
-                                      </span>
-                                    )}
-                                  </>
-                                ) : (
-                                  <span className="text-xs text-neutral-500">Disabled</span>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Sync Error */}
-                            {details.last_sync_error && (
-                              <div className="p-2 rounded bg-error-50 dark:bg-error-900/20 text-error-700 dark:text-error-300 text-xs">
-                                <div className="flex items-start gap-2">
-                                  <AlertCircle className="h-3 w-3 flex-shrink-0 mt-0.5" />
-                                  <span>{details.last_sync_error}</span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Action Buttons */}
-                            <div className="flex items-center gap-2 pt-2">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleTestConnection(instance.id)
-                                }}
-                                disabled={testingConnection === instance.id}
-                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600 disabled:opacity-50"
-                                data-testid={`test-connection-${instance.id}`}
-                              >
-                                {testingConnection === instance.id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Activity className="h-3 w-3" />
-                                )}
-                                <span>Test Connection</span>
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleSyncNow(instance.id)
-                                }}
-                                disabled={syncingServiceConfig === instance.id || details.last_sync_status === 'in_progress'}
-                                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50 disabled:opacity-50"
-                                data-testid={`sync-now-${instance.id}`}
-                              >
-                                {syncingServiceConfig === instance.id || details.last_sync_status === 'in_progress' ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <RefreshCw className="h-3 w-3" />
-                                )}
-                                <span>Sync Now</span>
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleToggleAutoSync(instance.id, !details.sync_enabled)
-                                }}
-                                disabled={togglingAutoSync === instance.id}
-                                className={`flex items-center gap-1 px-2 py-1 text-xs rounded ${
-                                  details.sync_enabled
-                                    ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 hover:bg-warning-200 dark:hover:bg-warning-900/50'
-                                    : 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 hover:bg-success-200 dark:hover:bg-success-900/50'
-                                } disabled:opacity-50`}
-                                data-testid={`toggle-auto-sync-${instance.id}`}
-                              >
-                                {togglingAutoSync === instance.id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Zap className="h-3 w-3" />
-                                )}
-                                <span>{details.sync_enabled ? 'Disable' : 'Enable'} Auto-Sync</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Access URL */}
-                        {details.outputs?.access_url && (
-                          <a
-                            href={details.outputs.access_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary-600 hover:underline inline-block"
-                          >
-                            {details.outputs.access_url}
-                          </a>
-                        )}
-
-                        {/* Error */}
-                        {details.error && (
-                          <div className="p-2 rounded bg-error-50 dark:bg-error-900/20 text-error-700 dark:text-error-300">
-                            {details.error}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Templates - Compose Services with ServiceConfigs */}
-      {composeTemplates.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
-            <Package className="h-5 w-5" />
-            Compose Services
-          </h2>
-          <div className="card p-6">
-            <div className="space-y-2">
-              {composeTemplates.map((template) => {
-                const templateServiceConfigs = instancesByTemplate[template.id] || []
-                const isExpanded = expandedTemplates.has(template.id)
-
-                return (
-                  <div key={template.id} className="border-b border-neutral-200 dark:border-neutral-700 last:border-0 pb-2 last:pb-0">
-                    {/* Service Template Row */}
-                    <div
-                      className="flex items-center gap-3 p-3 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
-                      onClick={() => toggleTemplate(template.id)}
-                      data-testid={`service-template-${template.id}`}
-                    >
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleTemplate(template.id)
-                        }}
-                        className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="h-4 w-4" />
-                        ) : (
-                          <ChevronUp className="h-4 w-4" />
-                        )}
-                      </button>
-
-                      <Package className="h-5 w-5 text-primary-600 dark:text-primary-400 flex-shrink-0" />
-
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                          {template.display_name || template.id}
-                        </h3>
-                        {template.description && (
-                          <p className="text-sm text-neutral-600 dark:text-neutral-400 truncate">
-                            {template.description}
-                          </p>
-                        )}
-                      </div>
-
-                      {templateServiceConfigs.length > 0 && (
-                        <span className="px-2 py-0.5 text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
-                          {templateServiceConfigs.length} {templateServiceConfigs.length === 1 ? 'instance' : 'instances'}
-                        </span>
-                      )}
-
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openCreateServiceConfigModal(template)
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
-                        data-testid={`deploy-${template.id}`}
-                      >
-                        <Plus className="h-3 w-3" />
-                        Deploy
-                      </button>
-                    </div>
-
-                    {/* Service ServiceConfigs (indented) */}
-                    {isExpanded && templateServiceConfigs.length > 0 && (
-                      <div className="ml-12 mt-2 space-y-1">
-                        {templateServiceConfigs.map((instance) => {
-                          const details = instanceDetails[instance.id]
-                          const isRunning = details?.status === 'running'
-
-                          return (
-                            <div
-                              key={instance.id}
-                              className="flex items-center gap-3 p-3 rounded bg-neutral-50 dark:bg-neutral-800/50 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                              data-testid={`service-instance-${instance.id}`}
-                            >
-                              <HardDrive className="h-4 w-4 text-neutral-500 flex-shrink-0" />
-
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100">
-                                    {instance.name}
-                                  </span>
-                                  {details && getStatusBadge(details.status)}
-                                </div>
-                                <div className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400">
-                                  <span>{instance.deployment_target || 'local'}</span>
-                                  {details?.outputs?.access_url && (
-                                    <>
-                                      <span>•</span>
-                                      <a
-                                        href={details.outputs.access_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-primary-600 hover:underline"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        {details.outputs.access_url}
-                                      </a>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-1">
-                                {isRunning && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleRestartService(instance.id)
-                                    }}
-                                    disabled={restartingServiceConfig === instance.id}
-                                    className="p-1.5 text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700"
-                                    title="Restart"
-                                  >
-                                    <RefreshCw className="h-4 w-4" />
-                                  </button>
-                                )}
-
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleEditConsumer(instance.id)
-                                  }}
-                                  className="p-1.5 text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700"
-                                  title="Edit"
-                                >
-                                  <Pencil className="h-4 w-4" />
-                                </button>
-
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleDeleteServiceConfig(instance.id)
-                                  }}
-                                  className="p-1.5 text-error-600 hover:text-error-700 dark:text-error-400 dark:hover:text-error-300 rounded hover:bg-error-100 dark:hover:bg-error-900/30"
-                                  title="Delete"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Templates - Providers */}
-      {(visibleProviders.length > 0 || availableToAdd.length > 0) && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
-            <Cloud className="h-5 w-5" />
-            Providers
-          </h2>
-          <div className="card p-6">
-            {visibleProviders.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {visibleProviders.map((template) => (
-                  <TemplateCard
-                    key={template.id}
-                    template={template}
-                    isExpanded={expandedTemplates.has(template.id)}
-                    onToggle={() => toggleTemplate(template.id)}
-                    onCreate={() => openCreateServiceConfigModal(template)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <Cloud className="h-12 w-12 text-neutral-300 dark:text-neutral-600 mx-auto mb-3" />
-                <p className="text-neutral-500 dark:text-neutral-400 mb-4">
-                  No providers added yet
-                </p>
-                <button
-                  onClick={() => setShowAddProviderModal(true)}
-                  className="btn-primary flex items-center gap-2 mx-auto"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Provider
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Wiring Board - Drag and Drop Interface */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -2189,6 +1676,7 @@ export default function ServiceConfigsPage() {
             onDeleteWiring={handleDeleteWiringFromBoard}
             onEditProvider={handleEditProviderFromBoard}
             onCreateServiceConfig={handleCreateServiceConfigFromBoard}
+            onUpdateTemplateConfigVars={handleUpdateTemplateConfigVars}
             onDeleteServiceConfig={handleDeleteServiceConfig}
             onStartProvider={async (providerId, isTemplate) => {
               if (isTemplate) {
@@ -2211,136 +1699,6 @@ export default function ServiceConfigsPage() {
           />
         </div>
       </div>
-
-      {/* Unified Create ServiceConfig Modal (used by both + button and drag-drop) */}
-      <Modal
-        isOpen={createServiceConfigState.isOpen}
-        onClose={() => setCreateServiceConfigState({ ...createServiceConfigState, isOpen: false })}
-        title={createServiceConfigState.wiring ? 'Connect Provider' : 'Create ServiceConfig'}
-        titleIcon={createServiceConfigState.wiring ? <Plug className="h-5 w-5 text-primary-600" /> : <Plus className="h-5 w-5 text-primary-600" />}
-        maxWidth="lg"
-        testId="create-instance-modal"
-      >
-        {createServiceConfigState.template && (
-          <div className="space-y-4">
-            {/* Wiring connection visual (only shown for drag-drop path) */}
-            {createServiceConfigState.wiring && (
-              <div className="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
-                <div className="flex-1 text-right">
-                  <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                    {createServiceConfigState.template.name}
-                  </p>
-                  <p className="text-xs text-neutral-500">{createServiceConfigState.wiring.capability}</p>
-                </div>
-                <ArrowRight className="h-5 w-5 text-primary-500" />
-                <div className="flex-1">
-                  <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                    {createServiceConfigState.wiring.consumerName}
-                  </p>
-                  <p className="text-xs text-neutral-500">{createServiceConfigState.wiring.capability} slot</p>
-                </div>
-              </div>
-            )}
-
-            {/* Template info (only shown for + button path) */}
-            {!createServiceConfigState.wiring && (
-              <div className="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    {createServiceConfigState.template.source === 'compose' ? (
-                      <HardDrive className="h-4 w-4 text-purple-600" />
-                    ) : (
-                      <Cloud className="h-4 w-4 text-blue-600" />
-                    )}
-                    <p className="font-medium text-neutral-900 dark:text-neutral-100">
-                      {createServiceConfigState.template.name}
-                    </p>
-                  </div>
-                  <p className="text-xs text-neutral-500 mt-1">{createServiceConfigState.template.description}</p>
-                </div>
-              </div>
-            )}
-
-            {/* ServiceConfig Name */}
-            <div>
-              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
-                ServiceConfig Name
-              </label>
-              <input
-                type="text"
-                value={createServiceConfigState.form.name}
-                onChange={(e) =>
-                  setCreateServiceConfigState((prev) => ({
-                    ...prev,
-                    form: { ...prev.form, name: e.target.value },
-                  }))
-                }
-                className="input w-full text-sm"
-                placeholder={createServiceConfigState.form.id}
-                data-testid="create-instance-name"
-              />
-            </div>
-
-            {/* Config fields using ConfigFieldRow */}
-            {createServiceConfigState.template.config_schema && createServiceConfigState.template.config_schema.length > 0 && (
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                  Provider Settings
-                </label>
-                <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 overflow-hidden">
-                  {createServiceConfigState.template.config_schema.map((field: any) => (
-                    <ConfigFieldRow
-                      key={field.key}
-                      field={field}
-                      value={createServiceConfigState.form.config[field.key] || ''}
-                      onChange={(value) =>
-                        setCreateServiceConfigState((prev) => ({
-                          ...prev,
-                          form: {
-                            ...prev.form,
-                            config: { ...prev.form.config, [field.key]: value },
-                          },
-                        }))
-                      }
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Help text */}
-            <p className="text-xs text-neutral-500">
-              {createServiceConfigState.wiring
-                ? 'ServiceConfig will be created and connected to the service slot.'
-                : 'Leave fields blank to use default settings. Only modified values will be stored.'}
-            </p>
-
-            {/* Modal Footer */}
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-neutral-200 dark:border-neutral-700">
-              <button
-                onClick={() => setCreateServiceConfigState({ ...createServiceConfigState, isOpen: false })}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateServiceConfig}
-                disabled={!createServiceConfigState.form.name || creating === createServiceConfigState.template.id}
-                className="btn-primary flex items-center gap-2"
-                data-testid="create-instance-submit"
-              >
-                {creating === createServiceConfigState.template.id ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Plus className="h-4 w-4" />
-                )}
-                {createServiceConfigState.wiring ? 'Create & Connect' : 'Create ServiceConfig'}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
       {/* Edit Provider/ServiceConfig Modal */}
       <Modal
         isOpen={!!editingProvider}
@@ -2615,7 +1973,74 @@ export default function ServiceConfigsPage() {
         )}
       </Modal>
 
-      {/* TODO: Add Deploy to uNode modals for local and remote */}
+      {/* Simple Deploy Modal (for local/remote with env vars) */}
+      <Modal
+        isOpen={simpleDeployModal.isOpen}
+        onClose={() => setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })}
+        title={`Deploy to ${simpleDeployModal.targetType === 'local' ? 'Local' : 'Remote'} uNode`}
+        maxWidth="lg"
+        testId="simple-deploy-modal"
+      >
+        <div className="space-y-4">
+          {loadingDeployEnv && (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-primary-500" />
+              <span className="ml-2 text-sm text-neutral-500">Loading configuration...</span>
+            </div>
+          )}
+
+          {!loadingDeployEnv && deployEnvVars.length > 0 && (
+            <>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                Configure environment variables for this deployment:
+              </p>
+              <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 max-h-96 overflow-y-auto">
+                {deployEnvVars.map((ev) => (
+                  <EnvVarRow
+                    key={ev.name}
+                    envVar={ev}
+                    config={deployEnvConfigs[ev.name]}
+                    onChange={(updates) => {
+                      setDeployEnvConfigs((prev) => ({
+                        ...prev,
+                        [ev.name]: { ...prev[ev.name], ...updates },
+                      }))
+                    }}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {!loadingDeployEnv && deployEnvVars.length === 0 && (
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 italic">
+              No environment variables to configure.
+            </p>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+            <button
+              onClick={() => setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })}
+              className="btn-secondary"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmDeploy}
+              disabled={loadingDeployEnv || creating !== null}
+              className="btn-primary flex items-center gap-2"
+              data-testid="confirm-deploy"
+            >
+              {creating !== null ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle className="h-4 w-4" />
+              )}
+              Deploy
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

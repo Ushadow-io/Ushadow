@@ -42,29 +42,44 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
   const [namespace, setNamespace] = useState('ushadow')
   const [envVars, setEnvVars] = useState<EnvVarInfo[]>([])
   const [envConfigs, setEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
+  const [loadingEnvVars, setLoadingEnvVars] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deploymentResult, setDeploymentResult] = useState<string | null>(null)
 
   useEffect(() => {
     if (isOpen) {
-      loadServices()
-    }
-  }, [isOpen])
-
-  // Auto-select service if preselected
-  useEffect(() => {
-    if (preselectedServiceId && services.length > 0 && !selectedService) {
-      const service = services.find(s => s.service_id === preselectedServiceId)
-      if (service) {
-        handleSelectService(service)
+      // If service is preselected, load env vars directly
+      if (preselectedServiceId) {
+        handleSelectService({
+          service_id: preselectedServiceId,
+          service_name: preselectedServiceId,
+          display_name: preselectedServiceId,
+        })
+      } else {
+        // Otherwise, load service list for selection
+        loadServices()
       }
     }
-  }, [preselectedServiceId, services, selectedService])
+  }, [isOpen, preselectedServiceId])
 
   const loadServices = async () => {
     try {
-      const response = await kubernetesApi.getAvailableServices()
-      setServices(response.data.services)
+      // Use servicesApi instead of kubernetesApi to get installed compose services
+      const response = await servicesApi.getInstalled()
+
+      // Convert to the expected format
+      const serviceOptions: ServiceOption[] = response.data
+        .filter((svc: any) => svc.installed) // Only installed services
+        .map((svc: any) => ({
+          service_id: svc.service_id || svc.name,
+          service_name: svc.name,
+          display_name: svc.display_name || svc.name,
+          description: svc.description,
+          image: svc.image,
+          requires: svc.requires || []
+        }))
+
+      setServices(serviceOptions)
     } catch (err: any) {
       console.error('Failed to load services:', err)
       setError('Failed to load services')
@@ -95,6 +110,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
   const handleSelectService = async (service: ServiceOption) => {
     setSelectedService(service)
     setError(null)
+    setLoadingEnvVars(true)
 
     try {
       console.log('📦 Selected service:', service.service_id)
@@ -144,6 +160,8 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
     } catch (err: any) {
       console.error('Failed to load env config:', err)
       setError(`Failed to load environment configuration: ${formatError(err)}`)
+    } finally {
+      setLoadingEnvVars(false)
     }
   }
 
@@ -403,26 +421,33 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
         <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
           Environment Variables
         </label>
-        <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
-          {envVars.map((envVar) => {
-            const config = envConfigs[envVar.name] || {
-              name: envVar.name,
-              source: 'default',
-              value: undefined,
-              setting_path: undefined,
-              new_setting_path: undefined
-            }
+        {loadingEnvVars ? (
+          <div className="flex items-center justify-center py-12 rounded-lg border border-neutral-200 dark:border-neutral-700">
+            <Loader className="h-6 w-6 animate-spin text-primary-600" />
+            <span className="ml-3 text-sm text-neutral-600 dark:text-neutral-400">Loading configuration...</span>
+          </div>
+        ) : (
+          <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+            {envVars.map((envVar) => {
+              const config = envConfigs[envVar.name] || {
+                name: envVar.name,
+                source: 'default',
+                value: undefined,
+                setting_path: undefined,
+                new_setting_path: undefined
+              }
 
-            return (
-              <EnvVarEditor
-                key={envVar.name}
-                envVar={envVar}
-                config={config}
-                onChange={(updates) => handleEnvConfigChange(envVar.name, updates)}
-              />
-            )
-          })}
-        </div>
+              return (
+                <EnvVarEditor
+                  key={envVar.name}
+                  envVar={envVar}
+                  config={config}
+                  onChange={(updates) => handleEnvConfigChange(envVar.name, updates)}
+                />
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex justify-between items-center pt-4 border-t border-neutral-200 dark:border-neutral-700">
@@ -434,6 +459,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
         </button>
         <button
           onClick={handleDeploy}
+          disabled={loadingEnvVars}
           className="btn-primary"
           data-testid="deploy-service-btn"
         >
