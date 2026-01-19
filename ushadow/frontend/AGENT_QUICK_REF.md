@@ -122,16 +122,17 @@ See `src/testing/ui-contract.ts` for patterns.
 
 ### 1. Z-Index / Stacking Issues
 ```tsx
-// ❌ BAD - arbitrary z-index values
+// ❌ BAD - arbitrary z-index values in page components
 className="z-[999]"
 className="z-50"
 
-// ✅ GOOD - use defined scale from tailwind.config.js
-className="z-dropdown"  // 50 - menus, dropdowns
-className="z-modal"     // 60 - modals, dialogs
+// ✅ GOOD - use defined scale for non-portaled elements
+className="z-sticky"    // 40 - sticky headers
+className="z-dropdown"  // 50 - inline menus, dropdowns
+className="z-modal"     // 60 - overlays (if not using Modal)
 className="z-toast"     // 70 - notifications
 ```
-**Rule**: Modals must use portal (Modal component does this). Dropdowns need `z-dropdown`.
+**Rule**: Always use `Modal` component for dialogs (it portals to body). For inline dropdowns, use `z-dropdown`.
 
 ### 2. Menus/Dropdowns Getting Cutoff
 ```tsx
