@@ -57,6 +57,7 @@ dependencies = [
 
     # CLI Interactive Shell
     "prompt_toolkit>=3.0.48",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
