@@ -15,6 +15,7 @@ Examples:
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -22,6 +23,17 @@ from typing import Any, Optional
 
 from rich.console import Console
 from rich.table import Table
+
+# Shell mode imports (lazy loaded)
+SHELL_AVAILABLE = True
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.styles import Style
+except ImportError:
+    SHELL_AVAILABLE = False
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent
@@ -288,6 +300,7 @@ def show_help(commands: dict, tag: Optional[str] = None) -> None:
             console.print(f"  [cyan]{group:<20}[/cyan] ({cmd_count} commands)")
         console.print("\n[dim]Usage: ush <group> <command> [args...][/dim]")
         console.print("[dim]       ush <group> --help[/dim]")
+        console.print("[dim]       ush shell              # Interactive mode with Tab completion[/dim]")
         console.print("[dim]       ush health[/dim]")
     else:
         # Show commands for a specific group
@@ -310,6 +323,202 @@ def show_help(commands: dict, tag: Optional[str] = None) -> None:
             console.print(f"  [cyan]{full_cmd:<40}[/cyan] {cmd_info['summary']}")
 
         console.print(f"\n[dim]Usage: ush {tag} <command> [args...][/dim]")
+
+
+# =============================================================================
+# Interactive Shell Mode
+# =============================================================================
+
+class UshCompleter(Completer):
+    """
+    Nested completer for ush shell.
+
+    Tab 1: Complete command group (services, providers, etc.)
+    Tab 2: Complete command (list, start, stop, etc.)
+    Tab 3+: Complete parameters with hints
+    """
+
+    def __init__(self, commands: dict):
+        self.commands = commands
+        # Add special commands
+        self.special_commands = {"help", "exit", "quit", "health"}
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        words = text.split()
+        word_count = len(words)
+
+        # Handle partial word at cursor
+        word_before_cursor = document.get_word_before_cursor()
+        if text and not text.endswith(" "):
+            word_count -= 1
+
+        if word_count == 0:
+            # Complete command groups + special commands
+            for cmd in sorted(self.special_commands):
+                if cmd.startswith(word_before_cursor):
+                    yield Completion(cmd, start_position=-len(word_before_cursor),
+                                   display_meta="built-in")
+            for group in sorted(self.commands.keys()):
+                if group.startswith(word_before_cursor):
+                    cmd_count = len(self.commands[group])
+                    yield Completion(group, start_position=-len(word_before_cursor),
+                                   display_meta=f"{cmd_count} commands")
+
+        elif word_count == 1:
+            # Complete commands within group
+            group = words[0]
+            if group in self.commands:
+                for cmd_name, cmd_info in sorted(self.commands[group].items()):
+                    if cmd_name.startswith(word_before_cursor):
+                        yield Completion(cmd_name, start_position=-len(word_before_cursor),
+                                       display_meta=cmd_info.get("summary", "")[:40])
+
+        elif word_count >= 2:
+            # Complete parameters
+            group = words[0]
+            cmd = words[1]
+            if group in self.commands and cmd in self.commands[group]:
+                cmd_info = self.commands[group][cmd]
+                provided_count = word_count - 2
+
+                # Path parameters (positional, required)
+                path_params = cmd_info.get("path_params", [])
+                if provided_count < len(path_params):
+                    param = path_params[provided_count]
+                    # Yield placeholder hint
+                    yield Completion(f"<{param}>", start_position=-len(word_before_cursor),
+                                   display_meta="required")
+                else:
+                    # Query parameters (optional, --name format)
+                    for qp in cmd_info.get("query_params", []):
+                        opt = f"--{qp['name']}"
+                        if opt.startswith(word_before_cursor) and opt not in words:
+                            meta = qp.get("description", "")[:30] or ("required" if qp.get("required") else "optional")
+                            yield Completion(opt, start_position=-len(word_before_cursor),
+                                           display_meta=meta)
+
+
+def run_shell(commands: dict, client: UshadowClient) -> None:
+    """Run interactive shell with nested completion and fish-style suggestions."""
+    if not SHELL_AVAILABLE:
+        console.print("[red]Shell mode requires prompt_toolkit. Install with:[/red]")
+        console.print("[dim]  pip install prompt_toolkit[/dim]")
+        sys.exit(1)
+
+    # Shell styling
+    style = Style.from_dict({
+        "prompt": "cyan bold",
+        "": "#ffffff",  # Default text
+    })
+
+    # History file
+    history_file = Path.home() / ".ush_history"
+
+    # Create session with completion and history
+    session = PromptSession(
+        completer=UshCompleter(commands),
+        auto_suggest=AutoSuggestFromHistory(),
+        history=FileHistory(str(history_file)),
+        style=style,
+        complete_while_typing=False,  # Only complete on Tab
+    )
+
+    console.print("\n[bold cyan]ushadow shell[/bold cyan] - Type commands, Tab to complete, ↑/↓ for history")
+    console.print("[dim]Type 'help' for commands, 'exit' to quit[/dim]\n")
+
+    while True:
+        try:
+            # Get input with completion
+            text = session.prompt("ushadow> ").strip()
+
+            if not text:
+                continue
+
+            # Handle special commands
+            if text in ("exit", "quit"):
+                console.print("[dim]Goodbye![/dim]")
+                break
+
+            if text == "help":
+                show_help(commands)
+                continue
+
+            if text == "health":
+                try:
+                    result = client.health()
+                    console.print("[green]✅ ushadow backend healthy[/green]")
+                except Exception as e:
+                    console.print(f"[red]❌ Backend unreachable: {e}[/red]")
+                continue
+
+            # Parse and execute command
+            args = text.split()
+            if len(args) < 1:
+                continue
+
+            tag = args[0]
+
+            if tag not in commands:
+                console.print(f"[red]Unknown: {tag}[/red] - try 'help'")
+                continue
+
+            if len(args) == 1:
+                show_help(commands, tag)
+                continue
+
+            cmd_name = args[1]
+            if cmd_name not in commands[tag]:
+                console.print(f"[red]Unknown: {tag} {cmd_name}[/red]")
+                console.print(f"[dim]Available: {', '.join(sorted(commands[tag].keys()))}[/dim]")
+                continue
+
+            cmd_info = commands[tag][cmd_name]
+            remaining = args[2:]
+
+            # Parse path parameters
+            path_args = {}
+            for param in cmd_info["path_params"]:
+                if not remaining:
+                    console.print(f"[red]Missing: <{param}>[/red]")
+                    continue
+                path_args[param] = remaining.pop(0)
+
+            # Parse query parameters
+            query_args = {}
+            body_data = None
+            i = 0
+            while i < len(remaining):
+                arg = remaining[i]
+                if arg.startswith("--"):
+                    param_name = arg[2:]
+                    if i + 1 < len(remaining) and not remaining[i + 1].startswith("-"):
+                        query_args[param_name] = remaining[i + 1]
+                        i += 2
+                    else:
+                        query_args[param_name] = True
+                        i += 1
+                elif arg in ("--data", "-d") and i + 1 < len(remaining):
+                    try:
+                        body_data = json.loads(remaining[i + 1])
+                    except json.JSONDecodeError as e:
+                        console.print(f"[red]Invalid JSON: {e}[/red]")
+                    i += 2
+                else:
+                    i += 1
+
+            # Execute
+            try:
+                result = execute_command(client, cmd_info, path_args, query_args, body_data, tag, cmd_name)
+                print_result(result, tag, cmd_name)
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+
+        except KeyboardInterrupt:
+            console.print("\n[dim]Ctrl+C - type 'exit' to quit[/dim]")
+        except EOFError:
+            console.print("\n[dim]Goodbye![/dim]")
+            break
 
 
 def main():
@@ -340,6 +549,15 @@ def main():
                 console.print(json.dumps(result, indent=2))
         except Exception as e:
             console.print(f"[red]❌ Backend unreachable: {e}[/red]")
+            sys.exit(1)
+        return
+
+    if args[0] == "shell":
+        try:
+            client = UshadowClient.from_env()
+            run_shell(commands, client)
+        except Exception as e:
+            console.print(f"[red]❌ Cannot start shell: {e}[/red]")
             sys.exit(1)
         return
 
