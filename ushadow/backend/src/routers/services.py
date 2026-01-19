@@ -854,6 +854,72 @@ async def uninstall_service(
     return result
 
 
+@router.post("/mycelia/generate-token")
+async def generate_mycelia_token(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
+    """
+    Generate Mycelia authentication token by running the token-create command.
+
+    Returns:
+        Dictionary with 'token' and 'client_id' fields
+    """
+    import subprocess
+    import re
+    from pathlib import Path
+    from src.services.compose_registry import COMPOSE_DIR
+
+    try:
+        # Run the docker compose command to generate token
+        compose_file = COMPOSE_DIR / "mycelia-compose.yml"
+        if not compose_file.exists():
+            raise HTTPException(status_code=500, detail=f"Mycelia compose file not found at {compose_file}")
+
+        result = subprocess.run(
+            [
+                "docker", "compose", "-f", str(compose_file),
+                "run", "--rm", "mycelia-backend",
+                "deno", "run", "-A", "server.ts", "token-create"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Failed to generate Mycelia token: {result.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate token: {result.stderr}"
+            )
+
+        # Parse output to extract token and client_id
+        # Expected format:
+        # MYCELIA_TOKEN=mycelia_...
+        # MYCELIA_CLIENT_ID=...
+        output = result.stdout
+        token_match = re.search(r'MYCELIA_TOKEN=(\S+)', output)
+        client_id_match = re.search(r'MYCELIA_CLIENT_ID=(\S+)', output)
+
+        if not token_match or not client_id_match:
+            logger.error(f"Failed to parse token from output: {output}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to parse token from output"
+            )
+
+        return {
+            "token": token_match.group(1),
+            "client_id": client_id_match.group(1)
+        }
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Token generation timed out")
+    except Exception as e:
+        logger.error(f"Error generating Mycelia token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/register", response_model=ActionResponse)
 async def register_dynamic_service(
     request: RegisterServiceRequest,

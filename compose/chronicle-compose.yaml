@@ -10,7 +10,7 @@ x-ushadow:
   chronicle-backend:
     display_name: "Chronicle"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
-    requires: [llm, transcription]
+    requires: [llm, transcription, audio_input]
     optional: [memory]  # Uses memory if available, works without it
     route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
   chronicle-webui:

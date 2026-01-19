@@ -641,7 +641,7 @@ class CapabilityResolver:
             capability = use['capability']
             required = use.get('required', True)
 
-            provider = await self._get_selected_provider(capability)
+            provider, _ = await self._get_selected_provider(capability)
             if not provider:
                 if required:
                     missing_caps.append({
@@ -715,7 +715,7 @@ class CapabilityResolver:
                 if capability in seen_capabilities:
                     continue
 
-                provider = await self._get_selected_provider(capability)
+                provider, _ = await self._get_selected_provider(capability)
                 if not provider:
                     if required:
                         seen_capabilities[capability] = {

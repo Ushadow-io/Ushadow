@@ -1,0 +1,249 @@
+# Audio Consumer Providers (Audio Processing Services)
+# Implements the 'audio_consumer' capability defined in capabilities.yaml
+#
+# Audio consumers are SERVICES that receive and process audio
+# They CONSUME audio from audio inputs (mobile, Omi, etc.)
+
+capability: audio_consumer
+
+providers:
+  # ==========================================================================
+  # Chronicle - Audio Transcription & Conversation Tracking
+  # ==========================================================================
+  - id: chronicle
+    name: "Chronicle"
+    description: "Audio transcription, speaker diarization, and conversation management"
+    mode: local
+
+    docker:
+      image: ushadow/chronicle-backend:latest
+      compose_file: compose/chronicle-compose.yaml
+      service_name: chronicle-backend
+      ports:
+        - container: 5001
+          protocol: http
+      health:
+        http_get: /health
+        port: 5001
+
+    credentials:
+      websocket_url:
+        env_var: CHRONICLE_WS_URL
+        settings_path: audio_consumer.chronicle_ws_url
+        label: "Chronicle WebSocket URL"
+        default: "ws://chronicle-backend:5001/chronicle/ws_pcm"
+      protocol:
+        env_var: CHRONICLE_PROTOCOL
+        value: "wyoming"
+      api_key:
+        env_var: CHRONICLE_API_KEY
+        settings_path: audio_consumer.chronicle_api_key
+        label: "JWT Token"
+        required: false
+      format:
+        env_var: CHRONICLE_AUDIO_FORMAT
+        value: "pcm_s16le_16khz_mono"
+
+    config:
+      recording_mode:
+        env_var: CHRONICLE_RECORDING_MODE
+        settings_path: audio_consumer.chronicle_mode
+        label: "Recording Mode"
+        description: "batch = process after completion, streaming = real-time"
+        default: "streaming"
+        options: ["streaming", "batch"]
+      enable_diarization:
+        env_var: CHRONICLE_ENABLE_DIARIZATION
+        settings_path: audio_consumer.chronicle_diarization
+        label: "Enable Speaker Diarization"
+        default: true
+
+    capabilities:
+      - transcription
+      - speaker_diarization
+      - conversation_tracking
+      - memory_integration
+
+    ui:
+      icon: chronicle
+      tags: ["audio", "consumer", "transcription", "local"]
+
+  # ==========================================================================
+  # Mycelia - Audio Processing & Workflow Engine
+  # ==========================================================================
+  - id: mycelia
+    name: "Mycelia"
+    description: "Audio processing, timeline storage, and custom workflow orchestration"
+    mode: local
+
+    docker:
+      image: mycelia/backend:latest
+      compose_file: ""
+      service_name: mycelia-backend
+      ports:
+        - container: 5173
+          protocol: http
+      health:
+        http_get: /health
+        port: 5173
+
+    credentials:
+      websocket_url:
+        env_var: MYCELIA_WS_URL
+        settings_path: audio_consumer.mycelia_ws_url
+        label: "Mycelia WebSocket URL"
+        default: "ws://mycelia-backend:5173/ws_pcm"
+      protocol:
+        env_var: MYCELIA_PROTOCOL
+        value: "wyoming"
+      api_key:
+        env_var: MYCELIA_API_KEY
+        settings_path: audio_consumer.mycelia_api_key
+        label: "JWT Token"
+        required: true
+      format:
+        env_var: MYCELIA_AUDIO_FORMAT
+        value: "pcm_s16le_16khz_mono"
+
+    config:
+      processing_mode:
+        env_var: MYCELIA_PROCESSING_MODE
+        settings_path: audio_consumer.mycelia_mode
+        label: "Processing Mode"
+        default: "streaming"
+        options: ["streaming", "batch"]
+      chunk_duration:
+        env_var: MYCELIA_CHUNK_DURATION
+        settings_path: audio_consumer.mycelia_chunk_duration
+        label: "Chunk Duration (seconds)"
+        default: 10
+
+    capabilities:
+      - audio_storage
+      - timeline_management
+      - workflow_processing
+      - audio_chunking
+
+    ui:
+      icon: mycelia
+      tags: ["audio", "consumer", "processing", "local"]
+
+  # ==========================================================================
+  # Multi-Destination (Fanout to Multiple Consumers)
+  # ==========================================================================
+  - id: multi-destination
+    name: "Multi-Destination"
+    description: "Send audio to multiple consumers simultaneously (Chronicle + Mycelia + more)"
+    mode: relay
+
+    credentials:
+      websocket_url:
+        env_var: MULTI_DEST_WS_URL
+        settings_path: audio_consumer.multi_dest_ws_url
+        label: "Relay WebSocket URL"
+        default: "ws://ushadow-backend:8000/ws/audio/relay"
+      protocol:
+        env_var: MULTI_DEST_PROTOCOL
+        value: "wyoming"
+      api_key:
+        env_var: MULTI_DEST_API_KEY
+        settings_path: audio_consumer.multi_dest_api_key
+        label: "JWT Token"
+        required: true
+      format:
+        env_var: MULTI_DEST_AUDIO_FORMAT
+        value: "pcm_s16le_16khz_mono"
+
+    config:
+      destinations:
+        env_var: MULTI_DEST_DESTINATIONS
+        settings_path: audio_consumer.multi_dest_destinations
+        label: "Destinations"
+        description: "JSON array of {name, url} consumer endpoints"
+        default: '[{"name":"chronicle","url":"ws://chronicle-backend:5001/chronicle/ws_pcm"},{"name":"mycelia","url":"ws://mycelia-backend:5173/ws_pcm"}]'
+        type: json
+
+    capabilities:
+      - fanout
+      - load_balancing
+      - redundancy
+
+    ui:
+      icon: relay
+      tags: ["audio", "consumer", "relay", "fanout"]
+
+  # ==========================================================================
+  # Custom WebSocket Consumer
+  # ==========================================================================
+  - id: custom-websocket
+    name: "Custom WebSocket"
+    description: "Connect to any custom audio processing endpoint"
+    mode: custom
+
+    credentials:
+      websocket_url:
+        env_var: CUSTOM_CONSUMER_WS_URL
+        settings_path: audio_consumer.custom_ws_url
+        label: "WebSocket URL"
+        required: true
+        placeholder: "ws://your-server:port/audio/input"
+      protocol:
+        env_var: CUSTOM_CONSUMER_PROTOCOL
+        settings_path: audio_consumer.custom_protocol
+        label: "Protocol"
+        default: "wyoming"
+        options: ["wyoming", "raw", "webrtc", "custom"]
+      api_key:
+        env_var: CUSTOM_CONSUMER_API_KEY
+        settings_path: audio_consumer.custom_api_key
+        label: "API Key/Token"
+        required: false
+      format:
+        env_var: CUSTOM_CONSUMER_AUDIO_FORMAT
+        settings_path: audio_consumer.custom_format
+        label: "Audio Format"
+        default: "pcm_s16le_16khz_mono"
+
+    ui:
+      icon: custom
+      tags: ["audio", "consumer", "custom", "advanced"]
+
+  # ==========================================================================
+  # Webhook Consumer (HTTP POST)
+  # ==========================================================================
+  - id: webhook
+    name: "Webhook"
+    description: "POST audio to HTTP endpoint for external processing"
+    mode: webhook
+
+    credentials:
+      websocket_url:
+        env_var: WEBHOOK_URL
+        settings_path: audio_consumer.webhook_url
+        label: "Webhook URL"
+        required: true
+        placeholder: "https://your-api.com/audio/process"
+      protocol:
+        env_var: WEBHOOK_PROTOCOL
+        value: "http"
+      api_key:
+        env_var: WEBHOOK_API_KEY
+        settings_path: audio_consumer.webhook_api_key
+        label: "API Key"
+        required: false
+      format:
+        env_var: WEBHOOK_AUDIO_FORMAT
+        settings_path: audio_consumer.webhook_format
+        label: "Audio Format"
+        default: "wav"
+        options: ["wav", "mp3", "opus", "raw"]
+
+    config:
+      batch_size:
+        label: "Batch Size"
+        description: "Number of audio chunks to batch before sending"
+        default: 1
+
+    ui:
+      icon: webhook
+      tags: ["audio", "consumer", "webhook", "http"]

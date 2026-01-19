@@ -51,6 +51,7 @@ import {
   LocalServicesWizard,
   MobileAppWizard,
   SpeakerRecognitionWizard,
+  MyceliaWizard,
 } from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
 import ColorSystemPreview from './components/ColorSystemPreview'
@@ -98,6 +99,7 @@ function AppContent() {
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />
                 <Route path="wizard/mobile-app" element={<MobileAppWizard />} />
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
+                <Route path="wizard/mycelia" element={<MyceliaWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />

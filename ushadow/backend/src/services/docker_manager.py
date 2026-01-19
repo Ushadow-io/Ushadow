@@ -935,11 +935,26 @@ class DockerManager:
 
         resolved = {}
 
+        # Get provider registry for suggestions
+        from src.services.provider_registry import get_provider_registry
+        provider_registry = get_provider_registry()
+
         for env_var in service.all_env_vars:
             config = saved_config.get(env_var.name, {})
             source = config.get("source", "default")
             setting_path = config.get("setting_path")
             literal_value = config.get("value")
+
+            # Auto-map if no saved config and a matching suggestion with value exists
+            # This ensures auto-mapping works without requiring manual save
+            if source == "default" and not setting_path:
+                suggestions = await settings.get_suggestions_for_env_var(
+                    env_var.name, provider_registry, service.requires
+                )
+                auto_match = settings.find_matching_suggestion(env_var.name, suggestions)
+                if auto_match:
+                    source = "setting"
+                    setting_path = auto_match.path
 
             # Use settings.resolve_env_value as single source of truth
             # This ensures UI display and container startup use identical resolution
@@ -997,6 +1012,17 @@ class DockerManager:
             try:
                 container_env = await self._build_env_vars_from_compose_config(service_name)
                 subprocess_env.update(container_env)
+
+                # Add WELL_KNOWN_ENV_MAPPINGS to subprocess_env for Docker Compose variable substitution
+                # This allows compose files to use ${AUTH_SECRET_KEY} which gets substituted by Docker
+                from src.services.service_orchestrator import WELL_KNOWN_ENV_MAPPINGS
+                from src.config.omegaconf_settings import get_settings_store
+                settings_store = get_settings_store()
+                for env_name, settings_path in WELL_KNOWN_ENV_MAPPINGS.items():
+                    if env_name not in subprocess_env:  # Don't override already-set values
+                        value = await settings_store.get(settings_path)
+                        if value:
+                            subprocess_env[env_name] = str(value)
 
                 # Also try CapabilityResolver for any capabilities declared in x-ushadow
                 requires = service_config.get("metadata", {}).get("requires", [])
@@ -1297,7 +1323,7 @@ class DockerManager:
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=180  # Increased to 3 minutes for services that need building
             )
 
             if result.returncode == 0:
