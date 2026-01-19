@@ -33,9 +33,9 @@ Read `ushadow/frontend/src/testing/ui-contract.ts` for:
 - **Forms**: Use react-hook-form + Controller pattern
 
 ### File Size Limits (ESLint enforced)
-- **Pages**: Max 300 lines → Extract logic to hooks, UI to components
-- **Components**: Max 150 lines → Split into smaller components
-- **Hooks**: Max 80 lines → Compose from smaller hooks
+- **Pages**: Max 600 lines → Extract logic to hooks, UI to components
+- **Components**: Max 300 lines → Split into smaller components
+- **Hooks**: Max 100 lines → Compose from smaller hooks
 
 ### What NOT to Do
 - ❌ Create custom modals → Use `Modal` component
