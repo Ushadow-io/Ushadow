@@ -313,6 +313,9 @@ export const servicesApi = {
     compose_file?: string
     metadata?: Record<string, any>
   }) => api.post<{ success: boolean; message: string }>('/api/services/register', config),
+
+  /** Generate Mycelia authentication token */
+  generateMyceliaToken: () => api.post<{ token: string; client_id: string }>('/api/services/mycelia/generate-token'),
 }
 
 // Compose service configuration endpoints

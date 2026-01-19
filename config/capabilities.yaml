@@ -94,3 +94,40 @@ capabilities:
       sync_interval:
         type: integer
         description: "Auto-sync interval in seconds"
+
+  # ==========================================================================
+  # Audio Input Capability (Audio Sources)
+  # ==========================================================================
+  audio_input:
+    description: "Audio input sources that provide audio streams"
+
+    provides:
+      device_type:
+        type: string
+        description: "Type of audio input device (mobile, omi, desktop, file)"
+      format:
+        type: string
+        description: "Audio format specification (pcm_s16le_16khz_mono)"
+      protocol:
+        type: string
+        description: "Streaming protocol used (wyoming, webrtc, raw)"
+
+  # ==========================================================================
+  # Audio Consumer Capability (Audio Processing Services)
+  # ==========================================================================
+  audio_consumer:
+    description: "Services that consume and process audio streams"
+
+    provides:
+      websocket_url:
+        type: url
+        description: "WebSocket endpoint that accepts audio"
+      protocol:
+        type: string
+        description: "Audio streaming protocol (wyoming, webrtc, raw)"
+      api_key:
+        type: secret
+        description: "API key or JWT token (if required)"
+      format:
+        type: string
+        description: "Accepted audio format"

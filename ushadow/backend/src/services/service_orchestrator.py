@@ -46,6 +46,7 @@ WELL_KNOWN_ENV_MAPPINGS = {
     "AUTH_SECRET_KEY": "security.auth_secret_key",
     "ADMIN_PASSWORD": "security.admin_password",
     "USER": "auth.admin_email",  # For OpenMemory backend
+    "MYCELIA_SECRET_KEY": "security.auth_secret_key",  # Mycelia JWT signing
 }
 
 
@@ -884,6 +885,7 @@ class ServiceOrchestrator:
             profiles=service.profiles,
             required_env_count=len(service.required_env_vars),
             optional_env_count=len(service.optional_env_vars),
+            wizard=service.wizard,
         )
 
     async def _check_needs_setup(self, service: DiscoveredService) -> bool:

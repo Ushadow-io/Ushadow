@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import {
   Server,
@@ -40,17 +41,19 @@ import ImportFromGitHubModal from '../components/ImportFromGitHubModal'
 import { StatusBadge } from '../components/StatusBadge'
 
 export default function ServicesPage() {
+  const navigate = useNavigate()
+
   // Compose services state
   const [services, setServices] = useState<ComposeService[]>([])
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
   const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set())
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null)
-  const [envConfig, setEnvConfig] = useState<{
+  const [envConfigs, setEnvConfigs] = useState<Record<string, {
     required_env_vars: EnvVarInfo[]
     optional_env_vars: EnvVarInfo[]
-  } | null>(null)
-  const [envEditForm, setEnvEditForm] = useState<Record<string, EnvVarConfig>>({})
-  const [customEnvVars, setCustomEnvVars] = useState<Array<{ name: string; value: string }>>([])
+  }>>({})
+  const [envEditForms, setEnvEditForms] = useState<Record<string, Record<string, EnvVarConfig>>>({})
+  const [customEnvVars, setCustomEnvVars] = useState<Record<string, Array<{ name: string; value: string }>>>({})
 
   // Provider state
   const [capabilities, setCapabilities] = useState<Capability[]>([])
@@ -391,11 +394,13 @@ export default function ServicesPage() {
   const handleSaveEnvVars = async (serviceId: string) => {
     setSaving(true)
     try {
+      const serviceEnvEditForm = envEditForms[serviceId] || {}
+      const serviceCustomEnvVars = customEnvVars[serviceId] || []
       // Combine standard env vars with custom ones
       const envVars: EnvVarConfig[] = [
-        ...Object.values(envEditForm),
+        ...Object.values(serviceEnvEditForm),
         // Add custom env vars as new settings
-        ...customEnvVars
+        ...serviceCustomEnvVars
           .filter(ev => ev.name.trim() && ev.value.trim())
           .map(ev => ({
             name: ev.name.trim().toUpperCase(),
@@ -408,7 +413,7 @@ export default function ServicesPage() {
       const result = await servicesApi.updateEnvConfig(serviceId, envVars)
       console.log('Save result:', result)
       const newSettingsCount = (result.data as any)?.new_settings_created || 0
-      const customCount = customEnvVars.filter(ev => ev.name.trim() && ev.value.trim()).length
+      const customCount = serviceCustomEnvVars.filter(ev => ev.name.trim() && ev.value.trim()).length
       let msg = 'Environment configuration saved'
       if (newSettingsCount > 0 || customCount > 0) {
         const total = newSettingsCount + customCount
@@ -416,9 +421,22 @@ export default function ServicesPage() {
       }
       setMessage({ type: 'success', text: msg })
       setEditingServiceId(null)
-      setEnvConfig(null)
-      setEnvEditForm({})
-      setCustomEnvVars([])
+      // Clear this service's config
+      setEnvConfigs(prev => {
+        const next = { ...prev }
+        delete next[serviceId]
+        return next
+      })
+      setEnvEditForms(prev => {
+        const next = { ...prev }
+        delete next[serviceId]
+        return next
+      })
+      setCustomEnvVars(prev => {
+        const next = { ...prev }
+        delete next[serviceId]
+        return next
+      })
       // Reload services to update needs_setup status
       const servicesRes = await servicesApi.getInstalled()
       setServices(servicesRes.data)
@@ -430,10 +448,25 @@ export default function ServicesPage() {
   }
 
   const handleCancelEnvEdit = () => {
+    if (editingServiceId) {
+      // Clear only the editing service's config
+      setEnvConfigs(prev => {
+        const next = { ...prev }
+        delete next[editingServiceId]
+        return next
+      })
+      setEnvEditForms(prev => {
+        const next = { ...prev }
+        delete next[editingServiceId]
+        return next
+      })
+      setCustomEnvVars(prev => {
+        const next = { ...prev }
+        delete next[editingServiceId]
+        return next
+      })
+    }
     setEditingServiceId(null)
-    setEnvConfig(null)
-    setEnvEditForm({})
-    setCustomEnvVars([])
   }
 
   const handleExpandService = async (serviceId: string) => {
@@ -459,8 +492,8 @@ export default function ServicesPage() {
         }
       })
 
-      setEnvConfig(data)
-      setEnvEditForm(formData)
+      setEnvConfigs(prev => ({ ...prev, [serviceId]: data }))
+      setEnvEditForms(prev => ({ ...prev, [serviceId]: formData }))
     } catch (error: any) {
       setMessage({ type: 'error', text: 'Failed to load env configuration' })
     } finally {
@@ -477,15 +510,31 @@ export default function ServicesPage() {
     // Clear edit state if collapsing
     if (editingServiceId === serviceId) {
       setEditingServiceId(null)
-      setEnvConfig(null)
-      setEnvEditForm({})
+      setEnvConfigs(prev => {
+        const next = { ...prev }
+        delete next[serviceId]
+        return next
+      })
+      setEnvEditForms(prev => {
+        const next = { ...prev }
+        delete next[serviceId]
+        return next
+      })
+      setCustomEnvVars(prev => {
+        const next = { ...prev }
+        delete next[serviceId]
+        return next
+      })
     }
   }
 
-  const updateEnvVar = (name: string, updates: Partial<EnvVarConfig>) => {
-    setEnvEditForm(prev => ({
+  const updateEnvVar = (serviceId: string, name: string, updates: Partial<EnvVarConfig>) => {
+    setEnvEditForms(prev => ({
       ...prev,
-      [name]: { ...prev[name], ...updates }
+      [serviceId]: {
+        ...(prev[serviceId] || {}),
+        [name]: { ...(prev[serviceId]?.[name] || {}), ...updates }
+      }
     }))
   }
 
@@ -913,6 +962,9 @@ export default function ServicesPage() {
               const isEditing = editingServiceId === service.service_id
               const isStarting = startingService === service.service_name
               const isLoadingConfig = loadingEnvConfig === service.service_id
+              const envConfig = envConfigs[service.service_id]
+              const envEditForm = envEditForms[service.service_id] || {}
+              const serviceCustomEnvVars = customEnvVars[service.service_id] || []
 
               // Debug logging
               if (isExpanded || isLoadingConfig) {
@@ -976,10 +1028,16 @@ export default function ServicesPage() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (!isExpanded) {
-                                handleExpandService(service.service_id)
+                              // If service has a wizard, navigate to it
+                              if (service.wizard) {
+                                navigate(`/wizard/${service.wizard}`)
+                              } else {
+                                // Otherwise, open env var editing pane
+                                if (!isExpanded) {
+                                  handleExpandService(service.service_id)
+                                }
+                                setEditingServiceId(service.service_id)
                               }
-                              setEditingServiceId(service.service_id)
                             }}
                             className="group focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg"
                           >
@@ -1196,25 +1254,25 @@ export default function ServicesPage() {
                               key={ev.name}
                               envVar={ev}
                               config={envEditForm[ev.name]}
-                              onChange={(updates) => updateEnvVar(ev.name, updates)}
+                              onChange={(updates) => updateEnvVar(service.service_id, ev.name, updates)}
                             />
                           ))}
 
                           {/* Custom Env Vars Section */}
-                          {customEnvVars.length > 0 && (
+                          {serviceCustomEnvVars.length > 0 && (
                             <div className="mt-3 pt-3 border-t border-dashed border-neutral-200 dark:border-neutral-700">
                               <p className="text-[10px] uppercase tracking-wider text-neutral-400 mb-2">
                                 Custom Environment Variables
                               </p>
-                              {customEnvVars.map((ev, idx) => (
+                              {serviceCustomEnvVars.map((ev, idx) => (
                                 <div key={idx} className="flex items-center gap-2 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0">
                                   <input
                                     type="text"
                                     value={ev.name}
                                     onChange={(e) => {
-                                      const updated = [...customEnvVars]
+                                      const updated = [...serviceCustomEnvVars]
                                       updated[idx] = { ...ev, name: e.target.value.toUpperCase() }
-                                      setCustomEnvVars(updated)
+                                      setCustomEnvVars(prev => ({ ...prev, [service.service_id]: updated }))
                                     }}
                                     placeholder="VAR_NAME"
                                     className="w-40 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
@@ -1225,9 +1283,9 @@ export default function ServicesPage() {
                                     type="text"
                                     value={ev.value}
                                     onChange={(e) => {
-                                      const updated = [...customEnvVars]
+                                      const updated = [...serviceCustomEnvVars]
                                       updated[idx] = { ...ev, value: e.target.value }
-                                      setCustomEnvVars(updated)
+                                      setCustomEnvVars(prev => ({ ...prev, [service.service_id]: updated }))
                                     }}
                                     placeholder="value"
                                     className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
@@ -1235,7 +1293,10 @@ export default function ServicesPage() {
                                   />
                                   <button
                                     onClick={() => {
-                                      setCustomEnvVars(prev => prev.filter((_, i) => i !== idx))
+                                      setCustomEnvVars(prev => ({
+                                        ...prev,
+                                        [service.service_id]: serviceCustomEnvVars.filter((_, i) => i !== idx)
+                                      }))
                                     }}
                                     className="p-1 text-neutral-400 hover:text-error-500 transition-colors"
                                     title="Remove"
@@ -1251,7 +1312,10 @@ export default function ServicesPage() {
                           {/* Add Custom Env Var Button */}
                           <div className="mt-3">
                             <button
-                              onClick={() => setCustomEnvVars(prev => [...prev, { name: '', value: '' }])}
+                              onClick={() => setCustomEnvVars(prev => ({
+                                ...prev,
+                                [service.service_id]: [...serviceCustomEnvVars, { name: '', value: '' }]
+                              }))}
                               className="flex items-center gap-1.5 text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
                               data-testid="add-custom-env-btn"
                             >
