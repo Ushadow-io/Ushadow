@@ -13,6 +13,17 @@ export interface EnvVarItem {
   is_secret: boolean
 }
 
+/**
+ * A setting suggestion that can be mapped to an env var.
+ * Mirrors EnvVarSuggestion from api.ts but simplified.
+ */
+export interface SettingSuggestion {
+  path: string        // e.g., "api_keys.openai_api_key"
+  label: string       // e.g., "OpenAI API Key"
+  has_value: boolean  // Whether a value is already configured
+  value?: string      // Masked value for display (optional)
+}
+
 export interface EnvVarListEditorProps {
   /** Current list of env vars */
   envVars: EnvVarItem[]
@@ -24,6 +35,8 @@ export interface EnvVarListEditorProps {
   namePlaceholder?: string
   /** Test ID prefix */
   testIdPrefix?: string
+  /** Available settings to suggest for mapping (optional) */
+  suggestions?: SettingSuggestion[]
 }
 
 /**
@@ -57,12 +70,77 @@ export function isSecretName(name: string): boolean {
  *   allowNameEdit={true}
  * />
  */
+/**
+ * Finds matching suggestions for an env var name.
+ *
+ * This is the matching logic that determines which settings to suggest.
+ *
+ * @param envName - The environment variable name (e.g., "OPENAI_API_KEY")
+ * @param suggestions - Available settings to match against
+ * @returns Suggestions sorted by relevance (best matches first)
+ *
+ * TODO: Implement your matching logic here!
+ *
+ * Example matches to consider:
+ * - OPENAI_API_KEY -> api_keys.openai_api_key (exact match after normalization)
+ * - DATABASE_URL -> settings.database_url (partial match)
+ * - API_KEY -> api_keys.* (any API key setting)
+ */
+export function findMatchingSuggestions(
+  envName: string,
+  suggestions: SettingSuggestion[]
+): SettingSuggestion[] {
+  if (!envName || suggestions.length === 0) return []
+
+  const normalizedEnvName = envName.toLowerCase().replace(/_/g, '')
+
+  // Score and sort suggestions by relevance
+  const scored = suggestions.map(suggestion => {
+    const pathParts = suggestion.path.split('.')
+    const lastPart = pathParts[pathParts.length - 1].toLowerCase().replace(/_/g, '')
+
+    let score = 0
+
+    // Exact match on the last part of the path
+    if (lastPart === normalizedEnvName) {
+      score = 100
+    }
+    // Last part contains the env name or vice versa
+    else if (lastPart.includes(normalizedEnvName) || normalizedEnvName.includes(lastPart)) {
+      score = 50
+    }
+    // Check if they share significant substrings (e.g., "openai" in both)
+    else {
+      const envWords = envName.toLowerCase().split('_').filter(w => w.length > 2)
+      const pathWords = lastPart.split(/[_-]/).filter(w => w.length > 2)
+      const sharedWords = envWords.filter(w => pathWords.some(pw => pw.includes(w) || w.includes(pw)))
+      if (sharedWords.length > 0) {
+        score = 25 * sharedWords.length
+      }
+    }
+
+    // Boost score if the setting already has a value configured
+    if (suggestion.has_value && score > 0) {
+      score += 10
+    }
+
+    return { suggestion, score }
+  })
+
+  // Return suggestions with score > 0, sorted by score descending
+  return scored
+    .filter(s => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(s => s.suggestion)
+}
+
 export default function EnvVarListEditor({
   envVars,
   onChange,
   allowNameEdit = true,
   namePlaceholder = 'VAR_NAME',
   testIdPrefix = 'env-var',
+  suggestions = [],
 }: EnvVarListEditorProps) {
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
   const [showPaste, setShowPaste] = useState(false)
@@ -203,6 +281,7 @@ export default function EnvVarListEditor({
             onRemove={() => removeEnvVar(index)}
             onToggleSecret={() => toggleSecretVisibility(env.name)}
             testIdPrefix={testIdPrefix}
+            suggestions={suggestions}
           />
         ))}
       </div>
@@ -230,6 +309,7 @@ interface EnvVarRowProps {
   onRemove: () => void
   onToggleSecret: () => void
   testIdPrefix: string
+  suggestions: SettingSuggestion[]
 }
 
 function EnvVarRow({
@@ -242,6 +322,7 @@ function EnvVarRow({
   onRemove,
   onToggleSecret,
   testIdPrefix,
+  suggestions,
 }: EnvVarRowProps) {
   // Auto-detect secret when name changes
   const handleNameChange = (name: string) => {
@@ -334,16 +415,101 @@ function EnvVarRow({
         )}
 
         {env.source === 'setting' && (
-          <input
-            type="text"
-            value={env.setting_path || ''}
-            onChange={(e) => onUpdate({ setting_path: e.target.value })}
-            placeholder="api_keys.my_key"
-            className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            data-testid={`${testIdPrefix}-setting-path-${index}`}
+          <SettingPathSelector
+            envName={env.name}
+            settingPath={env.setting_path || ''}
+            suggestions={suggestions}
+            onSelect={(path) => onUpdate({ setting_path: path })}
+            testId={`${testIdPrefix}-setting-path-${index}`}
           />
         )}
       </div>
     </div>
+  )
+}
+
+// =============================================================================
+// SettingPathSelector - Dropdown for selecting from settings suggestions
+// =============================================================================
+
+interface SettingPathSelectorProps {
+  envName: string
+  settingPath: string
+  suggestions: SettingSuggestion[]
+  onSelect: (path: string) => void
+  testId: string
+}
+
+/**
+ * A dropdown that shows matching settings suggestions based on the env var name.
+ * Falls back to a text input if no suggestions are available.
+ */
+function SettingPathSelector({
+  envName,
+  settingPath,
+  suggestions,
+  onSelect,
+  testId,
+}: SettingPathSelectorProps) {
+  // Get suggestions sorted by relevance to this env var name
+  const matchedSuggestions = findMatchingSuggestions(envName, suggestions)
+
+  // If we have suggestions, show a dropdown; otherwise show text input
+  if (suggestions.length > 0) {
+    return (
+      <div className="flex-1 flex items-center gap-2">
+        <select
+          value={settingPath}
+          onChange={(e) => onSelect(e.target.value)}
+          className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+          data-testid={testId}
+        >
+          <option value="">Select a setting...</option>
+
+          {/* Show matched suggestions first with a "Suggested" group */}
+          {matchedSuggestions.length > 0 && (
+            <optgroup label="Suggested matches">
+              {matchedSuggestions.map((s) => (
+                <option key={s.path} value={s.path}>
+                  {s.label || s.path}
+                  {s.has_value ? ' ✓' : ''}
+                </option>
+              ))}
+            </optgroup>
+          )}
+
+          {/* Show all other suggestions */}
+          <optgroup label="All settings">
+            {suggestions
+              .filter((s) => !matchedSuggestions.includes(s))
+              .map((s) => (
+                <option key={s.path} value={s.path}>
+                  {s.label || s.path}
+                  {s.has_value ? ' ✓' : ''}
+                </option>
+              ))}
+          </optgroup>
+        </select>
+
+        {/* Show indicator if a configured setting is selected */}
+        {settingPath && suggestions.find((s) => s.path === settingPath)?.has_value && (
+          <span className="text-xs text-green-600 dark:text-green-400 whitespace-nowrap">
+            Configured
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  // Fallback: text input for manual entry when no suggestions available
+  return (
+    <input
+      type="text"
+      value={settingPath}
+      onChange={(e) => onSelect(e.target.value)}
+      placeholder="api_keys.my_key"
+      className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+      data-testid={testId}
+    />
   )
 }
