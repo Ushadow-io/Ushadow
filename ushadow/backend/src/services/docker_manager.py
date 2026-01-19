@@ -621,7 +621,7 @@ class DockerManager:
                     if not container:
                         # Log what we found but didn't match
                         found_projects = [c.labels.get('com.docker.compose.project', 'unknown') for c in containers]
-                        logger.info(
+                        logger.debug(
                             f"[get_service_info] Found {len(containers)} containers for {docker_container_name} "
                             f"but none in projects {target_projects}. Found in: {found_projects}"
                         )

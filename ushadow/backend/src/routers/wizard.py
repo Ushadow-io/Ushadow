@@ -379,27 +379,31 @@ async def get_quickstart_config() -> QuickstartResponse:
     Get setup requirements for default services.
 
     This endpoint powers the quickstart wizard by:
-    1. Getting default services from settings
+    1. Getting all installed services
     2. Using CapabilityResolver to determine what capabilities they need
     3. Returning aggregated provider/key requirements (deduplicated by capability)
 
     Returns capabilities with their providers and any missing keys.
     Also returns service info with display names for UI rendering.
     """
-    settings = get_settings_store()
+    from src.services.service_orchestrator import get_service_orchestrator
+
     resolver = get_capability_resolver()
     registry = get_compose_registry()
+    orchestrator = get_service_orchestrator()
 
-    # Get default services from settings
-    default_services = await settings.get("default_services") or []
+    # Get all installed services
+    installed_services = await orchestrator.list_installed_services()
+    service_ids = [s["service_id"] for s in installed_services if s.get("service_id")]
 
     # Use the reusable method from CapabilityResolver
-    requirements = await resolver.get_setup_requirements(default_services)
+    requirements = await resolver.get_setup_requirements(service_ids)
 
     # Build service info with display names from compose registry
     service_infos = []
-    for service_name in requirements["services"]:
-        service = registry.get_service_by_name(service_name)
+    for service_id in requirements["services"]:
+        # Get service by full ID (format: "compose-file:service-name")
+        service = registry.get_service(service_id)
         if service:
             service_infos.append(ServiceInfo(
                 name=service.service_name,
@@ -409,8 +413,8 @@ async def get_quickstart_config() -> QuickstartResponse:
         else:
             # Fallback if service not found in registry
             service_infos.append(ServiceInfo(
-                name=service_name,
-                display_name=service_name,
+                name=service_id,
+                display_name=service_id,
             ))
 
     return QuickstartResponse(

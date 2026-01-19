@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.services.llm_client import get_llm_client
+from src.services.tool_calling import ToolCallingOrchestrator
 from src.config.omegaconf_settings import get_settings_store
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     system: Optional[str] = None  # System prompt
     use_memory: bool = True  # Whether to fetch context from OpenMemory
+    use_tools: bool = True  # Whether to enable tool calling for memory sources
     user_id: Optional[str] = None  # User ID for memory lookup
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
@@ -238,16 +240,30 @@ async def chat(request: ChatRequest):
     async def generate():
         """Stream response chunks."""
         try:
-            async for chunk in llm.stream_completion(
-                messages=messages,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens
-            ):
-                # Use AI SDK data stream format for text deltas
-                yield format_text_delta(chunk)
+            # If tools are enabled, use ToolCallingOrchestrator for MCP integration
+            if request.use_tools:
+                orchestrator = ToolCallingOrchestrator()
+                result = await orchestrator.run_with_tools(
+                    messages=messages,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens
+                )
 
-            # Send finish message
-            yield format_finish_message("stop")
+                # Stream the complete result
+                yield format_text_delta(result["content"])
+                yield format_finish_message("stop")
+            else:
+                # Standard streaming without tools
+                async for chunk in llm.stream_completion(
+                    messages=messages,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens
+                ):
+                    # Use AI SDK data stream format for text deltas
+                    yield format_text_delta(chunk)
+
+                # Send finish message
+                yield format_finish_message("stop")
 
         except Exception as e:
             logger.error(f"Chat streaming error: {e}")
@@ -273,6 +289,9 @@ async def chat_simple(request: ChatRequest) -> Dict[str, Any]:
 
     Returns the complete response as JSON. Useful for testing or
     when streaming isn't needed.
+
+    Supports tool calling when use_tools=True, which enables the LLM
+    to query registered memory sources for additional information.
     """
     llm = get_llm_client()
 
@@ -319,21 +338,39 @@ async def chat_simple(request: ChatRequest) -> Dict[str, Any]:
         messages.append({"role": msg.role, "content": msg.content})
 
     try:
-        response = await llm.completion(
-            messages=messages,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens
-        )
+        # Use tool calling if enabled
+        if request.use_tools:
+            orchestrator = ToolCallingOrchestrator()
+            result = await orchestrator.run_with_tools(
+                messages=messages,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens
+            )
 
-        # Extract the assistant message
-        content = response.choices[0].message.content
+            return {
+                "id": str(uuid.uuid4()),
+                "role": "assistant",
+                "content": result["content"],
+                "tool_calls_made": result.get("tool_calls_made", []),
+                "iterations": result.get("iterations", 0),
+            }
+        else:
+            # Regular completion without tools
+            response = await llm.completion(
+                messages=messages,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens
+            )
 
-        return {
-            "id": str(uuid.uuid4()),
-            "role": "assistant",
-            "content": content,
-            "model": response.model if hasattr(response, 'model') else None,
-        }
+            # Extract the assistant message
+            content = response.choices[0].message.content
+
+            return {
+                "id": str(uuid.uuid4()),
+                "role": "assistant",
+                "content": content,
+                "model": response.model if hasattr(response, 'model') else None,
+            }
 
     except Exception as e:
         logger.error(f"Chat error: {e}")

@@ -24,7 +24,7 @@ x-ushadow:
 
 services:
   metamcp:
-    image: ghcr.io/metatool-ai/metamcp:latest
+    image: ghcr.io/metatool-ai/metamcp:2.4.15
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-metamcp
     # Requires postgres from infra (started via infra_services in x-ushadow)
     ports:
@@ -39,12 +39,12 @@ services:
       # Node environment
       - NODE_ENV=${NODE_ENV:-production}
 
-      # Session secret (generate with: openssl rand -hex 32)
-      - SESSION_SECRET=${METAMCP_SESSION_SECRET:-change-me-in-production}
+      # Session secret - uses same secret as ushadow backend
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
 
       # Server configuration file (auto-registers MCP servers on startup)
       - SERVERS_CONFIG=/app/config/servers.json
-
       # Optional: OIDC authentication
       # - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
       # - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
@@ -54,7 +54,7 @@ services:
       # Persist any local data
       - metamcp_data:/app/data
       # Server configuration for auto-registration
-      - ../config/metamcp:/app/config:ro
+      - ${PROJECT_ROOT}/config/metamcp:/app/config:ro
     networks:
       - infra-network
     healthcheck:

@@ -389,16 +389,21 @@ class CapabilityResolver:
         {'uses': [{'capability': 'llm', 'required': True}, ...]}
 
         Matching logic:
-        1. Exact service name match (e.g., 'chronicle-backend')
-        2. Compose file base name match (e.g., 'chronicle' matches chronicle-compose.yaml)
+        1. Exact service_id match (e.g., 'chronicle-compose:chronicle-backend')
+        2. Service name match (e.g., 'chronicle-backend')
+        3. Compose file base name match (e.g., 'chronicle' matches chronicle-compose.yaml)
         """
         if service_id in self._services_cache:
             return self._services_cache[service_id]
 
-        # Try exact service name match first
-        service = self._compose_registry.get_service_by_name(service_id)
+        # Try exact service_id match first (format: "compose-file:service-name")
+        service = self._compose_registry.get_service(service_id)
 
-        # If not found, try matching by compose file base name
+        # If not found, try service name match
+        if not service:
+            service = self._compose_registry.get_service_by_name(service_id)
+
+        # If still not found, try matching by compose file base name
         # e.g., 'chronicle' matches services in 'chronicle-compose.yaml'
         if not service:
             for s in self._compose_registry.get_services():
@@ -539,7 +544,7 @@ class CapabilityResolver:
                 if capability in seen_capabilities:
                     continue
 
-                provider = await self._get_selected_provider(capability)
+                provider, provider_instance = await self._get_selected_provider(capability)
                 if not provider:
                     if required:
                         seen_capabilities[capability] = {

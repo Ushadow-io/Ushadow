@@ -158,6 +158,10 @@ export default function ServicesPage() {
   const loadData = async () => {
     try {
       setLoading(true)
+
+      // Refresh compose registry and provider cache
+      await settingsApi.refresh()
+
       const [servicesResponse, capsResponse] = await Promise.all([
         servicesApi.getInstalled(),
         providersApi.getCapabilities()

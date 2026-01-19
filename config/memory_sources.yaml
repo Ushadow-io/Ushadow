@@ -1,0 +1,22 @@
+# Memory sources for chat tool calling
+memory:
+  sources:
+    - type: "mcp"
+      source_id: "notion"
+      name: "Notion Workspace"
+      description: "Search and query Notion pages, databases, and content"
+      enabled: true
+      adapter_config:
+        # Route through MetaMCP hub (aggregates all MCP servers)
+        mcp_url: "http://metamcp:12008/metamcp/ushadow/mcp"
+        transport: "http"
+        auth:
+          type: "bearer"
+          token_setting: "security.auth_secret_key"
+      tools:
+        - name: "search_notion"
+          description: "Search Notion workspace for pages and content"
+        - name: "get_page"
+          description: "Retrieve a specific Notion page with all content"
+        - name: "create_page"
+          description: "Create a new page in Notion"

@@ -18,6 +18,8 @@ from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import mask_dict_secrets
 from src.services.compose_registry import get_compose_registry
 from src.services.provider_registry import get_provider_registry
+from src.services.capability_resolver import get_capability_resolver
+from src.services.service_orchestrator import get_service_orchestrator
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -153,6 +155,97 @@ async def reset_config():
         }
     except Exception as e:
         logger.error(f"Error resetting config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/requirements")
+async def get_setup_requirements():
+    """
+    Get setup requirements for all installed services.
+
+    Returns the same format as quickstart wizard:
+    - required_capabilities: List of capabilities with provider info and missing keys
+    - services: List of services being configured
+    - all_configured: True if all services can start
+
+    This endpoint powers the Settings page to show all required fields.
+    """
+    try:
+        resolver = get_capability_resolver()
+        registry = get_compose_registry()
+        orchestrator = get_service_orchestrator()
+
+        # Get all installed services
+        installed_services = await orchestrator.list_installed_services()
+        service_ids = [s["service_id"] for s in installed_services if s.get("service_id")]
+
+        # Use the reusable method from CapabilityResolver
+        requirements = await resolver.get_setup_requirements(service_ids)
+
+        # Build service info with display names from compose registry
+        service_infos = []
+        for service_id in requirements["services"]:
+            # Get service by full ID (format: "compose-file:service-name")
+            service = registry.get_service(service_id)
+            if service:
+                service_infos.append({
+                    "name": service.service_name,
+                    "display_name": service.display_name or service.service_name,
+                    "description": service.description,
+                })
+            else:
+                # Fallback if service not found in registry
+                service_infos.append({
+                    "name": service_id,
+                    "display_name": service_id,
+                })
+
+        return {
+            "required_capabilities": requirements["required_capabilities"],
+            "services": service_infos,
+            "all_configured": requirements["all_configured"]
+        }
+    except Exception as e:
+        logger.error(f"Error getting setup requirements: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/requirements")
+async def save_setup_requirements(key_values: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Save key values from settings requirements screen.
+
+    Same functionality as quickstart wizard save endpoint.
+    """
+    try:
+        settings_store = get_settings_store()
+
+        # Prepare updates for secrets.yaml
+        updates: Dict[str, Any] = {}
+
+        for key, value in key_values.items():
+            if not value or value.strip() == "":
+                continue
+
+            # Convert dot notation to nested dict
+            # E.g., "providers.openai.api_key" -> {"providers": {"openai": {"api_key": value}}}
+            parts = key.split(".")
+            current = updates
+            for part in parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            current[parts[-1]] = value.strip()
+
+        # Save to secrets.yaml
+        if updates:
+            await settings_store.update(updates, target_file="secrets")
+            return {"success": True, "message": "Configuration saved", "keys_saved": len(key_values)}
+        else:
+            return {"success": True, "message": "No values to save", "keys_saved": 0}
+
+    except Exception as e:
+        logger.error(f"Error saving requirements: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

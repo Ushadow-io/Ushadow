@@ -466,9 +466,9 @@ class ComposeParser(BaseYAMLParser):
             if match:
                 var_name, default = match.groups()
                 # ${VAR} (no :-) → required (default is None)
-                # ${VAR:-} → required (empty default isn't useful)
+                # ${VAR:-} → optional with empty string default
                 # ${VAR:-value} → optional with explicit default
-                has_default = default is not None and default != ""
+                has_default = default is not None  # If :- is present, it has a default
                 return ComposeEnvVar(
                     name=key,
                     has_default=has_default,

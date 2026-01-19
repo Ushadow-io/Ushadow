@@ -31,6 +31,7 @@ from src.services.feature_flags import create_feature_flag_service, set_feature_
 from src.services.mcp_server import setup_mcp_server
 from src.config.omegaconf_settings import get_settings_store
 from src.utils.telemetry import TelemetryClient
+from src.memory.sources import load_memory_sources_from_config
 import threading
 
 # Configure logging
@@ -133,6 +134,16 @@ async def lifespan(app: FastAPI):
     settings_store = get_settings_store()
     await settings_store.load_config()  # Pre-load and cache
     logger.info("✓ OmegaConf settings initialized")
+
+    # Initialize memory sources for chat tool calling
+    await load_memory_sources_from_config()
+    logger.info("✓ Memory sources initialized")
+
+    # Sync integration instances as memory sources (Notion, etc.)
+    from src.memory.sources.integration_bridge import sync_integration_memory_sources
+    await sync_integration_memory_sources()
+    logger.info("✓ Integration memory sources synced")
+
     # Initialize deployment manager
     await init_deployment_manager(db)
     logger.info("✓ Deployment manager initialized")

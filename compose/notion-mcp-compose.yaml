@@ -1,0 +1,51 @@
+# Notion MCP Server
+# Official Notion Model Context Protocol server for AI integration
+#
+# Usage:
+#   docker compose -f compose/notion-mcp-compose.yaml up -d
+#
+# Access:
+#   - SSE endpoint: http://localhost:${NOTION_MCP_PORT:-3100}/sse
+#   - Tools: search, create_page, update_database, etc.
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  namespace: notion-mcp
+  # No infra dependencies needed
+  infra_services: []
+  notion-mcp:
+    display_name: "Notion MCP Server"
+    description: "Official Notion MCP server for AI-powered Notion integration"
+    requires: []
+    provides: mcp_notion
+
+services:
+  notion-mcp:
+    image: mcp/notion:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-notion-mcp
+    command: ["--transport", "http", "--port", "3100"]
+    ports:
+      - "${NOTION_MCP_PORT:-3100}:3100"
+    environment:
+      # Notion API token (from Notion integration)
+      - NOTION_TOKEN=${NOTION_TOKEN}
+
+      # Bearer token for HTTP transport authentication (required)
+      # Uses the same secret as ushadow backend JWT auth
+      - AUTH_TOKEN=${AUTH_TOKEN}
+    networks:
+      - infra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true

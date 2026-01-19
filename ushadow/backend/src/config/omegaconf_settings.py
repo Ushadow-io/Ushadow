@@ -793,6 +793,9 @@ class SettingsStore:
                 source, setting_path, value, ev.default_value, ev.name
             )
 
+            # Mask sensitive values in resolved_value
+            masked_resolved = mask_if_secret(ev.name, resolved) if resolved else resolved
+
             result.append({
                 "name": ev.name,
                 "is_required": is_required,
@@ -801,7 +804,7 @@ class SettingsStore:
                 "source": source,
                 "setting_path": setting_path,
                 "value": value,
-                "resolved_value": resolved,
+                "resolved_value": masked_resolved,
                 "suggestions": [s.to_dict() for s in suggestions],
             })
 

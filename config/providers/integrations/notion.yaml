@@ -1,0 +1,127 @@
+# Notion Workspace Integration Provider
+# Implements the 'memory_source' capability via official Notion MCP server
+
+capability: memory_source
+
+providers:
+  - id: notion
+    name: "Notion Workspace"
+    description: "Bidirectional sync with Notion - query and update pages, databases, and tasks via AI"
+    mode: local
+    integration_type: mcp
+    compose_file: compose/notion-mcp-compose.yaml
+
+    # Implements memory_source capability
+    credentials:
+      api_token:
+        env_var: NOTION_TOKEN
+        settings_path: api_keys.notion_token
+        label: "Notion API Token"
+        description: "Integration token from https://www.notion.so/my-integrations"
+        type: secret
+        required: true
+        link: "https://www.notion.so/my-integrations"
+
+      sync_interval:
+        env_var: NOTION_SYNC_INTERVAL
+        settings_path: integrations.notion.sync_interval
+        label: "Auto-Sync Interval (seconds)"
+        description: "How often to sync pages to OpenMemory (0 to disable auto-sync)"
+        type: integer
+        default: "21600"  # 6 hours
+
+      mcp_port:
+        env_var: NOTION_MCP_PORT
+        settings_path: integrations.notion.mcp_port
+        label: "MCP Server Port"
+        type: integer
+        default: "3100"
+
+    # MCP server configuration
+    mcp_config:
+      server_name: "notion"
+      transport: "http"
+      url: "http://notion-mcp:3100/mcp"
+      auth:
+        type: "bearer"
+        token_env: "AUTH_SECRET_KEY"
+
+      # Available tools from official Notion MCP server
+      tools:
+        - name: search_notion
+          description: "Search Notion workspace for pages and databases by title"
+        - name: get_page
+          description: "Retrieve a specific page with all content and properties"
+        - name: create_page
+          description: "Create a new page in Notion with markdown content"
+        - name: update_page
+          description: "Update an existing page's properties or content"
+        - name: append_to_page
+          description: "Append markdown content to an existing page"
+        - name: query_database
+          description: "Query a Notion database with filters and sorting"
+        - name: create_database
+          description: "Create a new database with specified schema"
+        - name: update_database
+          description: "Update database properties or entries"
+        - name: add_comment
+          description: "Add a comment to a page or database entry"
+        - name: move_page
+          description: "Move a page to a different location in the hierarchy"
+
+    # Memory mapping configuration (how to transform Notion data → memory format)
+    memory_mapping:
+      sync_target: openmemory  # Where to push during sync
+      bidirectional: true  # Allow AI to write back to Notion
+
+      field_mappings:
+        - source_field: "properties.Name.title[0].plain_text"
+          target_field: "title"
+          default_value: "{{id}}"
+        - source_field: "properties.Content.rich_text[0].plain_text"
+          target_field: "content"
+        - source_field: "properties.Tags.multi_select"
+          target_field: "tags"
+          transform: "extract_names"  # Extract name field from multi_select
+        - source_field: "created_time"
+          target_field: "created_at"
+          transform: "date_format"
+        - source_field: "last_edited_time"
+          target_field: "updated_at"
+          transform: "date_format"
+        - source_field: "id"
+          target_field: "source_id"
+        - source_field: "url"
+          target_field: "source_url"
+
+      include_unmapped: true  # Include all properties in metadata
+
+    # Sync configuration
+    sync_config:
+      # Change detection strategy
+      change_detection: "last_edited_time"  # Use Notion's last_edited_time for incremental sync
+
+      # What to sync
+      include_databases: true  # Sync database entries
+      include_pages: true  # Sync standalone pages
+
+      # Filters (optional - limit what gets synced)
+      # filters:
+      #   - property: "Status"
+      #     condition: "equals"
+      #     value: "Published"
+
+    ui:
+      icon: file-text
+      tags: ["integration", "memory_source", "mcp", "notion", "cloud"]
+      links:
+        docs: https://github.com/makenotion/notion-mcp-server
+        notion_integrations: https://www.notion.so/my-integrations
+        help: https://developers.notion.com/docs/getting-started
+
+    # Dependencies
+    depends_on:
+      required:
+        - openmemory  # Notion syncs to OpenMemory
+      optional:
+        - metamcp  # Can be accessed via MetaMCP hub

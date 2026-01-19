@@ -121,3 +121,26 @@ selected_providers:
 default_services:
   - chronicle-backend
   - mem0
+
+# Memory Sources for Chat Tool Calling
+# Configure external memory sources that the LLM can query during conversations
+memory:
+  sources:
+    - type: "mcp"
+      source_id: "notion"
+      name: "Notion Workspace"
+      description: "Search and query Notion pages, databases, and content"
+      enabled: true
+      metadata:
+        adapter_config:
+          # Direct connection to Notion MCP (no MetaMCP)
+          mcp_url: "http://notion-mcp:3100/mcp"
+          transport: "http"
+          # No auth needed - internal network provides security
+          tools:
+            - name: "API-post-search"
+              description: "Search Notion workspace for pages and content"
+            - name: "API-retrieve-a-page"
+              description: "Retrieve a specific Notion page with all content"
+            - name: "API-post-page"
+              description: "Create a new page in Notion"
