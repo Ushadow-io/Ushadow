@@ -90,6 +90,12 @@ export default function ImportFromGitHubModal({
   // Capabilities this service provides
   const [capabilities, setCapabilities] = useState<string[]>([])
 
+  // Capabilities this service requires (dependencies)
+  const [requiredCapabilities, setRequiredCapabilities] = useState<string[]>([])
+
+  // Custom capability input
+  const [customCapability, setCustomCapability] = useState('')
+
   // Env template paste
   const [showEnvPaste, setShowEnvPaste] = useState(false)
   const [envPasteText, setEnvPasteText] = useState('')
@@ -99,6 +105,7 @@ export default function ImportFromGitHubModal({
     { id: 'llm', label: 'LLM', description: 'Language model inference' },
     { id: 'tts', label: 'TTS', description: 'Text to speech' },
     { id: 'stt', label: 'STT', description: 'Speech to text' },
+    { id: 'transcription', label: 'Transcription', description: 'Speech to text transcription' },
     { id: 'embedding', label: 'Embedding', description: 'Text embeddings' },
     { id: 'memory', label: 'Memory', description: 'Persistent memory storage' },
     { id: 'vision', label: 'Vision', description: 'Image understanding' },
@@ -133,6 +140,8 @@ export default function ImportFromGitHubModal({
       setPorts([])
       setVolumes([])
       setCapabilities([])
+      setRequiredCapabilities([])
+      setCustomCapability('')
       setShowEnvPaste(false)
       setEnvPasteText('')
       setError(null)
@@ -441,6 +450,7 @@ export default function ImportFromGitHubModal({
           shadow_header_value: shadowHeader.header_value || serviceName,
           route_path: shadowHeader.route_path || `/${serviceName}`,
           capabilities: capabilities.length > 0 ? capabilities : undefined,
+          requires: requiredCapabilities.length > 0 ? requiredCapabilities : undefined,
         })
 
         const data = response.data
@@ -482,6 +492,7 @@ export default function ImportFromGitHubModal({
                 env_vars: envVars,
                 enabled: true,
                 capabilities: capabilities.length > 0 ? capabilities : undefined,
+                requires: requiredCapabilities.length > 0 ? requiredCapabilities : undefined,
               },
             })
 
@@ -510,6 +521,8 @@ export default function ImportFromGitHubModal({
         // Proceed to complete (even with partial success)
       }
 
+      // Trigger immediate refresh of parent data
+      onServiceImported()
       setStep('complete')
     } catch (err: any) {
       setError(extractErrorMessage(err, 'Failed to import service'))
@@ -816,7 +829,7 @@ export default function ImportFromGitHubModal({
         </div>
       </div>
 
-      {/* Capabilities */}
+      {/* Capabilities Provided */}
       <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
         <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
           <Server className="w-4 h-4" />
@@ -842,15 +855,106 @@ export default function ImportFromGitHubModal({
                   : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:border-gray-300 dark:hover:border-gray-600'
               }`}
               title={cap.description}
+              data-testid={`capability-provides-${cap.id}`}
             >
               {cap.label}
             </button>
           ))}
         </div>
+        {/* Custom capability input */}
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={customCapability}
+            onChange={(e) => setCustomCapability(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+            placeholder="Add custom capability..."
+            className="flex-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            data-testid="capability-custom-input"
+          />
+          <button
+            onClick={() => {
+              if (customCapability && !capabilities.includes(customCapability)) {
+                setCapabilities([...capabilities, customCapability])
+                setCustomCapability('')
+              }
+            }}
+            disabled={!customCapability || capabilities.includes(customCapability)}
+            className="px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+            data-testid="capability-custom-add"
+          >
+            <Plus className="w-4 h-4" />
+            Add
+          </button>
+        </div>
         {capabilities.length > 0 && (
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            Selected: {capabilities.join(', ')}
-          </p>
+          <div className="flex flex-wrap gap-1">
+            {capabilities.map((cap) => (
+              <span
+                key={cap}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300"
+              >
+                {cap}
+                <button
+                  onClick={() => setCapabilities(capabilities.filter((c) => c !== cap))}
+                  className="hover:text-red-500"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Capabilities Required */}
+      <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+          <Server className="w-4 h-4" />
+          Capabilities Required
+        </h4>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Select capabilities this service depends on (e.g., LLM, memory)
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {CAPABILITY_OPTIONS.map((cap) => (
+            <button
+              key={cap.id}
+              onClick={() => {
+                if (requiredCapabilities.includes(cap.id)) {
+                  setRequiredCapabilities(requiredCapabilities.filter((c) => c !== cap.id))
+                } else {
+                  setRequiredCapabilities([...requiredCapabilities, cap.id])
+                }
+              }}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                requiredCapabilities.includes(cap.id)
+                  ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-2 border-amber-500'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:border-gray-300 dark:hover:border-gray-600'
+              }`}
+              title={cap.description}
+              data-testid={`capability-requires-${cap.id}`}
+            >
+              {cap.label}
+            </button>
+          ))}
+        </div>
+        {requiredCapabilities.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {requiredCapabilities.map((cap) => (
+              <span
+                key={cap}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300"
+              >
+                {cap}
+                <button
+                  onClick={() => setRequiredCapabilities(requiredCapabilities.filter((c) => c !== cap))}
+                  className="hover:text-red-500"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
@@ -1068,13 +1172,15 @@ export default function ImportFromGitHubModal({
                 className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
               >
                 <div className="flex items-center justify-between mb-2">
-                  {dockerHubInfo ? (
+                  {/* Allow name editing for Docker Hub imports OR for manually added vars (empty name) */}
+                  {dockerHubInfo || !env.name ? (
                     <input
                       type="text"
                       value={env.name}
                       onChange={(e) => updateEnvVar(index, { name: e.target.value.toUpperCase() })}
                       placeholder="VAR_NAME"
-                      className="font-mono text-sm text-gray-900 dark:text-white bg-transparent border-none p-0 focus:ring-0"
+                      className="font-mono text-sm text-gray-900 dark:text-white bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 focus:ring-2 focus:ring-primary-500"
+                      data-testid={`env-var-name-${index}`}
                     />
                   ) : (
                     <span className="font-mono text-sm text-gray-900 dark:text-white">
@@ -1088,10 +1194,12 @@ export default function ImportFromGitHubModal({
                     {env.is_secret && (
                       <span className="text-xs text-amber-500">Secret</span>
                     )}
-                    {dockerHubInfo && (
+                    {/* Allow deletion for Docker Hub OR manually added vars */}
+                    {(dockerHubInfo || !originalEnv) && (
                       <button
                         onClick={() => removeEnvVar(index)}
                         className="p-1 text-gray-400 hover:text-red-500"
+                        data-testid={`env-var-delete-${index}`}
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>

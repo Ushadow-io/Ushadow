@@ -1665,6 +1665,7 @@ export interface DockerHubRegisterRequest {
   shadow_header_value?: string
   route_path?: string
   capabilities?: string[]  // Capabilities this service provides
+  requires?: string[]      // Capabilities this service requires (dependencies)
 }
 
 export const githubImportApi = {
@@ -1723,6 +1724,7 @@ export const githubImportApi = {
         volumes: request.volumes ? JSON.stringify(request.volumes) : undefined,
         env_vars: request.env_vars ? JSON.stringify(request.env_vars) : undefined,
         capabilities: request.capabilities ? JSON.stringify(request.capabilities) : undefined,
+        requires: request.requires ? JSON.stringify(request.requires) : undefined,
       }
     }),
 
