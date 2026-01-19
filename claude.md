@@ -48,6 +48,48 @@ Read `ushadow/backend/src/ARCHITECTURE.md` for:
 - ❌ Methods with >5 params → Use Pydantic models
 - ❌ Skip layer architecture → Follow router→service→store flow
 
+## Frontend Development Workflow
+
+**BEFORE writing ANY frontend code, follow this workflow:**
+
+### Step 1: Read Quick Reference
+Read `ushadow/frontend/AGENT_QUICK_REF.md` - it's ~800 tokens and covers all reusable components.
+
+### Step 2: Search for Existing Components
+```bash
+# Search for components before creating new ones
+grep -r "ComponentName" ushadow/frontend/src/components/
+
+# Check available hooks
+cat ushadow/frontend/src/hooks/index.ts
+
+# Check available contexts
+ls ushadow/frontend/src/contexts/
+```
+
+### Step 3: Check UI Contract
+Read `ushadow/frontend/src/testing/ui-contract.ts` for:
+- Component documentation and examples
+- TestID patterns (use these, don't invent new ones)
+- Import paths
+
+### Step 4: Follow Patterns
+- **Hooks**: See `ushadow/frontend/src/hooks/HOOK_PATTERNS.md`
+- **State**: Use existing contexts, React Query for server state
+- **Forms**: Use react-hook-form + Controller pattern
+
+### File Size Limits (ESLint enforced)
+- **Pages**: Max 300 lines → Extract logic to hooks, UI to components
+- **Components**: Max 150 lines → Split into smaller components
+- **Hooks**: Max 80 lines → Compose from smaller hooks
+
+### What NOT to Do
+- ❌ Create custom modals → Use `Modal` component
+- ❌ Create custom secret inputs → Use `SecretInput`
+- ❌ Create new state management → Use existing contexts
+- ❌ Hardcode testid strings → Import from `ui-contract.ts`
+- ❌ Put business logic in components → Extract to hooks
+
 ## CRITICAL Frontend Development Rules
 
 **MANDATORY: Every frontend change MUST include `data-testid` attributes for ALL interactive elements.**
