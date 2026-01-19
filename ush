@@ -2,324 +2,429 @@
 """
 ush - ushadow Command Line Tool
 
-Modern CLI built on auto-generated API client from OpenAPI spec.
+Dynamic CLI that auto-discovers commands from OpenAPI spec.
+All API endpoints are automatically available as CLI commands.
 
 Examples:
-    ush health                       # Check backend health
-    ush services list                # List all services
-    ush services start chronicle     # Start a service
-    ush services stop chronicle      # Stop a service
-    ush services restart chronicle   # Restart a service
-    ush services status chronicle    # Get service status
-    ush services logs chronicle      # View service logs
-    ush services env-export chronicle  # Export env vars
-    ush api GET /api/services/       # Raw API call
+    ush                              # List all command groups
+    ush services                     # List services commands
+    ush services list                # GET /api/services/
+    ush services start chronicle     # POST /api/services/{name}/start
+    ush providers list               # GET /api/providers/
+    ush wizard quickstart            # GET /api/wizard/quickstart
 """
 
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-import typer
 from rich.console import Console
 from rich.table import Table
-from typing_extensions import Annotated
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from ushadow.client.auth import UshadowClient
-
-# Initialize Typer app
-app = typer.Typer(
-    name="ush",
-    help="ushadow command-line interface",
-    add_completion=False,
-    no_args_is_help=True,  # Show help when no args provided
-)
-
-# Service management commands
-services_app = typer.Typer(
-    help="Service management commands",
-    no_args_is_help=True,  # Show help when just "ush services" is run
-)
-app.add_typer(services_app, name="services")
-
-# Global options
-verbose_option = Annotated[
-    bool,
-    typer.Option("--verbose", "-v", help="Enable verbose output")
-]
+from ushadow.client import UshadowClient
 
 console = Console()
 
+# =============================================================================
+# OpenAPI Spec Loader
+# =============================================================================
 
-def get_client(verbose: bool = False) -> UshadowClient:
-    """Get client from environment."""
+def load_openapi_spec() -> dict:
+    """Load OpenAPI spec from file or fetch from server."""
+    spec_file = PROJECT_ROOT / "openapi.json"
+
+    if spec_file.exists():
+        with open(spec_file) as f:
+            return json.load(f)
+
+    # Try to fetch from server
     try:
-        return UshadowClient.from_env(verbose=verbose)
-    except Exception as e:
-        console.print(f"[red]❌ Failed to initialize client: {e}[/red]")
-        raise typer.Exit(code=1)
+        client = UshadowClient.from_env()
+        return client.api("GET", "/openapi.json", auth=False)
+    except Exception:
+        console.print("[red]❌ No openapi.json found. Run: curl http://localhost:8000/openapi.json > openapi.json[/red]")
+        sys.exit(1)
 
 
-def format_status(status: str, health: Optional[str] = None) -> str:
-    """Format status with icon."""
-    if status == "running":
-        if health == "healthy":
-            return "🟢 running"
-        elif health == "unhealthy":
-            return "🟡 running (unhealthy)"
-        return "🔵 running"
-    elif status in ("stopped", "not_found", "exited"):
-        return "🔴 " + status
-    elif status == "created":
-        return "⚪ created"
-    return "⚪ " + status
+def parse_endpoints(spec: dict) -> dict[str, dict]:
+    """
+    Parse OpenAPI spec into a command structure.
+
+    Returns:
+        {
+            "services": {
+                "list": {"method": "GET", "path": "/api/services/", "summary": "...", "params": []},
+                "start": {"method": "POST", "path": "/api/services/{name}/start", "params": ["name"]},
+                ...
+            },
+            "providers": {...},
+            ...
+        }
+    """
+    commands = {}
+
+    for path, methods in spec.get("paths", {}).items():
+        for method, details in methods.items():
+            if method not in ("get", "post", "put", "delete"):
+                continue
+
+            # Extract tag (command group)
+            tags = details.get("tags", ["default"])
+            tag = tags[0] if tags else "default"
+
+            # Skip auth endpoints (handled separately)
+            if tag == "auth":
+                continue
+
+            # Parse command name from path
+            # /api/services/{name}/start -> "start"
+            # /api/services/ -> "list"
+            # /api/services/{name} -> "get"
+            cmd_name = extract_command_name(path, method)
+
+            # Extract parameters
+            params = details.get("parameters", [])
+            path_params = [p["name"] for p in params if p.get("in") == "path"]
+            query_params = [
+                {
+                    "name": p["name"],
+                    "required": p.get("required", False),
+                    "description": p.get("description", ""),
+                    "type": p.get("schema", {}).get("type", "string"),
+                    "default": p.get("schema", {}).get("default"),
+                }
+                for p in params if p.get("in") == "query"
+            ]
+
+            # Check if request body is required
+            has_body = "requestBody" in details
+
+            # Build command entry
+            if tag not in commands:
+                commands[tag] = {}
+
+            commands[tag][cmd_name] = {
+                "method": method.upper(),
+                "path": path,
+                "summary": details.get("summary", ""),
+                "description": details.get("description", ""),
+                "path_params": path_params,
+                "query_params": query_params,
+                "has_body": has_body,
+                "requires_auth": requires_auth(details),
+            }
+
+    return commands
 
 
-@app.command()
-def health(verbose: verbose_option = False):
-    """Check ushadow backend health."""
-    try:
-        client = get_client(verbose=verbose)
-        result = client.health()
-        console.print("[green]✅ ushadow backend healthy[/green]")
-        if verbose:
-            console.print(json.dumps(result, indent=2))
-    except Exception as e:
-        console.print(f"[red]❌ Backend unreachable: {e}[/red]")
-        raise typer.Exit(code=1)
+def extract_command_name(path: str, method: str) -> str:
+    """
+    Extract a clean command name from path and method.
+
+    /api/services/ + GET -> list
+    /api/services/{name} + GET -> get
+    /api/services/{name}/start + POST -> start
+    /api/services/{name}/logs + GET -> logs
+    /api/services/catalog + GET -> catalog
+    """
+    # Remove /api/ prefix and tag
+    parts = path.strip("/").split("/")
+    if parts[0] == "api":
+        parts = parts[1:]
+    if parts:
+        parts = parts[1:]  # Remove tag (services, providers, etc.)
+
+    # Handle empty path (list endpoint)
+    if not parts:
+        return "list"
+
+    # Filter out path parameters
+    parts = [p for p in parts if not p.startswith("{")]
+
+    if not parts:
+        # Path was just /{param} - this is a "get" operation
+        return "get" if method == "get" else method
+
+    # Join remaining parts with hyphens
+    name = "-".join(parts)
+
+    # Special case: if it's just the tag + method, use method name
+    if not name:
+        name = "get" if method == "get" else method
+
+    return name
 
 
-@services_app.command("list")
-def services_list(verbose: verbose_option = False):
-    """List all services."""
-    try:
-        client = get_client(verbose=verbose)
-        services = client.list_services()
-
-        if not services:
-            console.print("[yellow]No services found[/yellow]")
-            return
-
-        table = Table(title="Services", show_header=True, header_style="bold magenta")
-        table.add_column("Name", style="cyan", width=25)
-        table.add_column("Status", width=20)
-        table.add_column("Installed", width=10)
-        table.add_column("Description", overflow="fold")
-
-        for svc in services:
-            status = format_status(svc.get("status", "unknown"), svc.get("health"))
-            installed = "✅" if svc.get("installed") else "❌"
-            desc = (svc.get("description") or "")[:40]
-
-            table.add_row(
-                svc.get("service_name", "unknown"),
-                status,
-                installed,
-                desc,
-            )
-
-        console.print(table)
-
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
+def requires_auth(endpoint_details: dict) -> bool:
+    """Check if endpoint requires authentication."""
+    security = endpoint_details.get("security", [])
+    # If security is empty list, it's explicitly public
+    # If security is not present, check global security
+    return len(security) > 0 or "security" not in endpoint_details
 
 
-@services_app.command("status")
-def services_status(
-    service_name: Annotated[str, typer.Argument(help="Service name")],
-    verbose: verbose_option = False,
-):
-    """Get status of a specific service."""
-    try:
-        client = get_client(verbose=verbose)
-        service = client.get_service(service_name)
+# =============================================================================
+# Output Formatters (for pretty output on specific commands)
+# =============================================================================
 
-        status = format_status(service.get("status", "unknown"), service.get("health"))
-        console.print(f"{status} [bold]{service_name}[/bold]")
+def format_services_list(data: list) -> None:
+    """Pretty format for services list."""
+    table = Table(title="Services", show_header=True, header_style="bold magenta")
+    table.add_column("Name", style="cyan", width=25)
+    table.add_column("Status", width=20)
+    table.add_column("Installed", width=10)
+    table.add_column("Description", overflow="fold")
 
-        if service.get("ports"):
-            ports = service["ports"]
-            if isinstance(ports, list) and ports:
-                port_strs = [f"{p.get('host', '?')}:{p.get('container', '?')}" for p in ports]
-                console.print(f"   Ports: {', '.join(port_strs)}")
+    for svc in data:
+        status = svc.get("status", "unknown")
+        health = svc.get("health")
 
-        if verbose:
-            console.print(f"   Image: {service.get('image', 'unknown')}")
-            if service.get("description"):
-                console.print(f"   Description: {service['description']}")
+        if status == "running":
+            status_str = f"🟢 {status}" if health == "healthy" else f"🟡 {status}"
+        elif status in ("stopped", "not_found", "exited"):
+            status_str = f"🔴 {status}"
+        else:
+            status_str = f"⚪ {status}"
 
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
+        installed = "✅" if svc.get("installed") else "❌"
+        desc = (svc.get("description") or "")[:40]
+
+        table.add_row(svc.get("service_name", "?"), status_str, installed, desc)
+
+    console.print(table)
 
 
-@services_app.command("start")
-def services_start(
-    service_name: Annotated[str, typer.Argument(help="Service name")],
-    verbose: verbose_option = False,
-):
-    """Start a service."""
-    try:
-        client = get_client(verbose=verbose)
-        console.print(f"🔄 Starting [bold]{service_name}[/bold]...")
-        result = client.start_service(service_name)
+def format_providers_list(data: list) -> None:
+    """Pretty format for providers list."""
+    table = Table(title="Providers", show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="cyan", width=15)
+    table.add_column("Name", width=20)
+    table.add_column("Capability", width=15)
 
+    for p in data:
+        table.add_row(
+            p.get("id", "?"),
+            p.get("name", "?"),
+            p.get("capability", "?"),
+        )
+
+    console.print(table)
+
+
+# Registry of custom formatters: (tag, command) -> formatter function
+FORMATTERS = {
+    ("services", "list"): format_services_list,
+    ("providers", "list"): format_providers_list,
+}
+
+
+# =============================================================================
+# CLI Execution
+# =============================================================================
+
+def execute_command(
+    client: UshadowClient,
+    cmd_info: dict,
+    path_args: dict[str, str],
+    query_args: dict[str, Any],
+    body_data: Optional[dict],
+    tag: str,
+    cmd_name: str,
+) -> Any:
+    """Execute an API command and return the result."""
+    # Build the path with substituted parameters
+    path = cmd_info["path"]
+    for param, value in path_args.items():
+        path = path.replace(f"{{{param}}}", value)
+
+    # Add query parameters
+    if query_args:
+        query_str = "&".join(f"{k}={v}" for k, v in query_args.items() if v is not None)
+        if query_str:
+            path = f"{path}?{query_str}"
+
+    # Make the request
+    result = client.api(
+        cmd_info["method"],
+        path,
+        data=body_data,
+        auth=cmd_info["requires_auth"],
+    )
+
+    return result
+
+
+def print_result(result: Any, tag: str, cmd_name: str) -> None:
+    """Print the result, using custom formatter if available."""
+    formatter = FORMATTERS.get((tag, cmd_name))
+
+    if formatter and isinstance(result, list):
+        formatter(result)
+    elif isinstance(result, dict) and result.get("success") is not None:
+        # Action result
         if result.get("success"):
-            console.print(f"[green]✅ {service_name} started successfully[/green]")
-            if result.get("message"):
-                console.print(f"   {result['message']}")
+            console.print(f"[green]✅ {result.get('message', 'Success')}[/green]")
         else:
-            console.print(f"[red]❌ {result.get('message', 'Operation failed')}[/red]")
-            raise typer.Exit(code=1)
-
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
-
-
-@services_app.command("stop")
-def services_stop(
-    service_name: Annotated[str, typer.Argument(help="Service name")],
-    verbose: verbose_option = False,
-):
-    """Stop a service."""
-    try:
-        client = get_client(verbose=verbose)
-        console.print(f"🔄 Stopping [bold]{service_name}[/bold]...")
-        result = client.stop_service(service_name)
-
-        if result.get("success"):
-            console.print(f"[green]✅ {service_name} stopped successfully[/green]")
-        else:
-            console.print(f"[red]❌ {result.get('message', 'Operation failed')}[/red]")
-            raise typer.Exit(code=1)
-
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
-
-
-@services_app.command("restart")
-def services_restart(
-    service_name: Annotated[str, typer.Argument(help="Service name")],
-    verbose: verbose_option = False,
-):
-    """Restart a service."""
-    try:
-        client = get_client(verbose=verbose)
-        console.print(f"🔄 Restarting [bold]{service_name}[/bold]...")
-        result = client.restart_service(service_name)
-
-        if result.get("success"):
-            console.print(f"[green]✅ {service_name} restarted successfully[/green]")
-            if result.get("message"):
-                console.print(f"   {result['message']}")
-        else:
-            console.print(f"[red]❌ {result.get('message', 'Operation failed')}[/red]")
-            raise typer.Exit(code=1)
-
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
-
-
-@services_app.command("logs")
-def services_logs(
-    service_name: Annotated[str, typer.Argument(help="Service name")],
-    lines: Annotated[int, typer.Option("--lines", "-n", help="Number of lines")] = 100,
-    verbose: verbose_option = False,
-):
-    """View service logs."""
-    try:
-        client = get_client(verbose=verbose)
-        result = client.get_service_logs(service_name, lines=lines)
-
-        logs = result.get("logs", "")
-        if logs:
-            console.print(logs)
-        else:
-            console.print(f"[yellow]No logs available for {service_name}[/yellow]")
-
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
-
-
-@services_app.command("env-export")
-def services_env_export(
-    service_name: Annotated[str, typer.Argument(help="Service name")],
-    output: Annotated[Optional[str], typer.Option("--output", "-o", help="Output file")] = None,
-    verbose: verbose_option = False,
-):
-    """Export environment variables for a service."""
-    try:
-        client = get_client(verbose=verbose)
-        console.print(f"📦 Exporting env vars for [bold]{service_name}[/bold]...")
-        result = client.export_service_env(service_name)
-
-        env_vars = result.get("env_vars", {})
-        if not env_vars:
-            console.print(f"[yellow]No environment variables to export[/yellow]")
-            return
-
-        # Determine output file
-        output_file = output or f".env.{service_name}"
-
-        # Format and write
-        env_lines = [f"{k}={v}" for k, v in sorted(env_vars.items())]
-        with open(output_file, "w") as f:
-            f.write(f"# Environment variables for {service_name}\n")
-            f.write(f"# Generated by ush\n\n")
-            f.write("\n".join(env_lines))
-            f.write("\n")
-
-        console.print(f"[green]✅ Exported {len(env_vars)} env vars to {output_file}[/green]")
-
-        if not result.get("ready"):
-            missing = result.get("missing", [])
-            if missing:
-                console.print(f"[yellow]⚠️  Missing vars: {', '.join(missing)}[/yellow]")
-
-    except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
-
-
-@app.command()
-def api(
-    method: Annotated[str, typer.Argument(help="HTTP method (GET, POST, etc.)")],
-    endpoint: Annotated[str, typer.Argument(help="API endpoint path")],
-    data: Annotated[Optional[str], typer.Option("--data", "-d", help="JSON request body")] = None,
-    no_auth: Annotated[bool, typer.Option("--no-auth", help="Skip authentication")] = False,
-    verbose: verbose_option = False,
-):
-    """Make a raw API request."""
-    try:
-        client = get_client(verbose=verbose)
-
-        # Parse data if provided
-        body = json.loads(data) if data else None
-
-        if verbose:
-            console.print(f"[dim]🔗 {method.upper()} {endpoint}[/dim]")
-
-        result = client.api(method, endpoint, data=body, auth=not no_auth)
-
-        # Pretty print response
+            console.print(f"[red]❌ {result.get('message', 'Failed')}[/red]")
+    else:
+        # Default: JSON output
         console.print(json.dumps(result, indent=2))
 
-    except json.JSONDecodeError as e:
-        console.print(f"[red]❌ Invalid JSON: {e}[/red]")
-        raise typer.Exit(code=1)
+
+def show_help(commands: dict, tag: Optional[str] = None) -> None:
+    """Show help for available commands."""
+    if tag is None:
+        # Show all command groups
+        console.print("\n[bold]ushadow CLI[/bold] - Auto-generated from OpenAPI\n")
+        console.print("[bold]Command Groups:[/bold]")
+        for group in sorted(commands.keys()):
+            cmd_count = len(commands[group])
+            console.print(f"  [cyan]{group:<20}[/cyan] ({cmd_count} commands)")
+        console.print("\n[dim]Usage: ush <group> <command> [args...][/dim]")
+        console.print("[dim]       ush <group> --help[/dim]")
+        console.print("[dim]       ush health[/dim]")
+    else:
+        # Show commands for a specific group
+        if tag not in commands:
+            console.print(f"[red]Unknown command group: {tag}[/red]")
+            console.print(f"[dim]Available: {', '.join(sorted(commands.keys()))}[/dim]")
+            sys.exit(1)
+
+        console.print(f"\n[bold]{tag}[/bold] commands:\n")
+        for cmd_name, cmd_info in sorted(commands[tag].items()):
+            params_str = " ".join(f"<{p}>" for p in cmd_info["path_params"])
+            opts_str = " ".join(f"[--{p['name']}]" for p in cmd_info["query_params"])
+
+            full_cmd = f"{cmd_name}"
+            if params_str:
+                full_cmd += f" {params_str}"
+            if opts_str:
+                full_cmd += f" {opts_str}"
+
+            console.print(f"  [cyan]{full_cmd:<40}[/cyan] {cmd_info['summary']}")
+
+        console.print(f"\n[dim]Usage: ush {tag} <command> [args...][/dim]")
+
+
+def main():
+    """Main CLI entry point."""
+    # Load and parse OpenAPI spec
+    spec = load_openapi_spec()
+    commands = parse_endpoints(spec)
+
+    # Parse arguments
+    args = sys.argv[1:]
+
+    # No arguments - show help
+    if not args:
+        show_help(commands)
+        return
+
+    # Handle special commands
+    if args[0] in ("--help", "-h", "help"):
+        show_help(commands)
+        return
+
+    if args[0] == "health":
+        try:
+            client = UshadowClient.from_env()
+            result = client.health()
+            console.print("[green]✅ ushadow backend healthy[/green]")
+            if "--verbose" in args or "-v" in args:
+                console.print(json.dumps(result, indent=2))
+        except Exception as e:
+            console.print(f"[red]❌ Backend unreachable: {e}[/red]")
+            sys.exit(1)
+        return
+
+    # Get command group
+    tag = args[0]
+
+    if tag not in commands:
+        console.print(f"[red]Unknown command group: {tag}[/red]")
+        console.print(f"[dim]Available: {', '.join(sorted(commands.keys()))}[/dim]")
+        sys.exit(1)
+
+    # Help for command group
+    if len(args) == 1 or args[1] in ("--help", "-h", "help"):
+        show_help(commands, tag)
+        return
+
+    # Get command
+    cmd_name = args[1]
+
+    if cmd_name not in commands[tag]:
+        console.print(f"[red]Unknown command: {tag} {cmd_name}[/red]")
+        console.print(f"[dim]Available: {', '.join(sorted(commands[tag].keys()))}[/dim]")
+        sys.exit(1)
+
+    cmd_info = commands[tag][cmd_name]
+    remaining_args = args[2:]
+
+    # Parse path parameters (positional)
+    path_args = {}
+    for param in cmd_info["path_params"]:
+        if not remaining_args:
+            console.print(f"[red]Missing required argument: <{param}>[/red]")
+            console.print(f"[dim]Usage: ush {tag} {cmd_name} <{param}>[/dim]")
+            sys.exit(1)
+        path_args[param] = remaining_args.pop(0)
+
+    # Parse query parameters and options
+    query_args = {}
+    body_data = None
+    verbose = False
+
+    i = 0
+    while i < len(remaining_args):
+        arg = remaining_args[i]
+
+        if arg in ("--verbose", "-v"):
+            verbose = True
+            i += 1
+        elif arg in ("--data", "-d") and i + 1 < len(remaining_args):
+            try:
+                body_data = json.loads(remaining_args[i + 1])
+            except json.JSONDecodeError as e:
+                console.print(f"[red]Invalid JSON: {e}[/red]")
+                sys.exit(1)
+            i += 2
+        elif arg.startswith("--"):
+            # Query parameter
+            param_name = arg[2:]
+            if i + 1 < len(remaining_args) and not remaining_args[i + 1].startswith("-"):
+                query_args[param_name] = remaining_args[i + 1]
+                i += 2
+            else:
+                query_args[param_name] = True
+                i += 1
+        else:
+            console.print(f"[yellow]Warning: Unexpected argument: {arg}[/yellow]")
+            i += 1
+
+    # Execute command
+    try:
+        client = UshadowClient.from_env(verbose=verbose)
+
+        if verbose:
+            console.print(f"[dim]🔗 {cmd_info['method']} {cmd_info['path']}[/dim]")
+
+        result = execute_command(
+            client, cmd_info, path_args, query_args, body_data, tag, cmd_name
+        )
+
+        print_result(result, tag, cmd_name)
+
     except Exception as e:
         console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(code=1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    app()
+    main()
