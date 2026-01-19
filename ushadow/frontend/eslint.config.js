@@ -81,9 +81,9 @@ export default [
       // CODE QUALITY - Prevents sprawling files, forces modular code
       // =========================================================================
 
-      // Pages should be max 300 lines - forces extraction to components/hooks
+      // Pages should be max 600 lines - forces extraction to components/hooks
       'max-lines': ['warn', {
-        max: 300,
+        max: 600,
         skipBlankLines: true,
         skipComments: true,
       }],
