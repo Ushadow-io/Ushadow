@@ -25,3 +25,6 @@ export {
   UnifiedStreamingPage,
 } from './streaming';
 export type { StreamSource } from './streaming';
+
+// Chat Components
+export { VoiceChatInput } from './chat/VoiceChatInput';
