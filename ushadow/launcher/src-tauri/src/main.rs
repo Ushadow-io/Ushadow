@@ -21,7 +21,14 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     get_default_project_dir, check_project_dir, clone_ushadow_repo,
     update_ushadow_repo, install_git_windows, install_git_macos,
     // Worktree commands
-    list_worktrees, create_worktree, open_in_vscode, remove_worktree,
+    list_worktrees, list_git_branches, check_worktree_exists, create_worktree, create_worktree_with_workmux,
+    merge_worktree_with_rebase, list_tmux_sessions, get_tmux_window_status,
+    get_environment_tmux_status, get_tmux_info, ensure_tmux_running, attach_tmux_to_worktree,
+    open_in_vscode, open_in_vscode_with_tmux, remove_worktree, delete_environment,
+    get_tmux_sessions, kill_tmux_window, kill_tmux_server,
+    open_tmux_in_terminal, capture_tmux_pane, get_claude_status,
+    // Settings
+    load_launcher_settings, save_launcher_settings, write_credentials_to_worktree,
     // Permissions
     check_install_path};
 use tauri::{
@@ -142,9 +149,31 @@ fn main() {
             // Worktree management
             discover_environments_with_config,
             list_worktrees,
+            list_git_branches,
+            check_worktree_exists,
             create_worktree,
+            create_worktree_with_workmux,
+            merge_worktree_with_rebase,
+            list_tmux_sessions,
+            get_tmux_window_status,
+            get_environment_tmux_status,
+            get_tmux_info,
+            ensure_tmux_running,
+            attach_tmux_to_worktree,
             open_in_vscode,
+            open_in_vscode_with_tmux,
             remove_worktree,
+            delete_environment,
+            get_tmux_sessions,
+            kill_tmux_window,
+            kill_tmux_server,
+            open_tmux_in_terminal,
+            capture_tmux_pane,
+            get_claude_status,
+            // Settings
+            load_launcher_settings,
+            save_launcher_settings,
+            write_credentials_to_worktree,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

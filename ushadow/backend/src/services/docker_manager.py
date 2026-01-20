@@ -1297,7 +1297,7 @@ class DockerManager:
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=600  # 10 minutes for builds (some services like vibe-kanban compile Rust)
             )
 
             if result.returncode == 0:

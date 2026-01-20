@@ -8,11 +8,16 @@
   },
   "package": {
     "productName": "Ushadow",
-    "version": "0.5.0"
+    "version": "0.5.1"
   },
   "tauri": {
     "allowlist": {
       "all": false,
+      "clipboard": {
+        "all": true,
+        "writeText": true,
+        "readText": true
+      },
       "shell": {
         "all": false,
         "open": true,

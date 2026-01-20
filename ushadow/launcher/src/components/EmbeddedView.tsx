@@ -1,14 +1,15 @@
-import { X, ExternalLink, RefreshCw, ArrowLeft } from 'lucide-react'
+import { X, ExternalLink, RefreshCw, ArrowLeft, Terminal } from 'lucide-react'
 import { tauri } from '../hooks/useTauri'
 
 interface EmbeddedViewProps {
   url: string
   envName: string
   envColor?: string
+  envPath: string | null
   onClose: () => void
 }
 
-export function EmbeddedView({ url, envName, envColor, onClose }: EmbeddedViewProps) {
+export function EmbeddedView({ url, envName, envColor, envPath, onClose }: EmbeddedViewProps) {
   const handleOpenExternal = () => {
     tauri.openBrowser(url)
   }
@@ -17,6 +18,19 @@ export function EmbeddedView({ url, envName, envColor, onClose }: EmbeddedViewPr
     const iframe = document.getElementById('embedded-iframe') as HTMLIFrameElement
     if (iframe) {
       iframe.src = iframe.src
+    }
+  }
+
+  const handleOpenVscode = async () => {
+    if (envPath) {
+      await tauri.openInVscode(envPath, envName)
+    }
+  }
+
+  const handleOpenTerminal = async () => {
+    if (envPath) {
+      const windowName = `ushadow-${envName}`
+      await tauri.openTmuxInTerminal(windowName, envPath)
     }
   }
 
@@ -49,6 +63,29 @@ export function EmbeddedView({ url, envName, envColor, onClose }: EmbeddedViewPr
           >
             <RefreshCw className="w-4 h-4" />
           </button>
+
+          {/* VSCode and Terminal buttons - only show if envPath exists */}
+          {envPath && (
+            <>
+              <button
+                onClick={handleOpenTerminal}
+                className="p-1.5 rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors"
+                title="Open in Terminal"
+                data-testid="embedded-view-terminal"
+              >
+                <img src="/iterm-icon.png" alt="Terminal" className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleOpenVscode}
+                className="p-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors"
+                title="Open in VS Code"
+                data-testid="embedded-view-vscode"
+              >
+                <img src="/vscode48.png" alt="VS Code" className="w-4 h-4" />
+              </button>
+            </>
+          )}
+
           <button
             onClick={handleOpenExternal}
             className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
