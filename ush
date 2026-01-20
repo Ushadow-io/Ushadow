@@ -330,19 +330,89 @@ def show_help(commands: dict, tag: Optional[str] = None) -> None:
 # Interactive Shell Mode
 # =============================================================================
 
+def get_resource_endpoints() -> dict[str, tuple[str, str]]:
+    """
+    Map command groups to their list endpoints and name fields.
+
+    Returns dict of: group -> (list_endpoint, name_field)
+
+    This tells the completer how to fetch resource names for each group.
+    For example, "services" fetches from "/api/services/" and uses "service_name".
+
+    TODO: Add more mappings as needed for your API groups.
+    """
+    return {
+        "services": ("/api/services/", "service_name"),
+        "providers": ("/api/providers/", "id"),
+        "instances": ("/api/instances/", "name"),
+        "unodes": ("/api/unodes/", "name"),
+        "deployments": ("/api/deployments/", "name"),
+        # Add more as needed...
+    }
+
+
 class UshCompleter(Completer):
     """
-    Nested completer for ush shell.
+    Nested completer for ush shell with resource-first completion.
 
     Tab 1: Complete command group (services, providers, etc.)
-    Tab 2: Complete command (list, start, stop, etc.)
-    Tab 3+: Complete parameters with hints
+    Tab 2: Complete resource name OR command (fetched from API)
+    Tab 3: Complete command for that resource, or parameters
+
+    Example flow:
+        services <Tab>     → shows: mem0, chronicle, ... AND list, catalog, ...
+        services mem0 <Tab> → shows: start, stop, logs, status, ...
     """
 
-    def __init__(self, commands: dict):
+    def __init__(self, commands: dict, client: "UshadowClient"):
         self.commands = commands
-        # Add special commands
+        self.client = client
         self.special_commands = {"help", "exit", "quit", "health"}
+
+        # Cache for resource lists: {"services": ["mem0", "chronicle", ...]}
+        self._resource_cache: dict[str, list[str]] = {}
+
+        # Map: group -> (list_endpoint, name_field)
+        # This defines how to fetch resource names for each group
+        self.resource_endpoints = get_resource_endpoints()
+
+    def _get_resources(self, group: str) -> list[str]:
+        """Fetch and cache resource names for a group."""
+        if group in self._resource_cache:
+            return self._resource_cache[group]
+
+        if group not in self.resource_endpoints:
+            return []
+
+        endpoint, name_field = self.resource_endpoints[group]
+        try:
+            result = self.client.api("GET", endpoint, auth=True)
+            if isinstance(result, list):
+                names = [item.get(name_field, "") for item in result if item.get(name_field)]
+                self._resource_cache[group] = names
+                return names
+        except Exception:
+            pass  # Silently fail - just won't have completions
+
+        return []
+
+    def _get_commands_for_resource(self, group: str) -> list[str]:
+        """Get commands that operate on a specific resource (have path params)."""
+        if group not in self.commands:
+            return []
+        return [
+            cmd for cmd, info in self.commands[group].items()
+            if info.get("path_params")  # Commands that take a resource name
+        ]
+
+    def _get_standalone_commands(self, group: str) -> list[str]:
+        """Get commands that don't need a resource (list, catalog, etc.)."""
+        if group not in self.commands:
+            return []
+        return [
+            cmd for cmd, info in self.commands[group].items()
+            if not info.get("path_params")  # Commands without path params
+        ]
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -358,8 +428,7 @@ class UshCompleter(Completer):
             word_count -= 1
 
         if word_count == 0:
-            # Complete command groups + special commands
-            # Show ALL when Tab pressed on empty or just typed partial
+            # === Position 1: Command groups + special commands ===
             for cmd in sorted(self.special_commands):
                 if cmd.startswith(word_before_cursor):
                     yield Completion(cmd, start_position=-len(word_before_cursor),
@@ -371,38 +440,83 @@ class UshCompleter(Completer):
                                    display_meta=f"{cmd_count} commands")
 
         elif word_count == 1:
-            # Complete commands within group
-            # Show ALL commands when Tab pressed after "services "
+            # === Position 2: Resources AND standalone commands ===
+            # e.g., "services <Tab>" shows: mem0, chronicle, ... AND list, catalog
             group = words[0]
-            if group in self.commands:
-                for cmd_name, cmd_info in sorted(self.commands[group].items()):
-                    if cmd_name.startswith(word_before_cursor):
-                        yield Completion(cmd_name, start_position=-len(word_before_cursor),
+            if group not in self.commands:
+                return
+
+            # First: standalone commands (list, catalog, etc.)
+            for cmd in sorted(self._get_standalone_commands(group)):
+                if cmd.startswith(word_before_cursor):
+                    cmd_info = self.commands[group][cmd]
+                    yield Completion(cmd, start_position=-len(word_before_cursor),
+                                   display_meta=cmd_info.get("summary", "")[:40])
+
+            # Then: resource names from API
+            for name in sorted(self._get_resources(group)):
+                if name.startswith(word_before_cursor):
+                    yield Completion(name, start_position=-len(word_before_cursor),
+                                   display_meta="resource")
+
+        elif word_count == 2:
+            # === Position 3: Depends on what position 2 was ===
+            group = words[0]
+            second = words[1]
+
+            if group not in self.commands:
+                return
+
+            resources = self._get_resources(group)
+
+            if second in resources:
+                # User selected a resource → show commands for it
+                for cmd in sorted(self._get_commands_for_resource(group)):
+                    if cmd.startswith(word_before_cursor):
+                        cmd_info = self.commands[group][cmd]
+                        yield Completion(cmd, start_position=-len(word_before_cursor),
                                        display_meta=cmd_info.get("summary", "")[:40])
-
-        elif word_count >= 2:
-            # Complete parameters
-            group = words[0]
-            cmd = words[1]
-            if group in self.commands and cmd in self.commands[group]:
-                cmd_info = self.commands[group][cmd]
-                provided_count = word_count - 2
-
-                # Path parameters (positional, required)
+            elif second in self.commands[group]:
+                # User selected a command → show path params or resources
+                cmd_info = self.commands[group][second]
                 path_params = cmd_info.get("path_params", [])
-                if provided_count < len(path_params):
-                    param = path_params[provided_count]
-                    # Yield placeholder hint
-                    yield Completion(f"<{param}>", start_position=-len(word_before_cursor),
-                                   display_meta="required")
-                else:
-                    # Query parameters (optional, --name format)
-                    for qp in cmd_info.get("query_params", []):
-                        opt = f"--{qp['name']}"
-                        if opt.startswith(word_before_cursor) and opt not in words:
-                            meta = qp.get("description", "")[:30] or ("required" if qp.get("required") else "optional")
-                            yield Completion(opt, start_position=-len(word_before_cursor),
-                                           display_meta=meta)
+                if path_params:
+                    # Show resources as completions for the first path param
+                    for name in sorted(resources):
+                        if name.startswith(word_before_cursor):
+                            yield Completion(name, start_position=-len(word_before_cursor),
+                                           display_meta=f"<{path_params[0]}>")
+
+        elif word_count >= 3:
+            # === Position 4+: Additional params or query params ===
+            group = words[0]
+            second = words[1]
+            third = words[2]
+
+            if group not in self.commands:
+                return
+
+            resources = self._get_resources(group)
+
+            # Determine the command and resource
+            if second in resources and third in self.commands[group]:
+                # Pattern: services mem0 start [additional params]
+                cmd_info = self.commands[group][third]
+                provided_count = word_count - 3
+            elif second in self.commands[group]:
+                # Pattern: services start mem0 [additional params]
+                cmd_info = self.commands[group][second]
+                provided_count = word_count - 3
+            else:
+                return
+
+            # Query parameters
+            for qp in cmd_info.get("query_params", []):
+                opt = f"--{qp['name']}"
+                if opt.startswith(word_before_cursor) and opt not in words:
+                    meta = qp.get("description", "")[:30] or ("required" if qp.get("required") else "optional")
+                    yield Completion(opt, start_position=-len(word_before_cursor),
+                                   display_meta=meta)
 
 
 def run_shell(commands: dict, client: UshadowClient) -> None:
@@ -428,15 +542,15 @@ def run_shell(commands: dict, client: UshadowClient) -> None:
     history_file = Path.home() / ".ush_history"
 
     # Create session with completion and history
-    # reserve_space_for_menu=6 pushes prompt up so menu is visible
+    # reserve_space_for_menu pushes prompt up so menu is visible at bottom of screen
     session = PromptSession(
-        completer=UshCompleter(commands),
+        completer=UshCompleter(commands, client),
         auto_suggest=AutoSuggestFromHistory(),
         history=FileHistory(str(history_file)),
         style=style,
         complete_while_typing=False,
         complete_in_thread=True,
-        reserve_space_for_menu=8,  # Reserve space above prompt for completion menu
+        reserve_space_for_menu=8,
     )
 
     console.print("\n[bold cyan]ushadow shell[/bold cyan] - Type commands, Tab to complete, ↑/↓ for history")
@@ -482,14 +596,38 @@ def run_shell(commands: dict, client: UshadowClient) -> None:
                 show_help(commands, tag)
                 continue
 
-            cmd_name = args[1]
-            if cmd_name not in commands[tag]:
-                console.print(f"[red]Unknown: {tag} {cmd_name}[/red]")
-                console.print(f"[dim]Available: {', '.join(sorted(commands[tag].keys()))}[/dim]")
-                continue
+            # Support both orderings:
+            #   services start mem0   (command-first, original)
+            #   services mem0 start   (resource-first, new)
+            second = args[1]
+            third = args[2] if len(args) > 2 else None
 
-            cmd_info = commands[tag][cmd_name]
-            remaining = args[2:]
+            # Get cached resources for this group
+            completer = session.completer
+            resources = completer._get_resources(tag) if hasattr(completer, '_get_resources') else []
+
+            # Determine command and resource based on what was typed
+            if second in commands[tag]:
+                # Command-first: services start mem0
+                cmd_name = second
+                cmd_info = commands[tag][cmd_name]
+                remaining = args[2:]
+            elif second in resources and third and third in commands[tag]:
+                # Resource-first: services mem0 start
+                cmd_name = third
+                cmd_info = commands[tag][cmd_name]
+                # Pre-fill the resource as the first path param
+                remaining = [second] + args[3:]
+            elif second in resources:
+                # Just resource, no command yet: services mem0
+                console.print(f"[yellow]Select a command for {second}:[/yellow]")
+                resource_cmds = [c for c, i in commands[tag].items() if i.get("path_params")]
+                console.print(f"[dim]{', '.join(sorted(resource_cmds))}[/dim]")
+                continue
+            else:
+                console.print(f"[red]Unknown: {tag} {second}[/red]")
+                console.print(f"[dim]Available commands: {', '.join(sorted(commands[tag].keys()))}[/dim]")
+                continue
 
             # Parse path parameters
             path_args = {}
