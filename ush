@@ -330,28 +330,87 @@ def show_help(commands: dict, tag: Optional[str] = None) -> None:
 # Interactive Shell Mode
 # =============================================================================
 
-def get_resource_endpoints() -> dict[str, tuple[str, str]]:
+def guess_name_field(item: dict, group: str) -> str | None:
     """
-    Map command groups to their list endpoints and name fields.
+    Guess which field contains the resource name/identifier.
+
+    Args:
+        item: A single item from the list response
+        group: The command group name (e.g., "services")
+
+    Returns:
+        The field name that likely contains the identifier, or None
+
+    TODO: Implement your preferred field detection logic here.
+    Consider: What fields should take priority? How to handle edge cases?
+    """
+    # Common patterns to try, in priority order
+    candidates = [
+        f"{group.rstrip('s')}_name",  # service_name, provider_name
+        f"{group.rstrip('s')}_id",    # service_id, provider_id
+        "name",
+        "id",
+        "key",
+        "slug",
+    ]
+
+    for field in candidates:
+        if field in item and item[field]:
+            return field
+
+    # Fallback: first string field that looks like an identifier
+    for key, value in item.items():
+        if isinstance(value, str) and value and not key.startswith("_"):
+            return key
+
+    return None
+
+
+def get_resource_endpoints(spec: dict) -> dict[str, tuple[str, str]]:
+    """
+    Auto-detect resource list endpoints from OpenAPI spec.
+
+    Looks for GET /api/{group}/ endpoints and guesses the name field.
+    Falls back to manual overrides for known edge cases.
 
     Returns dict of: group -> (list_endpoint, name_field)
-
-    This tells the completer how to fetch resource names for each group.
-    For example, "services" fetches from "/api/services/" and uses "service_name".
-
-    TODO: Add more mappings as needed for your API groups.
     """
-    return {
+    # Manual overrides for edge cases where auto-detection fails
+    overrides = {
         "services": ("/api/services/", "service_name"),
-        "providers": ("/api/providers/", "id"),
-        "instances": ("/api/instances/", "name"),
-        "unodes": ("/api/unodes/", "name"),
-        "deployments": ("/api/deployments/", "name"),
-        "settings": ("/api/settings/", "key"),
         "docker": ("/api/docker/containers", "name"),
         "kubernetes": ("/api/kubernetes/namespaces", "name"),
-        # Add more as needed - format: "group": ("/api/list/endpoint", "name_field")
     }
+
+    endpoints = dict(overrides)
+
+    # Auto-detect from OpenAPI spec
+    for path, methods in spec.get("paths", {}).items():
+        if "get" not in methods:
+            continue
+
+        # Match /api/{group}/ pattern (list endpoints)
+        match = re.match(r"^/api/([^/]+)/?$", path)
+        if not match:
+            continue
+
+        group = match.group(1)
+
+        # Skip if we have a manual override
+        if group in overrides:
+            continue
+
+        # Check if response is an array (list endpoint)
+        responses = methods["get"].get("responses", {})
+        success = responses.get("200", {})
+        content = success.get("content", {}).get("application/json", {})
+        schema = content.get("schema", {})
+
+        if schema.get("type") == "array" or "items" in schema:
+            # This is a list endpoint - we'll guess the name field at runtime
+            endpoints[group] = (path, "__auto__")
+
+    return endpoints
 
 
 class UshCompleter(Completer):
@@ -367,17 +426,18 @@ class UshCompleter(Completer):
         services mem0 <Tab> → shows: start, stop, logs, status, ...
     """
 
-    def __init__(self, commands: dict, client: "UshadowClient"):
+    def __init__(self, commands: dict, client: "UshadowClient", spec: dict):
         self.commands = commands
         self.client = client
+        self.spec = spec
         self.special_commands = {"help", "exit", "quit", "health"}
 
         # Cache for resource lists: {"services": ["mem0", "chronicle", ...]}
         self._resource_cache: dict[str, list[str]] = {}
 
         # Map: group -> (list_endpoint, name_field)
-        # This defines how to fetch resource names for each group
-        self.resource_endpoints = get_resource_endpoints()
+        # Auto-detected from OpenAPI spec with manual overrides
+        self.resource_endpoints = get_resource_endpoints(spec)
 
     def _get_resources(self, group: str) -> list[str]:
         """Fetch and cache resource names for a group."""
@@ -390,7 +450,13 @@ class UshCompleter(Completer):
         endpoint, name_field = self.resource_endpoints[group]
         try:
             result = self.client.api("GET", endpoint, auth=True)
-            if isinstance(result, list):
+            if isinstance(result, list) and result:
+                # Auto-detect name field if marked as __auto__
+                if name_field == "__auto__":
+                    name_field = guess_name_field(result[0], group)
+                    if not name_field:
+                        return []
+
                 names = [item.get(name_field, "") for item in result if item.get(name_field)]
                 self._resource_cache[group] = names
                 return names
@@ -522,7 +588,7 @@ class UshCompleter(Completer):
                                    display_meta=meta)
 
 
-def run_shell(commands: dict, client: UshadowClient) -> None:
+def run_shell(commands: dict, client: UshadowClient, spec: dict) -> None:
     """Run interactive shell with nested completion and fish-style suggestions."""
     if not SHELL_AVAILABLE:
         console.print("[red]Shell mode requires prompt_toolkit. Install with:[/red]")
@@ -547,7 +613,7 @@ def run_shell(commands: dict, client: UshadowClient) -> None:
     # Create session with completion and history
     # reserve_space_for_menu pushes prompt up so menu is visible at bottom of screen
     session = PromptSession(
-        completer=UshCompleter(commands, client),
+        completer=UshCompleter(commands, client, spec),
         auto_suggest=AutoSuggestFromHistory(),
         history=FileHistory(str(history_file)),
         style=style,
@@ -711,7 +777,7 @@ def main():
     if args[0] == "shell":
         try:
             client = UshadowClient.from_env()
-            run_shell(commands, client)
+            run_shell(commands, client, spec)
         except Exception as e:
             console.print(f"[red]❌ Cannot start shell: {e}[/red]")
             sys.exit(1)
