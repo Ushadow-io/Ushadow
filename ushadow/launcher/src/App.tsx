@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { tauri, type Prerequisites, type Discovery } from './hooks/useTauri'
+import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment } from './hooks/useTauri'
 import { useAppStore } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
+import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
+import { writeText, readText } from '@tauri-apps/api/clipboard'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
@@ -10,8 +12,10 @@ import { FoldersPanel } from './components/FoldersPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
+import { TmuxManagerDialog } from './components/TmuxManagerDialog'
+import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders } from 'lucide-react'
 import { getColors } from './utils/colors'
 
 function App() {
@@ -42,8 +46,10 @@ function App() {
   const [loadingEnv, setLoadingEnv] = useState<string | null>(null)
   const [showProjectDialog, setShowProjectDialog] = useState(false)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
+  const [showTmuxManager, setShowTmuxManager] = useState(false)
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [logExpanded, setLogExpanded] = useState(true)
-  const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string } | null>(null)
+  const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string; envPath: string | null } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
@@ -51,6 +57,10 @@ function App() {
 
   // Window focus detection for smart polling
   const isWindowFocused = useWindowFocus()
+
+  // Tmux monitoring for agent status (only when window is focused and worktrees exist)
+  const environmentNames = discovery?.environments.map(e => e.name) ?? []
+  const tmuxStatuses = useTmuxMonitoring(environmentNames, isWindowFocused && environmentNames.length > 0)
 
   const logIdRef = useRef(0)
   const lastStateRef = useRef<string>('')
@@ -107,6 +117,87 @@ function App() {
     }
   }, [isResizing, handleMouseMove, handleMouseUp])
 
+  // Enable keyboard shortcuts for copy/paste
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+      const modifier = isMac ? e.metaKey : e.ctrlKey
+
+      // Only handle copy/paste/cut if modifier key is pressed
+      if (!modifier) return
+
+      // Get the active element
+      const target = e.target as HTMLElement
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+
+      try {
+        if (e.key.toLowerCase() === 'c') {
+          // Copy: get selection from input field or window selection
+          let textToCopy = ''
+          if (isInputField && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+            const start = target.selectionStart || 0
+            const end = target.selectionEnd || 0
+            textToCopy = target.value.substring(start, end)
+          } else {
+            const selection = window.getSelection()
+            textToCopy = selection?.toString() || ''
+          }
+
+          if (textToCopy) {
+            await writeText(textToCopy)
+            e.preventDefault()
+          }
+        } else if (e.key.toLowerCase() === 'v') {
+          // Paste: handle input fields specially, but allow pasting anywhere
+          const text = await readText()
+          if (!text) return
+
+          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+            // Paste into input/textarea
+            const start = target.selectionStart || 0
+            const end = target.selectionEnd || 0
+            const currentValue = target.value
+            target.value = currentValue.substring(0, start) + text + currentValue.substring(end)
+            target.selectionStart = target.selectionEnd = start + text.length
+
+            // Trigger input event so React state updates
+            const event = new Event('input', { bubbles: true })
+            target.dispatchEvent(event)
+            e.preventDefault()
+          } else if (target.isContentEditable) {
+            // Paste into contenteditable
+            document.execCommand('insertText', false, text)
+            e.preventDefault()
+          }
+        } else if (e.key.toLowerCase() === 'x') {
+          // Cut: only from input fields
+          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+            const start = target.selectionStart || 0
+            const end = target.selectionEnd || 0
+            const selectedText = target.value.substring(start, end)
+            if (selectedText) {
+              await writeText(selectedText)
+              const currentValue = target.value
+              target.value = currentValue.substring(0, start) + currentValue.substring(end)
+              target.selectionStart = target.selectionEnd = start
+
+              // Trigger input event so React state updates
+              const event = new Event('input', { bubbles: true })
+              target.dispatchEvent(event)
+              e.preventDefault()
+            }
+          }
+        }
+      } catch (err) {
+        // Silently fail if clipboard access is denied
+        console.warn('Clipboard access failed:', err)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown, true) // Use capture phase
+    return () => document.removeEventListener('keydown', handleKeyDown, true)
+  }, [])
+
   // Apply spoofed values to prerequisites
   const getEffectivePrereqs = useCallback((real: Prerequisites | null): Prerequisites | null => {
     if (!real) return null
@@ -118,11 +209,15 @@ function App() {
       tailscale_installed: spoofedPrereqs.tailscale_installed ?? real.tailscale_installed,
       tailscale_connected: real.tailscale_connected,
       python_installed: spoofedPrereqs.python_installed ?? real.python_installed,
+      workmux_installed: real.workmux_installed,
+      tmux_installed: real.tmux_installed,
       homebrew_version: real.homebrew_version,
       docker_version: real.docker_version,
       tailscale_version: real.tailscale_version,
       git_version: real.git_version,
       python_version: real.python_version,
+      workmux_version: real.workmux_version,
+      tmux_version: real.tmux_version,
     }
   }, [spoofedPrereqs])
 
@@ -153,6 +248,19 @@ function App() {
     try {
       const disc = await tauri.discoverEnvironments()
       setDiscovery(disc)
+
+      // Auto-start tmux if worktrees exist but tmux isn't running
+      const worktrees = disc.environments.filter(e => e.is_worktree)
+      if (worktrees.length > 0) {
+        try {
+          await tauri.ensureTmuxRunning()
+        } catch (err) {
+          // Non-critical, just log it
+          if (!silent) {
+            console.log('Could not ensure tmux is running:', err)
+          }
+        }
+      }
 
       if (!silent) {
         const runningCount = disc.infrastructure.filter(s => s.running).length
@@ -512,7 +620,7 @@ function App() {
             }
           } else {
             // Create a mock environment
-            const mockEnv = {
+            const mockEnv: UshadowEnvironment = {
               name: envName,
               color: envName,
               localhost_url: `http://localhost:8000`,
@@ -520,9 +628,12 @@ function App() {
               backend_port: 8000,
               webui_port: 3000,
               running: true,
+              status: 'Running' as const,
               tailscale_active: false,
               containers: ['backend', 'webui', 'postgres', 'redis'],
               path: projectRoot,
+              branch: null,
+              is_worktree: false,
             }
             return {
               ...prev,
@@ -601,16 +712,124 @@ function App() {
     }
   }
 
-  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null }) => {
+  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null; path: string | null }) => {
     const url = env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
-    setEmbeddedView({ url, envName: env.name, envColor: colors.primary })
+    setEmbeddedView({ url, envName: env.name, envColor: colors.primary, envPath: env.path })
+  }
+
+  const handleMerge = async (envName: string) => {
+    // Confirm with user before merging
+    const confirmed = window.confirm(
+      `Merge worktree "${envName}" to main?\n\n` +
+      `This will:\n` +
+      `• Rebase your branch onto main\n` +
+      `• Merge to main\n` +
+      `• Stop and remove the environment\n` +
+      `• Delete the worktree and close the tmux window\n\n` +
+      `Make sure all your changes are committed!`
+    )
+
+    if (!confirmed) return
+
+    setLoadingEnv(envName)
+    log(`Merging worktree "${envName}" to main...`, 'step')
+
+    try {
+      // First stop the environment if running
+      const env = discovery?.environments.find(e => e.name === envName)
+      if (env?.running) {
+        log(`Stopping environment before merge...`, 'info')
+        await tauri.stopEnvironment(envName)
+      }
+
+      // Merge with workmux
+      const result = await tauri.mergeWorktreeWithRebase(
+        projectRoot,
+        envName,
+        true,  // use rebase
+        false  // don't keep worktree
+      )
+
+      log(result, 'success')
+      log(`✓ Worktree "${envName}" merged and cleaned up`, 'success')
+
+      // Refresh discovery to update environment list
+      await refreshDiscovery()
+    } catch (err) {
+      log(`Failed to merge worktree: ${err}`, 'error')
+    } finally {
+      setLoadingEnv(null)
+    }
+  }
+
+  const handleDelete = async (envName: string) => {
+    // Find the environment to check if it's a worktree
+    const env = discovery?.environments.find(e => e.name === envName)
+    const isWorktree = env?.is_worktree || false
+
+    // Confirm with user before deleting
+    const message = isWorktree
+      ? `Delete environment "${envName}"?\n\n` +
+        `This will:\n` +
+        `• Stop all containers\n` +
+        `• Remove the worktree\n` +
+        `• Close the tmux session\n\n` +
+        `This action cannot be undone!`
+      : `Delete environment "${envName}"?\n\n` +
+        `This will:\n` +
+        `• Stop all containers\n` +
+        `• Close the tmux session\n\n` +
+        `This action cannot be undone!`
+
+    const confirmed = window.confirm(message)
+
+    if (!confirmed) return
+
+    setLoadingEnv(envName)
+    log(`Deleting environment "${envName}"...`, 'step')
+
+    try {
+      const result = await tauri.deleteEnvironment(projectRoot, envName)
+      log(result, 'success')
+      log(`✓ Environment "${envName}" deleted`, 'success')
+
+      // Refresh discovery to update environment list
+      await refreshDiscovery()
+    } catch (err) {
+      log(`Failed to delete environment: ${err}`, 'error')
+    } finally {
+      setLoadingEnv(null)
+    }
+  }
+
+  const handleAttachTmux = async (env: UshadowEnvironment) => {
+    if (!env.path) {
+      log('Cannot attach tmux: environment has no path', 'error')
+      return
+    }
+
+    log(`Opening VS Code with embedded tmux terminal for "${env.name}"...`, 'step')
+
+    try {
+      await tauri.openInVscodeWithTmux(env.path, env.name)
+      log(`✓ VS Code opened with tmux in integrated terminal`, 'success')
+
+      // Refresh to update tmux status
+      await refreshDiscovery(true)
+    } catch (err) {
+      log(`Failed to open VS Code with tmux: ${err}`, 'error')
+    }
   }
 
   // New environment handlers
   const handleNewEnvClone = async (name: string, serverMode: 'dev' | 'prod') => {
     setShowNewEnvDialog(false)
+
+    // Force lowercase to avoid Docker Compose naming issues
+    name = name.toLowerCase()
+
     const envPath = `${projectRoot}/../${name}` // Expected clone location
     const modeLabel = serverMode === 'dev' ? 'hot reload' : 'production'
 
@@ -686,6 +905,10 @@ function App() {
   const handleNewEnvWorktree = async (name: string, branch: string) => {
     setShowNewEnvDialog(false)
 
+    // Force lowercase to avoid Docker Compose naming issues
+    name = name.toLowerCase()
+    branch = branch.toLowerCase()
+
     if (!worktreesDir) {
       log('Worktrees directory not configured', 'error')
       return
@@ -704,10 +927,43 @@ function App() {
         await new Promise(r => setTimeout(r, 2000))
         log(`[DRY RUN] Worktree environment "${name}" created`, 'success')
       } else {
-        // Step 1: Create the git worktree
+        // Step 1: Create the git worktree with workmux (includes tmux integration)
         log(`Creating git worktree at ${envPath}...`, 'info')
-        const worktree = await tauri.createWorktree(projectRoot, worktreesDir, name, branch || undefined)
+        const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch || undefined, true)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
+
+        // Step 1.5: Write default admin credentials if configured
+        try {
+          const settings = await tauri.loadLauncherSettings()
+          if (settings.default_admin_email && settings.default_admin_password) {
+            log(`Writing admin credentials to secrets.yaml...`, 'info')
+            await tauri.writeCredentialsToWorktree(
+              worktree.path,
+              settings.default_admin_email,
+              settings.default_admin_password,
+              settings.default_admin_name || undefined
+            )
+            log(`✓ Admin credentials configured`, 'success')
+          } else {
+            log(`⚠ No default credentials configured - you'll need to register a user`, 'warning')
+          }
+        } catch (err) {
+          // Non-critical, user can still register manually
+          log(`Could not write credentials: ${err}`, 'warning')
+        }
+
+        // Check if tmux window was created
+        try {
+          const tmuxStatus = await tauri.getEnvironmentTmuxStatus(name)
+          if (tmuxStatus.exists) {
+            log(`✓ Tmux window 'ushadow-${name}' created`, 'success')
+          } else {
+            log(`⚠ Tmux window not created (tmux may not be running)`, 'warning')
+          }
+        } catch (err) {
+          // Non-critical, don't fail the operation
+          log(`Could not check tmux status: ${err}`, 'info')
+        }
 
         // Step 2: Update status
         setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting', path: worktree.path } : e))
@@ -1006,7 +1262,7 @@ function App() {
 
   return (
     <div
-      className="h-screen bg-surface-900 text-text-primary flex flex-col overflow-hidden"
+      className="h-screen bg-surface-900 text-text-primary flex flex-col overflow-hidden relative"
       data-testid="launcher-app"
       style={{ cursor: isResizing ? 'col-resize' : 'default' }}
     >
@@ -1016,6 +1272,7 @@ function App() {
           url={embeddedView.url}
           envName={embeddedView.envName}
           envColor={embeddedView.envColor}
+          envPath={embeddedView.envPath}
           onClose={() => setEmbeddedView(null)}
         />
       )}
@@ -1057,16 +1314,25 @@ function App() {
             </button>
           </div>
 
-          {/* Dev Tools Toggle */}
+          {/* Tmux Manager */}
           <button
-            onClick={() => setShowDevTools(!showDevTools)}
-            className={`p-2 rounded-lg transition-colors ${
-              showDevTools ? 'bg-yellow-500/20 text-yellow-400' : 'bg-surface-700 hover:bg-surface-600'
-            }`}
-            title="Toggle dev tools"
-            data-testid="dev-tools-toggle"
+            onClick={() => setShowTmuxManager(true)}
+            className="p-2 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors"
+            title="Manage tmux sessions"
+            data-testid="tmux-manager-button"
           >
-            <Settings className="w-4 h-4" />
+            <Terminal className="w-4 h-4" />
+          </button>
+
+          {/* Settings / Credentials Button */}
+          <button
+            onClick={() => setShowSettingsDialog(true)}
+            className="px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2 font-medium text-sm"
+            title="Configure default credentials"
+            data-testid="open-settings-button"
+          >
+            <Sliders className="w-4 h-4" />
+            Credentials
           </button>
 
           {/* Refresh */}
@@ -1080,13 +1346,6 @@ function App() {
           </button>
         </div>
       </header>
-
-      {/* Dev Tools Panel */}
-      {showDevTools && (
-        <div className="px-4 pt-4">
-          <DevToolsPanel />
-        </div>
-      )}
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
@@ -1160,7 +1419,11 @@ function App() {
                   installingItem={installingItem}
                   onInstall={handleInstall}
                   onStartDocker={handleStartDocker}
+                  showDevTools={showDevTools}
+                  onToggleDevTools={() => setShowDevTools(!showDevTools)}
                 />
+                {/* Dev Tools Panel - appears below Prerequisites */}
+                {showDevTools && <DevToolsPanel />}
                 <InfrastructurePanel
                   services={discovery?.infrastructure ?? []}
                   onStart={handleStartInfra}
@@ -1186,8 +1449,12 @@ function App() {
                   onStop={handleStopEnv}
                   onCreate={() => setShowNewEnvDialog(true)}
                   onOpenInApp={handleOpenInApp}
+                  onMerge={handleMerge}
+                  onDelete={handleDelete}
+                  onAttachTmux={handleAttachTmux}
                   onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
                   loadingEnv={loadingEnv}
+                  tmuxStatuses={tmuxStatuses}
                 />
               </div>
             </div>
@@ -1219,9 +1486,21 @@ function App() {
         isOpen={showNewEnvDialog}
         projectRoot={projectRoot}
         onClose={() => setShowNewEnvDialog(false)}
-        onClone={handleNewEnvClone}
         onLink={handleNewEnvLink}
         onWorktree={handleNewEnvWorktree}
+      />
+
+      {/* Tmux Manager Dialog */}
+      <TmuxManagerDialog
+        isOpen={showTmuxManager}
+        onClose={() => setShowTmuxManager(false)}
+        onRefresh={() => refreshDiscovery(true)}
+      />
+
+      {/* Settings Dialog */}
+      <SettingsDialog
+        isOpen={showSettingsDialog}
+        onClose={() => setShowSettingsDialog(false)}
       />
     </div>
   )

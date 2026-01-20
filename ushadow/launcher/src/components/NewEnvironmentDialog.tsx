@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react'
-import { X, Download, FolderOpen, GitBranch, Flame, Package } from 'lucide-react'
-
-type CreateMode = 'clone' | 'link' | 'worktree'
-type ServerMode = 'dev' | 'prod'
+import { X, GitBranch } from 'lucide-react'
+import { tauri } from '../hooks/useTauri'
+import { BranchSelector } from './BranchSelector'
 
 interface NewEnvironmentDialogProps {
   isOpen: boolean
   projectRoot: string
   onClose: () => void
-  onClone: (name: string, serverMode: ServerMode) => void
   onLink: (name: string, path: string) => void
   onWorktree: (name: string, branch: string) => void
 }
@@ -17,61 +15,191 @@ export function NewEnvironmentDialog({
   isOpen,
   projectRoot,
   onClose,
-  onClone,
   onLink,
   onWorktree,
 }: NewEnvironmentDialogProps) {
   const [name, setName] = useState('')
-  const [mode, setMode] = useState<CreateMode>('clone')
-  const [serverMode, setServerMode] = useState<ServerMode>('dev')
-  const [linkPath, setLinkPath] = useState('')
   const [branch, setBranch] = useState('')
-
-  // Set default link path when mode changes to 'link'
-  useEffect(() => {
-    if (mode === 'link' && !linkPath && projectRoot) {
-      // Default to parent directory + /ushadow (sibling to current repo)
-      const parentDir = projectRoot.split('/').slice(0, -1).join('/')
-      setLinkPath(parentDir ? `${parentDir}/ushadow` : '')
-    }
-  }, [mode, projectRoot, linkPath])
+  const [branches, setBranches] = useState<string[]>([])
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false)
+  const [showConflictDialog, setShowConflictDialog] = useState(false)
+  const [existingWorktree, setExistingWorktree] = useState<{ path: string; name: string } | null>(null)
+  const [isChecking, setIsChecking] = useState(false)
+  const [manualNameEdit, setManualNameEdit] = useState(false)
 
   // Reset form when dialog closes
   useEffect(() => {
     if (!isOpen) {
       setName('')
-      setLinkPath('')
       setBranch('')
-      setMode('clone')
-      setServerMode('dev')
+      setShowConflictDialog(false)
+      setExistingWorktree(null)
+      setManualNameEdit(false)
     }
   }, [isOpen])
 
-  if (!isOpen) return null
-
-  const handleSubmit = () => {
-    if (!name.trim()) return
-
-    switch (mode) {
-      case 'clone':
-        onClone(name.trim(), serverMode)
-        break
-      case 'link':
-        onLink(name.trim(), linkPath.trim())
-        break
-      case 'worktree':
-        onWorktree(name.trim(), branch.trim() || name.trim())
-        break
+  // Load branches when dialog opens
+  useEffect(() => {
+    if (isOpen && projectRoot) {
+      setIsLoadingBranches(true)
+      tauri.listGitBranches(projectRoot)
+        .then(setBranches)
+        .catch(err => {
+          console.error('Failed to load branches:', err)
+          setBranches([])
+        })
+        .finally(() => setIsLoadingBranches(false))
     }
+  }, [isOpen, projectRoot])
 
-    // Reset form
-    setName('')
-    setLinkPath('')
-    setBranch('')
-    setServerMode('dev')
+  /**
+   * Clean branch name for environment name
+   * Examples:
+   *   "claude/github-docker-import-SlXNo" -> "github-docker-import-slxno"
+   *   "feature/auth" -> "auth"
+   *   "main" -> "main"
+   */
+  const cleanBranchNameForEnv = (branchName: string): string => {
+    // Remove "claude/" prefix if present
+    let cleaned = branchName.replace(/^claude\//, '')
+
+    // For other prefixes like "feature/", "fix/", etc., take the part after the last "/"
+    const parts = cleaned.split('/')
+    cleaned = parts[parts.length - 1]
+
+    // Convert to lowercase and remove the random suffix pattern (e.g., "-SlXNo")
+    cleaned = cleaned.toLowerCase().replace(/-[a-z0-9]{5}$/i, '')
+
+    return cleaned
   }
 
-  const isValid = name.trim() && (mode !== 'link' || linkPath.trim())
+  // Auto-fill environment name from branch if not manually edited
+  const handleBranchChange = (newBranch: string) => {
+    setBranch(newBranch)
+
+    // Auto-fill name from branch if user hasn't manually edited it
+    if (!manualNameEdit && newBranch) {
+      setName(cleanBranchNameForEnv(newBranch))
+    }
+  }
+
+  // Track manual edits to the name field
+  const handleNameChange = (newName: string) => {
+    setName(newName)
+    setManualNameEdit(true)
+  }
+
+  if (!isOpen) return null
+
+  const handleSubmit = async () => {
+    if (!name.trim()) return
+    if (isChecking) return
+
+    const envName = name.trim()
+    const branchName = branch.trim() || envName
+
+    // Check if worktree exists for this branch
+    setIsChecking(true)
+    try {
+      const existing = await tauri.checkWorktreeExists(projectRoot, branchName)
+
+      if (existing) {
+        // Worktree exists - show conflict dialog
+        setExistingWorktree({ path: existing.path, name: existing.name })
+        setShowConflictDialog(true)
+      } else {
+        // No conflict - create new worktree
+        onWorktree(envName, branchName)
+        // Reset form
+        setName('')
+        setBranch('')
+      }
+    } catch (error) {
+      console.error('Error checking worktree:', error)
+      // If check fails, proceed with creation anyway
+      onWorktree(envName, branchName)
+      setName('')
+      setBranch('')
+    } finally {
+      setIsChecking(false)
+    }
+  }
+
+  const handleLinkToExisting = () => {
+    if (!existingWorktree) return
+    onLink(name.trim(), existingWorktree.path)
+    setShowConflictDialog(false)
+    setExistingWorktree(null)
+    setName('')
+    setBranch('')
+  }
+
+  const handleRemakeWorktree = () => {
+    onWorktree(name.trim(), branch.trim() || name.trim())
+    setShowConflictDialog(false)
+    setExistingWorktree(null)
+    setName('')
+    setBranch('')
+  }
+
+  const isValid = name.trim()
+
+  // Show conflict dialog if there's an existing worktree
+  if (showConflictDialog && existingWorktree) {
+    return (
+      <div
+        className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+        data-testid="worktree-conflict-dialog"
+      >
+        <div className="bg-surface-800 rounded-xl p-6 w-full max-w-md mx-4 shadow-xl">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Worktree Already Exists</h2>
+            <button
+              onClick={() => setShowConflictDialog(false)}
+              className="p-1 rounded hover:bg-surface-700 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <p className="text-sm text-text-secondary mb-4">
+            A worktree for branch <span className="font-mono text-primary-400">{branch.trim() || name.trim()}</span> already exists at:
+          </p>
+
+          <div className="mb-6 p-3 bg-surface-700/50 rounded text-xs font-mono text-text-muted break-all">
+            {existingWorktree.path}
+          </div>
+
+          <p className="text-sm text-text-secondary mb-6">
+            Would you like to link to the existing worktree or remake it?
+          </p>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowConflictDialog(false)}
+              className="flex-1 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleLinkToExisting}
+              className="flex-1 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 transition-colors font-medium"
+              data-testid="link-to-existing"
+            >
+              Link Existing
+            </button>
+            <button
+              onClick={handleRemakeWorktree}
+              className="flex-1 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 transition-colors font-medium"
+              data-testid="remake-worktree"
+            >
+              Remake
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -81,7 +209,10 @@ export function NewEnvironmentDialog({
       <div className="bg-surface-800 rounded-xl p-6 w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">New Environment</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <GitBranch className="w-5 h-5 text-primary-400" />
+            New Environment
+          </h2>
           <button
             onClick={onClose}
             className="p-1 rounded hover:bg-surface-700 transition-colors"
@@ -96,128 +227,45 @@ export function NewEnvironmentDialog({
           <span className="text-text-secondary">Repository:</span> {projectRoot || 'Not set'}
         </div>
 
-        {/* Environment Name */}
+        {/* Branch Name - Now first to enable auto-naming */}
         <div className="mb-4">
           <label className="block text-sm text-text-secondary mb-2">
-            Environment Name
+            Branch <span className="text-text-muted">(select existing or type new)</span>
+          </label>
+          <BranchSelector
+            branches={branches}
+            value={branch}
+            onChange={handleBranchChange}
+            placeholder={isLoadingBranches ? 'Loading branches...' : 'Type or select branch...'}
+            testId="branch-selector"
+          />
+          <p className="text-xs text-text-muted mt-1">
+            Select a Claude-created branch or any existing branch, or type a new name. If it doesn't exist, it will be created from main.
+          </p>
+        </div>
+
+        {/* Environment Name - Auto-filled from branch */}
+        <div className="mb-4">
+          <label className="block text-sm text-text-secondary mb-2">
+            Environment Name <span className="text-text-muted">(auto-filled, editable)</span>
           </label>
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && isValid && !isChecking && handleSubmit()}
             className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
             placeholder="e.g., dev, staging, feature-x"
-            autoFocus
             data-testid="env-name-input"
           />
+          <p className="text-xs text-text-muted mt-1">
+            Auto-filled from branch name. Edit if you prefer a different name.
+          </p>
         </div>
-
-        {/* Mode Selection */}
-        <div className="mb-4">
-          <label className="block text-sm text-text-secondary mb-2">
-            Setup Method
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            <ModeButton
-              icon={Download}
-              label="Clone"
-              active={mode === 'clone'}
-              onClick={() => setMode('clone')}
-            />
-            <ModeButton
-              icon={FolderOpen}
-              label="Link"
-              active={mode === 'link'}
-              onClick={() => setMode('link')}
-            />
-            <ModeButton
-              icon={GitBranch}
-              label="Worktree"
-              active={mode === 'worktree'}
-              onClick={() => setMode('worktree')}
-            />
-          </div>
-        </div>
-
-        {/* Server Mode - only for clone */}
-        {mode === 'clone' && (
-          <div className="mb-4">
-            <label className="block text-sm text-text-secondary mb-2">
-              Server Mode
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setServerMode('dev')}
-                className={`flex items-center gap-2 p-3 rounded-lg transition-all ${
-                  serverMode === 'dev'
-                    ? 'bg-primary-500/20 border-2 border-primary-500'
-                    : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-                }`}
-                data-testid="server-mode-dev"
-              >
-                <Flame className={`w-5 h-5 ${serverMode === 'dev' ? 'text-orange-400' : 'text-text-muted'}`} />
-                <div className="text-left">
-                  <p className={`text-sm font-medium ${serverMode === 'dev' ? 'text-primary-400' : ''}`}>Hot Reload</p>
-                  <p className="text-xs text-text-muted">Development server</p>
-                </div>
-              </button>
-              <button
-                onClick={() => setServerMode('prod')}
-                className={`flex items-center gap-2 p-3 rounded-lg transition-all ${
-                  serverMode === 'prod'
-                    ? 'bg-primary-500/20 border-2 border-primary-500'
-                    : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-                }`}
-                data-testid="server-mode-prod"
-              >
-                <Package className={`w-5 h-5 ${serverMode === 'prod' ? 'text-green-400' : 'text-text-muted'}`} />
-                <div className="text-left">
-                  <p className={`text-sm font-medium ${serverMode === 'prod' ? 'text-primary-400' : ''}`}>Production</p>
-                  <p className="text-xs text-text-muted">Nginx build</p>
-                </div>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Mode-specific inputs */}
-        {mode === 'link' && (
-          <div className="mb-4">
-            <label className="block text-sm text-text-secondary mb-2">
-              Existing Folder Path
-            </label>
-            <input
-              type="text"
-              value={linkPath}
-              onChange={(e) => setLinkPath(e.target.value)}
-              className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-              placeholder="/path/to/existing/ushadow"
-              data-testid="link-path-input"
-            />
-          </div>
-        )}
-
-        {mode === 'worktree' && (
-          <div className="mb-4">
-            <label className="block text-sm text-text-secondary mb-2">
-              Branch Name <span className="text-text-muted">(optional, defaults to env name)</span>
-            </label>
-            <input
-              type="text"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-              placeholder={name || 'feature/my-branch'}
-              data-testid="branch-input"
-            />
-          </div>
-        )}
 
         {/* Helper text */}
         <p className="text-xs text-text-muted mb-4">
-          {mode === 'clone' && 'Creates a fresh clone of the repository'}
-          {mode === 'link' && 'Links to an existing Ushadow folder'}
-          {mode === 'worktree' && 'Creates a git worktree for parallel development'}
+          Creates a git worktree for parallel development. If a worktree already exists for this branch, you'll be asked to link or remake it.
         </p>
 
         {/* Actions */}
@@ -230,40 +278,14 @@ export function NewEnvironmentDialog({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!isValid}
+            disabled={!isValid || isChecking}
             className="flex-1 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-medium"
             data-testid="create-env-submit"
           >
-            Create
+            {isChecking ? 'Checking...' : 'Create'}
           </button>
         </div>
       </div>
     </div>
-  )
-}
-
-function ModeButton({
-  icon: Icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: typeof Download
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`p-3 rounded-lg text-center transition-all ${
-        active
-          ? 'bg-primary-500/20 border-2 border-primary-500'
-          : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-      }`}
-    >
-      <Icon className={`w-5 h-5 mx-auto mb-1 ${active ? 'text-primary-400' : 'text-text-muted'}`} />
-      <p className="text-xs font-medium">{label}</p>
-    </button>
   )
 }
