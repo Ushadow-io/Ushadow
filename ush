@@ -347,7 +347,10 @@ def get_resource_endpoints() -> dict[str, tuple[str, str]]:
         "instances": ("/api/instances/", "name"),
         "unodes": ("/api/unodes/", "name"),
         "deployments": ("/api/deployments/", "name"),
-        # Add more as needed...
+        "settings": ("/api/settings/", "key"),
+        "docker": ("/api/docker/containers", "name"),
+        "kubernetes": ("/api/kubernetes/namespaces", "name"),
+        # Add more as needed - format: "group": ("/api/list/endpoint", "name_field")
     }
 
 
