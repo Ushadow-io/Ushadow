@@ -32,6 +32,7 @@ try:
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.styles import Style
+    from prompt_toolkit.key_binding import KeyBindings
 except ImportError:
     SHELL_AVAILABLE = False
 
@@ -350,11 +351,15 @@ class UshCompleter(Completer):
 
         # Handle partial word at cursor
         word_before_cursor = document.get_word_before_cursor()
-        if text and not text.endswith(" "):
+
+        # Key fix: if text ends with space, we're completing a NEW word
+        at_new_word = text.endswith(" ") or text == ""
+        if not at_new_word and words:
             word_count -= 1
 
         if word_count == 0:
             # Complete command groups + special commands
+            # Show ALL when Tab pressed on empty or just typed partial
             for cmd in sorted(self.special_commands):
                 if cmd.startswith(word_before_cursor):
                     yield Completion(cmd, start_position=-len(word_before_cursor),
@@ -367,6 +372,7 @@ class UshCompleter(Completer):
 
         elif word_count == 1:
             # Complete commands within group
+            # Show ALL commands when Tab pressed after "services "
             group = words[0]
             if group in self.commands:
                 for cmd_name, cmd_info in sorted(self.commands[group].items()):
@@ -406,22 +412,31 @@ def run_shell(commands: dict, client: UshadowClient) -> None:
         console.print("[dim]  pip install prompt_toolkit[/dim]")
         sys.exit(1)
 
-    # Shell styling
+    # Shell styling - includes completion menu styling
     style = Style.from_dict({
         "prompt": "cyan bold",
-        "": "#ffffff",  # Default text
+        "": "#ffffff",
+        # Completion menu styling
+        "completion-menu": "bg:#333333 #ffffff",
+        "completion-menu.completion": "bg:#333333 #ffffff",
+        "completion-menu.completion.current": "bg:#00aa00 #000000",
+        "completion-menu.meta.completion": "bg:#444444 #aaaaaa",
+        "completion-menu.meta.completion.current": "bg:#00aa00 #000000",
     })
 
     # History file
     history_file = Path.home() / ".ush_history"
 
     # Create session with completion and history
+    # reserve_space_for_menu=6 pushes prompt up so menu is visible
     session = PromptSession(
         completer=UshCompleter(commands),
         auto_suggest=AutoSuggestFromHistory(),
         history=FileHistory(str(history_file)),
         style=style,
-        complete_while_typing=False,  # Only complete on Tab
+        complete_while_typing=False,
+        complete_in_thread=True,
+        reserve_space_for_menu=8,  # Reserve space above prompt for completion menu
     )
 
     console.print("\n[bold cyan]ushadow shell[/bold cyan] - Type commands, Tab to complete, ↑/↓ for history")
