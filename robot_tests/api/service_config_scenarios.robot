@@ -21,8 +21,8 @@ ${SERVICE_ID}           chronicle
 ${CONFIG_DIR}           ${CURDIR}/../../config
 ${DEFAULTS_FILE}        ${CONFIG_DIR}/config.defaults.yaml
 ${OVERRIDES_FILE}       ${CONFIG_DIR}/config.overrides.yaml
-${SECRETS_FILE}         ${CONFIG_DIR}/secrets.yaml
-${COMPOSE_FILE}         ${CONFIG_DIR}/../docker-compose.yml
+${SECRETS_FILE}         ${CONFIG_DIR}/SECRETS/secrets.yaml
+${COMPOSE_FILE}         ${CONFIG_DIR}/../compose/backend.yml
 ${ENV_FILE}             ${CONFIG_DIR}/../.env
 ${DEFAULT_DATABASE}     ushadow
 ${TEST_DATABASE}        test-db-chronicle
@@ -48,14 +48,14 @@ Update Database Via Compose File
     # Act: Update database in compose file
     ${compose_content}=    Get File    ${COMPOSE_FILE}
     ${modified_compose}=    Replace String    ${compose_content}
-    ...                     MONGODB_DATABASE: ${DEFAULT_DATABASE}
-    ...                     MONGODB_DATABASE: ${TEST_DATABASE}
+    ...                     MONGODB_DATABASE=$\{MONGODB_DATABASE:-${DEFAULT_DATABASE}}
+    ...                     MONGODB_DATABASE=$\{MONGODB_DATABASE:-${TEST_DATABASE}}
     Create File    ${COMPOSE_FILE}.modified    ${modified_compose}
 
     # Note: In real test, you'd reload the service here
     # For now, we verify the compose file was updated
     ${updated_compose}=    Get File    ${COMPOSE_FILE}.modified
-    Should Contain    ${updated_compose}    MONGODB_DATABASE: ${TEST_DATABASE}
+    Should Contain    ${updated_compose}    MONGODB_DATABASE=$\{MONGODB_DATABASE:-${TEST_DATABASE}}
     ...    msg=Compose file should contain new database name
 
     [Teardown]    Run Keywords
@@ -104,7 +104,7 @@ Update Database Via Environment File
 Update Database Via Service Config API
     [Documentation]    Verify database config can be set via service config API
     ...                Tests the API → config.overrides.yaml → config merge flow
-    [Tags]    integration    config-merge    api    critical
+    [Tags]    integration    config-merge    api    critical    quick
 
     # Arrange: Get current database config
     ${config}=    Get Service Config    admin_session    ${SERVICE_ID}
@@ -151,12 +151,7 @@ Update Database Via Service Config API
 
     # Assert: Verify NOT written to secrets file (database is not a secret)
     ${secrets_exists}=    Run Keyword And Return Status    File Should Exist    ${SECRETS_FILE}
-    Run Keyword If    ${secrets_exists}    Run Keywords
-    ...    ${secrets_content}=    Read Config File    ${SECRETS_FILE}    AND
-    ...    ${has_db_in_secrets}=    Run Keyword And Return Status
-    ...        Dictionary Should Contain Key    ${secrets_content}[service_preferences][${SERVICE_ID}]    database    AND
-    ...    Should Not Be True    ${has_db_in_secrets}
-    ...    msg=Database config should NOT be in secrets.yaml (it's not a secret)
+    Run Keyword If    ${secrets_exists}    Verify Database Not In Secrets    ${SECRETS_FILE}    ${SERVICE_ID}
 
     Log    Database successfully updated via API and written to overrides
 
@@ -208,12 +203,7 @@ Test Secret Override Via Service Config API
 
     # Assert: Verify NOT written to overrides file (passwords are secrets)
     ${overrides_exists}=    Run Keyword And Return Status    File Should Exist    ${OVERRIDES_FILE}
-    Run Keyword If    ${overrides_exists}    Run Keywords
-    ...    ${overrides_content}=    Read Config File    ${OVERRIDES_FILE}    AND
-    ...    ${has_password_in_overrides}=    Run Keyword And Return Status
-    ...        Dictionary Should Contain Key    ${overrides_content}[service_preferences][${SERVICE_ID}]    admin_password    AND
-    ...    Should Not Be True    ${has_password_in_overrides}
-    ...    msg=Password should NOT be in config.overrides.yaml (it's a secret!)
+    Run Keyword If    ${overrides_exists}    Verify Password Not In Overrides    ${OVERRIDES_FILE}    ${SERVICE_ID}
 
     Log    Secret successfully written to secrets.yaml and masked in API responses
 
@@ -239,3 +229,33 @@ Cleanup Test Environment
     # Close all API sessions
     Delete All Sessions
     Log    Test environment cleaned up
+
+Verify Database Not In Secrets
+    [Documentation]    Verify database setting is not in secrets file
+    [Arguments]    ${secrets_file}    ${service_id}
+    ${secrets_content}=    Read Config File    ${secrets_file}
+    ${has_service_prefs}=    Run Keyword And Return Status
+    ...    Dictionary Should Contain Key    ${secrets_content}    service_preferences
+    Return From Keyword If    not ${has_service_prefs}
+    ${has_service}=    Run Keyword And Return Status
+    ...    Dictionary Should Contain Key    ${secrets_content}[service_preferences]    ${service_id}
+    Return From Keyword If    not ${has_service}
+    ${has_db}=    Run Keyword And Return Status
+    ...    Dictionary Should Contain Key    ${secrets_content}[service_preferences][${service_id}]    database
+    Should Not Be True    ${has_db}
+    ...    msg=Database config should NOT be in secrets.yaml (it's not a secret)
+
+Verify Password Not In Overrides
+    [Documentation]    Verify password setting is not in overrides file
+    [Arguments]    ${overrides_file}    ${service_id}
+    ${overrides_content}=    Read Config File    ${overrides_file}
+    ${has_service_prefs}=    Run Keyword And Return Status
+    ...    Dictionary Should Contain Key    ${overrides_content}    service_preferences
+    Return From Keyword If    not ${has_service_prefs}
+    ${has_service}=    Run Keyword And Return Status
+    ...    Dictionary Should Contain Key    ${overrides_content}[service_preferences]    ${service_id}
+    Return From Keyword If    not ${has_service}
+    ${has_password}=    Run Keyword And Return Status
+    ...    Dictionary Should Contain Key    ${overrides_content}[service_preferences][${service_id}]    admin_password
+    Should Not Be True    ${has_password}
+    ...    msg=Password should NOT be in config.overrides.yaml (it's a secret!)

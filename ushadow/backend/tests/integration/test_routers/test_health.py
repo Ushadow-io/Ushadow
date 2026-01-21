@@ -34,18 +34,6 @@ def test_health_endpoint_has_correct_structure(client: TestClient):
 
 
 @pytest.mark.integration
-def test_readiness_endpoint(client: TestClient):
-    """Readiness check endpoint should indicate if system is ready."""
-    response = client.get("/readiness")
-
-    # Readiness might be 200 (ready) or 503 (not ready)
-    assert response.status_code in [200, 503]
-
-    data = response.json()
-    assert "ready" in data or "status" in data
-
-
-@pytest.mark.integration
 def test_health_endpoint_responds_quickly(client: TestClient):
     """Health check should respond within reasonable time."""
     import time

@@ -1,7 +1,7 @@
 """
 Integration tests for authentication endpoints.
 
-Tests the /auth routes including login, registration, and token management.
+Tests the /api/auth routes including login, registration, and token management.
 """
 
 import pytest
@@ -14,7 +14,7 @@ class TestAuthEndpoints:
 
     def test_login_endpoint_exists(self, client: TestClient):
         """Login endpoint should exist and accept POST requests."""
-        response = client.post("/auth/jwt/login")
+        response = client.post("/api/auth/jwt/login")
 
         # Should respond (even if with error for missing credentials)
         assert response.status_code in [400, 401, 422]  # Not 404
@@ -22,7 +22,7 @@ class TestAuthEndpoints:
     def test_login_with_invalid_credentials(self, client: TestClient):
         """Login with invalid credentials should return 400 or 401."""
         response = client.post(
-            "/auth/jwt/login",
+            "/api/auth/jwt/login",
             data={
                 "username": "nonexistent@example.com",
                 "password": "wrong-password"
@@ -36,7 +36,7 @@ class TestAuthEndpoints:
         """Login should require both email and password."""
         # Missing password
         response = client.post(
-            "/auth/jwt/login",
+            "/api/auth/jwt/login",
             data={"username": "test@example.com"},
             headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
@@ -44,7 +44,7 @@ class TestAuthEndpoints:
 
         # Missing email
         response = client.post(
-            "/auth/jwt/login",
+            "/api/auth/jwt/login",
             data={"password": "password"},
             headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
@@ -52,7 +52,7 @@ class TestAuthEndpoints:
 
     def test_protected_endpoint_requires_auth(self, client: TestClient):
         """Protected endpoints should require authentication."""
-        response = client.get("/users/me")
+        response = client.get("/api/auth/users/me")
 
         # Should return 401 Unauthorized without token
         assert response.status_code == 401
@@ -60,7 +60,7 @@ class TestAuthEndpoints:
     def test_protected_endpoint_rejects_invalid_token(self, client: TestClient):
         """Protected endpoints should reject invalid tokens."""
         response = client.get(
-            "/users/me",
+            "/api/auth/users/me",
             headers={"Authorization": "Bearer invalid-token"}
         )
 
@@ -69,7 +69,7 @@ class TestAuthEndpoints:
 
     def test_logout_endpoint_exists(self, client: TestClient):
         """Logout endpoint should exist."""
-        response = client.post("/auth/jwt/logout")
+        response = client.post("/api/auth/jwt/logout")
 
         # Should respond (even if unauthorized)
         assert response.status_code in [200, 401]  # Not 404
@@ -81,7 +81,7 @@ class TestUserRegistration:
 
     def test_register_endpoint_exists(self, client: TestClient):
         """Register endpoint should exist."""
-        response = client.post("/auth/register")
+        response = client.post("/api/auth/register")
 
         # Should respond (even if with validation error)
         assert response.status_code in [400, 422]  # Not 404
@@ -89,7 +89,7 @@ class TestUserRegistration:
     def test_register_requires_valid_email(self, client: TestClient):
         """Registration should require a valid email address."""
         response = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={
                 "email": "not-an-email",
                 "password": "test-password-123"
@@ -101,7 +101,7 @@ class TestUserRegistration:
     def test_register_requires_password(self, client: TestClient):
         """Registration should require a password."""
         response = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={
                 "email": "test@example.com"
             }
@@ -115,7 +115,7 @@ class TestUserRegistration:
 
         for password in weak_passwords:
             response = client.post(
-                "/auth/register",
+                "/api/auth/register",
                 json={
                     "email": "test@example.com",
                     "password": password
@@ -133,14 +133,14 @@ class TestCurrentUser:
 
     def test_get_current_user_requires_auth(self, client: TestClient):
         """Getting current user should require authentication."""
-        response = client.get("/users/me")
+        response = client.get("/api/auth/users/me")
 
         assert response.status_code == 401
 
     def test_get_current_user_with_invalid_token(self, client: TestClient):
         """Should reject invalid authentication tokens."""
         response = client.get(
-            "/users/me",
+            "/api/auth/users/me",
             headers={"Authorization": "Bearer invalid-token-12345"}
         )
 

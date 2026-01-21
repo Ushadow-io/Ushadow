@@ -90,13 +90,15 @@ async def get_all_service_configs():
 
 @router.get("/service-configs/{service_id}")
 async def get_service_config(service_id: str):
-    """Get configuration for a specific service."""
+    """Get configuration for a specific service (with secrets masked)."""
     try:
         settings_store = get_settings_store()
         merged = await settings_store.load_config()
         service_prefs = getattr(merged.service_preferences, service_id, None)
         if service_prefs:
-            return OmegaConf.to_container(service_prefs, resolve=True)
+            config_dict = OmegaConf.to_container(service_prefs, resolve=True)
+            # Mask secrets before returning
+            return mask_dict_secrets(config_dict)
         return {}
     except Exception as e:
         logger.error(f"Error getting service config for {service_id}: {e}")
