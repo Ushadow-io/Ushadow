@@ -43,8 +43,8 @@ def _get_cors_origins_from_config() -> list[str]:
     Config priority: overrides.yaml > secrets.yaml > defaults.yaml
     """
     try:
-        from src.config.omegaconf_settings import get_settings_store
-        settings = get_settings_store()
+        from src.config.omegaconf_settings import get_settings
+        settings = get_settings()
         cors_origins = settings.get_sync("security.cors_origins", "")
 
         if cors_origins and cors_origins.strip():

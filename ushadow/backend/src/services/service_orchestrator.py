@@ -4,12 +4,13 @@ Service Orchestrator - Unified facade for service management.
 This is the single entry point for all service operations, combining:
 - ComposeServiceRegistry: Service discovery from compose files
 - DockerManager: Container lifecycle management
-- SettingsStore: Configuration and state persistence
+- Settings: Configuration and state persistence
 
 Routers should use this layer instead of calling underlying managers directly.
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -28,9 +29,6 @@ from src.services.docker_manager import (
     ServiceEndpoint,
 )
 from src.config.omegaconf_settings import (
-    get_settings_store,
-    SettingsStore,
-    # New v2 API
     get_settings,
     Settings,
     Source,
@@ -205,7 +203,7 @@ class ServiceOrchestrator:
     def __init__(self):
         self._compose_registry: Optional[ComposeServiceRegistry] = None
         self._docker_manager: Optional[DockerManager] = None
-        self._settings: Optional[SettingsStore] = None
+        self._settings: Optional[Settings] = None
 
     @property
     def compose_registry(self) -> ComposeServiceRegistry:
@@ -220,9 +218,9 @@ class ServiceOrchestrator:
         return self._docker_manager
 
     @property
-    def settings(self) -> SettingsStore:
+    def settings(self) -> Settings:
         if self._settings is None:
-            self._settings = get_settings_store()
+            self._settings = get_settings()
         return self._settings
 
     # =========================================================================
@@ -893,8 +891,8 @@ class ServiceOrchestrator:
             elif saved.get("source") == "literal" and saved.get("value"):
                 continue
             else:
-                has_value = await self.settings.has_value_for_env_var(ev.name)
-                if not has_value:
+                # Check if env var has a value from os.environ
+                if not os.environ.get(ev.name):
                     return True
 
         return False

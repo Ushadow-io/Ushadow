@@ -731,7 +731,7 @@ class DockerManager:
         Returns:
             List of port configurations with 'port', 'env_var', and 'source' keys
         """
-        from src.config.omegaconf_settings import get_settings_store
+        from src.config.omegaconf_settings import get_settings
 
         service_config = self.MANAGEABLE_SERVICES.get(service_name, {})
         ports = service_config.get('ports', [])
@@ -740,7 +740,7 @@ class DockerManager:
             ports = metadata.get('ports', [])
 
         # Load port overrides from services.{name}.ports
-        settings = get_settings_store()
+        settings = get_settings()
         config_key = service_name.replace("-", "_")
         port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
 
@@ -918,9 +918,9 @@ class DockerManager:
         Returns:
             Dict of env var name -> resolved value
         """
-        from src.config.omegaconf_settings import get_settings_store
+        from src.config.omegaconf_settings import get_settings
 
-        settings = get_settings_store()
+        settings = get_settings()
         compose_registry = get_compose_registry()
 
         # Find the service in compose registry
@@ -941,15 +941,15 @@ class DockerManager:
             setting_path = config.get("setting_path")
             literal_value = config.get("value")
 
-            # Use settings.resolve_env_value as single source of truth
-            # This ensures UI display and container startup use identical resolution
-            value = await settings.resolve_env_value(
-                source=source,
-                setting_path=setting_path,
-                literal_value=literal_value,
-                default_value=env_var.default_value,
-                env_name=env_var.name
-            )
+            # Resolve value based on source
+            value = None
+            if source == "setting" and setting_path:
+                value = await settings.get(setting_path)
+            elif source == "literal" and literal_value:
+                value = literal_value
+            else:
+                # Try env var from os.environ, then fall back to default
+                value = os.environ.get(env_var.name) or env_var.default_value
 
             if value:
                 resolved[env_var.name] = str(value)
@@ -1046,8 +1046,8 @@ class DockerManager:
                             # Handle _from_setting references
                             if isinstance(value, dict) and '_from_setting' in value:
                                 # Resolve the setting path
-                                from src.config.omegaconf_settings import get_settings_store
-                                settings = get_settings_store()
+                                from src.config.omegaconf_settings import get_settings
+                                settings = get_settings()
                                 setting_path = value['_from_setting']
                                 resolved_value = await settings.get(setting_path)
                                 if resolved_value:
@@ -1067,8 +1067,8 @@ class DockerManager:
                             subprocess_env[key] = str(value)
 
                 # Apply port overrides from services.{name}.ports
-                from src.config.omegaconf_settings import get_settings_store
-                settings = get_settings_store()
+                from src.config.omegaconf_settings import get_settings
+                settings = get_settings()
                 config_key = service_name.replace("-", "_")
                 port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
                 for env_var, port in port_overrides.items():

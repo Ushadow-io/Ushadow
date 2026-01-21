@@ -58,6 +58,16 @@ export interface UseProviderConfigsResult {
   refresh: () => Promise<void>
 }
 
+/**
+ * Options for useProviderConfigs hook
+ */
+export interface UseProviderConfigsOptions {
+  /** Pre-fetched templates (avoids duplicate API call) */
+  initialTemplates?: Template[]
+  /** Pre-fetched configs (avoids duplicate API call) */
+  initialConfigs?: ServiceConfigSummary[]
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -113,17 +123,56 @@ function generateConfigId(templateId: string, existingIds: string[]): string {
 // Hook
 // ============================================================================
 
-export function useProviderConfigs(capability: string | null): UseProviderConfigsResult {
-  const [templates, setTemplates] = useState<Template[]>([])
-  const [configs, setConfigs] = useState<ServiceConfigSummary[]>([])
+export function useProviderConfigs(
+  capability: string | null,
+  options?: UseProviderConfigsOptions
+): UseProviderConfigsResult {
+  const { initialTemplates, initialConfigs } = options || {}
+
+  // Check if we have pre-fetched data
+  const hasInitialData = Boolean(initialTemplates && initialConfigs)
+
+  // Memoize filtered data to avoid recalculating on every render
+  const filteredInitial = useMemo(() => {
+    if (!capability || !hasInitialData) return null
+
+    // Filter templates that provide this capability
+    const capabilityTemplates = initialTemplates!.filter(
+      t => t.provides === capability && t.source === 'provider'
+    )
+    // Filter configs that are based on capability templates
+    const templateIds = new Set(capabilityTemplates.map(t => t.id))
+    const capabilityConfigs = initialConfigs!.filter(
+      c => templateIds.has(c.template_id)
+    )
+    return { templates: capabilityTemplates, configs: capabilityConfigs }
+  }, [capability, hasInitialData, initialTemplates, initialConfigs])
+
+  const [templates, setTemplates] = useState<Template[]>(filteredInitial?.templates || [])
+  const [configs, setConfigs] = useState<ServiceConfigSummary[]>(filteredInitial?.configs || [])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Fetch templates and configs for the capability
+  // Update state when initial data changes (prop updates)
+  useEffect(() => {
+    if (filteredInitial) {
+      setTemplates(filteredInitial.templates)
+      setConfigs(filteredInitial.configs)
+    }
+  }, [filteredInitial])
+
+  // Fetch templates and configs for the capability (only if no initial data)
   const refresh = useCallback(async () => {
     if (!capability) {
       setTemplates([])
       setConfigs([])
+      return
+    }
+
+    // Skip fetch if we have initial data from parent - just re-filter
+    if (hasInitialData && filteredInitial) {
+      setTemplates(filteredInitial.templates)
+      setConfigs(filteredInitial.configs)
       return
     }
 
@@ -156,12 +205,14 @@ export function useProviderConfigs(capability: string | null): UseProviderConfig
     } finally {
       setLoading(false)
     }
-  }, [capability])
+  }, [capability, hasInitialData, filteredInitial])
 
-  // Load data on mount and when capability changes
+  // Load data on mount and when capability changes (only if no initial data)
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    if (!hasInitialData) {
+      refresh()
+    }
+  }, [hasInitialData, refresh])
 
   // Group templates and configs into dropdown options
   const grouped = useMemo((): GroupedProviders => {

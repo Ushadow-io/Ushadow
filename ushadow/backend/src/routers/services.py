@@ -300,7 +300,7 @@ async def set_port_override(
     so that subsequent service starts will use the new port.
     """
     from src.services.docker_manager import get_docker_manager, check_port_in_use
-    from src.config.omegaconf_settings import get_settings_store
+    from src.config.omegaconf_settings import get_settings
 
     docker_mgr = get_docker_manager()
 
@@ -317,7 +317,7 @@ async def set_port_override(
         )
 
     # Save the port override simply as services.{name}.ports.{ENV_VAR}
-    settings = get_settings_store()
+    settings = get_settings()
     # Normalize service name for config key (replace - with _)
     config_key = name.replace("-", "_")
     await settings.update({

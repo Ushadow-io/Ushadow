@@ -13,7 +13,7 @@
  * └─────────────────────────────────────────────────┘
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
   Cloud,
   HardDrive,
@@ -30,7 +30,7 @@ import {
 import { CapabilitySlot } from './CapabilitySlot'
 import { StatusIndicator } from './StatusIndicator'
 import { SettingField } from '../settings/SettingField'
-import { useProviderConfigs, type ProviderOption } from '../../hooks/useProviderConfigs'
+import { useProviderConfigs, type ProviderOption, type UseProviderConfigsOptions } from '../../hooks/useProviderConfigs'
 import type { Template, ServiceConfigSummary, Wiring } from '../../services/api'
 
 // ============================================================================
@@ -68,6 +68,8 @@ export interface FlatServiceCardProps {
   onDeploy?: (target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
   /** Provider templates by capability (for dropdowns) */
   providerTemplates: Template[]
+  /** Pre-fetched configs to avoid duplicate API calls */
+  initialConfigs?: ServiceConfigSummary[]
 }
 
 // ============================================================================
@@ -304,6 +306,8 @@ interface CapabilityRowProps {
   onExternalRefresh?: () => Promise<void>
   onCreateNew: () => void
   onClear: () => void
+  /** Pre-fetched data to avoid duplicate API calls */
+  hookOptions?: UseProviderConfigsOptions
 }
 
 function CapabilityRow({
@@ -318,8 +322,9 @@ function CapabilityRow({
   onExternalRefresh,
   onCreateNew,
   onClear,
+  hookOptions,
 }: CapabilityRowProps) {
-  const { grouped, templates, loading, refresh } = useProviderConfigs(capability)
+  const { grouped, templates, loading, refresh } = useProviderConfigs(capability, hookOptions)
 
   // Combined refresh: refresh hook data + notify parent
   const handleRefresh = useCallback(async () => {
@@ -387,7 +392,15 @@ export function FlatServiceCard({
   onAddConfig,
   onDeploy,
   providerTemplates,
+  initialConfigs,
 }: FlatServiceCardProps) {
+  // Memoize hook options to avoid recreating on each render
+  const hookOptions = useMemo<UseProviderConfigsOptions | undefined>(() => {
+    if (providerTemplates && initialConfigs) {
+      return { initialTemplates: providerTemplates, initialConfigs }
+    }
+    return undefined
+  }, [providerTemplates, initialConfigs])
   const [isStarting, setIsStarting] = useState(false)
   const [creatingCapability, setCreatingCapability] = useState<string | null>(null)
 
@@ -599,6 +612,7 @@ export function FlatServiceCard({
                 onUpdateConfig={onUpdateConfig}
                 onCreateNew={() => handleCreateNew(capability)}
                 onClear={() => onWiringClear(capability)}
+                hookOptions={hookOptions}
               />
             ))}
           </div>

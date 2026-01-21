@@ -10,13 +10,13 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.config.omegaconf_settings import get_settings_store
+from src.config.omegaconf_settings import get_settings
 from src.services.capability_resolver import get_capability_resolver
 from src.services.compose_registry import get_compose_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-settings_store = get_settings_store()
+settings = get_settings()
 
 
 # Models
@@ -111,11 +111,11 @@ async def get_wizard_api_keys():
     """
     try:
         return ApiKeysStep(
-            openai_api_key=mask_key(await settings_store.get("api_keys.openai_api_key")),
-            deepgram_api_key=mask_key(await settings_store.get("api_keys.deepgram_api_key")),
-            mistral_api_key=mask_key(await settings_store.get("api_keys.mistral_api_key")),
-            anthropic_api_key=mask_key(await settings_store.get("api_keys.anthropic_api_key")),
-            hf_token=mask_key(await settings_store.get("api_keys.hf_token")),
+            openai_api_key=mask_key(await settings.get("api_keys.openai_api_key")),
+            deepgram_api_key=mask_key(await settings.get("api_keys.deepgram_api_key")),
+            mistral_api_key=mask_key(await settings.get("api_keys.mistral_api_key")),
+            anthropic_api_key=mask_key(await settings.get("api_keys.anthropic_api_key")),
+            hf_token=mask_key(await settings.get("api_keys.hf_token")),
         )
     except Exception as e:
         logger.error(f"Error getting wizard API keys: {e}")
@@ -147,17 +147,17 @@ async def update_wizard_api_keys(api_keys: ApiKeysStep):
 
         # Save to OmegaConf (writes to secrets.yaml)
         if updates:
-            await settings_store.update(updates)
+            await settings.update(updates)
             logger.info(f"Wizard: API keys updated: {list(updates.keys())}")
 
         # Return masked values
         return ApiKeysUpdateResponse(
             api_keys=ApiKeysStep(
-                openai_api_key=mask_key(await settings_store.get("api_keys.openai_api_key")),
-                deepgram_api_key=mask_key(await settings_store.get("api_keys.deepgram_api_key")),
-                mistral_api_key=mask_key(await settings_store.get("api_keys.mistral_api_key")),
-                anthropic_api_key=mask_key(await settings_store.get("api_keys.anthropic_api_key")),
-                hf_token=mask_key(await settings_store.get("api_keys.hf_token")),
+                openai_api_key=mask_key(await settings.get("api_keys.openai_api_key")),
+                deepgram_api_key=mask_key(await settings.get("api_keys.deepgram_api_key")),
+                mistral_api_key=mask_key(await settings.get("api_keys.mistral_api_key")),
+                anthropic_api_key=mask_key(await settings.get("api_keys.anthropic_api_key")),
+                hf_token=mask_key(await settings.get("api_keys.hf_token")),
             ),
             success=True
         )
@@ -185,7 +185,7 @@ async def get_huggingface_status():
     Returns connection status and username if connected.
     """
     try:
-        hf_token = await settings_store.get("api_keys.hf_token")
+        hf_token = await settings.get("api_keys.hf_token")
 
         if not hf_token:
             return HuggingFaceStatusResponse(
@@ -228,7 +228,7 @@ async def get_huggingface_status():
     except httpx.TimeoutException:
         return HuggingFaceStatusResponse(
             connected=False,
-            has_token=bool(await settings_store.get("api_keys.hf_token")),
+            has_token=bool(await settings.get("api_keys.hf_token")),
             username=None,
             error="Connection timeout - check your internet connection"
         )
@@ -236,7 +236,7 @@ async def get_huggingface_status():
         logger.error(f"Error checking HuggingFace status: {e}")
         return HuggingFaceStatusResponse(
             connected=False,
-            has_token=bool(await settings_store.get("api_keys.hf_token")),
+            has_token=bool(await settings.get("api_keys.hf_token")),
             username=None,
             error=str(e)
         )
@@ -260,7 +260,7 @@ async def check_huggingface_models():
     For gated models (like PyAnnote), we verify actual access by attempting
     to resolve a file, not just checking model metadata.
     """
-    hf_token = await settings_store.get("api_keys.hf_token")
+    hf_token = await settings.get("api_keys.hf_token")
 
     if not hf_token:
         return HuggingFaceModelsResponse(
@@ -386,7 +386,7 @@ async def get_quickstart_config() -> QuickstartResponse:
     Returns capabilities with their providers and any missing keys.
     Also returns service info with display names for UI rendering.
     """
-    settings = get_settings_store()
+    settings = get_settings()
     resolver = get_capability_resolver()
     registry = get_compose_registry()
 
@@ -430,7 +430,7 @@ async def save_quickstart_config(key_values: Dict[str, str]) -> Dict[str, Any]:
     Accepts a dict of settings_path -> value (e.g., api_keys.openai_api_key -> sk-xxx).
     Saves directly to the settings store.
     """
-    settings = get_settings_store()
+    settings = get_settings()
 
     if not key_values:
         return {"success": True, "saved": 0, "message": "No values to save"}
@@ -457,7 +457,7 @@ async def get_setup_state() -> Dict[str, Any]:
     Returns wizard progress from config.overrides.yaml → wizard section.
     """
     from omegaconf import OmegaConf
-    settings = get_settings_store()
+    settings = get_settings()
     state = await settings.get("wizard", {})
     # Convert OmegaConf to plain dict for JSON serialization
     if state and hasattr(state, '_content'):
@@ -468,6 +468,6 @@ async def get_setup_state() -> Dict[str, Any]:
 @router.put("/setup-state")
 async def save_setup_state(state: Dict[str, Any]) -> Dict[str, Any]:
     """Save wizard state to config.overrides.yaml → wizard section."""
-    settings = get_settings_store()
+    settings = get_settings()
     await settings.update({"wizard": state})
     return {"success": True}

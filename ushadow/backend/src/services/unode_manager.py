@@ -16,7 +16,7 @@ from aiohttp import UnixConnector
 from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
-from src.config.omegaconf_settings import get_settings_store
+from src.config.omegaconf_settings import get_settings
 from src.config.secrets import get_auth_secret_key
 from src.utils.tailscale_serve import get_tailscale_status, TailscaleStatus
 from src.models.unode import (
@@ -33,7 +33,7 @@ from src.models.unode import (
 )
 
 logger = logging.getLogger(__name__)
-config = get_settings_store()
+config = get_settings()
 
 # Get backend port from OmegaConf (sync for module-level access)
 BACKEND_PORT = config.get_sync("network.backend_public_port") or 8000
