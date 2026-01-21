@@ -12,7 +12,9 @@ Manages application settings using OmegaConf for:
 import logging
 import os
 import time
+import warnings
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, List, Tuple, Dict
 
@@ -115,14 +117,40 @@ class SettingSuggestion:
 SECRET_PATTERNS = SENSITIVE_PATTERNS
 
 # Patterns that indicate a URL value
-URL_PATTERNS = ['url', 'endpoint', 'host', 'uri']
+URL_PATTERNS = ['url', 'endpoint', 'host', 'uri', 'server']
 
-# Sections to search for different setting types
+# Patterns for value type inference (checking actual values, not names)
+URL_VALUE_PATTERNS = ['http://', 'https://', 'redis://', 'mongodb://', 'postgres://', 'mysql://']
+
+# Section mapping for deprecated methods (backward compatibility)
 SETTING_SECTIONS = {
-    'secret': ['api_keys', 'security', 'admin'],
-    'url': ['services'],
-    'string': ['llm', 'transcription', 'memory', 'auth', 'security', 'admin'],
+    'secret': ['api_keys', 'security'],
+    'url': ['services', 'infrastructure'],
+    'string': ['settings', 'config'],
 }
+
+
+def infer_value_type(value: str) -> str:
+    """Infer the type of a setting value."""
+    if not value:
+        return 'empty'
+    value_lower = value.lower().strip()
+    # Check if it looks like a URL
+    if any(value_lower.startswith(p) for p in URL_VALUE_PATTERNS):
+        return 'url'
+    # Check if it looks like a secret (masked or has key-like format)
+    if value_lower.startswith('sk-') or value_lower.startswith('pk-') or '•' in value:
+        return 'secret'
+    # Check if boolean
+    if value_lower in ('true', 'false', 'yes', 'no', '1', '0'):
+        return 'bool'
+    # Check if numeric
+    try:
+        float(value)
+        return 'number'
+    except ValueError:
+        pass
+    return 'string'
 
 # =============================================================================
 # Helper Functions
@@ -353,7 +381,15 @@ class SettingsStore:
 
         Returns:
             Resolved value or default
+
+        .. deprecated::
+            Use Settings.for_service(service_id)[env_var].value instead.
         """
+        warnings.warn(
+            "get_by_env_var is deprecated. Use Settings.for_service(service_id)[env_var].value instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         # First check well-known mappings
         if env_var_name in self.WELL_KNOWN_ENV_MAPPINGS:
             path = self.WELL_KNOWN_ENV_MAPPINGS[env_var_name]
@@ -557,7 +593,15 @@ class SettingsStore:
 
         Returns:
             Tuple of (setting_path, value) if found, None otherwise
+
+        .. deprecated::
+            Use Settings.for_service(service_id)[env_var] which returns Resolution with path.
         """
+        warnings.warn(
+            "find_setting_for_env_var is deprecated. Use Settings.for_service(service_id)[env_var] instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         # First, try direct path mapping (derived from provider YAML configs)
         env_mapping = get_provider_registry().get_env_to_settings_mapping()
         if env_var_name in env_mapping:
@@ -610,7 +654,15 @@ class SettingsStore:
 
         Returns:
             True if a matching setting with a non-empty value exists
+
+        .. deprecated::
+            Use Settings.for_service(service_id)[env_var].found instead.
         """
+        warnings.warn(
+            "has_value_for_env_var is deprecated. Use Settings.for_service(service_id)[env_var].found instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         # First, try OmegaConf tree search (e.g., MEMORY_SERVER_URL -> infrastructure.memory_server_url)
         value = await self.get_by_env_var(env_var_name)
         if value and str(value).strip():
@@ -645,8 +697,8 @@ class SettingsStore:
         """
         Get setting suggestions that could fill an environment variable.
 
-        Searches config sections for compatible settings and optionally
-        includes provider-specific mappings.
+        Searches ALL config sections and filters by value type compatibility.
+        For example, a URL env var will show all settings that contain URL values.
 
         Args:
             env_var_name: Environment variable name
@@ -660,13 +712,11 @@ class SettingsStore:
         seen_paths = set()
         config = await self.get_config_as_dict()
 
-        # Determine which sections to search based on env var type
-        setting_type = infer_setting_type(env_var_name)
-        sections = SETTING_SECTIONS.get(setting_type, ['api_keys', 'security'])
+        # Determine the expected type based on env var name
+        expected_type = infer_setting_type(env_var_name)
 
-        # Search config sections
-        for section in sections:
-            section_data = config.get(section, {})
+        # Search ALL config sections, filter by value type
+        for section, section_data in config.items():
             if not isinstance(section_data, dict):
                 continue
 
@@ -677,11 +727,32 @@ class SettingsStore:
                 path = f"{section}.{key}"
                 if path in seen_paths:
                     continue
-                seen_paths.add(path)
 
                 str_value = str(value) if value is not None else ""
                 has_value = bool(str_value.strip())
 
+                # Filter by value type compatibility
+                value_type = infer_value_type(str_value) if has_value else 'empty'
+
+                # Type compatibility rules:
+                # - secret env vars: show secrets and empty slots in api_keys/security
+                # - url env vars: show urls and empty slots
+                # - string env vars: show strings, empty slots (but not urls/secrets)
+                is_compatible = False
+                if expected_type == 'secret':
+                    is_compatible = (value_type == 'secret' or
+                                    (value_type == 'empty' and section in ('api_keys', 'security')) or
+                                    is_secret_key(path))
+                elif expected_type == 'url':
+                    is_compatible = (value_type == 'url' or
+                                    (value_type == 'empty' and 'url' in key.lower()))
+                else:  # string type
+                    is_compatible = value_type in ('string', 'empty', 'bool', 'number')
+
+                if not is_compatible:
+                    continue
+
+                seen_paths.add(path)
                 suggestions.append(SettingSuggestion(
                     path=path,
                     label=key.replace("_", " ").title(),
@@ -764,7 +835,15 @@ class SettingsStore:
 
         Returns:
             Resolved value or None
+
+        .. deprecated::
+            Use Settings.for_service(service_id)[env_var].value instead.
         """
+        warnings.warn(
+            "resolve_env_value is deprecated. Use Settings.for_service(service_id)[env_var].value instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         if source == "setting" and setting_path:
             return await self.get(setting_path)
         elif source == "literal" and literal_value:
@@ -808,7 +887,15 @@ class SettingsStore:
             - value: Resolved string value
             - source_type: One of "settings", "os.environ", "default", "override"
             - source_path: Settings path or other identifier
+
+        .. deprecated::
+            Use Settings.for_service(service_id)[env_var] which returns Resolution with source.
         """
+        warnings.warn(
+            "resolve_env_value_with_source is deprecated. Use Settings.for_service() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         from src.models.service_config import EnvVarSource
 
         if source == "setting" and setting_path:
@@ -863,7 +950,15 @@ class SettingsStore:
 
         Returns:
             List of env var config dicts with suggestions and resolved values
+
+        .. deprecated::
+            Use Settings.for_service(service_id) combined with Settings.get_suggestions() instead.
         """
+        warnings.warn(
+            "build_env_var_config is deprecated. Use Settings.for_service(service_id) instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         result = []
 
         for ev in env_vars:
@@ -958,3 +1053,448 @@ def get_settings_store(config_dir: Optional[Path] = None) -> SettingsStore:
 # Backward compatibility aliases
 OmegaConfSettingsManager = SettingsStore
 get_omegaconf_settings = get_settings_store
+
+
+# =============================================================================
+# New Simplified Settings API (v2)
+# =============================================================================
+
+class Source(str, Enum):
+    """Where a resolved value came from (lowest to highest priority)."""
+    CONFIG_DEFAULT = "config_default"    # 1. config.defaults.yaml
+    COMPOSE_DEFAULT = "compose_default"  # 2. Default in compose file
+    ENV_FILE = "env_file"                # 3. .env file (os.environ)
+    CAPABILITY = "capability"            # 4. Wired provider/capability
+    DEPLOY_ENV = "deploy_env"            # 5. Environment-specific override
+    USER_OVERRIDE = "user_override"      # 6. Explicit user configuration
+    NOT_FOUND = "not_found"
+
+
+@dataclass
+class Resolution:
+    """Result of resolving an env var."""
+    value: Optional[str]
+    source: Source
+    path: Optional[str] = None  # settings path if source=SETTINGS
+
+    @property
+    def found(self) -> bool:
+        return self.source != Source.NOT_FOUND
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for API responses."""
+        return {
+            "value": self.value,
+            "source": self.source.value,
+            "path": self.path,
+        }
+
+
+class Settings:
+    """
+    Simplified settings interface (v2).
+
+    5 functions:
+    - resolve(env_vars, defaults) -> Dict[str, Resolution]
+    - get_suggestions(env_var) -> List[Suggestion]
+    - get(path) / get_sync(path) -> Any
+    - set(path, value) -> None
+    - delete(path) -> bool
+    """
+
+    def __init__(self, store: Optional[SettingsStore] = None):
+        self._store = store or get_settings_store()
+
+    # -------------------------------------------------------------------------
+    # Entity-Level Resolution
+    # -------------------------------------------------------------------------
+
+    async def for_service(self, service_id: str) -> Dict[str, Resolution]:
+        """
+        Get settings for a service template.
+
+        Layers applied: config_default → compose_default → env_file → capability
+
+        Args:
+            service_id: Service identifier (e.g., "chronicle-compose:chronicle-backend")
+
+        Returns:
+            Dict mapping env var names to their resolved values and sources
+        """
+        from src.services.compose_registry import get_compose_registry
+        from src.services.capability_resolver import CapabilityResolver
+
+        # Get service and its env var schema
+        registry = get_compose_registry()
+        service = registry.get_service(service_id)
+        if not service:
+            return {}
+
+        # Collect all env var names
+        env_vars = [ev.name for ev in service.required_env_vars] + \
+                   [ev.name for ev in service.optional_env_vars]
+
+        # Build compose_defaults from service schema
+        compose_defaults = {
+            ev.name: ev.default_value
+            for ev in service.required_env_vars + service.optional_env_vars
+            if ev.has_default and ev.default_value
+        }
+
+        # Get capability values from wired providers
+        capability_values = {}
+        if service.requires:
+            try:
+                resolver = CapabilityResolver()
+                # resolve_for_service returns env vars from wired capabilities
+                capability_values = await resolver.resolve_for_service(service_id)
+            except Exception as e:
+                logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
+
+        return await self._resolve_internal(
+            env_vars=env_vars,
+            compose_defaults=compose_defaults,
+            capability_values=capability_values,
+            deploy_env_overrides={},
+            user_overrides={},
+        )
+
+    async def for_deploy_config(
+        self,
+        deploy_target: str,
+        service_id: str
+    ) -> Dict[str, Resolution]:
+        """
+        Get settings preview for a deployment target.
+
+        Layers applied: config_default → compose_default → env_file → capability → deploy_env
+
+        Args:
+            deploy_target: Deployment target (e.g., "production", "staging")
+            service_id: Service identifier
+
+        Returns:
+            Dict mapping env var names to their resolved values and sources
+        """
+        from src.services.compose_registry import get_compose_registry
+        from src.services.capability_resolver import CapabilityResolver
+
+        # Get service and its env var schema
+        registry = get_compose_registry()
+        service = registry.get_service(service_id)
+        if not service:
+            return {}
+
+        # Collect all env var names
+        env_vars = [ev.name for ev in service.required_env_vars] + \
+                   [ev.name for ev in service.optional_env_vars]
+
+        # Build compose_defaults from service schema
+        compose_defaults = {
+            ev.name: ev.default_value
+            for ev in service.required_env_vars + service.optional_env_vars
+            if ev.has_default and ev.default_value
+        }
+
+        # Get capability values from wired providers
+        capability_values = {}
+        if service.requires:
+            try:
+                resolver = CapabilityResolver()
+                capability_values = await resolver.resolve_for_service(service_id)
+            except Exception as e:
+                logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
+
+        # Load deploy environment overrides
+        deploy_env_overrides = await self._store.get(
+            f"deploy_environments.{deploy_target}"
+        ) or {}
+
+        return await self._resolve_internal(
+            env_vars=env_vars,
+            compose_defaults=compose_defaults,
+            capability_values=capability_values,
+            deploy_env_overrides=deploy_env_overrides,
+            user_overrides={},
+        )
+
+    async def for_deployment(self, deployment_id: str) -> Dict[str, Resolution]:
+        """
+        Get settings for a running deployment instance.
+
+        Layers applied: ALL (config_default → compose_default → env_file → capability → deploy_env → user_override)
+
+        Args:
+            deployment_id: Deployment/instance identifier
+
+        Returns:
+            Dict mapping env var names to their resolved values and sources
+        """
+        from src.services.compose_registry import get_compose_registry
+        from src.services.capability_resolver import CapabilityResolver
+        from src.services.service_config_manager import get_service_config_manager
+
+        # Parse deployment_id to get service_id
+        # Format might be "service_id" or "service_id:instance_name"
+        parts = deployment_id.rsplit(':', 1) if ':' in deployment_id else [deployment_id]
+        service_id = parts[0] if len(parts) == 1 else ':'.join(parts[:-1])
+
+        # Get service and its env var schema
+        registry = get_compose_registry()
+        service = registry.get_service(service_id)
+        if not service:
+            # Try as a service config
+            config_manager = get_service_config_manager()
+            service_config = config_manager.get_config(deployment_id)
+            if service_config:
+                service_id = service_config.service_id
+                service = registry.get_service(service_id)
+
+        if not service:
+            return {}
+
+        # Collect all env var names
+        env_vars = [ev.name for ev in service.required_env_vars] + \
+                   [ev.name for ev in service.optional_env_vars]
+
+        # Build compose_defaults from service schema
+        compose_defaults = {
+            ev.name: ev.default_value
+            for ev in service.required_env_vars + service.optional_env_vars
+            if ev.has_default and ev.default_value
+        }
+
+        # Get capability values - use deployment-specific wiring if available
+        capability_values = {}
+        if service.requires:
+            try:
+                resolver = CapabilityResolver()
+                capability_values = await resolver.resolve_for_instance(deployment_id)
+            except Exception as e:
+                logger.debug(f"Could not resolve capabilities for {deployment_id}: {e}")
+                # Fall back to service-level resolution
+                try:
+                    capability_values = await resolver.resolve_for_service(service_id)
+                except Exception:
+                    pass
+
+        # Load deploy environment overrides (if deployment has a target)
+        deploy_env_overrides = {}
+        # TODO: Get deploy target from deployment config if available
+
+        # Load user overrides from saved config
+        config_key = f"service_env_config.{deployment_id.replace(':', '_')}"
+        saved_config = await self._store.get(config_key) or {}
+        user_overrides = {
+            name: cfg.get('value')
+            for name, cfg in saved_config.items()
+            if cfg.get('source') in ('literal', 'new_setting') and cfg.get('value')
+        }
+
+        return await self._resolve_internal(
+            env_vars=env_vars,
+            compose_defaults=compose_defaults,
+            capability_values=capability_values,
+            deploy_env_overrides=deploy_env_overrides,
+            user_overrides=user_overrides,
+        )
+
+    async def _resolve_internal(
+        self,
+        env_vars: List[str],
+        compose_defaults: Dict[str, str],
+        capability_values: Dict[str, str],
+        deploy_env_overrides: Dict[str, str],
+        user_overrides: Dict[str, str],
+    ) -> Dict[str, Resolution]:
+        """
+        Internal resolution logic.
+
+        Resolution order (highest priority wins):
+        6. user_override - Explicit user configuration
+        5. deploy_env - Environment-specific override
+        4. capability - Wired provider/capability value
+        3. env_file - .env file (os.environ)
+        2. compose_default - Default in compose file
+        1. config_default - config.defaults.yaml
+        """
+        results: Dict[str, Resolution] = {}
+
+        for env_var in env_vars:
+            # Check from highest to lowest priority, return first found
+
+            # 6. User override (highest)
+            if env_var in user_overrides:
+                value = user_overrides[env_var]
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.USER_OVERRIDE,
+                        path=None
+                    )
+                    continue
+
+            # 5. Deploy environment override
+            if env_var in deploy_env_overrides:
+                value = deploy_env_overrides[env_var]
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.DEPLOY_ENV,
+                        path=None
+                    )
+                    continue
+
+            # 4. Capability/provider wiring
+            if env_var in capability_values:
+                value = capability_values[env_var]
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.CAPABILITY,
+                        path=None
+                    )
+                    continue
+
+            # 3. .env file (os.environ)
+            env_value = os.environ.get(env_var)
+            if env_value and env_value.strip():
+                results[env_var] = Resolution(
+                    value=env_value,
+                    source=Source.ENV_FILE,
+                    path=None
+                )
+                continue
+
+            # 2. Compose file default
+            if env_var in compose_defaults:
+                value = compose_defaults[env_var]
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.COMPOSE_DEFAULT,
+                        path=None
+                    )
+                    continue
+
+            # 1. Config default (config.defaults.yaml via env var mapping)
+            setting_result = await self._store.find_setting_for_env_var(env_var)
+            if setting_result:
+                path, value = setting_result
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.CONFIG_DEFAULT,
+                        path=path
+                    )
+                    continue
+
+            # Not found
+            results[env_var] = Resolution(
+                value=None,
+                source=Source.NOT_FOUND,
+                path=None
+            )
+
+        return results
+
+    # -------------------------------------------------------------------------
+    # Suggestions
+    # -------------------------------------------------------------------------
+
+    async def get_suggestions(self, env_var: str) -> List[SettingSuggestion]:
+        """
+        Get possible settings that could fill this env var.
+        Used for dropdown menus in the UI.
+        """
+        return await self._store.get_suggestions_for_env_var(env_var)
+
+    # -------------------------------------------------------------------------
+    # Direct path access
+    # -------------------------------------------------------------------------
+
+    async def get(self, path: str, default: Any = None) -> Any:
+        """Get a value by settings path."""
+        return await self._store.get(path, default)
+
+    def get_sync(self, path: str, default: Any = None) -> Any:
+        """Sync version of get() for module-level initialization."""
+        return self._store.get_sync(path, default)
+
+    # -------------------------------------------------------------------------
+    # Mutations
+    # -------------------------------------------------------------------------
+
+    async def set(self, path: str, value: Any) -> None:
+        """
+        Set a setting value.
+        Auto-routes to secrets.yaml or config.overrides.yaml based on path.
+        """
+        await self._store.update({path: value})
+
+    async def delete(self, path: str) -> bool:
+        """
+        Delete a setting override.
+        Returns True if it existed, False otherwise.
+        """
+        # Check if value exists first
+        current = await self._store.get(path)
+        if current is None:
+            return False
+
+        # Determine which file to modify
+        if self._store._is_secret_key(path):
+            file_path = self._store.secrets_path
+        else:
+            file_path = self._store.overrides_path
+
+        if not file_path.exists():
+            return False
+
+        # Load, remove key, save
+        config = self._store._load_yaml_if_exists(file_path)
+        if config is None:
+            return False
+
+        # Navigate to parent and delete key
+        parts = path.split('.')
+        if len(parts) == 1:
+            if parts[0] in config:
+                del config[parts[0]]
+                OmegaConf.save(config, file_path)
+                self._store.clear_cache()
+                return True
+            return False
+
+        # Navigate to parent dict
+        parent = config
+        for part in parts[:-1]:
+            if part not in parent:
+                return False
+            parent = parent[part]
+
+        # Delete the key
+        key = parts[-1]
+        if key in parent:
+            del parent[key]
+            OmegaConf.save(config, file_path)
+            self._store.clear_cache()
+            return True
+
+        return False
+
+
+# Global Settings instance
+_settings: Optional[Settings] = None
+
+
+def get_settings() -> Settings:
+    """Get global Settings instance (new v2 API)."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+# Alias for cleaner external use
+Suggestion = SettingSuggestion

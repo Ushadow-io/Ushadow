@@ -196,6 +196,50 @@ async def get_template(
     raise HTTPException(status_code=404, detail=f"Template not found: {template_id}")
 
 
+@router.get("/templates/{template_id}/env")
+async def get_template_env_config(
+    template_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """
+    Get environment variable configuration with suggestions for a template.
+
+    Uses the same build_env_var_config() process as services for consistent
+    auto-mapping and suggestion behavior.
+    """
+    from dataclasses import dataclass
+
+    template = await get_template(template_id, current_user)
+    settings = get_settings_store()
+
+    # Convert config_schema to EnvVarConfig-like objects for build_env_var_config
+    @dataclass
+    class EnvVarStub:
+        name: str
+        default_value: Optional[str] = None
+        has_default: bool = False
+
+    env_vars = []
+    for field in template.config_schema:
+        default_val = field.get("default") if isinstance(field, dict) else getattr(field, "default", None)
+        env_vars.append(EnvVarStub(
+            name=field.get("env_var") or field["key"].upper() if isinstance(field, dict) else getattr(field, "env_var", None) or field.key.upper(),
+            default_value=default_val,
+            has_default=bool(default_val),
+        ))
+
+    # Use same process as services - builds suggestions and auto-maps
+    result = await settings.build_env_var_config(
+        env_vars=env_vars,
+        saved_config={},  # No saved config for templates
+        requires=template.requires or [],
+        provider_registry=None,  # Could add for capability-based suggestions
+        is_required=True,
+    )
+
+    return result
+
+
 # =============================================================================
 # ServiceConfig Endpoints
 # =============================================================================
