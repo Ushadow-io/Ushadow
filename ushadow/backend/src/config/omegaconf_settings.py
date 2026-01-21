@@ -196,8 +196,13 @@ class SettingsStore:
 
     def __init__(self, config_dir: Optional[Path] = None):
         if config_dir is None:
+            # Priority order: CONFIG_DIR env var → /config mount → PROJECT_ROOT → calculated path
+            # CONFIG_DIR env var allows tests to override default behavior
+            env_config_dir = os.environ.get("CONFIG_DIR")
+            if env_config_dir:
+                config_dir = Path(env_config_dir)
             # In Docker container, config is mounted at /config
-            if Path("/config").exists():
+            elif Path("/config").exists():
                 config_dir = Path("/config")
             else:
                 project_root = os.environ.get("PROJECT_ROOT")
@@ -446,6 +451,46 @@ class SettingsStore:
         # Fall back to pattern matching from secrets.py
         return is_secret_key(key)
 
+    def _split_secrets_and_overrides(self, updates: dict, path_prefix: str = "") -> Tuple[dict, dict]:
+        """
+        Recursively split a nested dict into secrets and non-secrets.
+
+        This handles nested structures like:
+        {"service_preferences": {"chronicle": {"admin_password": "secret", "database": "db"}}}
+
+        and correctly routes admin_password to secrets.yaml and database to overrides.yaml.
+
+        Args:
+            updates: Dict to split (can be nested)
+            path_prefix: Current path for checking if keys are secrets
+
+        Returns:
+            Tuple of (secrets_dict, overrides_dict) maintaining nested structure
+        """
+        secrets_dict = {}
+        overrides_dict = {}
+
+        for key, value in updates.items():
+            full_key = f"{path_prefix}.{key}" if path_prefix else key
+
+            if isinstance(value, dict):
+                # Recursively process nested dict
+                nested_secrets, nested_overrides = self._split_secrets_and_overrides(value, full_key)
+
+                # Add to respective dicts if non-empty
+                if nested_secrets:
+                    secrets_dict[key] = nested_secrets
+                if nested_overrides:
+                    overrides_dict[key] = nested_overrides
+            else:
+                # Leaf value - check if it's a secret
+                if self._is_secret_key(full_key):
+                    secrets_dict[key] = value
+                else:
+                    overrides_dict[key] = value
+
+        return secrets_dict, overrides_dict
+
     async def update(self, updates: dict) -> None:
         """
         Update settings, auto-routing to secrets.yaml or config.overrides.yaml.
@@ -463,11 +508,16 @@ class SettingsStore:
 
         for key, value in updates.items():
             if isinstance(value, dict):
-                # Nested dict - check the section name
+                # Check if this is a known secret section
                 if key in ('api_keys', 'admin', 'security'):
                     secrets_updates[key] = value
                 else:
-                    overrides_updates[key] = value
+                    # Recursively split nested dicts (e.g., service_preferences)
+                    nested_secrets, nested_overrides = self._split_secrets_and_overrides(value, key)
+                    if nested_secrets:
+                        secrets_updates[key] = nested_secrets
+                    if nested_overrides:
+                        overrides_updates[key] = nested_overrides
             else:
                 # Dot notation or simple key
                 if self._is_secret_key(key):

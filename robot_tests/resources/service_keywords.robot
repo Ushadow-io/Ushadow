@@ -103,6 +103,34 @@ Get Service Environment Variables
     ${env_vars}=    Set Variable    ${response.json()}[environment]
     [Return]    ${env_vars}
 
+Get Container Environment
+    [Documentation]    Get actual environment variables from a running container
+    ...
+    ...                Inspects the Docker container to retrieve the env vars
+    ...                that were actually passed at startup. This is useful for
+    ...                verifying that configured values are deployed correctly.
+    ...
+    ...                Arguments:
+    ...                - session: Authenticated session alias
+    ...                - service_name: Name of the service
+    ...                - unmask: If True, return unmasked values (default: False)
+    ...
+    ...                Returns: Dictionary with success, env_vars, container_found
+    ...
+    ...                Example:
+    ...                | ${result}= | Get Container Environment | admin_session | chronicle-backend |
+    ...                | Log | Model: ${result}[env_vars][OPENAI_MODEL] |
+
+    [Arguments]    ${session}    ${service_name}    ${unmask}=${False}
+
+    ${params}=    Create Dictionary    unmask=${unmask}
+    ${response}=    GET On Session    ${session}
+    ...             /api/services/${service_name}/container-env
+    ...             params=${params}
+    ...             expected_status=200
+
+    [Return]    ${response.json()}
+
 Wait For Service To Be Ready
     [Documentation]    Wait for service to reach ready state
     ...

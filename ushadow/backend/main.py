@@ -117,7 +117,10 @@ async def lifespan(app: FastAPI):
     # Initialize MongoDB connection
     client = AsyncIOMotorClient(mongodb_uri)
     db = client[mongodb_database]
-    
+
+    # Store db in app.state for health checks
+    app.state.db = db
+
     # Initialize Beanie ODM with document models
     await init_beanie(database=db, document_models=[User])
     logger.info("✓ Beanie ODM initialized")

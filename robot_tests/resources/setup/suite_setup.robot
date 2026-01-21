@@ -36,9 +36,10 @@ Setup REST Authentication
     [Documentation]    Configure REST library with JWT authentication token for each test
     ...
     ...                Gets fresh admin JWT token and sets it as authorization header.
+    ...                Note: REST library base URL must be set at import time in test file.
     ...                Use as Test Setup to ensure each test has a valid token.
 
-    # Get API URL
+    # Get API URL from environment config
     ${api_url}=    Get Api Url
 
     # Create temporary session for login
