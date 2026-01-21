@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Edit2, Save, X, Loader2, Plus, Trash2, Key, FileText } from 'lucide-react'
-import type { ConfigField, ServiceInstance } from '../../contexts/ServicesContext'
+import type { ConfigField, ServiceServiceConfig } from '../../contexts/ServicesContext'
 import { shouldShowField, maskValue } from '../../hooks/useServiceStatus'
 import { SecretInput, SettingField } from '../settings'
 
@@ -10,7 +10,7 @@ import { SecretInput, SettingField } from '../settings'
 
 interface ServiceConfigFormProps {
   /** The service being configured */
-  service: ServiceInstance
+  service: ServiceServiceConfig
   /** Current saved config values */
   config: Record<string, any>
   /** Whether we're in edit mode */

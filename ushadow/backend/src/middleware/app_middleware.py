@@ -271,21 +271,61 @@ def setup_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         """Handle HTTP exceptions with structured error response."""
-        # For authentication failures (401), add error_type
-        if exc.status_code == 401:
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={
-                    "detail": exc.detail,
-                    "error_type": "authentication_failure",
-                    "error_category": "security"
-                }
-            )
+        # Map status codes to error types for better frontend handling
+        error_type_map = {
+            400: ("bad_request", "validation"),
+            401: ("authentication_failure", "security"),
+            403: ("forbidden", "security"),
+            404: ("not_found", "resource"),
+            409: ("conflict", "resource"),
+            422: ("validation_error", "validation"),
+            429: ("rate_limited", "throttling"),
+            500: ("internal_error", "server"),
+            502: ("bad_gateway", "server"),
+            503: ("service_unavailable", "server"),
+            504: ("gateway_timeout", "server"),
+        }
 
-        # For other HTTP exceptions, return as normal
+        error_type, error_category = error_type_map.get(
+            exc.status_code, ("http_error", "general")
+        )
+
+        # Always return structured error response
         return JSONResponse(
             status_code=exc.status_code,
-            content={"detail": exc.detail}
+            content={
+                "detail": exc.detail,
+                "error_type": error_type,
+                "error_category": error_category,
+                "status_code": exc.status_code
+            }
+        )
+
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        """
+        Catch-all handler for any unhandled exceptions.
+
+        Logs full stack trace and returns structured error response.
+        This ensures all errors are visible in logs for debugging.
+        """
+        import traceback
+
+        # Log full error with stack trace
+        logger.error(
+            f"Unhandled exception in {request.method} {request.url.path}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        logger.error(f"Stack trace:\n{traceback.format_exc()}")
+
+        # Return structured error response
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": str(exc),
+                "error_type": type(exc).__name__,
+                "error_category": "internal_error"
+            }
         )
 
 

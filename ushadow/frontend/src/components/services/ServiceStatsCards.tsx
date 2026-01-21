@@ -22,7 +22,7 @@ interface ServiceStatsCardsProps {
  *
  * @example
  * <ServiceStatsCards
- *   totalServices={serviceInstances.length}
+ *   totalServices={serviceServiceConfigs.length}
  *   configuredServices={Object.keys(serviceConfigs).length}
  *   categoryCount={categories.length}
  * />

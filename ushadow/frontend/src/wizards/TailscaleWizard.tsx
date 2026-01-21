@@ -73,6 +73,7 @@ export default function TailscaleWizard() {
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Configuration
+  // Note: frontend_port is null to let backend auto-detect (5173 for dev, 80 for prod)
   const [config, setConfig] = useState<TailscaleConfig>({
     hostname: '',
     deployment_mode: {
@@ -82,7 +83,7 @@ export default function TailscaleWizard() {
     https_enabled: true,
     use_caddy_proxy: false,
     backend_port: 8000,
-    frontend_port: 3000,
+    frontend_port: null,
     environments: ['dev', 'test', 'prod'],
   })
 
@@ -152,6 +153,24 @@ export default function TailscaleWizard() {
       updateCorsOrigins()
     }
   }, [wizard.currentStep.id, config.hostname])
+
+  // Fetch routes when arriving at complete step (for returning users)
+  useEffect(() => {
+    if (wizard.currentStep.id === 'complete' && !configuredRoutes) {
+      fetchServeStatus()
+    }
+  }, [wizard.currentStep.id])
+
+  const fetchServeStatus = async () => {
+    try {
+      const response = await tailscaleApi.getServeStatus()
+      if (response.data.routes) {
+        setConfiguredRoutes(response.data.routes)
+      }
+    } catch (err) {
+      console.error('Failed to fetch serve status:', err)
+    }
+  }
 
   const updateCorsOrigins = async () => {
     if (!config.hostname) return
@@ -564,6 +583,10 @@ export default function TailscaleWizard() {
       setMessage({ type: 'info', text: 'Enabling HTTPS on Tailscale...' })
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
+
+      // Save configured routes for display
+      if (serveResponse.data.routes) {
+        setConfiguredRoutes(serveResponse.data.routes)
       }
 
       // Step 2: Provision the certificate (HTTPS is now enabled)
@@ -1204,101 +1227,99 @@ export default function TailscaleWizard() {
 
       {/* Complete Step */}
       {wizard.currentStep.id === 'complete' && (
-        <div id="tailscale-step-complete" className="space-y-6 text-center">
-          <CheckCircle className="w-16 h-16 text-green-600 dark:text-green-400 mx-auto" />
-          <div>
-            <h2 className="text-3xl font-semibold text-gray-900 dark:text-white mb-2">
-              Level 2 Complete!
-            </h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              Your ushadow instance is now accessible securely from anywhere
-            </p>
+        <div id="tailscale-step-complete" className="space-y-4 text-center">
+          {/* Compact header with icon inline */}
+          <div className="flex items-center justify-center gap-3">
+            <CheckCircle className="w-10 h-10 text-green-600 dark:text-green-400" />
+            <div className="text-left">
+              <h2 className="text-2xl font-semibold text-gray-900 dark:text-white">
+                Level 2 Complete!
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Secure access enabled from anywhere
+              </p>
+            </div>
           </div>
 
-          <div className="p-6 bg-gradient-to-r from-primary-50 to-fuchsia-50 dark:from-primary-900/30 dark:to-fuchsia-900/30 rounded-xl border-2 border-primary-200 dark:border-primary-800">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Your secure access URL:</p>
+          {/* Access URL - more compact */}
+          <div className="p-4 bg-gradient-to-r from-primary-50 to-fuchsia-50 dark:from-primary-900/30 dark:to-fuchsia-900/30 rounded-lg border border-primary-200 dark:border-primary-800">
             <a
               href={`https://${config.hostname}`}
               target="_blank"
               rel="noopener noreferrer"
               id="complete-access-url"
-              className="inline-flex items-center gap-2 text-xl font-mono font-semibold text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 hover:underline"
+              data-testid="complete-access-url"
+              className="inline-flex items-center gap-2 text-lg font-mono font-semibold text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 hover:underline"
             >
               https://{config.hostname}
-              <ExternalLink className="w-5 h-5" />
+              <ExternalLink className="w-4 h-4" />
             </a>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
-              Accessible from any device on your Tailscale network
-            </p>
           </div>
 
-          <div className="p-5 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-left">
-            <h3 className="font-semibold text-gray-900 dark:text-white mb-3 text-sm">
-              What's been configured:
-            </h3>
-            <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
-              <li className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                Tailscale container running in Docker
-              </li>
+          {/* Combined configuration status - compact grid */}
+          <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-left">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-700 dark:text-gray-300">
+              <span className="flex items-center gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                Tailscale
+              </span>
               {caddyEnabled && (
-                <li className="flex items-center gap-2">
-                  <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                  Caddy reverse proxy for multi-service routing
-                </li>
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                  Caddy
+                </span>
               )}
-              <li className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                HTTPS certificate provisioned
-              </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                {caddyEnabled ? 'Caddy reverse proxy routes configured' : 'Tailscale Serve routes configured'}
-              </li>
-              <li className="flex items-center gap-2" data-testid="cors-status">
+              <span className="flex items-center gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                HTTPS
+              </span>
+              <span className="flex items-center gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                Routes
+              </span>
+              <span className="flex items-center gap-1.5" data-testid="cors-status">
                 {corsStatus.loading ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
-                    <span>Updating CORS origins...</span>
+                    <div className="w-3.5 h-3.5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                    CORS...
                   </>
                 ) : corsStatus.updated ? (
                   <>
-                    <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                    <span>CORS origin added: <code className="text-xs bg-gray-200 dark:bg-gray-600 px-1 rounded">{corsStatus.origin}</code></span>
+                    <CheckCircle className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                    CORS
                   </>
                 ) : corsStatus.error ? (
                   <>
-                    <AlertTriangle className="w-4 h-4 text-amber-500" />
-                    <span className="text-amber-600 dark:text-amber-400">{corsStatus.error}</span>
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                    <span className="text-amber-600 dark:text-amber-400">CORS</span>
                   </>
                 ) : (
                   <>
-                    <div className="w-4 h-4 border-2 border-gray-300 rounded-full" />
-                    <span className="text-gray-400">CORS origins pending...</span>
+                    <div className="w-3.5 h-3.5 border-2 border-gray-300 rounded-full" />
+                    <span className="text-gray-400">CORS</span>
                   </>
                 )}
-              </li>
-            </ul>
-          </div>
-
-          {/* Configured Routes Display */}
-          {configuredRoutes && (
-            <div className="p-5 bg-primary-50 dark:bg-primary-900/20 rounded-lg text-left border-2 border-primary-200 dark:border-primary-800">
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-3 text-sm flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                Configured Routes
-              </h3>
-              <pre
-                data-testid="configured-routes"
-                className="p-3 bg-white dark:bg-gray-800 rounded text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-64 border border-primary-200 dark:border-primary-700"
-              >
-                {configuredRoutes}
-              </pre>
-              <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-                These routes direct traffic from your Tailscale URL to the appropriate services
-              </p>
+              </span>
             </div>
-          )}
+
+            {/* Collapsible routes section */}
+            {configuredRoutes && (
+              <details className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                <summary
+                  className="cursor-pointer text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  data-testid="routes-toggle"
+                >
+                  View configured routes
+                </summary>
+                <pre
+                  data-testid="configured-routes"
+                  className="mt-2 p-2 bg-white dark:bg-gray-800 rounded text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-32 border border-gray-200 dark:border-gray-700"
+                >
+                  {configuredRoutes}
+                </pre>
+              </details>
+            )}
+          </div>
 
           <WhatsNext
             currentLevel={2}

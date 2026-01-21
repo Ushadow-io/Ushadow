@@ -634,8 +634,8 @@ async def start_service(
     discovered = registry.get_service_by_name(name)
     service_id = discovered.service_id if discovered else name
 
-    # Pass full service_id as instance_id to enable wiring-aware env resolution
-    result = await orchestrator.start_service(name, instance_id=service_id)
+    # Pass full service_id as config_id to enable wiring-aware env resolution
+    result = await orchestrator.start_service(name, config_id=service_id)
 
     if not result.success and result.message in ["Service not found", "Operation not permitted"]:
         raise HTTPException(status_code=403, detail=result.message)

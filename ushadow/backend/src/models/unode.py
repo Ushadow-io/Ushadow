@@ -30,9 +30,16 @@ class UNodePlatform(str, Enum):
     UNKNOWN = "unknown"
 
 
+class UNodeType(str, Enum):
+    """Type of deployment target."""
+    DOCKER = "docker"        # Traditional Docker host (worker/leader)
+    KUBERNETES = "kubernetes"  # Kubernetes cluster
+
+
 class UNodeCapabilities(BaseModel):
     """Capabilities of a u-node."""
     can_run_docker: bool = True
+    can_run_kubernetes: bool = False
     can_run_gpu: bool = False
     can_become_leader: bool = False
     available_memory_mb: int = 0
@@ -42,8 +49,9 @@ class UNodeCapabilities(BaseModel):
 
 class UNodeBase(BaseModel):
     """Base u-node model."""
-    hostname: str = Field(..., description="Tailscale hostname")
+    hostname: str = Field(..., description="Tailscale hostname or K8s cluster ID")
     display_name: Optional[str] = None
+    type: UNodeType = Field(UNodeType.DOCKER, description="Deployment target type")
     role: UNodeRole = UNodeRole.WORKER
     platform: UNodePlatform = UNodePlatform.UNKNOWN
     tailscale_ip: Optional[str] = None

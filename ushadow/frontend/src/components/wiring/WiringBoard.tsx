@@ -26,7 +26,6 @@ import {
   Cloud,
   HardDrive,
   AlertCircle,
-  Plug,
   X,
   GripVertical,
   Pencil,
@@ -36,7 +35,14 @@ import {
   StopCircle,
   Settings,
   Loader2,
+  ChevronDown,
+  ChevronUp,
+  Plug,
+  Package,
 } from 'lucide-react'
+import { ServiceTemplateCard } from './ServiceTemplateCard'
+import { ServiceInstanceCard } from './ServiceInstanceCard'
+import { StatusIndicator } from './StatusIndicator'
 // Per-service wiring model - each consumer has its own connections
 
 interface ConfigVar {
@@ -68,13 +74,15 @@ interface ConsumerInfo {
   configVars?: ConfigVar[]
   configured?: boolean
   description?: string // Service description
+  isTemplate?: boolean // True for templates, false for instances
+  templateId?: string // For templates: own ID; for instances: parent template ID
 }
 
 interface WiringInfo {
   id: string
-  source_instance_id: string
+  source_config_id: string
   source_capability: string
-  target_instance_id: string
+  target_config_id: string
   target_capability: string
 }
 
@@ -91,14 +99,16 @@ interface WiringBoardProps {
   onProviderDrop: (dropInfo: DropInfo) => void
   onDeleteWiring: (consumerId: string, capability: string) => Promise<void>
   onEditProvider: (providerId: string, isTemplate: boolean) => void
-  onCreateInstance: (templateId: string) => void
-  onDeleteInstance: (instanceId: string) => void
+  onCreateServiceConfig: (templateId: string) => void
+  onUpdateTemplateConfigVars?: (templateId: string, configVars: ConfigVar[]) => Promise<void>
+  onDeleteServiceConfig: (instanceId: string) => void
   onStartProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
   onStopProvider?: (providerId: string, isTemplate: boolean) => Promise<void>
   // Consumer/Service callbacks
   onEditConsumer?: (consumerId: string) => void
   onStartConsumer?: (consumerId: string) => Promise<void>
   onStopConsumer?: (consumerId: string) => Promise<void>
+  onDeployConsumer?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
 }
 
 export default function WiringBoard({
@@ -108,16 +118,54 @@ export default function WiringBoard({
   onProviderDrop,
   onDeleteWiring,
   onEditProvider,
-  onCreateInstance,
-  onDeleteInstance,
+  onCreateServiceConfig,
+  onUpdateTemplateConfigVars,
+  onDeleteServiceConfig,
   onStartProvider,
   onStopProvider,
   onEditConsumer,
   onStartConsumer,
+  onDeployConsumer,
   onStopConsumer,
 }: WiringBoardProps) {
   const [activeProvider, setActiveProvider] = useState<ProviderInfo | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [collapsedTemplates, setCollapsedTemplates] = useState<Set<string>>(new Set())
+  // Provider selection modal state (for click-to-select alternative to drag-drop)
+  const [selectingSlot, setSelectingSlot] = useState<{ consumerId: string; capability: string } | null>(null)
+
+  const toggleTemplateCollapse = (templateId: string) => {
+    setCollapsedTemplates(prev => {
+      const next = new Set(prev)
+      if (next.has(templateId)) {
+        next.delete(templateId)
+      } else {
+        next.add(templateId)
+      }
+      return next
+    })
+  }
+
+  // Open provider selection modal for a slot
+  const handleSelectProviderClick = (consumerId: string, capability: string) => {
+    setSelectingSlot({ consumerId, capability })
+  }
+
+  // Get available providers for a specific capability
+  const getProvidersForCapability = (capability: string) => {
+    return providers.filter(p => p.capability === capability)
+  }
+
+  // Handle selecting a provider from the modal
+  const handleProviderSelected = (provider: ProviderInfo) => {
+    if (!selectingSlot) return
+    onProviderDrop({
+      provider,
+      consumerId: selectingSlot.consumerId,
+      capability: selectingSlot.capability,
+    })
+    setSelectingSlot(null)
+  }
 
   // Configure sensors for proper drag handling
   const mouseSensor = useSensor(MouseSensor, {
@@ -211,11 +259,11 @@ export default function WiringBoard({
   // Get provider for a specific consumer's capability slot
   const getProviderForSlot = (consumerId: string, capability: string) => {
     const wire = wiring.find(
-      (w) => w.target_instance_id === consumerId && w.target_capability === capability
+      (w) => w.target_config_id === consumerId && w.target_capability === capability
     )
     if (wire) {
       return {
-        provider: providers.find((p) => p.id === wire.source_instance_id),
+        provider: providers.find((p) => p.id === wire.source_config_id),
         capability,
       }
     }
@@ -259,25 +307,45 @@ export default function WiringBoard({
                 {Object.values(templates).map(({ template, instances }) => {
                   if (!template) return null // Skip if template not loaded
                   const templateConnectionCount = wiring.filter(
-                    (w) => w.source_instance_id === template.id
+                    (w) => w.source_config_id === template.id
                   ).length
+                  const isCollapsed = collapsedTemplates.has(template.id)
+                  const hasInstances = instances.length > 0
                   return (
                     <div key={template.id} className="space-y-1">
-                      {/* Template (default) */}
-                      <DraggableProvider
-                        provider={template}
-                        connectionCount={templateConnectionCount}
-                        onEdit={() => onEditProvider(template.id, true)}
-                        onCreateInstance={() => onCreateInstance(template.id)}
-                        onStart={onStartProvider ? () => onStartProvider(template.id, true) : undefined}
-                        onStop={onStopProvider ? () => onStopProvider(template.id, true) : undefined}
-                      />
-                      {/* Nested instances */}
-                      {instances.length > 0 && (
+                      {/* Template header with collapse toggle */}
+                      <div className="flex items-center gap-1">
+                        {hasInstances && (
+                          <button
+                            onClick={() => toggleTemplateCollapse(template.id)}
+                            className="p-0.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+                            title={isCollapsed ? `Show ${instances.length} instance(s)` : 'Collapse instances'}
+                            data-testid={`collapse-provider-${template.id}`}
+                          >
+                            {isCollapsed ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                        <div className={`flex-1 ${!hasInstances ? 'ml-5' : ''}`}>
+                          <DraggableProvider
+                            provider={template}
+                            connectionCount={templateConnectionCount}
+                            onEdit={() => onEditProvider(template.id, true)}
+                            onCreateServiceConfig={() => onCreateServiceConfig(template.id)}
+                            onStart={onStartProvider ? () => onStartProvider(template.id, true) : undefined}
+                            onStop={onStopProvider ? () => onStopProvider(template.id, true) : undefined}
+                          />
+                        </div>
+                      </div>
+                      {/* Nested instances - collapsible */}
+                      {hasInstances && !isCollapsed && (
                         <div className="ml-6 space-y-1 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
                           {instances.map((instance) => {
                             const instanceConnectionCount = wiring.filter(
-                              (w) => w.source_instance_id === instance.id
+                              (w) => w.source_config_id === instance.id
                             ).length
                             return (
                               <DraggableProvider
@@ -285,12 +353,22 @@ export default function WiringBoard({
                                 provider={instance}
                                 connectionCount={instanceConnectionCount}
                                 onEdit={() => onEditProvider(instance.id, false)}
-                                onDelete={() => onDeleteInstance(instance.id)}
+                                onDelete={() => onDeleteServiceConfig(instance.id)}
                                 onStart={onStartProvider ? () => onStartProvider(instance.id, false) : undefined}
                                 onStop={onStopProvider ? () => onStopProvider(instance.id, false) : undefined}
+                                templateProvider={template}
                               />
                             )
                           })}
+                        </div>
+                      )}
+                      {/* Collapsed indicator */}
+                      {hasInstances && isCollapsed && (
+                        <div
+                          className="ml-6 pl-3 text-xs text-neutral-400 dark:text-neutral-500 cursor-pointer hover:text-neutral-600 dark:hover:text-neutral-400"
+                          onClick={() => toggleTemplateCollapse(template.id)}
+                        >
+                          {instances.length} instance{instances.length > 1 ? 's' : ''} hidden
                         </div>
                       )}
                     </div>
@@ -316,33 +394,106 @@ export default function WiringBoard({
 
           {consumers.length > 0 ? (
             <div className="space-y-4">
-              {consumers.map((consumer) => {
-                const configVars = consumer.configVars || []
-                const missingRequiredVars = configVars.filter((v) => v.required && !v.value)
-                const configuredVars = configVars.filter((v) => v.value)
-                const needsSetup = consumer.configured === false || missingRequiredVars.length > 0
-                const isCloud = consumer.mode === 'cloud'
-                const canStart = !isCloud && (consumer.status === 'stopped' || consumer.status === 'pending' || consumer.status === 'exited' || consumer.status === 'not_running' || consumer.status === 'not_found')
-                const canStop = !isCloud && (consumer.status === 'running' || consumer.status === 'starting')
+              {/* Group consumers by template */}
+              {(() => {
+                // Separate templates and instances
+                const templates = consumers.filter((c) => c.isTemplate)
+                const instances = consumers.filter((c) => !c.isTemplate)
 
-                return (
-                  <ConsumerCard
-                    key={consumer.id}
-                    consumer={consumer}
-                    missingRequiredVars={missingRequiredVars}
-                    configuredVars={configuredVars}
-                    needsSetup={needsSetup}
-                    canStart={canStart}
-                    canStop={canStop}
-                    activeProvider={activeProvider}
-                    getProviderForSlot={getProviderForSlot}
-                    onDeleteWiring={onDeleteWiring}
-                    onEdit={onEditConsumer}
-                    onStart={onStartConsumer}
-                    onStop={onStopConsumer}
-                  />
-                )
-              })}
+                // Group instances by template
+                const instancesByTemplate = instances.reduce((acc, instance) => {
+                  const templateId = instance.templateId || 'unknown'
+                  if (!acc[templateId]) acc[templateId] = []
+                  acc[templateId].push(instance)
+                  return acc
+                }, {} as Record<string, ConsumerInfo[]>)
+
+                return templates.map((template) => {
+                  const templateInstances = instancesByTemplate[template.id] || []
+                  const isCollapsed = collapsedTemplates.has(template.id)
+                  const hasInstances = templateInstances.length > 0
+
+                  return (
+                    <div key={template.id} className="space-y-2">
+                      {/* Template header with collapse toggle */}
+                      <div className="flex items-start gap-1">
+                        {hasInstances && (
+                          <button
+                            onClick={() => toggleTemplateCollapse(template.id)}
+                            className="p-0.5 mt-4 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+                            title={isCollapsed ? `Show ${templateInstances.length} instance(s)` : 'Collapse instances'}
+                            data-testid={`collapse-service-${template.id}`}
+                          >
+                            {isCollapsed ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                        <div className={`flex-1 ${!hasInstances ? 'ml-5' : ''}`}>
+                          <ServiceTemplateCard
+                            template={{
+                              id: template.id,
+                              name: template.name,
+                              description: template.description,
+                              requires: template.requires,
+                            }}
+                            configVars={template.configVars}
+                            onCreateInstance={() => onCreateServiceConfig(template.id)}
+                            onUpdateConfigVars={
+                              onUpdateTemplateConfigVars
+                                ? (vars) => onUpdateTemplateConfigVars(template.id, vars)
+                                : undefined
+                            }
+                            alwaysShowConfig={true}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Nested instances - collapsible */}
+                      {hasInstances && !isCollapsed && (
+                        <div className="ml-6 space-y-2 border-l-2 border-neutral-200 dark:border-neutral-700 pl-3">
+                          {templateInstances.map((instance) => {
+                            return (
+                              <ServiceInstanceCard
+                                key={instance.id}
+                                instance={{
+                                  id: instance.id,
+                                  name: instance.name,
+                                  requires: instance.requires,
+                                  status: instance.status,
+                                  mode: instance.mode,
+                                  description: instance.description,
+                                }}
+                                configVars={instance.configVars}
+                                activeProvider={activeProvider}
+                                getProviderForSlot={getProviderForSlot}
+                                onDeleteWiring={onDeleteWiring}
+                                onSelectProvider={handleSelectProviderClick}
+                                onEdit={onEditConsumer}
+                                onStart={onStartConsumer}
+                                onStop={onStopConsumer}
+                                onDeploy={onDeployConsumer}
+                                onDelete={() => onDeleteServiceConfig(instance.id)}
+                              />
+                            )
+                          })}
+                        </div>
+                      )}
+                      {/* Collapsed indicator */}
+                      {hasInstances && isCollapsed && (
+                        <div
+                          className="ml-6 pl-3 text-xs text-neutral-400 dark:text-neutral-500 cursor-pointer hover:text-neutral-600 dark:hover:text-neutral-400"
+                          onClick={() => toggleTemplateCollapse(template.id)}
+                        >
+                          {templateInstances.length} instance{templateInstances.length > 1 ? 's' : ''} hidden
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              })()}
             </div>
           ) : (
             <div className="p-4 text-center text-neutral-400 dark:text-neutral-500 text-sm border-2 border-dashed border-neutral-200 dark:border-neutral-700 rounded-lg">
@@ -375,6 +526,81 @@ export default function WiringBoard({
         document.body
       )}
 
+      {/* Provider Selection Modal (click-to-select alternative to drag-drop) */}
+      {selectingSlot && createPortal(
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9998]"
+          onClick={() => setSelectingSlot(null)}
+        >
+          <div
+            className="bg-white dark:bg-neutral-800 rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="provider-selection-modal"
+          >
+            <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                  Select Provider
+                </h3>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                  Choose a <span className="font-medium">{selectingSlot.capability}</span> provider
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectingSlot(null)}
+                className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 rounded"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 max-h-80 overflow-y-auto">
+              {(() => {
+                const availableProviders = getProvidersForCapability(selectingSlot.capability)
+                if (availableProviders.length === 0) {
+                  return (
+                    <div className="text-center py-6 text-neutral-500 dark:text-neutral-400">
+                      <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No providers available for {selectingSlot.capability}</p>
+                      <p className="text-sm mt-1">Add a provider first</p>
+                    </div>
+                  )
+                }
+                return (
+                  <div className="space-y-2">
+                    {availableProviders.map((provider) => (
+                      <button
+                        key={provider.id}
+                        onClick={() => handleProviderSelected(provider)}
+                        className="w-full p-3 text-left rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-400 dark:hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+                        data-testid={`select-provider-${provider.id}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {provider.mode === 'local' ? (
+                            <HardDrive className="h-5 w-5 text-purple-500" />
+                          ) : (
+                            <Cloud className="h-5 w-5 text-blue-500" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                              {provider.name}
+                            </div>
+                            <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                              {provider.isTemplate ? 'Default' : 'Instance'} • {provider.mode}
+                            </div>
+                          </div>
+                          <StatusIndicator status={provider.status} />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
     </DndContext>
   )
 }
@@ -387,13 +613,14 @@ interface DraggableProviderProps {
   provider: ProviderInfo
   connectionCount: number
   onEdit: () => void
-  onCreateInstance?: () => void // Only for templates
+  onCreateServiceConfig?: () => void // Only for templates
   onDelete?: () => void // Only for instances
   onStart?: () => Promise<void>
   onStop?: () => Promise<void>
+  templateProvider?: ProviderInfo // Parent template for instances
 }
 
-function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance, onDelete, onStart, onStop }: DraggableProviderProps) {
+function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceConfig, onDelete, onStart, onStop, templateProvider }: DraggableProviderProps) {
   const [isStarting, setIsStarting] = useState(false)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: provider.id,
@@ -452,7 +679,7 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
     >
       {/* Draggable header */}
       <div
-        className="px-3 py-2 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+        className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
         {...attributes}
         {...listeners}
       >
@@ -463,14 +690,13 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
               {provider.name}
             </span>
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* Capability tag */}
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                {provider.capability}
+              </span>
               {isConnected && (
                 <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
                   {connectionCount}
-                </span>
-              )}
-              {provider.isTemplate && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400">
-                  default
                 </span>
               )}
             </div>
@@ -524,9 +750,9 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
-          {provider.isTemplate && onCreateInstance && (
+          {provider.isTemplate && onCreateServiceConfig && (
             <button
-              onClick={(e) => handleButtonClick(e, onCreateInstance)}
+              onClick={(e) => handleButtonClick(e, onCreateServiceConfig)}
               className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
               title="Create new instance"
               data-testid={`provider-create-instance-${provider.id}`}
@@ -570,18 +796,24 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
                 +{missingRequiredVars.length - 2} required
               </span>
             )}
-            {/* Configured fields */}
-            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => (
-              <span
-                key={v.key}
-                className="text-xs text-neutral-500 dark:text-neutral-400"
-                title={`${v.label}: ${v.value}`}
-              >
-                {v.required && <span className="text-error-500 mr-0.5">*</span>}
-                <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
-                <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-              </span>
-            ))}
+            {/* Configured fields - color code overrides */}
+            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
+              // Check if this value is overridden from template
+              const isOverridden = templateProvider &&
+                templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
+
+              return (
+                <span
+                  key={v.key}
+                  className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
+                  title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
+                >
+                  {v.required && <span className="text-error-500 mr-0.5">*</span>}
+                  <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                  <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                </span>
+              )
+            })}
             {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
               <span className="text-xs text-neutral-400">
                 +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
@@ -595,9 +827,6 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateInstance
   )
 }
 
-// =============================================================================
-// Service Card Component (vertical slot layout per wireframe)
-// =============================================================================
 
 interface ServiceCardProps {
   consumer: ConsumerInfo
@@ -612,6 +841,7 @@ interface ServiceCardProps {
   onEdit?: (consumerId: string) => void
   onStart?: (consumerId: string) => Promise<void>
   onStop?: (consumerId: string) => Promise<void>
+  onDeploy?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
 }
 
 function ConsumerCard({
@@ -627,8 +857,36 @@ function ConsumerCard({
   onEdit,
   onStart,
   onStop,
+  onDeploy,
 }: ServiceCardProps) {
   const [isStarting, setIsStarting] = useState(false)
+  const [showDeployMenu, setShowDeployMenu] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
+
+  // Close deploy menu when clicking outside
+  useEffect(() => {
+    if (!showDeployMenu) return
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-deploy-menu]')) {
+        setShowDeployMenu(false)
+      }
+    }
+
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [showDeployMenu])
+
+  const handleDeployClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const button = e.currentTarget
+    const rect = button.getBoundingClientRect()
+    setMenuPosition({
+      top: rect.bottom + 4,
+      left: rect.right - 192 // 192px = 48 * 4 (w-48)
+    })
+    setShowDeployMenu(!showDeployMenu)
+  }
 
   const handleStartClick = async () => {
     if (!onStart) return
@@ -726,6 +984,59 @@ function ConsumerCard({
                     Stop
                   </button>
                 ) : null}
+              </>
+            )}
+            {onDeploy && (
+              <>
+                <button
+                  onClick={handleDeployClick}
+                  className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
+                  title="Deploy service"
+                  data-testid={`consumer-deploy-${consumer.id}`}
+                  data-deploy-menu
+                >
+                  <Plus className="h-3 w-3" />
+                  Deploy
+                </button>
+                {showDeployMenu && menuPosition && createPortal(
+                  <div
+                    className="fixed w-48 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl z-[9998]"
+                    style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
+                    data-deploy-menu
+                  >
+                    <button
+                      onClick={() => {
+                        onDeploy(consumer.id, { type: 'local' })
+                        setShowDeployMenu(false)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-t-lg flex items-center gap-2"
+                    >
+                      <HardDrive className="h-4 w-4" />
+                      Local (Leader uNode)
+                    </button>
+                    <button
+                      onClick={() => {
+                        onDeploy(consumer.id, { type: 'remote' })
+                        setShowDeployMenu(false)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-2"
+                    >
+                      <Cloud className="h-4 w-4" />
+                      Remote uNode
+                    </button>
+                    <button
+                      onClick={() => {
+                        onDeploy(consumer.id, { type: 'kubernetes' })
+                        setShowDeployMenu(false)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-b-lg flex items-center gap-2"
+                    >
+                      <Package className="h-4 w-4" />
+                      Kubernetes
+                    </button>
+                  </div>,
+                  document.body
+                )}
               </>
             )}
             {onEdit && (
@@ -831,30 +1142,28 @@ function CapabilitySlot({
   const isOrphaned = connection && !connection.provider
 
   return (
-    <div>
-      {/* Capability label */}
-      <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-1">
-        {capability}
-      </div>
-      {/* Drop zone */}
-      <div
-        ref={setNodeRef}
-        className={`
-          relative rounded-lg border-2 transition-all p-3 min-h-[48px] flex items-center
-          ${isOver && isDropTarget ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30' : ''}
-          ${isDropTarget && !isOver ? 'border-primary-300 dark:border-primary-600 border-dashed bg-primary-50/50 dark:bg-primary-900/10' : ''}
-          ${hasProvider ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20' : ''}
-          ${isOrphaned ? 'border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20' : ''}
-          ${!hasProvider && !isOrphaned && !isDropTarget ? 'border-neutral-200 dark:border-neutral-700 border-dashed' : ''}
-        `}
-        data-testid={`capability-slot-${consumerId}-${capability}`}
-      >
-        {hasProvider ? (
-          <div className="flex items-center justify-between w-full">
+    <div
+      ref={setNodeRef}
+      className={`
+        relative rounded-lg border-2 transition-all p-3 min-h-[48px] flex items-center
+        ${isOver && isDropTarget ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30' : ''}
+        ${isDropTarget && !isOver ? 'border-primary-300 dark:border-primary-600 border-dashed bg-primary-50/50 dark:bg-primary-900/10' : ''}
+        ${hasProvider ? 'border-success-300 dark:border-success-700 bg-success-50 dark:bg-success-900/20' : ''}
+        ${isOrphaned ? 'border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20' : ''}
+        ${!hasProvider && !isOrphaned && !isDropTarget ? 'border-neutral-200 dark:border-neutral-700 border-dashed' : ''}
+      `}
+      data-testid={`capability-slot-${consumerId}-${capability}`}
+    >
+      {hasProvider ? (
+        <div className="w-full">
+          <div className="flex items-center justify-between w-full mb-1.5">
             <div className="flex items-center gap-2">
               <Cloud className="h-4 w-4 text-success-500" />
               <span className="font-medium text-neutral-900 dark:text-neutral-100">
                 {connection.provider!.name}
+              </span>
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                {capability}
               </span>
             </div>
             <button
@@ -865,79 +1174,59 @@ function CapabilitySlot({
               <X className="h-4 w-4" />
             </button>
           </div>
-        ) : isOrphaned ? (
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2 text-warning-600 dark:text-warning-400">
-              <AlertCircle className="h-4 w-4" />
-              <span className="text-sm">Provider missing</span>
+          {/* Show provider config vars */}
+          {connection.provider!.configVars.filter(v => v.value).length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-6">
+              {connection.provider!.configVars
+                .filter(v => v.value)
+                .slice(0, 2)
+                .map((v) => (
+                  <span
+                    key={v.key}
+                    className="text-xs text-neutral-500 dark:text-neutral-400"
+                    title={`${v.label}: ${v.value}`}
+                  >
+                    <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                    <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                  </span>
+                ))}
+              {connection.provider!.configVars.filter(v => v.value).length > 2 && (
+                <span className="text-xs text-neutral-400">
+                  +{connection.provider!.configVars.filter(v => v.value).length - 2} more
+                </span>
+              )}
             </div>
-            <button
-              onClick={onClear}
-              className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Clear"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-neutral-400 dark:text-neutral-500">
-            <Plug className="h-4 w-4" />
-            <span className="text-sm">
-              {isDropTarget ? 'Drop provider here' : 'Drag a provider here'}
+          )}
+        </div>
+      ) : isOrphaned ? (
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2 text-warning-600 dark:text-warning-400">
+            <AlertCircle className="h-4 w-4" />
+            <span className="text-sm">Provider missing</span>
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+              {capability}
             </span>
           </div>
-        )}
-      </div>
+          <button
+            onClick={onClear}
+            className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+            title="Clear"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-neutral-400 dark:text-neutral-500">
+          <Plug className="h-4 w-4" />
+          <span className="text-sm">
+            {isDropTarget ? 'Drop ' : 'Drag '}
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+              {capability}
+            </span>
+            {isDropTarget ? ' here' : ' provider here'}
+          </span>
+        </div>
+      )}
     </div>
   )
-}
-
-// =============================================================================
-// Status Indicator
-// =============================================================================
-
-function StatusIndicator({ status }: { status: string }) {
-  switch (status) {
-    case 'running':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-success-500 animate-pulse" />
-          Running
-        </span>
-      )
-    case 'configured':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-success-500" />
-          Ready
-        </span>
-      )
-    case 'needs_setup':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300">
-          <Settings className="h-3 w-3" />
-          Setup
-        </span>
-      )
-    case 'stopped':
-    case 'not_running':
-      return (
-        <span className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-          Stopped
-        </span>
-      )
-    case 'error':
-      return (
-        <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300">
-          <AlertCircle className="h-3 w-3" />
-          Error
-        </span>
-      )
-    default:
-      return (
-        <span className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
-          {status}
-        </span>
-      )
-  }
 }

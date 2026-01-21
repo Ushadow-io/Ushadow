@@ -1,6 +1,6 @@
 import { ReactNode } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import type { ServiceInstance } from '../../contexts/ServicesContext'
+import type { ServiceServiceConfig } from '../../contexts/ServicesContext'
 
 // ============================================================================
 // Types
@@ -16,13 +16,13 @@ interface ServiceCategoryListProps {
   /** Service categories to display */
   categories: ServiceCategory[]
   /** Services grouped by category ID */
-  servicesByCategory: Record<string, ServiceInstance[]>
+  servicesByCategory: Record<string, ServiceServiceConfig[]>
   /** Set of expanded category IDs */
   expandedCategories: Set<string>
   /** Callback when category is toggled */
   onToggleCategory: (categoryId: string) => void
   /** Render function for each service card */
-  renderServiceCard: (service: ServiceInstance) => ReactNode
+  renderServiceCard: (service: ServiceServiceConfig) => ReactNode
 }
 
 // ============================================================================

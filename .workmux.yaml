@@ -1,0 +1,76 @@
+# Workmux Configuration for Ushadow Project
+# This config optimizes git worktree + tmux workflow for parallel environment development
+
+# Main branch to merge into (auto-detected from git, but can override)
+main_branch: "main"
+
+# Where worktrees are created (relative to project root or absolute path)
+# Using parent directory pattern for cleaner organization
+worktree_dir: "../"
+
+# Prefix for tmux window names (helps identify workmux windows)
+window_prefix: "ushadow-"
+
+# Default merge strategy: merge | rebase | squash
+# Rebase recommended for cleaner history
+merge_strategy: "rebase"
+
+# How to name worktree directories: full (branch name) | basename (last component)
+worktree_naming: "full"
+
+# Commands to run after worktree creation (before tmux window opens)
+post_create:
+  # Setup VSCode colors for environment identification
+  - "uv run --with pyyaml python3 -c \"from setup.vscode_utils.colors import setup_colors_for_directory; from pathlib import Path; setup_colors_for_directory(Path('.'), '$(basename $(pwd))')\" || true"
+  # Generate secrets if needed
+  - "bash scripts/generate-secrets.sh || true"
+
+# Commands to run before merging (aborts merge if any fail)
+pre_merge:
+  # Ensure tests pass before merging
+  # - "make test"  # Uncomment when test suite is ready
+
+# Commands to run before removing worktree
+pre_remove:
+  # Stop any running containers for this environment
+  - "ENV_NAME=$(basename $(pwd)) bash scripts/stop-env.sh || true"
+
+# File operations (applied after worktree creation)
+files:
+  # Copy these files/patterns to each worktree (separate configs per env)
+  copy:
+    - ".env"  # Each environment gets its own .env with unique ports
+    - ".vscode/settings.json"  # VSCode colors set per environment
+
+  # Symlink these files/patterns (shared across worktrees)
+  symlink:
+    - "node_modules"  # Share node_modules to save disk space
+    - ".venv"  # Share Python virtual environment
+    - "ushadow/frontend/node_modules"  # Share frontend deps
+
+# Tmux pane layout (how the window is organized)
+panes:
+  # Main pane - ready for commands or agent interaction
+  - command: "echo '🚀 Ushadow Environment: $(basename $(pwd))' && echo '' && echo 'Quick commands:' && echo '  ./dev.sh    - Start in dev mode' && echo '  ./go.sh     - Start in prod mode' && echo '  make test   - Run tests' && echo '  code .      - Open in VSCode' && echo '' && $SHELL"
+    focus: true
+    split: horizontal
+    size: 75%
+
+# Agent status icons (shown in tmux status bar)
+status_icons:
+  working: '🤖'    # Agent actively processing
+  waiting: '💬'    # Agent waiting for input
+  done: '✅'       # Agent task completed
+  error: '❌'      # Agent encountered error
+
+# Auto-format tmux status line to show agent status
+status_format: true
+
+# LLM-based branch name generation (when using --auto-name flag)
+auto_name:
+  # Use fast, cheap model for branch name generation
+  model: 'gemini-2.0-flash-lite'
+  system_prompt: |
+    Generate a short, descriptive git branch name (2-4 words, kebab-case).
+    Focus on the feature/fix being worked on.
+    Examples: "fix-auth-bug", "add-tailscale-wizard", "refactor-docker-setup"

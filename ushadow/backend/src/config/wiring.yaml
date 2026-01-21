@@ -1,17 +1,12 @@
 defaults: {}
 wiring:
-- id: 9dc8a4aa
-  source_instance_id: deepgram
+- id: e09624c8
+  source_config_id: openai-1
+  source_capability: llm
+  target_config_id: chronicle-compose:chronicle-backend
+  target_capability: llm
+- id: 89ba188e
+  source_config_id: deepgram-1
   source_capability: transcription
-  target_instance_id: chronicle-compose:chronicle-backend
+  target_config_id: chronicle-compose:chronicle-backend
   target_capability: transcription
-- id: 3cacc293
-  source_instance_id: openai-2
-  source_capability: llm
-  target_instance_id: openmemory-compose:mem0
-  target_capability: llm
-- id: 62a97a18
-  source_instance_id: openai-3
-  source_capability: llm
-  target_instance_id: chronicle-compose:chronicle-backend
-  target_capability: llm
