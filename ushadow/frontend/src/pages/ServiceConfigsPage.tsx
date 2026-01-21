@@ -166,6 +166,10 @@ export default function ServiceConfigsPage() {
       console.log('Templates loaded:', templatesRes.data)
       console.log('Compose templates (before filter):', templatesRes.data.filter((t: any) => t.source === 'compose'))
       console.log('Compose templates (after installed filter):', templatesRes.data.filter((t: any) => t.source === 'compose' && t.installed))
+      // Debug: show requires for each compose template
+      templatesRes.data.filter((t: any) => t.source === 'compose').forEach((t: any) => {
+        console.log(`  ${t.id}: installed=${t.installed}, requires=${JSON.stringify(t.requires)}`)
+      })
 
       setTemplates(templatesRes.data)
       setServiceConfigs(instancesRes.data)
@@ -417,8 +421,11 @@ export default function ServiceConfigsPage() {
   // Consumer/Service handlers for WiringBoard
   const handleStartConsumer = async (consumerId: string) => {
     try {
+      // Find the consumer to get its templateId (instances have different id vs templateId)
+      const consumer = wiringConsumers.find(c => c.id === consumerId)
+      const templateId = consumer?.templateId || consumerId
       // Extract service name from template ID (format: "compose_file:service_name")
-      const serviceName = consumerId.includes(':') ? consumerId.split(':').pop()! : consumerId
+      const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.startService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} started` })
       // Reload service statuses
@@ -434,8 +441,11 @@ export default function ServiceConfigsPage() {
 
   const handleStopConsumer = async (consumerId: string) => {
     try {
+      // Find the consumer to get its templateId (instances have different id vs templateId)
+      const consumer = wiringConsumers.find(c => c.id === consumerId)
+      const templateId = consumer?.templateId || consumerId
       // Extract service name from template ID (format: "compose_file:service_name")
-      const serviceName = consumerId.includes(':') ? consumerId.split(':').pop()! : consumerId
+      const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.stopService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} stopped` })
       // Reload service statuses
@@ -644,6 +654,146 @@ export default function ServiceConfigsPage() {
   const providerTemplates = templates
     .filter((t) => t.source === 'provider' && t.provides)
 
+  const wiringProviders = [
+    // Templates (defaults) - show configured ones OR client/upload/remote mode (no config needed)
+    ...providerTemplates
+      .filter((t) => t.configured || ['client', 'upload', 'remote', 'relay'].includes(t.mode)) // Client-mode providers don't need setup
+      .map((t) => {
+        // Extract config vars from schema - include all fields with required indicator
+        const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> =
+          t.config_schema
+            ?.map((field: any) => {
+              const isSecret = field.type === 'secret'
+              const hasValue = field.has_value || !!field.value
+              let displayValue = ''
+              if (hasValue) {
+                if (isSecret) {
+                  displayValue = '••••••'
+                } else if (field.value) {
+                  displayValue = String(field.value)
+                } else if (field.has_value) {
+                  // Has a value but we can't display it - show brief indicator
+                  displayValue = '(set)'
+                }
+              }
+              return {
+                key: field.key,
+                label: field.label || field.key,
+                value: displayValue,
+                isSecret,
+                required: field.required,
+              }
+            }) || []
+
+        // Cloud services: status is based on configuration, not Docker
+        // Local services: status is based on Docker availability
+        let status: string
+        if (t.mode === 'cloud') {
+          // Cloud services are either configured or need setup
+          status = t.configured ? 'configured' : 'needs_setup'
+        } else {
+          // Local services use availability (from Docker)
+          status = t.available ? 'running' : 'stopped'
+        }
+
+        // For LLM providers, append model to name for clarity
+        let displayName = t.name
+        if (t.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${t.name}-${modelVar.value}`
+          }
+        }
+
+        return {
+          id: t.id,
+          name: displayName,
+          capability: t.provides!,
+          status,
+          mode: t.mode,
+          isTemplate: true,
+          templateId: t.id,
+          configVars,
+          configured: t.configured,
+        }
+      }),
+    // Custom instances from provider templates
+    ...instances
+      .filter((i) => {
+        const template = providerTemplates.find((t) => t.id === i.template_id)
+        return template && template.provides
+      })
+      .map((i) => {
+        const template = providerTemplates.find((t) => t.id === i.template_id)!
+        // Get instance config from instanceDetails if loaded
+        const details = instanceDetails[i.id]
+        const schema = template.config_schema || []
+        const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> = []
+
+        // Build config vars from schema, merging with instance overrides
+        schema.forEach((field: any) => {
+          const overrideValue = details?.config?.values?.[field.key]
+          const isSecret = field.type === 'secret'
+          let displayValue = ''
+          if (overrideValue) {
+            // Instance has an override value
+            displayValue = isSecret ? '••••••' : String(overrideValue)
+          } else if (field.value) {
+            // Inherited from template - show the actual value
+            displayValue = isSecret ? '••••••' : String(field.value)
+          } else if (field.has_value) {
+            // Template has a value but we can't display it
+            displayValue = isSecret ? '••••••' : '(set)'
+          }
+          configVars.push({
+            key: field.key,
+            label: field.label || field.key,
+            value: displayValue,
+            isSecret,
+            required: field.required,
+          })
+        })
+
+        // Determine status based on mode
+        let instanceStatus: string
+        if (template.mode === 'cloud') {
+          // Cloud instances use config-based status
+          // Check if all required fields have values
+          const hasAllRequired = schema.every((field: any) => {
+            if (!field.required) return true
+            const overrideValue = details?.config?.values?.[field.key]
+            return !!(overrideValue || field.has_value || field.value)
+          })
+          instanceStatus = hasAllRequired ? 'configured' : 'needs_setup'
+        } else {
+          // Local instances use Docker status
+          instanceStatus = i.status === 'running' ? 'running' : i.status
+        }
+
+        // For LLM providers, append model to name for clarity
+        let displayName = i.name
+        if (template.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${i.name}-${modelVar.value}`
+          }
+        }
+
+        return {
+          id: i.id,
+          name: displayName,
+          capability: template.provides!,
+          status: instanceStatus,
+          mode: template.mode,
+          isTemplate: false,
+          templateId: i.template_id,
+          configVars,
+          configured: template.configured, // ServiceConfig inherits template's configured status
+        }
+      }),
+  ]
+
+  // Consumers: compose service templates
   const composeTemplates = templates.filter((t) => t.source === 'compose' && t.installed)
 
   // Handle inline provider card editing (Providers tab)

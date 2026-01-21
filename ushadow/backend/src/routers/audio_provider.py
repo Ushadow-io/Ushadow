@@ -243,3 +243,156 @@ async def check_consumer_health(user = Depends(get_current_user)):
         "status": "ok",
         "message": "Health check not yet implemented"
     }
+
+
+class AudioDestination(BaseModel):
+    """A wired audio destination"""
+    consumer_id: str
+    consumer_name: str
+    websocket_url: str  # External URL (for direct connection) or internal URL (for relay)
+    protocol: str = "wyoming"
+    format: str = "pcm_s16le_16khz_mono"
+
+
+class WiredDestinationsResponse(BaseModel):
+    """Response with all wired audio destinations"""
+    has_destinations: bool
+    destinations: List[AudioDestination]
+    # Relay mode: frontend connects to relay_url, backend fans out to destinations
+    use_relay: bool = False
+    relay_url: Optional[str] = None  # e.g., wss://hostname/ws/audio/relay
+
+
+@router.get("/wired-destinations", response_model=WiredDestinationsResponse)
+async def get_wired_audio_destinations(user = Depends(get_current_user)):
+    """
+    Get audio destinations based on wiring configuration.
+
+    Returns WebSocket URLs for all consumers that have audio_input wired to them.
+    Used by the frontend recording component to know where to send audio.
+
+    If Tailscale is configured, returns wss:// URLs via Tailscale hostname.
+    Otherwise falls back to ws://localhost for local development.
+    """
+    import yaml
+    from pathlib import Path
+    from ..services.service_config_manager import ServiceConfigManager
+
+    destinations = []
+
+    try:
+        # Load wiring config from the same location as ServiceConfigManager
+        config_manager = ServiceConfigManager()
+        wiring_path = config_manager.wiring_path
+        if wiring_path.exists():
+            with open(wiring_path) as f:
+                wiring_data = yaml.safe_load(f) or {}
+        else:
+            wiring_data = {}
+
+        wiring_list = wiring_data.get("wiring", [])
+
+        # Find all audio_input wiring entries
+        audio_wiring = [
+            w for w in wiring_list
+            if w.get("source_capability") == "audio_input" or
+               w.get("target_capability") == "audio_input"
+        ]
+
+        if not audio_wiring:
+            # Fall back to checking if any known audio consumers are running
+            # by looking at the target services
+            pass
+
+        # Get settings for port resolution and Tailscale hostname
+        settings = get_settings_store()
+
+        # Get Tailscale hostname from settings store (cached, uses TailscaleManager internally)
+        tailscale_hostname = settings.get_tailscale_hostname()
+
+        # Get environment name for container naming
+        env_name = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow").strip() or "ushadow"
+
+        # Determine if we should use relay mode (when Tailscale is enabled)
+        use_relay = bool(tailscale_hostname)
+        relay_url = f"wss://{tailscale_hostname}/ws/audio/relay" if use_relay else None
+
+        # For each wired consumer, build the WebSocket URL
+        # When using relay, we return INTERNAL URLs (backend connects to services)
+        # When not using relay, we return EXTERNAL URLs (frontend connects directly)
+        for wire in audio_wiring:
+            target_id = wire.get("target_config_id", "")
+
+            # Look up the actual service config to get container name
+            target_config = config_manager.get_service_config(target_id)
+
+            # If container_name is missing, try to discover it from Docker
+            if target_config and not target_config.container_name:
+                config_manager.discover_container_info(target_id)
+                # Refresh the config after discovery
+                target_config = config_manager.get_service_config(target_id)
+
+            # Extract service type from target_config_id or template
+            service_type = ""
+            if target_config:
+                template_id = target_config.template_id or ""
+                service_type = template_id.lower()
+            if not service_type:
+                service_type = target_id.lower()
+
+            # Build WebSocket URL based on the service
+            ws_url = None
+            consumer_name = target_config.name if target_config else target_id
+
+            if "chronicle" in service_type:
+                consumer_name = "Chronicle"
+                if use_relay:
+                    # Internal URL - use container_name from deployment or fallback
+                    container_name = (target_config.container_name if target_config else None) or f"{env_name}-chronicle-backend"
+                    port = await settings.get("chronicle.port") or os.environ.get("CHRONICLE_PORT", "8000")
+                    ws_url = f"ws://{container_name}:{port}/ws_pcm"
+                else:
+                    # Direct localhost connection (no Tailscale)
+                    port = await settings.get("chronicle.port") or os.environ.get("CHRONICLE_PORT", "8080")
+                    ws_url = f"ws://localhost:{port}/ws_pcm"
+
+            elif "mycelia" in service_type:
+                consumer_name = "Mycelia"
+                if use_relay:
+                    # Internal URL - use discovered container_name
+                    container_name = target_config.container_name if target_config else None
+                    if not container_name:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            f"Mycelia service {target_id} has no container_name - container may not be running"
+                        )
+                        continue  # Skip this destination
+                    # Internal port is 5173 (host-mapped to 15173)
+                    internal_port = "5173"
+                    ws_url = f"ws://{container_name}:{internal_port}/ws_pcm"
+                else:
+                    # Direct localhost connection (no Tailscale) - use host-mapped port
+                    port = await settings.get("mycelia.backend_port") or os.environ.get("MYCELIA_BACKEND_PORT", "15173")
+                    ws_url = f"ws://localhost:{port}/ws_pcm"
+
+            if ws_url:
+                destinations.append(AudioDestination(
+                    consumer_id=target_id,
+                    consumer_name=consumer_name,
+                    websocket_url=ws_url,
+                ))
+
+        return WiredDestinationsResponse(
+            has_destinations=len(destinations) > 0,
+            destinations=destinations,
+            use_relay=use_relay,
+            relay_url=relay_url,
+        )
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error getting wired destinations: {e}")
+        return WiredDestinationsResponse(
+            has_destinations=False,
+            destinations=[]
+        )
