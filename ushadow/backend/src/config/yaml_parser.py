@@ -13,6 +13,7 @@ The ComposeParser extracts:
 
 import logging
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
@@ -84,7 +85,15 @@ class BaseYAMLParser:
         Example:
             >>> parser.get_nested(data, "services.mem0.image")
             "ghcr.io/ushadow-io/u-mem0-api:latest"
+
+        .. deprecated::
+            Use OmegaConf.select(config, path) for OmegaConf configs.
         """
+        warnings.warn(
+            "get_nested is deprecated. Use OmegaConf.select() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         keys = path.split(".")
         current = data
 
@@ -107,7 +116,15 @@ class BaseYAMLParser:
 
         Example:
             >>> parser.set_nested(data, "services.mem0.enabled", True)
+
+        .. deprecated::
+            Use OmegaConf.update(config, path, value) for OmegaConf configs.
         """
+        warnings.warn(
+            "set_nested is deprecated. Use OmegaConf.update() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         keys = path.split(".")
         current = data
 
@@ -130,7 +147,15 @@ class BaseYAMLParser:
 
         Returns:
             Merged dictionary (new dict, doesn't modify inputs)
+
+        .. deprecated::
+            Use OmegaConf.merge(base, overlay) for OmegaConf configs.
         """
+        warnings.warn(
+            "merge is deprecated. Use OmegaConf.merge() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         result = dict(base)
 
         for key, value in overlay.items():

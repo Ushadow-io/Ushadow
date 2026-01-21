@@ -318,10 +318,12 @@ export const servicesApi = {
 // Compose service configuration endpoints
 export interface EnvVarConfig {
   name: string
-  source: 'setting' | 'new_setting' | 'literal' | 'default'
+  // Old sources: 'setting' | 'new_setting' | 'literal' | 'default'
+  // New v2 sources: 'config_default' | 'compose_default' | 'env_file' | 'capability' | 'deploy_env' | 'user_override' | 'not_found'
+  source: string
   setting_path?: string      // For source='setting' - existing setting to map
   new_setting_path?: string  // For source='new_setting' - new setting path to create
-  value?: string             // For source='literal' or 'new_setting'
+  value?: string             // For source='literal' or 'new_setting', or resolved value
   locked?: boolean           // For provider-supplied values that cannot be edited
   provider_name?: string     // Name of the provider supplying this value
 }
@@ -338,13 +340,12 @@ export interface EnvVarSuggestion {
 export interface EnvVarInfo {
   name: string
   is_required: boolean
-  has_default: boolean
-  default_value?: string
   source: string
   setting_path?: string
-  value?: string
   resolved_value?: string
   suggestions: EnvVarSuggestion[]
+  locked?: boolean
+  provider_name?: string
 }
 
 /** Missing key that needs to be configured for a provider */
@@ -1205,6 +1206,10 @@ export const svcConfigsApi = {
   /** Get a template by ID */
   getTemplate: (templateId: string) =>
     api.get<Template>(`/api/svc-configs/templates/${templateId}`),
+
+  /** Get env var config with suggestions for a template (same process as services) */
+  getTemplateEnvConfig: (templateId: string) =>
+    api.get<EnvVarInfo[]>(`/api/svc-configs/templates/${templateId}/env`),
 
   // ServiceConfigs
   /** List all instances */

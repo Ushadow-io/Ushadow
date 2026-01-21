@@ -20,7 +20,8 @@ import {
   Package,
   Trash2,
   BookOpen,
-  Download
+  Download,
+  Lock
 } from 'lucide-react'
 import {
   settingsApi,
@@ -450,9 +451,11 @@ export default function ServicesPage() {
       ;[...data.required_env_vars, ...data.optional_env_vars].forEach(ev => {
         formData[ev.name] = {
           name: ev.name,
-          source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
+          source: ev.source || 'default',
           setting_path: ev.setting_path,
-          value: ev.value
+          value: ev.resolved_value || ev.value,  // Use resolved_value from API
+          locked: ev.locked,
+          provider_name: ev.provider_name,
         }
       })
 
@@ -1166,7 +1169,7 @@ export default function ServicesPage() {
                               <span className="font-mono text-neutral-900 dark:text-neutral-100">
                                 {ev.name.includes('KEY') || ev.name.includes('SECRET') || ev.name.includes('PASSWORD')
                                   ? (ev.resolved_value ? '••••••' + ev.resolved_value.slice(-4) : <span className="text-warning-600">Not set</span>)
-                                  : (ev.resolved_value || ev.default_value || <span className="text-warning-600">Not set</span>)
+                                  : (ev.resolved_value || <span className="text-warning-600">Not set</span>)
                                 }
                               </span>
                             </div>
@@ -1511,14 +1514,14 @@ interface EnvVarEditorProps {
 
 function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
   const [editing, setEditing] = useState(false)
-  const [showMapping, setShowMapping] = useState(config.source === 'setting')
+  // If setting_path is set, this is a "mapped" value - show mapping mode
+  const isMapped = !!config.setting_path
+  const [showMapping, setShowMapping] = useState(isMapped)
 
   const isSecret = envVar.name.includes('KEY') || envVar.name.includes('SECRET') || envVar.name.includes('PASSWORD')
-  const hasDefault = envVar.has_default && envVar.default_value
-  const isUsingDefault = config.source === 'default' || (!config.value && !config.setting_path && hasDefault)
+  const isLocked = config.locked || envVar.locked || false
 
   // Generate setting path from env var name for auto-creating settings
-  // Keep the full key name to match conventions like api_keys.openai_api_key
   const autoSettingPath = () => {
     const name = envVar.name.toLowerCase()
     if (name.includes('api_key') || name.includes('key') || name.includes('secret') || name.includes('token')) {
@@ -1536,16 +1539,27 @@ function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
     }
   }
 
-  // Check if there's a matching suggestion for auto-mapping
-  const matchingSuggestion = envVar.suggestions.find(s => {
-    const envName = envVar.name.toLowerCase()
-    const pathParts = s.path.toLowerCase().split('.')
-    const lastPart = pathParts[pathParts.length - 1]
-    return envName.includes(lastPart) || lastPart.includes(envName.replace(/_/g, ''))
-  })
+  // Locked fields - provided by wired providers or infrastructure
+  if (isLocked) {
+    const displayValue = config.value || ''
+    const maskedValue = isSecret && displayValue.length > 0 ? '•'.repeat(Math.min(displayValue.length, 20)) : displayValue
 
-  // Auto-map if matching and not yet configured
-  const effectiveSettingPath = config.setting_path || (matchingSuggestion?.has_value ? matchingSuggestion.path : undefined)
+    return (
+      <div className="flex items-center gap-2 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-blue-50 dark:bg-blue-900/10">
+        <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0" title={envVar.name}>
+          {envVar.name}
+          {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
+        </span>
+        <Lock className="w-3 h-3 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono">{maskedValue}</span>
+          <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-blue-600/20 text-blue-700 dark:text-blue-300 flex-shrink-0">
+            {config.provider_name || 'provider'}
+          </span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex items-center gap-2 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0">
@@ -1573,7 +1587,7 @@ function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
         {showMapping ? (
           // Mapping mode - styled dropdown
           <select
-            value={effectiveSettingPath || ''}
+            value={config.setting_path || ''}
             onChange={(e) => {
               if (e.target.value) {
                 onChange({ source: 'setting', setting_path: e.target.value, value: undefined, new_setting_path: undefined })
@@ -1588,8 +1602,8 @@ function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
               </option>
             ))}
           </select>
-        ) : hasDefault && isUsingDefault && !editing ? (
-          // Default value display
+        ) : config.value && !editing ? (
+          // Has resolved value - show with source badge
           <>
             <button
               onClick={() => setEditing(true)}
@@ -1598,21 +1612,33 @@ function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
             >
               <Pencil className="w-3 h-3" />
             </button>
-            <span className="text-xs text-neutral-400 truncate">{envVar.default_value}</span>
-            <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-neutral-700 text-neutral-400 flex-shrink-0">default</span>
+            <span className="text-xs text-neutral-300 truncate font-mono" title={config.value}>
+              {isSecret ? '•'.repeat(Math.min(config.value.length, 20)) : config.value}
+            </span>
+            <span className={`ml-auto px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
+              config.source === 'env_file' ? 'bg-green-600/20 text-green-400' :
+              config.source === 'capability' ? 'bg-blue-600/20 text-blue-400' :
+              config.source === 'config_default' ? 'bg-purple-600/20 text-purple-400' :
+              'bg-neutral-700 text-neutral-400'
+            }`}>
+              {config.source === 'env_file' ? '.env' :
+               config.source === 'capability' ? 'provider' :
+               config.source === 'config_default' ? 'config' :
+               config.source === 'compose_default' ? 'default' :
+               config.source === 'default' ? 'default' :
+               config.source}
+            </span>
           </>
         ) : (
-          // Value input
+          // No value - show input
           <input
             type={isSecret ? 'password' : 'text'}
-            value={config.source === 'setting' ? '' : (config.value || '')}
+            value={''}
             onChange={(e) => handleValueChange(e.target.value)}
             placeholder="enter value"
             className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
             autoFocus={editing}
-            onBlur={() => {
-              if (!config.value && hasDefault) setEditing(false)
-            }}
+            onBlur={() => setEditing(false)}
           />
         )}
       </div>

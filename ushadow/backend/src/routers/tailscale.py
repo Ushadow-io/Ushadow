@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from src.services.auth import get_current_user, generate_jwt_for_service
 from src.models.user import User
-from src.config.omegaconf_settings import get_settings_store
+from src.config.omegaconf_settings import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
 
@@ -695,7 +695,7 @@ async def get_mobile_connection_qr(
                 detail="Could not get Tailscale connection details. Please try again."
             )
 
-        config = get_settings_store()
+        config = get_settings()
         api_port = config.get_sync("network.backend_public_port") or 8000
 
         # Build full API URL for leader info endpoint
@@ -1449,7 +1449,7 @@ async def update_cors_origins(
     needed for the new origin to take effect.
     """
     try:
-        settings = get_settings_store()
+        settings = get_settings()
 
         # Build the origin URL
         origin = f"https://{request.hostname}"

@@ -17,7 +17,7 @@ from src.models.service_config import (
 )
 from src.services.auth import get_current_user
 from src.services.service_config_manager import get_service_config_manager
-from src.config.omegaconf_settings import get_settings_store
+from src.config.omegaconf_settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/svc-configs", tags=["instances"])
 
 async def _check_provider_configured(provider) -> bool:
     """Check if a provider has all required fields configured."""
-    settings = get_settings_store()
+    settings = get_settings()
     for em in provider.env_maps:
         if not em.required:
             continue
@@ -60,7 +60,7 @@ async def list_templates(
     try:
         from src.services.compose_registry import get_compose_registry
         registry = get_compose_registry()
-        settings = get_settings_store()
+        settings = get_settings()
 
         # Get installed service names (same logic as ServiceOrchestrator)
         default_services = await settings.get("default_services") or []
@@ -126,7 +126,7 @@ async def list_templates(
         from src.services.provider_registry import get_provider_registry
         from src.routers.providers import check_local_provider_available
         provider_registry = get_provider_registry()
-        settings = get_settings_store()
+        settings = get_settings()
         for provider in provider_registry.get_providers():
             if source and source != "provider":
                 continue
@@ -196,6 +196,78 @@ async def get_template(
     raise HTTPException(status_code=404, detail=f"Template not found: {template_id}")
 
 
+@router.get("/templates/{template_id}/env")
+async def get_template_env_config(
+    template_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """
+    Get environment variable configuration with suggestions for a template.
+
+    Uses the Settings v2 API for consistent behavior with services endpoint.
+    Returns same format as /api/services/{name}/env for unified frontend handling.
+    """
+    from src.config.omegaconf_settings import get_settings, Source
+
+    template = await get_template(template_id, current_user)
+    settings_v2 = get_settings()
+
+    result = []
+    for field in template.config_schema:
+        # Get env var name from field
+        if isinstance(field, dict):
+            env_name = field.get("env_var") or field["key"].upper()
+            default_val = field.get("default")
+            has_default = bool(default_val)
+            is_required = field.get("required", True)
+        else:
+            env_name = getattr(field, "env_var", None) or field.key.upper()
+            default_val = getattr(field, "default", None)
+            has_default = bool(default_val)
+            is_required = getattr(field, "required", True)
+
+        # Get suggestions using Settings v2 API
+        suggestions = await settings_v2.get_suggestions(env_name)
+
+        # Try to find a matching suggestion with a value for auto-mapping
+        matching_suggestion = None
+        for s in suggestions:
+            if s.has_value:
+                # Check if suggestion path matches env var name pattern
+                env_lower = env_name.lower()
+                path_parts = s.path.lower().split('.')
+                last_part = path_parts[-1] if path_parts else ''
+                if env_lower.endswith(last_part) or last_part in env_lower:
+                    matching_suggestion = s
+                    break
+
+        # Determine source and setting_path based on matching suggestion
+        if matching_suggestion:
+            source = Source.CONFIG_DEFAULT.value
+            setting_path = matching_suggestion.path
+            resolved_value = matching_suggestion.value
+        else:
+            source = "default"
+            setting_path = None
+            resolved_value = default_val
+
+        result.append({
+            "name": env_name,
+            "is_required": is_required,
+            "has_default": has_default,
+            "default_value": default_val,
+            "source": source,
+            "setting_path": setting_path,
+            "value": None,  # User-entered value
+            "resolved_value": resolved_value,
+            "suggestions": [s.to_dict() for s in suggestions],
+            "locked": False,
+            "provider_name": None,
+        })
+
+    return result
+
+
 # =============================================================================
 # ServiceConfig Endpoints
 # =============================================================================
@@ -234,7 +306,7 @@ async def get_instance(
     if overrides:
         try:
             from src.services.capability_resolver import get_capability_resolver
-            settings = get_settings_store()
+            settings = get_settings()
             resolver = get_capability_resolver()
 
             # Get template defaults from provider registry
@@ -283,7 +355,7 @@ async def create_instance(
     if filtered_config:
         try:
             from src.services.capability_resolver import get_capability_resolver
-            settings = get_settings_store()
+            settings = get_settings()
             resolver = get_capability_resolver()
 
             # Get template defaults from provider registry
@@ -354,7 +426,7 @@ async def update_instance(
                 instance = manager.get_service_config(config_id)
                 if instance:
                     from src.services.capability_resolver import get_capability_resolver
-                    settings = get_settings_store()
+                    settings = get_settings()
                     resolver = get_capability_resolver()
 
                     # Get template defaults from provider registry

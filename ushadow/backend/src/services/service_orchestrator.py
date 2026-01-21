@@ -4,12 +4,13 @@ Service Orchestrator - Unified facade for service management.
 This is the single entry point for all service operations, combining:
 - ComposeServiceRegistry: Service discovery from compose files
 - DockerManager: Container lifecycle management
-- SettingsStore: Configuration and state persistence
+- Settings: Configuration and state persistence
 
 Routers should use this layer instead of calling underlying managers directly.
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -28,8 +29,9 @@ from src.services.docker_manager import (
     ServiceEndpoint,
 )
 from src.config.omegaconf_settings import (
-    get_settings_store,
-    SettingsStore,
+    get_settings,
+    Settings,
+    Source,
 )
 from src.services.provider_registry import get_provider_registry
 
@@ -201,7 +203,7 @@ class ServiceOrchestrator:
     def __init__(self):
         self._compose_registry: Optional[ComposeServiceRegistry] = None
         self._docker_manager: Optional[DockerManager] = None
-        self._settings: Optional[SettingsStore] = None
+        self._settings: Optional[Settings] = None
 
     @property
     def compose_registry(self) -> ComposeServiceRegistry:
@@ -216,9 +218,9 @@ class ServiceOrchestrator:
         return self._docker_manager
 
     @property
-    def settings(self) -> SettingsStore:
+    def settings(self) -> Settings:
         if self._settings is None:
-            self._settings = get_settings_store()
+            self._settings = get_settings()
         return self._settings
 
     # =========================================================================
@@ -449,25 +451,61 @@ class ServiceOrchestrator:
         }
 
     async def get_env_config(self, name: str) -> Optional[Dict[str, Any]]:
-        """Get environment variable configuration with suggestions."""
+        """Get environment variable configuration with suggestions.
+
+        Uses the new entity-based Settings API (v2) for resolution.
+        """
         service = self._find_service(name)
         if not service:
             return None
 
-        provider_registry = get_provider_registry()
         schema = service.get_env_schema()
+        settings_v2 = get_settings()
 
-        # Load saved configuration
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await self.settings.get(config_key) or {}
+        # Get resolutions using new entity-based API
+        resolutions = await settings_v2.for_service(service.service_id)
 
-        # Delegate to settings store for env var resolution
-        required_vars = await self.settings.build_env_var_config(
-            schema.required_env_vars, saved_config, schema.requires, provider_registry, is_required=True
-        )
-        optional_vars = await self.settings.build_env_var_config(
-            schema.optional_env_vars, saved_config, schema.requires, provider_registry, is_required=False
-        )
+        # Build env var config from schema + resolutions + suggestions
+        async def build_env_var_info(ev: EnvVarConfig, is_required: bool) -> Dict[str, Any]:
+            """Build single env var info from schema and resolution."""
+            resolution = resolutions.get(ev.name)
+            suggestions = await settings_v2.get_suggestions(ev.name)
+
+            # Map Source enum to string for API response
+            source = resolution.source.value if resolution else "default"
+            resolved_value = resolution.value if resolution and resolution.found else None
+
+            # Determine if this came from a setting path
+            setting_path = resolution.path if resolution else None
+
+            # Handle locked values (from capabilities/providers)
+            is_locked = source == Source.CAPABILITY.value if resolution else False
+            provider_name = None
+            if is_locked and setting_path:
+                # Extract provider from capability path if available
+                parts = setting_path.split('.')
+                if len(parts) >= 2:
+                    provider_name = parts[1] if parts[0] == 'capabilities' else None
+
+            return {
+                "name": ev.name,
+                "is_required": is_required,
+                "source": source,
+                "setting_path": setting_path,
+                "resolved_value": resolved_value,
+                "suggestions": [s.to_dict() for s in suggestions],
+                "locked": is_locked,
+                "provider_name": provider_name,
+            }
+
+        required_vars = [
+            await build_env_var_info(ev, is_required=True)
+            for ev in schema.required_env_vars
+        ]
+        optional_vars = [
+            await build_env_var_info(ev, is_required=False)
+            for ev in schema.optional_env_vars
+        ]
 
         return {
             "service_id": service.service_id,
@@ -853,8 +891,8 @@ class ServiceOrchestrator:
             elif saved.get("source") == "literal" and saved.get("value"):
                 continue
             else:
-                has_value = await self.settings.has_value_for_env_var(ev.name)
-                if not has_value:
+                # Check if env var has a value from os.environ
+                if not os.environ.get(ev.name):
                     return True
 
         return False
