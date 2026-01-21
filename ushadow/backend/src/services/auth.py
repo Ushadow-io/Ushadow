@@ -299,6 +299,12 @@ def generate_jwt_for_service(
         "aud": audiences,  # Audiences - services that can use this token
         "exp": datetime.utcnow() + timedelta(seconds=JWT_LIFETIME_SECONDS),
         "iat": datetime.utcnow(),
+        # Mycelia-compatible fields for resource authorization
+        "principal": user_email,  # Identity for access logging
+        "policies": [
+            # Grant full access - fine-grained policies can be added later
+            {"resource": "**", "action": "*", "effect": "allow"}
+        ],
     }
 
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)

@@ -119,9 +119,9 @@ URL_PATTERNS = ['url', 'endpoint', 'host', 'uri']
 
 # Sections to search for different setting types
 SETTING_SECTIONS = {
-    'secret': ['api_keys', 'security', 'admin'],
+    'secret': ['api_keys', 'security', 'admin', 'services', 'mycelia', 'settings'],
     'url': ['services'],
-    'string': ['llm', 'transcription', 'memory', 'auth', 'security', 'admin'],
+    'string': ['llm', 'transcription', 'memory', 'auth', 'security', 'admin', 'mycelia', 'settings'],
 }
 
 # =============================================================================
@@ -220,11 +220,52 @@ class SettingsStore:
         dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
         self.cache_ttl: int = 0 if dev_mode else 5  # seconds
 
+        # Tailscale status cache (separate from config cache, longer TTL)
+        self._tailscale_hostname: Optional[str] = None
+        self._tailscale_cache_timestamp: float = 0
+        self._tailscale_cache_ttl: int = 30  # 30 seconds - container status doesn't change often
+
     def clear_cache(self) -> None:
         """Clear the configuration cache, forcing reload on next access."""
         self._cache = None
         self._cache_timestamp = 0
+        self._tailscale_hostname = None
+        self._tailscale_cache_timestamp = 0
         logger.info("OmegaConfSettings cache cleared")
+
+    def get_tailscale_hostname(self) -> Optional[str]:
+        """
+        Get the Tailscale hostname from TailscaleManager with caching.
+
+        Returns the full DNS name (e.g., "orange.spangled-kettle.ts.net") if
+        Tailscale is authenticated, None otherwise.
+
+        Uses a 30-second cache to avoid repeated Docker container queries.
+        """
+        # Check cache first
+        if self._tailscale_hostname is not None:
+            if time.time() - self._tailscale_cache_timestamp < self._tailscale_cache_ttl:
+                return self._tailscale_hostname
+
+        # Query TailscaleManager for live status
+        try:
+            from src.services.tailscale_manager import get_tailscale_manager
+            ts_manager = get_tailscale_manager()
+            ts_status = ts_manager.get_container_status()
+
+            if ts_status.authenticated and ts_status.hostname:
+                self._tailscale_hostname = ts_status.hostname
+                self._tailscale_cache_timestamp = time.time()
+                return self._tailscale_hostname
+            else:
+                # Not authenticated - cache the None result too
+                self._tailscale_hostname = None
+                self._tailscale_cache_timestamp = time.time()
+                return None
+
+        except Exception as e:
+            logger.debug(f"Could not get Tailscale status: {e}")
+            return None
 
     def _load_yaml_if_exists(self, path: Path) -> Optional[DictConfig]:
         """Load a YAML file if it exists, return None otherwise."""
@@ -660,34 +701,41 @@ class SettingsStore:
         seen_paths = set()
         config = await self.get_config_as_dict()
 
-        # Determine which sections to search based on env var type
-        setting_type = infer_setting_type(env_var_name)
-        sections = SETTING_SECTIONS.get(setting_type, ['api_keys', 'security'])
+        # Determine expected type from env var name
+        expected_type = infer_setting_type(env_var_name)
 
-        # Search config sections
-        for section in sections:
-            section_data = config.get(section, {})
-            if not isinstance(section_data, dict):
-                continue
-
-            for key, value in section_data.items():
-                if value is None or isinstance(value, dict):
-                    continue
-
-                path = f"{section}.{key}"
+        # Helper to recursively collect settings from nested dicts
+        def collect_settings(data: dict, prefix: str):
+            for key, value in data.items():
+                path = f"{prefix}.{key}" if prefix else key
                 if path in seen_paths:
                     continue
-                seen_paths.add(path)
 
-                str_value = str(value) if value is not None else ""
-                has_value = bool(str_value.strip())
+                if isinstance(value, dict):
+                    # Recursively search nested dicts
+                    collect_settings(value, path)
+                elif value is not None:
+                    # Filter by type - only show settings that match expected type
+                    # e.g., API_KEY should only show secret-type settings
+                    setting_type = infer_setting_type(key)
+                    if expected_type == 'secret' and setting_type != 'secret':
+                        continue
+                    if expected_type == 'url' and setting_type != 'url':
+                        continue
+                    # 'string' type matches anything
 
-                suggestions.append(SettingSuggestion(
-                    path=path,
-                    label=key.replace("_", " ").title(),
-                    has_value=has_value,
-                    value=mask_secret_value(str_value, path) if has_value else None,
-                ))
+                    seen_paths.add(path)
+                    str_value = str(value) if value is not None else ""
+                    has_value = bool(str_value.strip())
+                    suggestions.append(SettingSuggestion(
+                        path=path,
+                        label=key.replace("_", " ").title(),
+                        has_value=has_value,
+                        value=mask_secret_value(str_value, path) if has_value else None,
+                    ))
+
+        # Search ALL sections in config dynamically
+        collect_settings(config, "")
 
         # Add provider-specific mappings if registry provided
         if provider_registry and capabilities:
