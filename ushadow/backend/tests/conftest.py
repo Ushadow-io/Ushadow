@@ -6,10 +6,16 @@ This file provides common test fixtures used across unit and integration tests:
 - Database fixtures
 - Authentication fixtures
 - Mock service fixtures
+
+Test Environment Setup:
+- Unit tests: No external dependencies, use mocks
+- Integration tests: Require MongoDB/Redis running on localhost
 """
 
 import os
 import sys
+import shutil
+import tempfile
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 from unittest.mock import MagicMock, AsyncMock
@@ -22,25 +28,74 @@ from httpx import AsyncClient, ASGITransport
 backend_root = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_root / "src"))
 
+# Find project root (contains config/ directory)
+project_root = backend_root.parent.parent
+
+
+# =============================================================================
+# Session Setup (pytest-env sets environment variables before this)
+# =============================================================================
+
+@pytest.fixture(scope="session", autouse=True)
+def test_config_dir():
+    """
+    Create test config directory structure (runs once per test session).
+
+    pytest-env plugin sets CONFIG_DIR=/tmp/pytest_config before pytest starts.
+    This fixture creates the directory structure and necessary files.
+    """
+    # Debug: verify pytest-env set the variable
+    print(f"\n[test_config_dir] CONFIG_DIR={os.environ.get('CONFIG_DIR')}")
+    print(f"[test_config_dir] MONGODB_URI={os.environ.get('MONGODB_URI')}")
+
+    # Use the CONFIG_DIR set by pytest-env
+    test_config_dir = Path(os.environ.get("CONFIG_DIR", "/tmp/pytest_config"))
+    secrets_dir = test_config_dir / "SECRETS"
+
+    # Clean up any existing directory from previous runs
+    if test_config_dir.exists():
+        shutil.rmtree(test_config_dir)
+
+    # Create directory structure
+    secrets_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy actual config.defaults.yaml for realistic tests
+    source_defaults = project_root / "config" / "config.defaults.yaml"
+    if source_defaults.exists():
+        shutil.copy(source_defaults, test_config_dir / "config.defaults.yaml")
+
+    # Create minimal secrets.yaml (required for AUTH_SECRET_KEY)
+    (secrets_dir / "secrets.yaml").write_text("""security:
+  auth_secret_key: test-secret-key-for-testing-only-not-secure
+  session_secret: test-session-secret-for-testing
+api_keys:
+  openai: ""
+  deepgram: ""
+""")
+
+    # Reset settings store singleton to pick up new CONFIG_DIR
+    import src.config.omegaconf_settings as settings_module
+    settings_module._settings_store = None
+
+    yield test_config_dir
+
+    # Cleanup
+    if test_config_dir.exists():
+        shutil.rmtree(test_config_dir)
+
 
 # =============================================================================
 # Application Fixtures
 # =============================================================================
 
-@pytest.fixture(scope="session")
-def test_env():
-    """Set up test environment variables."""
-    os.environ["ENVIRONMENT"] = "test"
-    os.environ["TESTING"] = "true"
-    # Prevent actual service connections during tests
-    os.environ["MONGO_URI"] = "mongodb://test:27017"
-    os.environ["REDIS_URL"] = "redis://test:6379"
-
 
 @pytest.fixture
-def app(test_env):
-    """FastAPI application instance for testing."""
-    # Import here to ensure test env is set first
+def app():
+    """
+    FastAPI application instance for testing.
+
+    Environment is already configured by pytest_configure hook.
+    """
     from main import app as fastapi_app
     return fastapi_app
 
@@ -277,4 +332,22 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "requires_k8s: mark test as requiring Kubernetes"
+    )
+    config.addinivalue_line(
+        "markers", "no_secrets: mark test as not requiring secrets/API keys"
+    )
+    config.addinivalue_line(
+        "markers", "requires_secrets: mark test as requiring secrets/API keys"
+    )
+    config.addinivalue_line(
+        "markers", "api: mark test as an API test"
+    )
+    config.addinivalue_line(
+        "markers", "performance: mark test as a performance test"
+    )
+    config.addinivalue_line(
+        "markers", "tdd: TDD tests that document future functionality (expected to fail)"
+    )
+    config.addinivalue_line(
+        "markers", "stable: Stable tests that must pass in CI"
     )

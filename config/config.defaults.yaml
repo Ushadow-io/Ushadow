@@ -62,6 +62,8 @@ transcription:
 
 # Service-Specific Preferences (not shared across services)
 service_preferences:
+  chronicle:
+    database: ushadow
   openmemory:
     enable_graph: false
     neo4j_password: null
