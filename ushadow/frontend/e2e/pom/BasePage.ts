@@ -2,9 +2,17 @@
  * BasePage - Base class for all Page Object Models.
  *
  * Provides common navigation and utility methods.
+ * Uses testid patterns from ui-contract.ts for consistency.
  */
 
 import { type Page, type Locator } from '@playwright/test'
+import {
+  secretInput,
+  settingField,
+  settingsSection,
+  envVarEditor,
+  modal,
+} from '../../src/testing/ui-contract'
 
 export abstract class BasePage {
   readonly page: Page
@@ -30,64 +38,92 @@ export abstract class BasePage {
     return this.page.getByTestId(testId)
   }
 
-  /**
-   * Get a locator for a setting field by ID
-   */
+  // ===========================================================================
+  // Setting Field helpers (uses ui-contract patterns)
+  // ===========================================================================
+
   protected getSettingField(id: string): Locator {
-    return this.getByTestId(`setting-field-${id}`)
+    return this.getByTestId(settingField.container(id))
   }
 
-  /**
-   * Get a locator for a secret input by ID
-   */
-  protected getSecretInput(id: string): Locator {
-    return this.getByTestId(`secret-input-${id}`)
-  }
-
-  /**
-   * Get a locator for a settings section by ID
-   */
-  protected getSettingsSection(id: string): Locator {
-    return this.getByTestId(`settings-section-${id}`)
-  }
-
-  /**
-   * Fill a secret input field
-   */
-  async fillSecret(id: string, value: string): Promise<void> {
-    const field = this.getByTestId(`secret-input-${id}-field`)
-    await field.fill(value)
-  }
-
-  /**
-   * Fill a text/url setting field
-   */
   async fillSetting(id: string, value: string): Promise<void> {
-    const input = this.getByTestId(`setting-field-${id}-input`)
+    const input = this.getByTestId(settingField.input(id))
     await input.fill(value)
   }
 
-  /**
-   * Select an option in a setting field
-   */
   async selectSetting(id: string, value: string): Promise<void> {
-    const select = this.getByTestId(`setting-field-${id}-select`)
+    const select = this.getByTestId(settingField.select(id))
     await select.selectOption(value)
   }
 
-  /**
-   * Toggle a setting switch
-   */
   async toggleSetting(id: string): Promise<void> {
-    const toggle = this.getByTestId(`setting-field-${id}-toggle`)
+    const toggle = this.getByTestId(settingField.toggle(id))
     await toggle.click()
   }
 
-  /**
-   * Toggle secret visibility
-   */
+  // ===========================================================================
+  // Secret Input helpers (uses ui-contract patterns)
+  // ===========================================================================
+
+  protected getSecretInput(id: string): Locator {
+    return this.getByTestId(secretInput.container(id))
+  }
+
+  async fillSecret(id: string, value: string): Promise<void> {
+    const field = this.getByTestId(secretInput.field(id))
+    await field.fill(value)
+  }
+
   async toggleSecretVisibility(id: string): Promise<void> {
-    const toggle = this.getByTestId(`secret-input-${id}-toggle`)
+    const toggle = this.getByTestId(secretInput.toggle(id))
     await toggle.click()
+  }
+
+  // ===========================================================================
+  // Settings Section helpers (uses ui-contract patterns)
+  // ===========================================================================
+
+  protected getSettingsSection(id: string): Locator {
+    return this.getByTestId(settingsSection.container(id))
+  }
+
+  // ===========================================================================
+  // Env Var Editor helpers (uses ui-contract patterns)
+  // ===========================================================================
+
+  protected getEnvVarEditor(varName: string): Locator {
+    return this.getByTestId(envVarEditor.container(varName))
+  }
+
+  async fillEnvVarValue(varName: string, value: string): Promise<void> {
+    const input = this.getByTestId(envVarEditor.valueInput(varName))
+    await input.fill(value)
+  }
+
+  async selectEnvVarMapping(varName: string, settingPath: string): Promise<void> {
+    // First click the Map button to show the dropdown
+    const mapBtn = this.getByTestId(envVarEditor.mapButton(varName))
+    await mapBtn.click()
+    // Then select the setting
+    const select = this.getByTestId(envVarEditor.mapSelect(varName))
+    await select.selectOption(settingPath)
+  }
+
+  // ===========================================================================
+  // Modal helpers (uses ui-contract patterns)
+  // ===========================================================================
+
+  protected getModal(id: string): Locator {
+    return this.getByTestId(modal.container(id))
+  }
+
+  async closeModal(id: string): Promise<void> {
+    const closeBtn = this.getByTestId(modal.close(id))
+    await closeBtn.click()
+  }
+
+  async clickModalBackdrop(id: string): Promise<void> {
+    const backdrop = this.getByTestId(modal.backdrop(id))
+    await backdrop.click()
   }
 }
