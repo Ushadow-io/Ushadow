@@ -181,6 +181,10 @@ export default function ServiceConfigsPage() {
       console.log('Templates loaded:', templatesRes.data)
       console.log('Compose templates (before filter):', templatesRes.data.filter((t: any) => t.source === 'compose'))
       console.log('Compose templates (after installed filter):', templatesRes.data.filter((t: any) => t.source === 'compose' && t.installed))
+      // Debug: show requires for each compose template
+      templatesRes.data.filter((t: any) => t.source === 'compose').forEach((t: any) => {
+        console.log(`  ${t.id}: installed=${t.installed}, requires=${JSON.stringify(t.requires)}`)
+      })
 
       setTemplates(templatesRes.data)
       setServiceConfigs(instancesRes.data)
@@ -550,8 +554,11 @@ export default function ServiceConfigsPage() {
   // Consumer/Service handlers for WiringBoard
   const handleStartConsumer = async (consumerId: string) => {
     try {
+      // Find the consumer to get its templateId (instances have different id vs templateId)
+      const consumer = wiringConsumers.find(c => c.id === consumerId)
+      const templateId = consumer?.templateId || consumerId
       // Extract service name from template ID (format: "compose_file:service_name")
-      const serviceName = consumerId.includes(':') ? consumerId.split(':').pop()! : consumerId
+      const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.startService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} started` })
       // Reload service statuses
@@ -567,8 +574,11 @@ export default function ServiceConfigsPage() {
 
   const handleStopConsumer = async (consumerId: string) => {
     try {
+      // Find the consumer to get its templateId (instances have different id vs templateId)
+      const consumer = wiringConsumers.find(c => c.id === consumerId)
+      const templateId = consumer?.templateId || consumerId
       // Extract service name from template ID (format: "compose_file:service_name")
-      const serviceName = consumerId.includes(':') ? consumerId.split(':').pop()! : consumerId
+      const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.stopService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} stopped` })
       // Reload service statuses
@@ -871,9 +881,9 @@ export default function ServiceConfigsPage() {
     .filter((t) => t.source === 'provider' && t.provides)
 
   const wiringProviders = [
-    // Templates (defaults) - only show configured ones
+    // Templates (defaults) - show configured ones OR client/upload/remote mode (no config needed)
     ...providerTemplates
-      .filter((t) => t.configured) // Only show providers that have been set up
+      .filter((t) => t.configured || ['client', 'upload', 'remote', 'relay'].includes(t.mode)) // Client-mode providers don't need setup
       .map((t) => {
         // Extract config vars from schema - include all fields with required indicator
         const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> =

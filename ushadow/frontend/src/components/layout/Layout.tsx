@@ -1,13 +1,14 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode } from 'lucide-react'
-import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
+import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
 import { useMobileQrCode } from '../../hooks/useQrCode'
+import { svcConfigsApi } from '../../services/api'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
 import { StatusBadge, type BadgeVariant } from '../StatusBadge'
 import Modal from '../Modal'
@@ -35,6 +36,7 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
+  const [isDesktopMicWired, setIsDesktopMicWired] = useState(false)
 
   // QR code hook
   const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
@@ -53,6 +55,28 @@ export default function Layout() {
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Check if desktop-mic (or any audio_input provider) is wired
+  useEffect(() => {
+    const checkAudioWiring = async () => {
+      try {
+        const wiringRes = await svcConfigsApi.getWiring()
+        // Check if any audio_input provider is wired
+        const hasAudioWiring = wiringRes.data.some(
+          (w: any) => w.source_capability === 'audio_input' ||
+                      w.source_config_id?.includes('desktop-mic') ||
+                      w.source_config_id?.includes('mobile-app')
+        )
+        setIsDesktopMicWired(hasAudioWiring)
+      } catch (err) {
+        // Silently fail - user might not be logged in yet
+      }
+    }
+    checkAudioWiring()
+    // Re-check periodically (every 30 seconds)
+    const interval = setInterval(checkAudioWiring, 30000)
+    return () => clearInterval(interval)
   }, [])
 
   // Define navigation items with optional feature flag requirements
@@ -185,36 +209,82 @@ export default function Layout() {
 
             {/* Header Actions */}
             <div className="flex items-center space-x-1">
-              {/* Chronicle Record Button - only show when connected */}
-              {isChronicleConnected && (
-                <button
-                  onClick={recording.isRecording ? recording.stopRecording : recording.startRecording}
-                  disabled={!recording.canAccessMicrophone || (isRecordingProcessing && !recording.isRecording)}
-                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg font-medium transition-all ${
-                    recording.isRecording
-                      ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
-                      : isRecordingProcessing
-                        ? 'bg-amber-500 text-white'
-                        : 'bg-primary-600 hover:bg-primary-700 text-white'
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                  title={recording.isRecording ? 'Stop Recording' : 'Start Recording'}
-                  data-testid="chronicle-record-button"
-                >
-                  {isRecordingProcessing && !recording.isRecording ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : recording.isRecording ? (
-                    <MicOff className="h-4 w-4" />
-                  ) : (
-                    <Mic className="h-4 w-4" />
+              {/* Record Button with Mode Selector - show when Chronicle connected OR desktop-mic is wired */}
+              {(isChronicleConnected || isDesktopMicWired) && (
+                <div className="flex items-center">
+                  {/* Mode Toggle - only show when not recording */}
+                  {!recording.isRecording && !isRecordingProcessing && (
+                    <div
+                      className="flex items-center mr-1 rounded-lg overflow-hidden"
+                      style={{
+                        backgroundColor: isDark ? 'var(--surface-700)' : '#f5f5f5',
+                        border: isDark ? '1px solid var(--surface-500)' : '1px solid #e5e5e5',
+                      }}
+                      data-testid="header-mode-toggle"
+                    >
+                      <button
+                        onClick={() => recording.setMode('streaming')}
+                        className={`p-2 transition-all ${
+                          recording.mode === 'streaming'
+                            ? 'bg-primary-600 text-white'
+                            : ''
+                        }`}
+                        style={{
+                          color: recording.mode !== 'streaming' ? (isDark ? 'var(--text-secondary)' : '#525252') : undefined,
+                        }}
+                        title="Streaming mode - audio sent in real-time"
+                        data-testid="header-mode-streaming"
+                      >
+                        <Zap className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => recording.setMode('batch')}
+                        className={`p-2 transition-all ${
+                          recording.mode === 'batch'
+                            ? 'bg-primary-600 text-white'
+                            : ''
+                        }`}
+                        style={{
+                          color: recording.mode !== 'batch' ? (isDark ? 'var(--text-secondary)' : '#525252') : undefined,
+                        }}
+                        title="Batch mode - audio sent when you stop"
+                        data-testid="header-mode-batch"
+                      >
+                        <Archive className="h-4 w-4" />
+                      </button>
+                    </div>
                   )}
-                  <span className="hidden sm:inline text-sm">
-                    {recording.isRecording
-                      ? recording.formatDuration(recording.recordingDuration)
-                      : isRecordingProcessing
-                        ? 'Starting...'
-                        : 'Record'}
-                  </span>
-                </button>
+
+                  {/* Record/Stop Button */}
+                  <button
+                    onClick={recording.isRecording ? recording.stopRecording : recording.startRecording}
+                    disabled={!recording.canAccessMicrophone || (isRecordingProcessing && !recording.isRecording)}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg font-medium transition-all ${
+                      recording.isRecording
+                        ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                        : isRecordingProcessing
+                          ? 'bg-amber-500 text-white'
+                          : 'bg-primary-600 hover:bg-primary-700 text-white'
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                    title={recording.isRecording ? 'Stop Recording' : 'Start Recording'}
+                    data-testid="chronicle-record-button"
+                  >
+                    {isRecordingProcessing && !recording.isRecording ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : recording.isRecording ? (
+                      <MicOff className="h-4 w-4" />
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
+                    <span className="hidden sm:inline text-sm">
+                      {recording.isRecording
+                        ? recording.formatDuration(recording.recordingDuration)
+                        : isRecordingProcessing
+                          ? 'Starting...'
+                          : 'Record'}
+                    </span>
+                  </button>
+                </div>
               )}
 
               {/* Test Feature Flag Indicator */}

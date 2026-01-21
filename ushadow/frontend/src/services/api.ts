@@ -1700,6 +1700,40 @@ export interface DockerHubRegisterRequest {
   capabilities?: string[]  // Capabilities this service provides
 }
 
+// =============================================================================
+// Audio Provider API - Wired audio destinations
+// =============================================================================
+
+export interface AudioDestination {
+  consumer_id: string
+  consumer_name: string
+  websocket_url: string
+  protocol: string
+  format: string
+}
+
+export interface WiredDestinationsResponse {
+  has_destinations: boolean
+  destinations: AudioDestination[]
+  // Relay mode: frontend connects to relay_url, backend fans out to destinations
+  use_relay: boolean
+  relay_url: string | null  // e.g., wss://hostname/ws/audio/relay
+}
+
+export const audioApi = {
+  /** Get wired audio destinations based on wiring configuration */
+  getWiredDestinations: () =>
+    api.get<WiredDestinationsResponse>('/api/providers/audio_consumer/wired-destinations'),
+
+  /** Get active audio consumer configuration */
+  getActiveConsumer: () =>
+    api.get('/api/providers/audio_consumer/active'),
+
+  /** Get available audio consumers */
+  getAvailableConsumers: () =>
+    api.get('/api/providers/audio_consumer/available'),
+}
+
 export const githubImportApi = {
   /** Scan a GitHub repository for docker-compose files */
   scan: (github_url: string, branch?: string, compose_path?: string) =>

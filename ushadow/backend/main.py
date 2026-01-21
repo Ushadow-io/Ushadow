@@ -22,7 +22,7 @@ from src.models.user import User  # Beanie document model
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
-from src.routers import kubernetes, tailscale, unodes, docker
+from src.routers import kubernetes, tailscale, unodes, docker, sse
 from src.routers import github_import, audio_relay, audio_provider
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
@@ -181,6 +181,7 @@ app.include_router(service_configs.router, tags=["service-configs"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
+app.include_router(sse.router, prefix="/api/sse", tags=["sse"])
 app.include_router(github_import.router, prefix="/api/github-import", tags=["github-import"])
 app.include_router(audio_relay.router, tags=["audio"])
 app.include_router(audio_provider.router, tags=["providers"])
