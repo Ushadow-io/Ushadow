@@ -1,14 +1,13 @@
 /**
  * SecretInput - Reusable secret/API key input with visibility toggle.
  *
- * Features:
- * - Show/hide toggle for secret values
- * - Masked display for sensitive data
- * - Consistent test IDs for Playwright automation
+ * @see src/testing/ui-contract.ts for testid patterns and usage examples
  */
 
 import { useState, forwardRef } from 'react'
 import { Eye, EyeOff, Key } from 'lucide-react'
+
+import { secretInput } from '../../testing/ui-contract'
 
 export interface SecretInputProps {
   /** Unique identifier for the input (used in test IDs) */
@@ -48,10 +47,8 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
   ) => {
     const [visible, setVisible] = useState(false)
 
-    const testId = `secret-input-${id}`
-
     return (
-      <div className="relative" data-testid={testId}>
+      <div className="relative" data-testid={secretInput.container(id)}>
         <div className="relative">
           {showIcon && (
             <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
@@ -65,7 +62,7 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
             disabled={disabled}
-            data-testid={`${testId}-field`}
+            data-testid={secretInput.field(id)}
             className={`
               w-full rounded-lg border px-3 py-2 pr-10
               ${showIcon ? 'pl-10' : 'pl-3'}
@@ -85,7 +82,7 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
             type="button"
             onClick={() => setVisible(!visible)}
             disabled={disabled}
-            data-testid={`${testId}-toggle`}
+            data-testid={secretInput.toggle(id)}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 disabled:opacity-50"
             aria-label={visible ? 'Hide value' : 'Show value'}
           >
@@ -93,7 +90,7 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(
           </button>
         </div>
         {error && (
-          <p className="mt-1 text-sm text-red-600 dark:text-red-400" data-testid={`${testId}-error`}>
+          <p className="mt-1 text-sm text-red-600 dark:text-red-400" data-testid={secretInput.error(id)}>
             {error}
           </p>
         )}
