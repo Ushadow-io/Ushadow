@@ -53,7 +53,7 @@ services:
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
     networks:
-      - infra-network
+      - ushadow-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${SPEAKER_SERVICE_PORT:-8085}/health"]
@@ -90,7 +90,7 @@ services:
       default:
         aliases:
           - speaker-recognition
-      infra-network:
+      ushadow-network:
         aliases:
           - speaker-recognition
     restart: unless-stopped
@@ -132,7 +132,7 @@ services:
       - SPEAKER_SERVICE_PORT=${SPEAKER_SERVICE_PORT:-8085}
       - VITE_SPEAKER_SERVICE_URL=http://localhost:${SPEAKER_SERVICE_PORT:-8085}
     networks:
-      - infra-network
+      - ushadow-network
     # Note: No depends_on - both cpu and gpu services use 'speaker-recognition' network alias
     # The webui connects by alias and handles connection retries gracefully
     restart: unless-stopped
@@ -158,7 +158,7 @@ services:
     depends_on:
       - speaker-recognition-webui
     networks:
-      - infra-network
+      - ushadow-network
     restart: unless-stopped
 
 # =============================================================================
@@ -178,6 +178,6 @@ volumes:
 # Networks
 # =============================================================================
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true

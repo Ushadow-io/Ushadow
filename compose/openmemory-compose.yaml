@@ -52,7 +52,7 @@ services:
     volumes:
       - mem0_data:/app/data
     networks:
-      - infra-network
+      - ushadow-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 10s
@@ -70,14 +70,14 @@ services:
       - VITE_API_URL=http://localhost:${OPENMEMORY_PORT:-8765}
       - API_URL=http://mem0:8765
     networks:
-      - infra-network
+      - ushadow-network
     depends_on:
       - mem0
     restart: unless-stopped
 
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true
 
 volumes:

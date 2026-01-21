@@ -72,7 +72,7 @@ services:
       - ${PROJECT_ROOT}/config/defaults.yml:/app/config/defaults.yml:ro
 
     networks:
-      - infra-network
+      - ushadow-network
 
     # NOTE: Depends on shared infrastructure services (mongo, redis, qdrant)
     # These must be started separately via docker-compose.infra.yml
@@ -103,7 +103,7 @@ services:
       - VITE_BACKEND_URL=http://localhost:${CHRONICLE_PORT:-8080}
       - BACKEND_URL=http://chronicle-backend:8000
     networks:
-      - infra-network
+      - ushadow-network
     depends_on:
       - chronicle-backend
     restart: unless-stopped
@@ -119,6 +119,6 @@ volumes:
 
 # Use existing shared infrastructure network
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true

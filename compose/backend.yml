@@ -38,7 +38,7 @@ services:
       # Docker socket for container management (Tailscale container control)
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - infra-network
+      - ushadow-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -48,6 +48,6 @@ services:
     restart: unless-stopped
 
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true
