@@ -5,8 +5,8 @@
  * Supports both streaming and non-streaming modes.
  */
 
-import { getAuthToken, getApiUrl } from '../utils/authStorage';
-import { getActiveUnode } from '../utils/unodeStorage';
+import { getAuthToken, getApiUrl } from '../_utils/authStorage';
+import { getActiveUnode } from '../_utils/unodeStorage';
 
 // Types for chat API
 export interface ChatMessage {
@@ -109,7 +109,7 @@ async function apiRequest<T>(
     console.error(`[ChatAPI] Error ${response.status}:`, errorText);
 
     if (response.status === 401) {
-      const { clearAuthToken } = await import('../utils/authStorage');
+      const { clearAuthToken } = await import('../_utils/authStorage');
       await clearAuthToken();
       throw new Error('Authentication expired. Please scan QR code to reconnect.');
     }
@@ -189,7 +189,7 @@ export async function sendStreamingMessage(
       console.error(`[ChatAPI] Streaming error ${response.status}:`, errorText);
 
       if (response.status === 401) {
-        const { clearAuthToken } = await import('../utils/authStorage');
+        const { clearAuthToken } = await import('../_utils/authStorage');
         await clearAuthToken();
         const error = 'Authentication expired. Please scan QR code to reconnect.';
         onError?.(error);

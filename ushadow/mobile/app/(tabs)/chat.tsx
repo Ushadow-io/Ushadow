@@ -24,13 +24,13 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
-import { isAuthenticated } from '../utils/authStorage';
+import { isAuthenticated } from '../_utils/authStorage';
 import { VoiceChatInput } from '../components/chat/VoiceChatInput';
 import {
   ChatMessage,
   ChatStatus,
   getChatStatus,
-  sendStreamingMessage,
+  sendMessage,
   createUserMessage,
   createAssistantMessage,
   generateMessageId,
@@ -169,50 +169,27 @@ export default function ChatScreen() {
           content: m.content,
         }));
 
-        await sendStreamingMessage(
-          {
-            messages: [
-              ...recentMessages,
-              { role: 'user', content },
-            ],
-            use_memory: true,
-          },
-          // onChunk
-          (chunk) => {
-            if (chunk.type === 'text' && chunk.content) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMessageId
-                    ? { ...m, content: m.content + chunk.content }
-                    : m
-                )
-              );
-            }
-          },
-          // onDone
-          (fullContent) => {
-            console.log('[Chat] Streaming complete, length:', fullContent.length);
-            setStreamingMessageId(null);
-            setIsProcessing(false);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          },
-          // onError
-          (errorMsg) => {
-            console.error('[Chat] Streaming error:', errorMsg);
-            setError(errorMsg);
-            setStreamingMessageId(null);
-            setIsProcessing(false);
-            // Update message to show error
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessageId
-                  ? { ...m, content: `Error: ${errorMsg}` }
-                  : m
-              )
-            );
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          }
+        const response = await sendMessage({
+          messages: [
+            ...recentMessages,
+            { role: 'user', content },
+          ],
+          use_memory: true,
+        });
+
+        // Update assistant message with response
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessageId
+              ? { ...m, content: response.content }
+              : m
+          )
         );
+
+        console.log('[Chat] Response received, length:', response.content.length);
+        setStreamingMessageId(null);
+        setIsProcessing(false);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
         console.error('[Chat] Send error:', errorMsg);

@@ -30,7 +30,7 @@ import {
   SavedOmiDevice,
   saveOmiDevice,
   getSavedOmiDevices,
-} from '../utils/omiDeviceStorage';
+} from '../_utils/omiDeviceStorage';
 
 interface OmiDeviceScannerProps {
   onDeviceSaved: (device: SavedOmiDevice) => void;

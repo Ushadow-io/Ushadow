@@ -26,7 +26,7 @@ import {
   searchMemories,
   type Memory,
 } from '../services/memoriesApi';
-import { isAuthenticated, getUserEmail } from '../utils/authStorage';
+import { isAuthenticated, getUserEmail } from '../_utils/authStorage';
 
 export default function MemoriesScreen() {
   const [memories, setMemories] = useState<Memory[]>([]);
