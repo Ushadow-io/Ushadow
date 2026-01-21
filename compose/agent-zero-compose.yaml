@@ -52,7 +52,7 @@ services:
       - agent_zero_data:/a0
 
     networks:
-      - infra-network
+      - ushadow-network
 
     # Enable access to host network for Ollama and other local services
     extra_hosts:
@@ -72,6 +72,6 @@ volumes:
     name: ${COMPOSE_PROJECT_NAME:-ushadow}_agent_zero_data
 
 networks:
-  infra-network:
+  ushadow-network:
     external: true
-    name: ${COMPOSE_PROJECT_NAME:-ushadow}_infra-network
+    name: ushadow-network

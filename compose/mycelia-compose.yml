@@ -19,7 +19,7 @@ x-ushadow:
     display_name: "Mycelia"
     description: "Self-hosted AI memory and timeline - capture ideas via voice, screenshots, or text"
     requires: ["llm", "transcription", "audio_input"]
-    provides: ["memory", "transcription", "timeline"]
+    provides: memory  # Primary capability (timeline, transcription are secondary)
     tags: ["ai", "memory", "voice", "transcription", "timeline"]
     wizard: "mycelia"  # ID of the setup wizard
   mycelia-frontend:
@@ -44,7 +44,7 @@ services:
     environment:
       - MYCELIA_FRONTEND_MODE=dev  
     networks:
-      - infra-network
+      - ushadow-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080"]
       interval: 30s
@@ -104,11 +104,12 @@ services:
       # Application Config
       - LOG_LEVEL=${MYCELIA_LOG_LEVEL:-INFO}
       - NODE_ENV=${NODE_ENV:-production}
+      - JOB_TRIGGERS_FAST=${JOB_TRIGGERS_FAST:-true}
     volumes:
       - ${PROJECT_ROOT:-..}/mycelia/backend:/app
       - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/myceliasdk
     networks:
-      - infra-network
+      - ushadow-network
     healthcheck:
       test: ["CMD", "deno", "eval", "const res = await fetch('http://localhost:5173/health'); Deno.exit(res.ok ? 0 : 1);"]
       interval: 30s
@@ -138,7 +139,7 @@ services:
       - ${PROJECT_ROOT:-..}/mycelia/python:/app
       - mycelia_worker_data:/root/.cache
     networks:
-      - infra-network
+      - ushadow-network
     depends_on:
       mycelia-backend:
         condition: service_healthy
@@ -159,8 +160,8 @@ services:
     restart: unless-stopped
 
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true
 
 volumes:
