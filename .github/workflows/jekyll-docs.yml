@@ -1,0 +1,141 @@
+name: Deploy Jekyll Documentation to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/jekyll-docs.yml'
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # Build job
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          cache-version: 0
+          working-directory: docs
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Create Gemfile if not exists
+        working-directory: docs
+        run: |
+          if [ ! -f Gemfile ]; then
+            cat > Gemfile << 'EOF'
+          source "https://rubygems.org"
+
+          gem "jekyll", "~> 4.3"
+          gem "webrick"
+
+          # Theme
+          gem "minima", "~> 2.5"
+
+          # Plugins
+          group :jekyll_plugins do
+            gem "jekyll-feed"
+            gem "jekyll-seo-tag"
+            gem "jekyll-sitemap"
+          end
+          EOF
+            echo "✓ Created default Gemfile"
+          fi
+
+      - name: Create Jekyll config if not exists
+        working-directory: docs
+        run: |
+          if [ ! -f _config.yml ]; then
+            cat > _config.yml << 'EOF'
+          title: Ushadow Documentation
+          description: >-
+            AI Orchestration Platform - Documentation and Guides
+          baseurl: ""
+          url: ""
+
+          # Build settings
+          theme: minima
+          plugins:
+            - jekyll-feed
+            - jekyll-seo-tag
+            - jekyll-sitemap
+
+          # Markdown
+          markdown: kramdown
+          kramdown:
+            input: GFM
+            syntax_highlighter: rouge
+
+          # Collections
+          collections:
+            guides:
+              output: true
+              permalink: /:collection/:name
+
+          # Defaults
+          defaults:
+            - scope:
+                path: ""
+                type: "guides"
+              values:
+                layout: "page"
+
+          # Exclude from processing
+          exclude:
+            - Gemfile
+            - Gemfile.lock
+            - node_modules
+            - vendor
+            - .bundle
+            - README.md
+          EOF
+            echo "✓ Created default _config.yml"
+          fi
+
+      - name: Install dependencies
+        working-directory: docs
+        run: bundle install
+
+      - name: Build with Jekyll
+        working-directory: docs
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  # Deployment job
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

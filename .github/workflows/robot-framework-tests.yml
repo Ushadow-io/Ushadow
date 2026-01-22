@@ -1,0 +1,261 @@
+name: Robot Framework Tests
+
+on:
+  pull_request:
+    paths:
+      - 'robot_tests/**'
+      - 'ushadow/backend/**'
+      - '.github/workflows/robot-framework-tests.yml'
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: 'Specific test path (e.g., robot_tests/api/)'
+        required: false
+        default: 'robot_tests/'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  pages: write
+  id-token: write
+
+jobs:
+  robot-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install Robot Framework dependencies
+      run: |
+        pip install -r robot_tests/requirements.txt
+
+    - name: Start backend services
+      run: |
+        # Start MongoDB and Redis for integration tests
+        docker compose up -d mongodb redis
+
+    - name: Wait for services to be healthy
+      run: |
+        echo "Waiting for MongoDB..."
+        timeout 60 bash -c 'until docker compose ps mongodb | grep -q "healthy"; do sleep 2; done'
+        echo "Waiting for Redis..."
+        timeout 60 bash -c 'until docker compose ps redis | grep -q "Up"; do sleep 2; done'
+        echo "✓ Services are ready"
+
+    - name: Start backend server
+      run: |
+        cd ushadow/backend
+        # Install uv if not present
+        if ! command -v uv &> /dev/null; then
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+        fi
+        uv pip install --system -e ".[dev]"
+        # Start backend in background
+        nohup uvicorn main:app --host 0.0.0.0 --port 8080 > backend.log 2>&1 &
+        echo $! > backend.pid
+
+    - name: Wait for backend to be ready
+      run: |
+        echo "Waiting for backend..."
+        timeout 60 bash -c 'until curl -f http://localhost:8080/health; do sleep 2; done'
+        echo "✓ Backend is ready"
+
+    - name: Run Robot Framework tests
+      env:
+        CI: "true"
+        TEST_PATH: ${{ github.event.inputs.test_path || 'robot_tests/' }}
+      run: |
+        mkdir -p robot_tests/results
+
+        robot \
+          --outputdir robot_tests/results \
+          --loglevel INFO \
+          --consolewidth 120 \
+          "$TEST_PATH" || true
+
+        # Store exit code for later
+        echo "test_exit_code=$?" >> $GITHUB_ENV
+
+    - name: Show backend logs on failure
+      if: always()
+      run: |
+        if [ -f ushadow/backend/backend.log ]; then
+          echo "=== Backend Logs (last 100 lines) ==="
+          tail -n 100 ushadow/backend/backend.log
+        fi
+
+    - name: Check if test results exist
+      if: always()
+      id: check_results
+      run: |
+        if [ -f robot_tests/results/output.xml ]; then
+          echo "results_exist=true" >> $GITHUB_OUTPUT
+          echo "✓ Test results found"
+        else
+          echo "results_exist=false" >> $GITHUB_OUTPUT
+          echo "⚠️ No test results found"
+          ls -la robot_tests/results/ || echo "Results directory doesn't exist"
+        fi
+
+    - name: Upload Robot Framework HTML reports
+      if: always() && steps.check_results.outputs.results_exist == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: robot-test-reports-html
+        path: |
+          robot_tests/results/report.html
+          robot_tests/results/log.html
+        retention-days: 30
+
+    - name: Publish HTML Report as GitHub Pages artifact
+      if: always() && steps.check_results.outputs.results_exist == 'true'
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: robot_tests/results
+
+    - name: Deploy to GitHub Pages
+      if: always() && steps.check_results.outputs.results_exist == 'true'
+      uses: actions/deploy-pages@v4
+      id: deployment
+
+    - name: Generate test summary
+      if: always() && steps.check_results.outputs.results_exist == 'true'
+      id: test_summary
+      run: |
+        # Parse test results
+        python3 << 'PYTHON_SCRIPT' > test_summary.txt
+        import xml.etree.ElementTree as ET
+        tree = ET.parse('robot_tests/results/output.xml')
+        root = tree.getroot()
+        stats = root.find('.//total/stat')
+        if stats is not None:
+            passed = stats.get("pass", "0")
+            failed = stats.get("fail", "0")
+            total = int(passed) + int(failed)
+            print(f"PASSED={passed}")
+            print(f"FAILED={failed}")
+            print(f"TOTAL={total}")
+        PYTHON_SCRIPT
+
+        # Source the variables
+        source test_summary.txt
+
+        # Set outputs
+        echo "passed=$PASSED" >> $GITHUB_OUTPUT
+        echo "failed=$FAILED" >> $GITHUB_OUTPUT
+        echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+    - name: Post PR comment with test results
+      if: always() && steps.check_results.outputs.results_exist == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const passed = '${{ steps.test_summary.outputs.passed }}';
+          const failed = '${{ steps.test_summary.outputs.failed }}';
+          const total = '${{ steps.test_summary.outputs.total }}';
+          const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+          const pagesUrl = '${{ steps.deployment.outputs.page_url }}';
+
+          const status = failed === '0' ? '✅ All tests passed!' : '❌ Some tests failed';
+          const emoji = failed === '0' ? '🎉' : '⚠️';
+
+          const comment = `## ${emoji} Robot Framework Test Results
+
+          **Status**: ${status}
+
+          | Metric | Count |
+          |--------|-------|
+          | ✅ Passed | ${passed} |
+          | ❌ Failed | ${failed} |
+          | 📊 Total | ${total} |
+
+          ### 📊 View Reports
+
+          **GitHub Pages (Live Reports):**
+          - [📋 Test Report](${pagesUrl}report.html)
+          - [📝 Detailed Log](${pagesUrl}log.html)
+
+          **Download Artifacts:**
+          - [robot-test-reports-html](${runUrl}) - HTML reports
+          - [robot-test-results-xml](${runUrl}) - XML output
+
+          ---
+          *[View full workflow run](${runUrl})*`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+    - name: Upload Robot Framework XML output
+      if: always() && steps.check_results.outputs.results_exist == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: robot-test-results-xml
+        path: robot_tests/results/output.xml
+        retention-days: 30
+
+    - name: Display test results summary
+      if: always()
+      run: |
+        if [ -f robot_tests/results/output.xml ]; then
+          echo "========================================"
+          echo "Robot Framework Test Results"
+          echo "========================================"
+          python3 << 'PYTHON_SCRIPT'
+        import xml.etree.ElementTree as ET
+        tree = ET.parse('robot_tests/results/output.xml')
+        root = tree.getroot()
+        stats = root.find('.//total/stat')
+        if stats is not None:
+            passed = stats.get("pass", "0")
+            failed = stats.get("fail", "0")
+            print(f'✅ Passed: {passed}')
+            print(f'❌ Failed: {failed}')
+            print(f'📊 Total: {int(passed) + int(failed)}')
+        PYTHON_SCRIPT
+          echo "========================================"
+          echo ""
+          echo "📊 FULL TEST REPORTS AVAILABLE:"
+          echo "  1. Go to the 'Summary' tab at the top"
+          echo "  2. Scroll to 'Artifacts' section"
+          echo "  3. Download 'robot-test-reports-html'"
+          echo "  4. Extract and open report.html in your browser"
+        fi
+
+    - name: Cleanup
+      if: always()
+      run: |
+        # Stop backend
+        if [ -f ushadow/backend/backend.pid ]; then
+          kill $(cat ushadow/backend/backend.pid) || true
+        fi
+        # Stop docker services
+        docker compose down -v
+
+    - name: Fail workflow if tests failed
+      if: always()
+      run: |
+        if [ "${{ env.test_exit_code }}" != "0" ]; then
+          echo "❌ Tests failed with exit code ${{ env.test_exit_code }}"
+          exit 1
+        else
+          echo "✅ All tests passed"
+        fi
