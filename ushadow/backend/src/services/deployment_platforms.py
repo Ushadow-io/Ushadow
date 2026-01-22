@@ -104,12 +104,12 @@ class DockerDeployPlatform(DeployPlatform):
 
     def _get_target_ip(self, target: DeployTarget) -> str:
         """Get target IP (localhost for local, tailscale IP for remote)."""
-        hostname = target.metadata["hostname"]
+        hostname = target.identifier  # Use standardized field (hostname for Docker targets)
 
         if self._is_local_deployment(hostname):
             return "localhost"
 
-        tailscale_ip = target.metadata.get("tailscale_ip")
+        tailscale_ip = target.raw_metadata.get("tailscale_ip")
         if tailscale_ip:
             return tailscale_ip
         else:
@@ -143,11 +143,21 @@ class DockerDeployPlatform(DeployPlatform):
                     port_key = f"{port_str}/tcp"
                     exposed_ports[port_key] = {}
 
-            # Create container
+            # Create container with ushadow labels for stateless tracking
+            from datetime import datetime, timezone
+            labels = {
+                "ushadow.deployment_id": deployment_id,
+                "ushadow.service_id": resolved_service.service_id,
+                "ushadow.unode_hostname": target.identifier,
+                "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
+                "ushadow.backend_type": "docker",
+            }
+
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
             container = docker_client.containers.run(
                 image=resolved_service.image,
                 name=container_name,
+                labels=labels,
                 environment=resolved_service.environment,
                 ports=port_bindings,
                 volumes=resolved_service.volumes if resolved_service.volumes else None,
@@ -170,7 +180,7 @@ class DockerDeployPlatform(DeployPlatform):
                     exposed_port = int(first_port)
 
             # Build deployment object
-            hostname = target.metadata["hostname"]
+            hostname = target.identifier  # Use standardized field (hostname for Docker targets)
             deployment = Deployment(
                 id=deployment_id,
                 service_id=resolved_service.service_id,
@@ -212,7 +222,7 @@ class DockerDeployPlatform(DeployPlatform):
         namespace: Optional[str] = None,
     ) -> Deployment:
         """Deploy to a Docker host via unode manager API or local Docker."""
-        hostname = target.metadata["hostname"]
+        hostname = target.identifier  # Use standardized field (hostname for Docker targets)
         logger.info(f"Deploying {resolved_service.service_id} to Docker host {hostname}")
 
         # Generate container name
@@ -230,10 +240,20 @@ class DockerDeployPlatform(DeployPlatform):
             )
 
         # Build deploy payload for remote unode manager
+        from datetime import datetime, timezone
+        labels = {
+            "ushadow.deployment_id": deployment_id,
+            "ushadow.service_id": resolved_service.service_id,
+            "ushadow.unode_hostname": hostname,
+            "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
+            "ushadow.backend_type": "docker",
+        }
+
         payload = {
             "service_id": resolved_service.service_id,
             "container_name": container_name,
             "image": resolved_service.image,
+            "labels": labels,
             "ports": resolved_service.ports,
             "environment": resolved_service.environment,
             "volumes": resolved_service.volumes,
@@ -372,6 +392,116 @@ class DockerDeployPlatform(DeployPlatform):
                 logger.error(f"Failed to get logs: {e}")
                 return [f"Error getting logs: {str(e)}"]
 
+    async def list_deployments(
+        self,
+        target: DeployTarget,
+        service_id: Optional[str] = None,
+    ) -> List[Deployment]:
+        """
+        Query Docker for all ushadow deployments.
+
+        Returns deployments by querying containers with ushadow labels.
+        This is stateless - container runtime is the source of truth.
+        """
+        from datetime import datetime, timezone
+        import docker
+
+        deployments = []
+
+        try:
+            if self._is_local_deployment(target.identifier):
+                # Query local Docker
+                docker_client = docker.from_env()
+                filters = {"label": "ushadow.deployment_id"}
+
+                if service_id:
+                    filters["label"].append(f"ushadow.service_id={service_id}")
+
+                containers = docker_client.containers.list(all=True, filters=filters)
+
+                for container in containers:
+                    labels = container.labels
+
+                    # Extract deployment info from labels
+                    deployment_id = labels.get("ushadow.deployment_id")
+                    if not deployment_id:
+                        continue
+
+                    # Map container status to deployment status
+                    status_map = {
+                        "running": DeploymentStatus.RUNNING,
+                        "exited": DeploymentStatus.STOPPED,
+                        "created": DeploymentStatus.PENDING,
+                        "dead": DeploymentStatus.FAILED,
+                        "paused": DeploymentStatus.STOPPED,
+                    }
+
+                    container_status = container.status.lower()
+                    deployment_status = status_map.get(container_status, DeploymentStatus.FAILED)
+
+                    # Extract exposed port
+                    exposed_port = None
+                    if container.ports:
+                        for container_port, host_bindings in container.ports.items():
+                            if host_bindings:
+                                exposed_port = int(host_bindings[0]["HostPort"])
+                                break
+
+                    # Parse deployed_at from label
+                    deployed_at = None
+                    deployed_at_str = labels.get("ushadow.deployed_at")
+                    if deployed_at_str:
+                        try:
+                            deployed_at = datetime.fromisoformat(deployed_at_str.replace('Z', '+00:00'))
+                        except:
+                            pass
+
+                    deployment = Deployment(
+                        id=deployment_id,
+                        service_id=labels.get("ushadow.service_id", "unknown"),
+                        unode_hostname=labels.get("ushadow.unode_hostname", target.identifier),
+                        status=deployment_status,
+                        container_id=container.id,
+                        container_name=container.name,
+                        deployed_at=deployed_at,
+                        exposed_port=exposed_port,
+                        backend_type="docker",
+                        backend_metadata={
+                            "container_id": container.id,
+                            "local_deployment": True,
+                        }
+                    )
+
+                    deployments.append(deployment)
+
+            else:
+                # Query remote unode manager
+                # TODO: Implement remote query via unode manager API
+                logger.warning(f"Remote deployment listing not yet implemented for {target.identifier}")
+
+        except Exception as e:
+            logger.error(f"Failed to list deployments: {e}")
+
+        return deployments
+
+    async def get_deployment_by_id(
+        self,
+        target: DeployTarget,
+        deployment_id: str
+    ) -> Optional[Deployment]:
+        """
+        Get a specific deployment by ID.
+
+        Queries Docker for container with matching deployment_id label.
+        """
+        deployments = await self.list_deployments(target)
+
+        for deployment in deployments:
+            if deployment.id == deployment_id:
+                return deployment
+
+        return None
+
 
 class KubernetesDeployPlatform(DeployPlatform):
     """Platform implementation for Kubernetes clusters."""
@@ -381,10 +511,8 @@ class KubernetesDeployPlatform(DeployPlatform):
 
     async def get_infrastructure(self, target: DeployTarget) -> Optional[Dict[str, Any]]:
         """Get infrastructure scan for the K8s cluster."""
-        cluster_data = target.metadata
-        namespace = cluster_data.get("namespace", "default")
-        infra_scans = cluster_data.get("infra_scans", {})
-        return infra_scans.get(namespace, {})
+        # Use standardized infrastructure field (already resolved for the namespace)
+        return target.infrastructure or {}
 
     async def deploy(
         self,
@@ -394,14 +522,14 @@ class KubernetesDeployPlatform(DeployPlatform):
         namespace: Optional[str] = None,
     ) -> Deployment:
         """Deploy to a Kubernetes cluster."""
-        cluster_data = target.metadata
-        cluster_id = cluster_data["cluster_id"]
-        hostname = cluster_data["name"]  # Use cluster name as hostname
+        # Use standardized fields
+        cluster_id = target.identifier  # cluster_id
+        hostname = target.name  # cluster name
 
         logger.info(f"Deploying {resolved_service.service_id} to K8s cluster {hostname}")
 
         # Use cluster's default namespace if not specified
-        namespace = namespace or cluster_data.get("namespace", "default")
+        namespace = namespace or target.namespace or "default"
 
         # Use kubernetes_manager.deploy_to_kubernetes
         result = await self.k8s_manager.deploy_to_kubernetes(
@@ -440,8 +568,8 @@ class KubernetesDeployPlatform(DeployPlatform):
         deployment: Deployment
     ) -> DeploymentStatus:
         """Get pod status from Kubernetes."""
-        cluster_data = target.metadata
-        cluster_id = cluster_data["cluster_id"]
+        # Use standardized identifier field (cluster_id for K8s targets)
+        cluster_id = target.identifier
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -473,8 +601,8 @@ class KubernetesDeployPlatform(DeployPlatform):
         deployment: Deployment
     ) -> bool:
         """Scale K8s deployment to 0 replicas."""
-        cluster_data = target.metadata
-        cluster_id = cluster_data["cluster_id"]
+        # Use standardized identifier field (cluster_id for K8s targets)
+        cluster_id = target.identifier
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -503,8 +631,8 @@ class KubernetesDeployPlatform(DeployPlatform):
         deployment: Deployment
     ) -> bool:
         """Delete K8s deployment, service, and configmaps."""
-        cluster_data = target.metadata
-        cluster_id = cluster_data["cluster_id"]
+        # Use standardized identifier field (cluster_id for K8s targets)
+        cluster_id = target.identifier
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -556,8 +684,8 @@ class KubernetesDeployPlatform(DeployPlatform):
         tail: int = 100
     ) -> List[str]:
         """Get logs from K8s pods."""
-        cluster_data = target.metadata
-        cluster_id = cluster_data["cluster_id"]
+        # Use standardized identifier field (cluster_id for K8s targets)
+        cluster_id = target.identifier
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 

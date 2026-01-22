@@ -461,40 +461,98 @@ async def proxy_service_request(
     """
     Generic proxy endpoint for service REST APIs.
 
-    Routes frontend requests through ushadow backend to any managed service.
+    Routes frontend requests to managed services (MANAGEABLE_SERVICES) or deployed services.
     This provides:
     - Unified authentication (JWT forwarded to service)
     - No CORS issues
     - Centralized logging/monitoring
     - Service discovery (no hardcoded ports)
+    - Support for both local and remote deployments
 
     Usage:
         Frontend: axios.get('/api/services/chronicle-backend/proxy/api/conversations')
-        Backend: Forwards to http://chronicle-backend:8000/api/conversations
+        Backend: Forwards to http://chronicle-backend-abc123:8000/api/conversations
 
     For WebSocket/streaming, use direct_url from connection-info instead.
     """
     import httpx
+    import os
     from src.services.docker_manager import get_docker_manager
+    from src.services.deployment_manager import get_deployment_manager
 
     docker_mgr = get_docker_manager()
+    deployment_mgr = get_deployment_manager()
 
-    # Validate service exists
-    if name not in docker_mgr.MANAGEABLE_SERVICES:
-        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    container_name = None
+    internal_port = 8000
+    is_remote = False
+    remote_url = None
 
-    # Get internal URL (Docker network)
-    ports = docker_mgr.get_service_ports(name)
-    if not ports:
-        raise HTTPException(status_code=503, detail=f"Service '{name}' has no ports configured")
+    # First check deployments (user-deployed services override infrastructure)
+    all_deployments = await deployment_mgr.list_deployments()
 
-    primary_port = ports[0]
-    internal_port = primary_port.get("container_port", 8000)
+    # Find deployment matching service name
+    matching_deployment = None
+    for deployment in all_deployments:
+        # Match by service_id (now just the service name, e.g., "chronicle-backend")
+        if deployment.service_id == name:
+            # Prefer running deployments
+            if deployment.status == "running":
+                matching_deployment = deployment
+                break
+            elif not matching_deployment:
+                matching_deployment = deployment
 
-    # Build container name with project prefix (e.g., ushadow-red-chronicle-backend)
-    import os
-    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-    container_name = f"{project_name}-{name}"
+    if matching_deployment:
+        # Extract container details from deployment
+        container_name = matching_deployment.container_name
+
+        # For Docker networking, we need the CONTAINER port, not the host port
+        # Parse from deployed_config ports if available
+        internal_port = 8000  # default
+        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
+            ports = matching_deployment.deployed_config["ports"]
+            if ports and len(ports) > 0:
+                # Parse first port mapping: "8081:8000" -> container port is 8000
+                first_port = ports[0]
+                if ":" in first_port:
+                    _, container_port = first_port.split(":", 1)
+                    internal_port = int(container_port)
+                else:
+                    internal_port = int(first_port)
+
+        # Check if remote deployment
+        is_remote = matching_deployment.unode_hostname != os.getenv("UNODE_HOSTNAME", "ushadow-purple")
+
+        if is_remote:
+            # For remote deployments, proxy through the remote unode manager
+            # TODO: Implement remote proxy via unode manager API
+            raise HTTPException(
+                status_code=501,
+                detail=f"Remote service proxy not yet implemented for {name} on {matching_deployment.unode_hostname}"
+            )
+
+        logger.info(f"[PROXY] Using deployed service: {container_name}:{internal_port} (deployment_id={matching_deployment.id})")
+
+    elif name in docker_mgr.MANAGEABLE_SERVICES:
+        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        ports = docker_mgr.get_service_ports(name)
+        if ports:
+            primary_port = ports[0]
+            internal_port = primary_port.get("container_port", 8000)
+
+        # Build container name with project prefix (e.g., ushadow-purple-chronicle-backend)
+        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+        container_name = f"{project_name}-{name}"
+        logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}")
+
+    else:
+        # Service not found anywhere
+        raise HTTPException(
+            status_code=404,
+            detail=f"Service '{name}' not found in deployments or MANAGEABLE_SERVICES"
+        )
+
     internal_url = f"http://{container_name}:{internal_port}"
 
     # Extract token from query params for audio/media requests
