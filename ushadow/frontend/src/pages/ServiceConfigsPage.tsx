@@ -26,6 +26,8 @@ import {
   servicesApi,
   kubernetesApi,
   clusterApi,
+  deploymentsApi,
+  DeployTarget,
   Template,
   ServiceConfig,
   ServiceConfigSummary,
@@ -137,8 +139,8 @@ export default function ServiceConfigsPage() {
   const [deployEnvVars, setDeployEnvVars] = useState<EnvVarInfo[]>([])
   const [deployEnvConfigs, setDeployEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
   const [loadingDeployEnv, setLoadingDeployEnv] = useState(false)
-  const [kubernetesClusters, setKubernetesClusters] = useState<any[]>([])
-  const [loadingClusters, setLoadingClusters] = useState(false)
+  const [availableTargets, setAvailableTargets] = useState<DeployTarget[]>([])
+  const [loadingTargets, setLoadingTargets] = useState(false)
 
   // Service catalog state
   const [showCatalog, setShowCatalog] = useState(false)
@@ -470,35 +472,27 @@ export default function ServiceConfigsPage() {
     const consumerInstance = instances.find(inst => inst.id === consumerId)
     const templateId = consumerInstance?.template_id || consumerId
 
-    // For Kubernetes, load available clusters first
+    // For Kubernetes, load available targets and filter to K8s only
     if (target.type === 'kubernetes') {
-      setLoadingClusters(true)
+      setLoadingTargets(true)
       try {
-        const clustersResponse = await kubernetesApi.listClusters()
-        setKubernetesClusters(clustersResponse.data)
+        const targetsResponse = await deploymentsApi.listTargets()
+        const k8sTargets = targetsResponse.data.filter(t => t.type === 'k8s')
+        setAvailableTargets(k8sTargets)
 
-        // If there's only one cluster, auto-select it and use its cached infrastructure scan
-        if (clustersResponse.data.length === 1) {
-          const cluster = clustersResponse.data[0]
+        // If there's only one cluster, auto-select it and use its infrastructure from standardized field
+        if (k8sTargets.length === 1) {
+          const deployTarget = k8sTargets[0]
+          const infraData = deployTarget.infrastructure || {}
 
-          // Use cached infrastructure scan results from cluster
-          // Infrastructure is cluster-wide, so use any available namespace scan
-          let infraData = {}
-          if (cluster.infra_scans && Object.keys(cluster.infra_scans).length > 0) {
-            // Use the first available scan (infra is typically accessible cluster-wide)
-            const firstNamespace = Object.keys(cluster.infra_scans)[0]
-            infraData = cluster.infra_scans[firstNamespace] || {}
-            console.log(`🏗️ Using cached K8s infrastructure from namespace '${firstNamespace}':`, infraData)
-          } else {
-            console.warn('No cached infrastructure scan found for cluster')
-          }
+          console.log(`🏗️ Using K8s infrastructure from ${deployTarget.name}:`, infraData)
 
           // Pass template_id as serviceId so the modal loads the right env vars
           setDeployModalState({
             isOpen: true,
             serviceId: templateId,
-            targetType: target.type,
-            selectedClusterId: cluster.cluster_id,
+            targetType: 'kubernetes',
+            selectedClusterId: deployTarget.identifier,  // cluster_id from standardized field
             infraServices: infraData,
           })
         } else {
@@ -511,10 +505,10 @@ export default function ServiceConfigsPage() {
           })
         }
       } catch (err) {
-        console.error('Failed to load K8s clusters:', err)
-        setMessage({ type: 'error', text: 'Failed to load Kubernetes clusters' })
+        console.error('Failed to load K8s targets:', err)
+        setMessage({ type: 'error', text: 'Failed to load deployment targets' })
       } finally {
-        setLoadingClusters(false)
+        setLoadingTargets(false)
       }
     } else if (target.type === 'local' || target.type === 'remote') {
       // Show deploy confirmation modal with env vars
@@ -525,19 +519,23 @@ export default function ServiceConfigsPage() {
         targetId: target.id,
       })
 
-      // Load env config with deploy target
+      // Load deployment targets to get deployment_target_id
       setLoadingDeployEnv(true)
       try {
-        // Determine deployment_target_id for deploy_target parameter
         let deployTargetId: string | undefined
+
         if (target.type === 'local') {
-          const leaderResponse = await clusterApi.getLeaderInfo()
-          // Use deployment_target_id if available, fallback to hostname for backward compatibility
-          deployTargetId = leaderResponse.data.deployment_target_id || leaderResponse.data.hostname
+          // Get local leader target from unified targets endpoint
+          const targetsResponse = await deploymentsApi.listTargets()
+          const dockerTargets = targetsResponse.data.filter(t => t.type === 'docker')
+          // Use standardized is_leader field
+          const leaderTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
+          deployTargetId = leaderTarget?.id
         } else if (target.id) {
           deployTargetId = target.id
         }
 
+        // Get environment variable configuration with deploy_target for proper resolution
         const response = await servicesApi.getEnvConfig(templateId, deployTargetId)
         const allVars = [...response.data.required_env_vars, ...response.data.optional_env_vars]
         setDeployEnvVars(allVars)
@@ -549,12 +547,12 @@ export default function ServiceConfigsPage() {
             name: ev.name,
             source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
             setting_path: ev.setting_path,
-            value: ev.value
+            value: ev.resolved_value  // Backend sends resolved_value, not value
           }
         })
         setDeployEnvConfigs(formData)
       } catch (error) {
-        console.error('Failed to load env config:', error)
+        console.error('Failed to load deployment preparation:', error)
       } finally {
         setLoadingDeployEnv(false)
       }
@@ -574,8 +572,17 @@ export default function ServiceConfigsPage() {
       let targetHostname: string
 
       if (targetType === 'local') {
-        const leaderResponse = await clusterApi.getLeaderInfo()
-        targetHostname = leaderResponse.data.hostname
+        // Get local leader target from unified targets endpoint
+        const targetsResponse = await deploymentsApi.listTargets()
+        const dockerTargets = targetsResponse.data.filter(t => t.type === 'docker')
+        const leaderTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
+        targetHostname = leaderTarget?.identifier  // Use standardized identifier field (hostname)
+
+        if (!targetHostname) {
+          setMessage({ type: 'error', text: 'Failed to find local leader unode' })
+          setCreating(null)
+          return
+        }
       } else {
         // Remote
         if (!simpleDeployModal.targetId) {
@@ -1764,8 +1771,8 @@ export default function ServiceConfigsPage() {
         <DeployToK8sModal
           isOpen={true}
           onClose={() => setDeployModalState({ isOpen: false, serviceId: null, targetType: null })}
-          cluster={deployModalState.selectedClusterId ? kubernetesClusters.find((c) => c.cluster_id === deployModalState.selectedClusterId) : undefined}
-          availableClusters={kubernetesClusters}
+          target={deployModalState.selectedClusterId ? availableTargets.find((t) => t.identifier === deployModalState.selectedClusterId) : undefined}
+          availableTargets={availableTargets}
           infraServices={deployModalState.infraServices || {}}
           preselectedServiceId={deployModalState.serviceId || undefined}
         />

@@ -908,9 +908,11 @@ class DockerManager:
         """
         Build environment variables from user's saved compose configuration.
 
-        For compose-discovered services, users configure env vars via the
-        /api/compose/services/{id}/env endpoint. This method resolves those
-        configurations to actual values.
+        Uses the entity-based Settings API (v2) to resolve values from all sources:
+        - Service-specific config
+        - Capability providers
+        - Global settings
+        - Defaults
 
         Args:
             service_name: Name of the service (docker_service_name)
@@ -928,39 +930,27 @@ class DockerManager:
         if not service:
             return {}
 
-        # Load saved configuration
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await settings.get(config_key)
-        saved_config = saved_config or {}
+        # Use entity-based Settings API to resolve all env vars
+        # This automatically checks: service config, capabilities, providers, settings, defaults
+        resolutions = await settings.for_service(service.service_id)
 
         resolved = {}
 
         for env_var in service.all_env_vars:
-            config = saved_config.get(env_var.name, {})
-            source = config.get("source", "default")
-            setting_path = config.get("setting_path")
-            literal_value = config.get("value")
+            resolution = resolutions.get(env_var.name)
 
-            # Resolve value based on source
-            value = None
-            if source == "setting" and setting_path:
-                value = await settings.get(setting_path)
-            elif source == "literal" and literal_value:
-                value = literal_value
-            else:
-                # Try env var from os.environ, then fall back to default
-                value = os.environ.get(env_var.name) or env_var.default_value
-
-            if value:
-                resolved[env_var.name] = str(value)
-            elif env_var.is_required and source != "default":
+            if resolution and resolution.found and resolution.value:
+                resolved[env_var.name] = str(resolution.value)
+                logger.debug(
+                    f"Resolved {env_var.name} from {resolution.source.value}: {mask_if_secret(env_var.name, str(resolution.value))}"
+                )
+            elif env_var.is_required:
                 logger.warning(
-                    f"Service {service_name}: env var {env_var.name} "
-                    f"has no value for source={source}"
+                    f"Service {service_name}: required env var {env_var.name} has no value"
                 )
 
         logger.info(
-            f"Resolved {len(resolved)} env vars for {service_name} from compose config"
+            f"Resolved {len(resolved)} env vars for {service_name} using Settings API v2"
         )
         return resolved
 

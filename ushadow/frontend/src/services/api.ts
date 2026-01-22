@@ -642,7 +642,34 @@ export interface Deployment {
   exposed_port?: number
 }
 
+export interface DeployTarget {
+  // Core identity fields (always present)
+  id: string  // deployment_target_id format: {identifier}.{type}.{environment}
+  type: 'docker' | 'k8s'
+  name: string  // Human-readable name
+  identifier: string  // hostname (docker) or cluster_id (k8s)
+  environment: string  // e.g., 'purple', 'production'
+
+  // Status and health
+  status: string  // online/offline/healthy/unknown
+
+  // Platform-specific fields (optional)
+  namespace?: string  // K8s namespace (k8s only)
+  infrastructure?: Record<string, any>  // Infrastructure scan data (k8s only)
+
+  // Common metadata
+  provider?: string  // local/remote/eks/gke/aks
+  region?: string  // Region or location
+  is_leader?: boolean  // Is this the leader node (docker only)
+
+  // Raw data for advanced use cases
+  raw_metadata: Record<string, any>  // Original UNode or KubernetesCluster data
+}
+
 export const deploymentsApi = {
+  // Deployment targets (unified)
+  listTargets: () => api.get<DeployTarget[]>('/api/deployments/targets'),
+
   // Service definitions
   createService: (data: Omit<ServiceDefinition, 'created_at' | 'updated_at' | 'created_by'>) =>
     api.post('/api/deployments/services', data),

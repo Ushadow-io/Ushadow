@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react'
 import { CheckCircle, Loader, ChevronRight } from 'lucide-react'
 import Modal from './Modal'
 import EnvVarEditor from './EnvVarEditor'
-import { kubernetesApi, servicesApi, svcConfigsApi, KubernetesCluster, EnvVarInfo, EnvVarConfig } from '../services/api'
+import { kubernetesApi, servicesApi, svcConfigsApi, DeployTarget, EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface DeployToK8sModalProps {
   isOpen: boolean
   onClose: () => void
-  cluster?: KubernetesCluster  // Optional - if not provided, show cluster selection
-  availableClusters?: KubernetesCluster[]  // For cluster selection
+  target?: DeployTarget  // Optional - if not provided, show target selection
+  availableTargets?: DeployTarget[]  // For target selection
   infraServices?: Record<string, any>
   preselectedServiceId?: string  // If provided, skip service selection step
 }
@@ -22,12 +22,12 @@ interface ServiceOption {
   requires?: string[]
 }
 
-export default function DeployToK8sModal({ isOpen, onClose, cluster: initialCluster, availableClusters = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployToK8sModalProps) {
-  const [step, setStep] = useState<'cluster' | 'select' | 'configure' | 'deploying' | 'complete'>(
-    !initialCluster && availableClusters.length > 1 ? 'cluster' :
+export default function DeployToK8sModal({ isOpen, onClose, target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployToK8sModalProps) {
+  const [step, setStep] = useState<'target' | 'select' | 'configure' | 'deploying' | 'complete'>(
+    !initialTarget && availableTargets.length > 1 ? 'target' :
     preselectedServiceId ? 'configure' : 'select'
   )
-  const [selectedCluster, setSelectedCluster] = useState<KubernetesCluster | null>(initialCluster || null)
+  const [selectedTarget, setSelectedTarget] = useState<DeployTarget | null>(initialTarget || null)
   const [infraServices, setInfraServices] = useState<Record<string, any>>(initialInfraServices)
 
   // Sync infra services from prop to state when it changes
@@ -120,7 +120,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       // Pass deployment_target_id for unified deployment target resolution
       const envResponse = await servicesApi.getEnvConfig(
         service.service_id,
-        selectedCluster?.deployment_target_id || selectedCluster?.cluster_id
+        selectedTarget?.id
       )
       const envData = envResponse.data
 
@@ -212,7 +212,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
   }
 
   const handleDeploy = async () => {
-    if (!selectedService || !selectedCluster) return
+    if (!selectedService || !selectedTarget) return
 
     try {
       setStep('deploying')
@@ -220,9 +220,9 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
 
       // Generate instance ID for this deployment target (only lowercase, numbers, hyphens)
       const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
-      const clusterName = selectedCluster.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-      const instanceId = `${sanitizedServiceId}-${clusterName}`
-      const deploymentTarget = `k8s://${selectedCluster.cluster_id}/${namespace}`
+      const targetName = selectedTarget.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+      const instanceId = `${sanitizedServiceId}-${targetName}`
+      const deploymentTarget = `k8s://${selectedTarget.identifier}/${namespace}`
 
       // Convert env configs to instance config format
       const configValues: Record<string, any> = {}
@@ -246,8 +246,8 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
         await svcConfigsApi.getServiceConfig(instanceId)
         // ServiceConfig exists - update it
         await svcConfigsApi.updateServiceConfig(instanceId, {
-          name: `${selectedService.display_name} (${selectedCluster.name}/${namespace})`,
-          description: `K8s deployment to ${selectedCluster.name} in ${namespace} namespace`,
+          name: `${selectedService.display_name} (${selectedTarget.name}/${namespace})`,
+          description: `K8s deployment to ${selectedTarget.name} in ${namespace} namespace`,
           config: configValues,
           deployment_target: deploymentTarget
         })
@@ -256,8 +256,8 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
         await svcConfigsApi.createServiceConfig({
           id: instanceId,
           template_id: selectedService.service_id,
-          name: `${selectedService.display_name} (${selectedCluster.name}/${namespace})`,
-          description: `K8s deployment to ${selectedCluster.name} in ${namespace} namespace`,
+          name: `${selectedService.display_name} (${selectedTarget.name}/${namespace})`,
+          description: `K8s deployment to ${selectedTarget.name} in ${namespace} namespace`,
           config: configValues,
           deployment_target: deploymentTarget
         })
@@ -266,7 +266,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       // Step 2: Deploy the service config to K8s
       // The backend will use centralized resolution which reads from the service config config
       const deployResponse = await kubernetesApi.deployService(
-        selectedCluster.cluster_id,
+        selectedTarget.identifier,
         {
           service_id: selectedService.service_id,
           namespace: namespace,
@@ -290,47 +290,39 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
     }))
   }
 
-  const handleClusterSelection = async (cluster: KubernetesCluster) => {
-    setSelectedCluster(cluster)
+  const handleTargetSelection = async (target: DeployTarget) => {
+    setSelectedTarget(target)
     setError(null)
 
-    // Use cached infrastructure scan results from cluster
-    // Infrastructure is cluster-wide, so use any available namespace scan
-    let infraData = {}
-    if (cluster.infra_scans && Object.keys(cluster.infra_scans).length > 0) {
-      // Use the first available scan (infra is typically accessible cluster-wide)
-      const firstNamespace = Object.keys(cluster.infra_scans)[0]
-      infraData = cluster.infra_scans[firstNamespace] || {}
-      console.log(`🔍 Using cached K8s infrastructure from namespace '${firstNamespace}':`, infraData)
-    } else {
-      console.warn('No cached infrastructure scan found for cluster')
-    }
+    // Use infrastructure from standardized DeployTarget field
+    const infraData = target.infrastructure || {}
+    console.log(`🔍 Using K8s infrastructure from ${target.name}:`, infraData)
     setInfraServices(infraData)
 
     setStep('select')
   }
 
-  const renderClusterSelection = () => (
+  const renderTargetSelection = () => (
     <div className="space-y-4">
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
-        Select a Kubernetes cluster for deployment
+        Select a deployment target
       </p>
 
       <div className="space-y-2 max-h-96 overflow-y-auto">
-        {availableClusters.map((cluster) => (
+        {availableTargets.map((target) => (
           <button
-            key={cluster.cluster_id}
-            onClick={() => handleClusterSelection(cluster)}
+            key={target.id}
+            onClick={() => handleTargetSelection(target)}
             className="w-full p-4 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-500 dark:hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors text-left"
-            data-testid={`select-cluster-${cluster.cluster_id}`}
+            data-testid={`select-target-${target.identifier}`}
           >
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                  {cluster.name}
+                  {target.name}
                 </h4>
                 <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
-                  {cluster.provider} • {cluster.region || 'unknown region'}
+                  {target.provider} • {target.region || 'unknown region'}
                 </p>
               </div>
               <ChevronRight className="h-5 w-5 text-neutral-400" />
@@ -344,7 +336,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
   const renderSelectService = () => (
     <div className="space-y-4">
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
-        Select a service to deploy to <strong>{selectedCluster?.name}</strong> in namespace <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">{namespace}</code>
+        Select a service to deploy to <strong>{selectedTarget?.name}</strong> in namespace <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">{namespace}</code>
       </p>
 
       <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -521,7 +513,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       maxWidth="xl"
       testId="deploy-to-k8s-modal"
     >
-      {step === 'cluster' && renderClusterSelection()}
+      {step === 'target' && renderTargetSelection()}
       {step === 'select' && renderSelectService()}
       {step === 'configure' && renderConfigureEnvVars()}
       {step === 'deploying' && renderDeploying()}

@@ -11,16 +11,34 @@ class DeployTarget(BaseModel):
     Represents a specific deployment destination.
 
     This is the "WHERE" - a concrete place to deploy services.
-    Contains both the identifier and the metadata about the target.
+    Provides a standardized interface regardless of platform type (docker/k8s).
 
     Examples:
-        - DeployTarget(id="ushadow-purple.unode.purple", type="docker", metadata={...})
-        - DeployTarget(id="anubis.k8s.purple", type="k8s", metadata={...})
+        - DeployTarget(id="ushadow-purple.unode.purple", type="docker", ...)
+        - DeployTarget(id="anubis.k8s.purple", type="k8s", ...)
     """
 
+    # Core identity fields (always present)
     id: str = Field(..., description="Deployment target ID: {identifier}.{type}.{environment}")
     type: Literal["docker", "k8s"] = Field(..., description="Platform type")
-    metadata: Dict[str, Any] = Field(..., description="UNode or KubernetesCluster data")
+    name: str = Field(..., description="Human-readable name")
+    identifier: str = Field(..., description="Hostname (docker) or cluster_id (k8s)")
+    environment: str = Field(..., description="Environment name (e.g., 'purple', 'production')")
+
+    # Status and health
+    status: str = Field(..., description="Status: online/offline/healthy/unknown")
+
+    # Platform-specific fields (optional)
+    namespace: Optional[str] = Field(None, description="K8s namespace (k8s only)")
+    infrastructure: Optional[Dict[str, Any]] = Field(None, description="Infrastructure scan data (k8s only)")
+
+    # Common metadata
+    provider: Optional[str] = Field(None, description="Provider: local/remote/eks/gke/aks")
+    region: Optional[str] = Field(None, description="Region or location")
+    is_leader: Optional[bool] = Field(None, description="Is this the leader node (docker only)")
+
+    # Raw data for advanced use cases
+    raw_metadata: Dict[str, Any] = Field(..., description="Original UNode or KubernetesCluster data")
 
     @classmethod
     async def from_id(cls, target_id: str) -> "DeployTarget":
