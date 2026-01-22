@@ -19,8 +19,9 @@ from src.models.deployment import (
     ResolvedServiceDefinition,
 )
 from src.models.unode import UNode
+from src.models.deploy_target import DeployTarget
 from src.services.compose_registry import get_compose_registry
-from src.services.deployment_backends import get_deployment_backend
+from src.services.deployment_platforms import get_deploy_platform
 
 logger = logging.getLogger(__name__)
 
@@ -130,23 +131,34 @@ class DeploymentManager:
     async def resolve_service_for_deployment(
         self,
         service_id: str,
+        deploy_target: Optional[str] = None,
         config_id: Optional[str] = None
     ) -> "ResolvedServiceDefinition":
         """
-        Resolve all variables for a service using docker-compose config.
+        Resolve all variables for a service using the new Settings API.
 
         This is the single source of truth for variable resolution across all
         deployment targets (local docker, remote unode, kubernetes).
 
+        Uses Settings.for_deploy_config() to get properly resolved environment
+        variables through the complete hierarchy:
+        - config.defaults.yaml
+        - Docker Compose file defaults
+        - .env file (os.environ)
+        - Capability/provider values
+        - Deploy environment overrides
+        - User overrides (if config_id provided)
+
         Steps:
         1. Get service from compose registry
-        2. Get user's saved env configuration (from ServiceConfig if config_id provided)
-        3. Run `docker-compose -f <file> config <service>` with resolved env vars
-        4. Parse the resolved YAML output (all ${VAR:-default} substituted)
+        2. Use Settings API to resolve all env vars for this deployment target
+        3. Run `docker-compose config` to resolve image/port/volume variables
+        4. Combine Settings-resolved env vars with compose-resolved structure
         5. Return ResolvedServiceDefinition with clean values
 
         Args:
             service_id: Service identifier (e.g., "openmemory-compose:mem0-ui")
+            deploy_target: Target unode hostname or cluster ID for deployment
             config_id: Optional ServiceConfig ID to load env var overrides from
 
         Returns:
@@ -167,15 +179,36 @@ class DeploymentManager:
         if not service:
             raise ValueError(f"Service not found: {service_id}")
 
-        # Get user's saved env configuration (same as docker_manager does)
-        from src.services.docker_manager import get_docker_manager
-        docker_manager = get_docker_manager()
+        # Use new Settings API to resolve environment variables
+        from src.config import get_settings
+        settings = get_settings()
 
-        # Build environment variables with user configuration (including ServiceConfig overrides)
-        subprocess_env, container_env = await docker_manager._build_env_vars_for_service(
-            service.service_name,
-            config_id=config_id
-        )
+        # Choose resolution method based on context:
+        # - config_id provided: use for_deployment() (full hierarchy with user overrides)
+        # - deploy_target provided: use for_deploy_config() (up to deploy_env layer)
+        # - neither: use for_service() (up to capability layer)
+        if config_id:
+            logger.info(f"Resolving settings for deployment {config_id}")
+            env_resolutions = await settings.for_deployment(config_id)
+        elif deploy_target:
+            logger.info(f"Resolving settings for service {service_id} targeting {deploy_target}")
+            env_resolutions = await settings.for_deploy_config(deploy_target, service_id)
+        else:
+            # Fallback to service-level resolution (layers 1-4 only)
+            logger.info(f"Resolving settings for service {service_id} (no context)")
+            env_resolutions = await settings.for_service(service_id)
+
+        # Extract values from Resolution objects
+        container_env = {
+            env_var: resolution.value
+            for env_var, resolution in env_resolutions.items()
+            if resolution.value is not None
+        }
+
+        # Build subprocess environment for docker-compose config (needs all vars for ${VAR} substitution)
+        import os
+        subprocess_env = os.environ.copy()
+        subprocess_env.update(container_env)
 
         # Get compose file path (DiscoveredService has compose_file as direct attribute)
         compose_file = str(service.compose_file)
@@ -258,16 +291,27 @@ class DeploymentManager:
                     # Short format: "3002:3000" or "3000"
                     ports.append(str(port_def))
 
-            # Get resolved environment
-            environment = resolved_service.get("environment", {})
-            if isinstance(environment, list):
+            # Use the properly resolved environment from _build_env_vars_for_service
+            # This includes all layers: config defaults, compose defaults, .env, capabilities, etc.
+            # Don't rely on docker-compose config output as it only includes vars listed in the compose file
+            environment = container_env
+
+            # Also merge any environment vars from the compose file output that aren't in container_env
+            # This handles edge cases where compose file has additional vars not managed by our system
+            compose_environment = resolved_service.get("environment", {})
+            if isinstance(compose_environment, list):
                 # Convert list format ["KEY=value"] to dict
                 env_dict = {}
-                for env_item in environment:
+                for env_item in compose_environment:
                     if "=" in env_item:
                         key, value = env_item.split("=", 1)
                         env_dict[key] = value
-                environment = env_dict
+                compose_environment = env_dict
+
+            # Merge compose environment (lower priority) with container_env (higher priority)
+            for key, value in compose_environment.items():
+                if key not in environment:
+                    environment[key] = value
 
             # Get other fields - handle volumes (can be list of strings or dicts)
             volumes_raw = resolved_service.get("volumes", [])
@@ -460,7 +504,11 @@ class DeploymentManager:
         """
         # Resolve service with all variables substituted
         try:
-            resolved_service = await self.resolve_service_for_deployment(service_id)
+            resolved_service = await self.resolve_service_for_deployment(
+                service_id,
+                deploy_target=unode_hostname,
+                config_id=config_id
+            )
         except ValueError as e:
             logger.error(f"Failed to resolve service {service_id}: {e}")
             raise ValueError(f"Service resolution failed: {e}")
@@ -503,14 +551,16 @@ class DeploymentManager:
         # Create deployment ID
         deployment_id = str(uuid.uuid4())[:8]
 
-        # Get appropriate deployment backend
-        k8s_manager = None
+        # Create deployment target from unode
         from src.models.unode import UNodeType
-        if unode.type == UNodeType.KUBERNETES:
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = await get_kubernetes_manager()
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            metadata=unode.model_dump()
+        )
 
-        backend = get_deployment_backend(unode, k8s_manager)
+        # Get appropriate deployment platform
+        platform = get_deploy_platform(target)
 
         # Check for port conflicts using the existing method (Docker only)
         if unode.type != UNodeType.KUBERNETES:
@@ -549,10 +599,10 @@ class DeploymentManager:
             else:
                 logger.info(f"No port conflicts detected for {service_name}")
 
-        # Deploy using the backend
+        # Deploy using the platform
         try:
-            deployment = await backend.deploy(
-                unode=unode,
+            deployment = await platform.deploy(
+                target=target,
                 resolved_service=resolved_service,
                 deployment_id=deployment_id,
                 namespace=namespace
@@ -683,17 +733,19 @@ class DeploymentManager:
 
         unode = UNode(**unode_dict)
 
-        # Get appropriate backend
-        k8s_manager = None
+        # Create deployment target from unode
         from src.models.unode import UNodeType
-        if unode.type == UNodeType.KUBERNETES:
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = await get_kubernetes_manager()
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            metadata=unode.model_dump()
+        )
 
-        backend = get_deployment_backend(unode, k8s_manager)
+        # Get appropriate deployment platform
+        platform = get_deploy_platform(target)
 
         try:
-            success = await backend.stop(unode, deployment)
+            success = await platform.stop(target, deployment)
 
             if success:
                 deployment.status = DeploymentStatus.STOPPED
@@ -755,16 +807,19 @@ class DeploymentManager:
         if unode_dict:
             unode = UNode(**unode_dict)
 
-            # Get appropriate backend
-            k8s_manager = None
-            if unode.type.value == "kubernetes":
-                from src.services.kubernetes_manager import get_kubernetes_manager
-                k8s_manager = await get_kubernetes_manager()
+            # Create deployment target from unode
+            from src.models.unode import UNodeType
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                metadata=unode.model_dump()
+            )
 
-            backend = get_deployment_backend(unode, k8s_manager)
+            # Get appropriate deployment platform
+            platform = get_deploy_platform(target)
 
             try:
-                await backend.remove(unode, deployment)
+                await platform.remove(target, deployment)
             except Exception as e:
                 logger.warning(f"Failed to remove deployment on node: {e}")
 
@@ -819,17 +874,19 @@ class DeploymentManager:
 
         unode = UNode(**unode_dict)
 
-        # Get appropriate backend
-        k8s_manager = None
+        # Create deployment target from unode
         from src.models.unode import UNodeType
-        if unode.type == UNodeType.KUBERNETES:
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = await get_kubernetes_manager()
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            metadata=unode.model_dump()
+        )
 
-        backend = get_deployment_backend(unode, k8s_manager)
+        # Get appropriate deployment platform
+        platform = get_deploy_platform(target)
 
         try:
-            logs = await backend.get_logs(unode, deployment, tail)
+            logs = await platform.get_logs(target, deployment, tail)
             return "\n".join(logs)
         except Exception as e:
             logger.error(f"Failed to get logs for {deployment_id}: {e}")

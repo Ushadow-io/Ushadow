@@ -135,6 +135,12 @@ export default function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorP
             data-testid={`map-select-${envVar.name}`}
           >
             <option value="">select...</option>
+            {/* If current setting_path isn't in suggestions, show it as an option */}
+            {config.setting_path && !envVar.suggestions.some(s => s.path === config.setting_path) && (
+              <option value={config.setting_path}>
+                {config.setting_path} {config.value ? `→ ${config.value.length > 20 ? config.value.substring(0, 20) + '...' : config.value}` : '(current)'}
+              </option>
+            )}
             {envVar.suggestions.map((s) => {
               // Truncate long values to prevent horizontal scrolling
               const displayValue = s.value && s.value.length > 30 ? s.value.substring(0, 30) + '...' : s.value

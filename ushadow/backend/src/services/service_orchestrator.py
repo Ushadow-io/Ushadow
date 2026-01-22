@@ -450,10 +450,15 @@ class ServiceOrchestrator:
             "preferences": dict(preferences) if hasattr(preferences, 'items') else preferences,
         }
 
-    async def get_env_config(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_env_config(self, name: str, deploy_target: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get environment variable configuration with suggestions.
 
         Uses the new entity-based Settings API (v2) for resolution.
+
+        Args:
+            name: Service name
+            deploy_target: Optional deployment target (unode hostname or cluster ID)
+                          to include deploy_env layer in resolution
         """
         service = self._find_service(name)
         if not service:
@@ -463,7 +468,11 @@ class ServiceOrchestrator:
         settings_v2 = get_settings()
 
         # Get resolutions using new entity-based API
-        resolutions = await settings_v2.for_service(service.service_id)
+        # Use for_deploy_config if deploy_target is provided (includes deploy_env layer)
+        if deploy_target:
+            resolutions = await settings_v2.for_deploy_config(deploy_target, service.service_id)
+        else:
+            resolutions = await settings_v2.for_service(service.service_id)
 
         # Build env var config from schema + resolutions + suggestions
         async def build_env_var_info(ev: EnvVarConfig, is_required: bool) -> Dict[str, Any]:
@@ -867,7 +876,11 @@ class ServiceOrchestrator:
         )
 
     async def _check_needs_setup(self, service: DiscoveredService) -> bool:
-        """Check if a service needs setup (missing required env vars)."""
+        """Check if a service needs setup (missing required env vars).
+
+        Uses the entity-based Settings API to check if values can be resolved
+        from any source (service config, capabilities, providers, or settings).
+        """
         required_without_defaults = [
             ev for ev in service.required_env_vars
             if ev.is_required and not ev.has_default
@@ -876,23 +889,22 @@ class ServiceOrchestrator:
         if not required_without_defaults:
             return False
 
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await self.settings.get(config_key) or {}
+        # Use the Settings API resolution to check if values are available
+        settings_v2 = get_settings()
+        resolutions = await settings_v2.for_service(service.service_id)
 
         for ev in required_without_defaults:
-            saved = saved_config.get(ev.name, {})
-            if hasattr(saved, 'items'):
-                saved = dict(saved)
+            resolution = resolutions.get(ev.name)
 
-            if saved.get("source") == "setting" and saved.get("setting_path"):
-                value = await self.settings.get(saved["setting_path"])
-                if not value:
-                    return True
-            elif saved.get("source") == "literal" and saved.get("value"):
-                continue
-            else:
-                # Check if env var has a value from os.environ
-                if not os.environ.get(ev.name):
+            # Check if value can be resolved from any source
+            if not resolution or not resolution.found:
+                # Also check well-known mappings as fallback
+                if ev.name in WELL_KNOWN_ENV_MAPPINGS:
+                    settings_path = WELL_KNOWN_ENV_MAPPINGS[ev.name]
+                    value = await self.settings.get(settings_path)
+                    if not value:
+                        return True
+                else:
                     return True
 
         return False

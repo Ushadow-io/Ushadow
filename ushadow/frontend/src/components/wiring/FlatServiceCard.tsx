@@ -13,7 +13,7 @@
  * └─────────────────────────────────────────────────┘
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import {
   Cloud,
   HardDrive,
@@ -26,6 +26,9 @@ import {
   X,
   Save,
   ChevronLeft,
+  ChevronDown,
+  Server,
+  Monitor,
 } from 'lucide-react'
 import { CapabilitySlot } from './CapabilitySlot'
 import { StatusIndicator } from './StatusIndicator'
@@ -403,6 +406,21 @@ export function FlatServiceCard({
   }, [providerTemplates, initialConfigs])
   const [isStarting, setIsStarting] = useState(false)
   const [creatingCapability, setCreatingCapability] = useState<string | null>(null)
+  const [showDeployMenu, setShowDeployMenu] = useState(false)
+  const deployMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close deploy menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (deployMenuRef.current && !deployMenuRef.current.contains(event.target as Node)) {
+        setShowDeployMenu(false)
+      }
+    }
+    if (showDeployMenu) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showDeployMenu])
 
   // Compute state
   const isCloud = template.mode === 'cloud'
@@ -497,8 +515,9 @@ export function FlatServiceCard({
       >
         {/* Header */}
         <div className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 flex-1 min-w-0">
+          {/* Row 1: Service name + Edit */}
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
               {/* Mode icon */}
               {isCloud ? (
                 <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
@@ -507,12 +526,27 @@ export function FlatServiceCard({
               )}
 
               {/* Service name */}
-              <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
+              <span className="font-semibold text-neutral-900 dark:text-neutral-100">
                 {template.name}
               </span>
-
-              <StatusIndicator status={status} />
             </div>
+
+            {/* Edit - top right */}
+            {onEdit && (
+              <button
+                onClick={onEdit}
+                className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                title="Edit settings"
+                data-testid={`flat-service-edit-${template.id}`}
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          {/* Row 2: Status + Actions */}
+          <div className="flex items-center justify-between">
+            <StatusIndicator status={status} />
 
             {/* Actions */}
             <div className="flex items-center gap-2">
@@ -545,18 +579,6 @@ export function FlatServiceCard({
                 </>
               )}
 
-              {/* Edit */}
-              {onEdit && (
-                <button
-                  onClick={onEdit}
-                  className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-                  title="Edit settings"
-                  data-testid={`flat-service-edit-${template.id}`}
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-              )}
-
               {/* Add config variant */}
               {onAddConfig && (
                 <button
@@ -569,24 +591,69 @@ export function FlatServiceCard({
                 </button>
               )}
 
-              {/* Deploy */}
+              {/* Deploy dropdown */}
               {onDeploy && (
-                <button
-                  onClick={() => onDeploy({ type: 'local' })}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
-                  title="Deploy service"
-                  data-testid={`flat-service-deploy-${template.id}`}
-                >
-                  <Rocket className="h-4 w-4" />
-                  Deploy
-                </button>
+                <div className="relative" ref={deployMenuRef}>
+                  <button
+                    onClick={() => setShowDeployMenu(!showDeployMenu)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50"
+                    title="Deploy service"
+                    data-testid={`flat-service-deploy-${template.id}`}
+                  >
+                    <Rocket className="h-4 w-4" />
+                    Deploy
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+
+                  {/* Deploy target menu */}
+                  {showDeployMenu && (
+                    <div
+                      className="absolute right-0 mt-1 w-48 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg z-50"
+                      data-testid={`flat-service-deploy-menu-${template.id}`}
+                    >
+                      <button
+                        onClick={() => {
+                          onDeploy({ type: 'local' })
+                          setShowDeployMenu(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-t-lg"
+                        data-testid={`deploy-target-local-${template.id}`}
+                      >
+                        <Monitor className="h-4 w-4 text-neutral-500" />
+                        <span>Local Docker</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          onDeploy({ type: 'remote' })
+                          setShowDeployMenu(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                        data-testid={`deploy-target-remote-${template.id}`}
+                      >
+                        <Server className="h-4 w-4 text-neutral-500" />
+                        <span>Remote uNode</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          onDeploy({ type: 'kubernetes' })
+                          setShowDeployMenu(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-b-lg"
+                        data-testid={`deploy-target-kubernetes-${template.id}`}
+                      >
+                        <Cloud className="h-4 w-4 text-neutral-500" />
+                        <span>Kubernetes</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
 
           {/* Description */}
           {template.description && (
-            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
               {template.description}
             </p>
           )}

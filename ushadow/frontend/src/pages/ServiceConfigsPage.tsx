@@ -465,12 +465,10 @@ export default function ServiceConfigsPage() {
   }
 
   const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => {
-    // Get the consumer instance to find its template_id
+    // consumerId can be either an instance ID or a template ID (for templates without instances)
+    // Try to find instance first, otherwise treat as template ID
     const consumerInstance = instances.find(inst => inst.id === consumerId)
-    if (!consumerInstance) {
-      setMessage({ type: 'error', text: `Service instance ${consumerId} not found` })
-      return
-    }
+    const templateId = consumerInstance?.template_id || consumerId
 
     // For Kubernetes, load available clusters first
     if (target.type === 'kubernetes') {
@@ -498,7 +496,7 @@ export default function ServiceConfigsPage() {
           // Pass template_id as serviceId so the modal loads the right env vars
           setDeployModalState({
             isOpen: true,
-            serviceId: consumerInstance.template_id,
+            serviceId: templateId,
             targetType: target.type,
             selectedClusterId: cluster.cluster_id,
             infraServices: infraData,
@@ -508,7 +506,7 @@ export default function ServiceConfigsPage() {
           // Infrastructure will be loaded when cluster is selected in modal
           setDeployModalState({
             isOpen: true,
-            serviceId: consumerInstance.template_id,
+            serviceId: templateId,
             targetType: target.type,
           })
         }
@@ -522,15 +520,25 @@ export default function ServiceConfigsPage() {
       // Show deploy confirmation modal with env vars
       setSimpleDeployModal({
         isOpen: true,
-        serviceId: consumerId,
+        serviceId: templateId,
         targetType: target.type,
         targetId: target.id,
       })
 
-      // Load env config
+      // Load env config with deploy target
       setLoadingDeployEnv(true)
       try {
-        const response = await servicesApi.getEnvConfig(consumerId)
+        // Determine deployment_target_id for deploy_target parameter
+        let deployTargetId: string | undefined
+        if (target.type === 'local') {
+          const leaderResponse = await clusterApi.getLeaderInfo()
+          // Use deployment_target_id if available, fallback to hostname for backward compatibility
+          deployTargetId = leaderResponse.data.deployment_target_id || leaderResponse.data.hostname
+        } else if (target.id) {
+          deployTargetId = target.id
+        }
+
+        const response = await servicesApi.getEnvConfig(templateId, deployTargetId)
         const allVars = [...response.data.required_env_vars, ...response.data.optional_env_vars]
         setDeployEnvVars(allVars)
 
