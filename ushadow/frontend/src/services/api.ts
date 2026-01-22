@@ -265,14 +265,14 @@ export const servicesApi = {
   getConfig: (name: string) => api.get(`/api/services/${name}/config`),
 
   /** Get environment variable configuration with suggestions */
-  getEnvConfig: (name: string) => api.get<{
+  getEnvConfig: (name: string, deployTarget?: string) => api.get<{
     service_id: string
     service_name: string
     compose_file: string
     requires: string[]
     required_env_vars: EnvVarInfo[]
     optional_env_vars: EnvVarInfo[]
-  }>(`/api/services/${name}/env`),
+  }>(`/api/services/${name}/env${deployTarget ? `?deploy_target=${encodeURIComponent(deployTarget)}` : ''}`),
 
   /** Save environment variable configuration */
   updateEnvConfig: (name: string, envVars: EnvVarConfig[]) =>
@@ -550,6 +550,7 @@ export interface KubernetesCluster {
   namespace: string
   labels: Record<string, string>
   infra_scans?: Record<string, any>
+  deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
 }
 
 export const kubernetesApi = {
@@ -652,8 +653,8 @@ export const deploymentsApi = {
   deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
 
   // Deployments
-  deploy: (serviceId: string, unodeHostname: string) =>
-    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname }),
+  deploy: (serviceId: string, unodeHostname: string, configId?: string) =>
+    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId }),
   listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class UNodeRole(str, Enum):
@@ -78,6 +78,18 @@ class UNode(UNodeBase):
     services: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def deployment_target_id(self) -> str:
+        """
+        Get unified deployment target ID.
+
+        Format: {hostname}.unode.{environment}
+        Example: "ushadow-purple.unode.purple"
+        """
+        from src.utils.deployment_targets import make_deployment_target_id
+        return make_deployment_target_id(self.hostname, "unode")
 
     class Config:
         from_attributes = True

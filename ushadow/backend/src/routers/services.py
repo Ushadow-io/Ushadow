@@ -743,14 +743,20 @@ async def get_service_config(
 @router.get("/{name}/env")
 async def get_env_config(
     name: str,
+    deploy_target: Optional[str] = None,
     orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
 ) -> Dict[str, Any]:
     """
     Get environment variable configuration for a service.
 
     Returns the env schema with current configuration and suggested settings.
+
+    Args:
+        name: Service name
+        deploy_target: Optional deployment target (unode hostname or cluster ID)
+                      to include deploy_env layer in resolution
     """
-    result = await orchestrator.get_env_config(name)
+    result = await orchestrator.get_env_config(name, deploy_target=deploy_target)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     return result

@@ -1,35 +1,49 @@
-"""Deployment backend implementations for different target types."""
+"""Deployment platform implementations for different target types."""
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 import logging
 import httpx
-from datetime import datetime
+import docker
 
 from src.models.deployment import ResolvedServiceDefinition, Deployment, DeploymentStatus
-from src.models.unode import UNode, UNodeType
+from src.models.deploy_target import DeployTarget
 from src.services.kubernetes_manager import KubernetesManager
-import docker
 
 logger = logging.getLogger(__name__)
 
 
-class DeploymentBackend(ABC):
-    """Base class for deployment backends."""
+class DeployPlatform(ABC):
+    """
+    Abstract platform implementation.
+
+    This is the "HOW" - the strategy for deploying to a type of target.
+    Stateless - operates on DeployTarget instances.
+    """
+
+    @abstractmethod
+    async def get_infrastructure(self, target: DeployTarget) -> Optional[Dict[str, Any]]:
+        """
+        Get infrastructure scan for this target.
+
+        Returns cluster-detected services like Redis, MongoDB, etc.
+        Only applicable for Kubernetes targets.
+        """
+        pass
 
     @abstractmethod
     async def deploy(
         self,
-        unode: UNode,
+        target: DeployTarget,
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         namespace: Optional[str] = None,
     ) -> Deployment:
         """
-        Deploy a service to this backend.
+        Deploy a service to this target.
 
         Args:
-            unode: The target unode (Docker host or K8s cluster)
+            target: The deployment target
             resolved_service: Fully resolved service definition
             deployment_id: Unique deployment identifier
             namespace: Optional namespace (K8s only)
@@ -42,7 +56,7 @@ class DeploymentBackend(ABC):
     @abstractmethod
     async def get_status(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> DeploymentStatus:
         """Get current status of a deployment."""
@@ -51,7 +65,7 @@ class DeploymentBackend(ABC):
     @abstractmethod
     async def stop(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> bool:
         """Stop a running deployment."""
@@ -60,7 +74,7 @@ class DeploymentBackend(ABC):
     @abstractmethod
     async def remove(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> bool:
         """Remove a deployment completely."""
@@ -69,7 +83,7 @@ class DeploymentBackend(ABC):
     @abstractmethod
     async def get_logs(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment,
         tail: int = 100
     ) -> List[str]:
@@ -77,29 +91,37 @@ class DeploymentBackend(ABC):
         pass
 
 
-class DockerDeploymentBackend(DeploymentBackend):
-    """Deployment backend for Docker hosts (traditional unodes)."""
+class DockerDeployPlatform(DeployPlatform):
+    """Platform implementation for Docker hosts (local or remote unodes)."""
 
     UNODE_MANAGER_PORT = 8444
 
-    def _is_local_deployment(self, unode: UNode) -> bool:
+    def _is_local_deployment(self, hostname: str) -> bool:
         """Check if this is a local deployment (same host as backend)."""
         import os
         env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
-        return unode.hostname == env_name or unode.hostname == "localhost"
+        return hostname == env_name or hostname == "localhost"
 
-    def _get_target_ip(self, unode: UNode) -> str:
-        """Get target IP for unode (localhost for local, tailscale IP for remote)."""
-        if self._is_local_deployment(unode):
+    def _get_target_ip(self, target: DeployTarget) -> str:
+        """Get target IP (localhost for local, tailscale IP for remote)."""
+        hostname = target.metadata["hostname"]
+
+        if self._is_local_deployment(hostname):
             return "localhost"
-        elif unode.tailscale_ip:
-            return unode.tailscale_ip
+
+        tailscale_ip = target.metadata.get("tailscale_ip")
+        if tailscale_ip:
+            return tailscale_ip
         else:
-            raise ValueError(f"Unode {unode.hostname} has no Tailscale IP configured")
+            raise ValueError(f"UNode {hostname} has no Tailscale IP configured")
+
+    async def get_infrastructure(self, target: DeployTarget) -> Optional[Dict[str, Any]]:
+        """Docker hosts don't have infrastructure scans."""
+        return None
 
     async def _deploy_local(
         self,
-        unode: UNode,
+        target: DeployTarget,
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         container_name: str
@@ -148,10 +170,11 @@ class DockerDeploymentBackend(DeploymentBackend):
                     exposed_port = int(first_port)
 
             # Build deployment object
+            hostname = target.metadata["hostname"]
             deployment = Deployment(
                 id=deployment_id,
                 service_id=resolved_service.service_id,
-                unode_hostname=unode.hostname,
+                unode_hostname=hostname,
                 status=DeploymentStatus.RUNNING,
                 container_id=container.id,
                 container_name=container_name,
@@ -183,23 +206,24 @@ class DockerDeploymentBackend(DeploymentBackend):
 
     async def deploy(
         self,
-        unode: UNode,
+        target: DeployTarget,
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         namespace: Optional[str] = None,
     ) -> Deployment:
         """Deploy to a Docker host via unode manager API or local Docker."""
-        logger.info(f"Deploying {resolved_service.service_id} to Docker host {unode.hostname}")
+        hostname = target.metadata["hostname"]
+        logger.info(f"Deploying {resolved_service.service_id} to Docker host {hostname}")
 
         # Generate container name
         container_name = f"{resolved_service.compose_service_name}-{deployment_id[:8]}"
 
         # Check if this is a local deployment
-        if self._is_local_deployment(unode):
+        if self._is_local_deployment(hostname):
             # Use Docker directly for local deployments
             logger.info("Using local Docker for deployment")
             return await self._deploy_local(
-                unode,
+                target,
                 resolved_service,
                 deployment_id,
                 container_name
@@ -220,7 +244,7 @@ class DockerDeploymentBackend(DeploymentBackend):
         }
 
         # Get target IP (tailscale IP for remote)
-        target_ip = self._get_target_ip(unode)
+        target_ip = self._get_target_ip(target)
         logger.info(f"Deploying to remote unode via {target_ip}")
 
         # Send deploy command to unode manager
@@ -236,7 +260,7 @@ class DockerDeploymentBackend(DeploymentBackend):
                 deployment = Deployment(
                     id=deployment_id,
                     service_id=resolved_service.service_id,
-                    unode_hostname=unode.hostname,
+                    unode_hostname=hostname,
                     status=DeploymentStatus.RUNNING,
                     container_id=result.get("container_id"),
                     container_name=container_name,
@@ -266,11 +290,11 @@ class DockerDeploymentBackend(DeploymentBackend):
 
     async def get_status(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> DeploymentStatus:
         """Get container status from Docker host."""
-        target_ip = self._get_target_ip(unode)
+        target_ip = self._get_target_ip(target)
         url = f"http://{target_ip}:{self.UNODE_MANAGER_PORT}/api/status/{deployment.container_name}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -294,11 +318,11 @@ class DockerDeploymentBackend(DeploymentBackend):
 
     async def stop(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> bool:
         """Stop a Docker container."""
-        target_ip = self._get_target_ip(unode)
+        target_ip = self._get_target_ip(target)
         url = f"http://{target_ip}:{self.UNODE_MANAGER_PORT}/api/stop/{deployment.container_name}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -312,11 +336,11 @@ class DockerDeploymentBackend(DeploymentBackend):
 
     async def remove(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> bool:
         """Remove a Docker container."""
-        target_ip = self._get_target_ip(unode)
+        target_ip = self._get_target_ip(target)
         url = f"http://{target_ip}:{self.UNODE_MANAGER_PORT}/api/remove/{deployment.container_name}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -330,12 +354,12 @@ class DockerDeploymentBackend(DeploymentBackend):
 
     async def get_logs(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment,
         tail: int = 100
     ) -> List[str]:
         """Get Docker container logs."""
-        target_ip = self._get_target_ip(unode)
+        target_ip = self._get_target_ip(target)
         url = f"http://{target_ip}:{self.UNODE_MANAGER_PORT}/api/logs/{deployment.container_name}?tail={tail}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -349,25 +373,35 @@ class DockerDeploymentBackend(DeploymentBackend):
                 return [f"Error getting logs: {str(e)}"]
 
 
-class KubernetesDeploymentBackend(DeploymentBackend):
-    """Deployment backend for Kubernetes clusters."""
+class KubernetesDeployPlatform(DeployPlatform):
+    """Platform implementation for Kubernetes clusters."""
 
     def __init__(self, k8s_manager: KubernetesManager):
         self.k8s_manager = k8s_manager
 
+    async def get_infrastructure(self, target: DeployTarget) -> Optional[Dict[str, Any]]:
+        """Get infrastructure scan for the K8s cluster."""
+        cluster_data = target.metadata
+        namespace = cluster_data.get("namespace", "default")
+        infra_scans = cluster_data.get("infra_scans", {})
+        return infra_scans.get(namespace, {})
+
     async def deploy(
         self,
-        unode: UNode,
+        target: DeployTarget,
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         namespace: Optional[str] = None,
     ) -> Deployment:
         """Deploy to a Kubernetes cluster."""
-        logger.info(f"Deploying {resolved_service.service_id} to K8s cluster {unode.hostname}")
+        cluster_data = target.metadata
+        cluster_id = cluster_data["cluster_id"]
+        hostname = cluster_data["name"]  # Use cluster name as hostname
 
-        # Use unode.hostname as cluster_id for K8s unodes
-        cluster_id = unode.hostname
-        namespace = namespace or unode.metadata.get("default_namespace", "default")
+        logger.info(f"Deploying {resolved_service.service_id} to K8s cluster {hostname}")
+
+        # Use cluster's default namespace if not specified
+        namespace = namespace or cluster_data.get("namespace", "default")
 
         # Use kubernetes_manager.deploy_to_kubernetes
         result = await self.k8s_manager.deploy_to_kubernetes(
@@ -380,7 +414,7 @@ class KubernetesDeploymentBackend(DeploymentBackend):
         deployment = Deployment(
             id=deployment_id,
             service_id=resolved_service.service_id,
-            unode_hostname=unode.hostname,
+            unode_hostname=hostname,
             status=DeploymentStatus.RUNNING,
             container_id=None,  # K8s uses pod names, not container IDs
             container_name=result["deployment_name"],
@@ -402,11 +436,12 @@ class KubernetesDeploymentBackend(DeploymentBackend):
 
     async def get_status(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> DeploymentStatus:
         """Get pod status from Kubernetes."""
-        cluster_id = unode.hostname
+        cluster_data = target.metadata
+        cluster_id = cluster_data["cluster_id"]
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -434,11 +469,12 @@ class KubernetesDeploymentBackend(DeploymentBackend):
 
     async def stop(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> bool:
         """Scale K8s deployment to 0 replicas."""
-        cluster_id = unode.hostname
+        cluster_data = target.metadata
+        cluster_id = cluster_data["cluster_id"]
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -463,11 +499,12 @@ class KubernetesDeploymentBackend(DeploymentBackend):
 
     async def remove(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment
     ) -> bool:
         """Delete K8s deployment, service, and configmaps."""
-        cluster_id = unode.hostname
+        cluster_data = target.metadata
+        cluster_id = cluster_data["cluster_id"]
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -514,12 +551,13 @@ class KubernetesDeploymentBackend(DeploymentBackend):
 
     async def get_logs(
         self,
-        unode: UNode,
+        target: DeployTarget,
         deployment: Deployment,
         tail: int = 100
     ) -> List[str]:
         """Get logs from K8s pods."""
-        cluster_id = unode.hostname
+        cluster_data = target.metadata
+        cluster_id = cluster_data["cluster_id"]
         namespace = deployment.backend_metadata.get("namespace", "default")
         deployment_name = deployment.backend_metadata.get("deployment_name")
 
@@ -551,20 +589,21 @@ class KubernetesDeploymentBackend(DeploymentBackend):
             return [f"Error getting logs: {str(e)}"]
 
 
-def get_deployment_backend(unode: UNode, k8s_manager: Optional[KubernetesManager] = None) -> DeploymentBackend:
+def get_deploy_platform(target: DeployTarget, k8s_manager: Optional[KubernetesManager] = None) -> DeployPlatform:
     """
-    Factory function to get the appropriate deployment backend for a unode.
+    Get the appropriate platform implementation for a target.
 
     Args:
-        unode: The target unode
-        k8s_manager: KubernetesManager instance (required for K8s backends)
+        target: The deployment target
+        k8s_manager: KubernetesManager instance (required for K8s targets)
 
     Returns:
-        Appropriate DeploymentBackend implementation
+        Appropriate DeployPlatform implementation
     """
-    if unode.type == UNodeType.KUBERNETES:
+    if target.type == "k8s":
         if not k8s_manager:
-            raise ValueError("KubernetesManager required for K8s deployments")
-        return KubernetesDeploymentBackend(k8s_manager)
+            from src.services.kubernetes_manager import get_kubernetes_manager
+            k8s_manager = get_kubernetes_manager()
+        return KubernetesDeployPlatform(k8s_manager)
     else:
-        return DockerDeploymentBackend()
+        return DockerDeployPlatform()

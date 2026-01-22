@@ -296,6 +296,7 @@ async def deploy_service_to_cluster(
     try:
         resolved_service = await deployment_manager.resolve_service_for_deployment(
             request.service_id,
+            deploy_target=cluster_id,
             config_id=request.config_id
         )
     except ValueError as e:

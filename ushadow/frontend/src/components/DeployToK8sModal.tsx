@@ -117,7 +117,11 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       console.log('🔧 Current infraServices state:', infraServices)
 
       // Load environment variable schema with suggestions from settingsStore
-      const envResponse = await servicesApi.getEnvConfig(service.service_id)
+      // Pass deployment_target_id for unified deployment target resolution
+      const envResponse = await servicesApi.getEnvConfig(
+        service.service_id,
+        selectedCluster?.deployment_target_id || selectedCluster?.cluster_id
+      )
       const envData = envResponse.data
 
       // Initialize env vars and configs (EXACT same pattern as ServicesPage)
@@ -145,11 +149,12 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
           }
         } else {
           // Use data from API response (backend already mapped to settings)
+          // Note: backend sends resolved_value, not value
           initialConfigs[envVar.name] = {
             name: envVar.name,
             source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
             setting_path: envVar.setting_path,
-            value: envVar.value,
+            value: envVar.resolved_value,  // Use resolved_value from backend
             new_setting_path: undefined
           }
         }
