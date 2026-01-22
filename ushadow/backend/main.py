@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Telemetry configuration
 TELEMETRY_ENDPOINT = os.environ.get(
     "TELEMETRY_ENDPOINT",
-    "https://ushadow-telemetry.your-subdomain.workers.dev"
+    "https://ushadow-telemetry.stu-6b7.workers.dev"
 )
 
 
