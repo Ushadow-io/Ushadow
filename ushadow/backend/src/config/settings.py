@@ -297,7 +297,7 @@ class Settings:
             config_manager = get_service_config_manager()
             service_config = config_manager.get_service_config(deployment_id)
             if service_config:
-                service_id = service_config.service_id
+                service_id = service_config.template_id  # Fixed: ServiceConfig has template_id, not service_id
                 service = registry.get_service(service_id)
 
         if not service:
