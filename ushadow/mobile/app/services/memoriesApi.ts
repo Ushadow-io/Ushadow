@@ -7,8 +7,8 @@
  * Proxy pattern: /api/services/mem0/proxy/api/v1/*
  */
 
-import { getAuthToken, getApiUrl } from '../utils/authStorage';
-import { getActiveUnode } from '../utils/unodeStorage';
+import { getAuthToken, getApiUrl } from '../_utils/authStorage';
+import { getActiveUnode } from '../_utils/unodeStorage';
 
 export interface Memory {
   id: string;

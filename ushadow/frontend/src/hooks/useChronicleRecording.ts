@@ -102,10 +102,14 @@ export const useChronicleRecording = (): ChronicleRecordingReturn => {
     channelCount: 1,
     bufferSize: 4096,
     onAudioChunk: async (chunk) => {
+      console.log('🔊 onAudioChunk called, adapter open?', adapterRef.current?.isOpen())
       if (adapterRef.current?.isOpen()) {
+        console.log('📤 Sending chunk to Chronicle via WebSocket')
         await adapterRef.current.sendAudioChunk(chunk)
         chunkCountRef.current++
         setDebugStats(prev => ({ ...prev, chunksSent: chunkCountRef.current }))
+      } else {
+        console.warn('⚠️ Adapter not open, chunk NOT sent')
       }
     },
     onStateChange: (state) => {

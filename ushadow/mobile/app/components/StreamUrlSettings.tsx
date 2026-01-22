@@ -17,7 +17,7 @@ import {
   UIManager,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { parseStreamUrl, buildStreamUrl, StreamUrlConfig } from '../utils/unodeStorage';
+import { parseStreamUrl, buildStreamUrl, StreamUrlConfig } from '../_utils/unodeStorage';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 
 // Enable LayoutAnimation on Android

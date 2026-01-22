@@ -31,8 +31,8 @@ import {
   updateOmiDeviceName,
   removeOmiDevice,
   setActiveOmiDevice,
-} from '../utils/omiDeviceStorage';
-import { appendTokenToUrl } from '../utils/authStorage';
+} from '../_utils/omiDeviceStorage';
+import { appendTokenToUrl } from '../_utils/authStorage';
 
 interface OmiDeviceCardProps {
   device: SavedOmiDevice;

@@ -32,7 +32,7 @@ import {
   isAuthenticated,
   saveAuthToken,
   saveApiUrl,
-} from '../utils/authStorage';
+} from '../_utils/authStorage';
 import { ConnectionState, createInitialConnectionState } from '../types/connectionLog';
 
 export default function HomeScreen() {

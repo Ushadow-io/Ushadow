@@ -80,6 +80,9 @@ export async function captureDisplayMedia(
       )
     }
 
+    // Note: getDisplayMedia requires video to be enabled for the picker to work
+    // properly in most browsers. We request a minimal video track and then
+    // immediately stop it after capturing the audio.
     const stream = await navigator.mediaDevices.getDisplayMedia({
       audio: {
         sampleRate: constraints?.sampleRate || 16000,
@@ -88,8 +91,18 @@ export async function captureDisplayMedia(
         noiseSuppression: constraints?.noiseSuppression ?? false,
         autoGainControl: constraints?.autoGainControl ?? false
       },
-      video: false // Audio only, no screen capture
+      video: true // Required for picker to work - we'll stop the video track immediately
     })
+
+    // Stop the video track immediately - we only need audio
+    const videoTracks = stream.getVideoTracks()
+    videoTracks.forEach(track => {
+      track.stop()
+      stream.removeTrack(track)
+    })
+    if (videoTracks.length > 0) {
+      console.log('🎬 Video track stopped and removed (audio-only capture)')
+    }
 
     // Verify we got an audio track
     const audioTracks = stream.getAudioTracks()

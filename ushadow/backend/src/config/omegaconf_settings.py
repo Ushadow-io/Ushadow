@@ -204,6 +204,5 @@ def env_var_matches_setting(env_name: str, setting_path: str) -> bool:
 from src.config.store import SettingsStore, get_settings_store
 from src.config.settings import Settings, get_settings, Source, Resolution, Suggestion
 
-# Backward compatibility aliases
-OmegaConfSettingsManager = SettingsStore
-get_omegaconf_settings = get_settings_store
+# Alias for cleaner external use
+Suggestion = SettingSuggestion
