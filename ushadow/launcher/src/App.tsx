@@ -15,7 +15,7 @@ import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
 import { getColors } from './utils/colors'
 
 function App() {
@@ -1292,25 +1292,37 @@ function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Mode Toggle */}
+          {/* Page Navigation */}
           <div className="flex rounded-lg bg-surface-700 p-0.5" data-testid="mode-toggle">
             <button
-              onClick={() => setAppMode('dev')}
+              onClick={() => setAppMode('launch')}
               className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'dev' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                appMode === 'launch' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
               }`}
-            >
-              <Settings className="w-3 h-3 inline mr-1" />
-              Dev
-            </button>
-            <button
-              onClick={() => setAppMode('quick')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'quick' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
+              data-testid="nav-launch"
             >
               <Zap className="w-3 h-3 inline mr-1" />
-              Quick
+              Launch
+            </button>
+            <button
+              onClick={() => setAppMode('install')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                appMode === 'install' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-install"
+            >
+              <Package className="w-3 h-3 inline mr-1" />
+              Install
+            </button>
+            <button
+              onClick={() => setAppMode('environments')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                appMode === 'environments' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-environments"
+            >
+              <FolderGit2 className="w-3 h-3 inline mr-1" />
+              Environments
             </button>
           </div>
 
@@ -1349,8 +1361,8 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
-        {appMode === 'quick' ? (
-          /* Quick Mode - Single button */
+        {appMode === 'launch' ? (
+          /* Launch Page - One-Click Launch */
           <div className="h-full flex flex-col items-center justify-center">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
@@ -1379,8 +1391,8 @@ function App() {
               onClick={handleQuickLaunch}
               disabled={isLaunching}
               className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
-                isLaunching 
-                  ? 'bg-surface-600 cursor-not-allowed' 
+                isLaunching
+                  ? 'bg-surface-600 cursor-not-allowed'
                   : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
               }`}
               data-testid="quick-launch-button"
@@ -1398,20 +1410,25 @@ function App() {
               )}
             </button>
           </div>
-        ) : (
-          /* Dev Mode - Two column layout */
-          <div className="h-full flex flex-col gap-4">
-            <div className="flex-1 flex gap-0 overflow-hidden">
-              {/* Left Column - Folders, Prerequisites & Infrastructure */}
-              <div
-                className="flex flex-col gap-4 overflow-y-auto"
-                style={{ width: `${leftColumnWidth}px`, flexShrink: 0 }}
-              >
-                <FoldersPanel
-                  projectRoot={projectRoot}
-                  worktreesDir={worktreesDir}
-                  onEditFolders={() => setShowProjectDialog(true)}
-                />
+        ) : appMode === 'install' ? (
+          /* Install Page - Prerequisites & Infrastructure Setup */
+          <div className="h-full flex flex-col gap-4 overflow-y-auto">
+            <div className="text-center mb-4">
+              <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
+              <p className="text-text-secondary">
+                Install prerequisites and configure your single environment
+              </p>
+            </div>
+
+            <FoldersPanel
+              projectRoot={projectRoot}
+              worktreesDir={worktreesDir}
+              onEditFolders={() => setShowProjectDialog(true)}
+            />
+
+            {/* Prerequisites and Infrastructure Side-by-Side */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-4">
                 <PrerequisitesPanel
                   prerequisites={effectivePrereqs}
                   platform={platform}
@@ -1424,40 +1441,94 @@ function App() {
                 />
                 {/* Dev Tools Panel - appears below Prerequisites */}
                 {showDevTools && <DevToolsPanel />}
-                <InfrastructurePanel
-                  services={discovery?.infrastructure ?? []}
-                  onStart={handleStartInfra}
-                  onStop={handleStopInfra}
-                  onRestart={handleRestartInfra}
-                  isLoading={loadingInfra}
-                />
               </div>
 
-            {/* Resize handle */}
-            <div
-              className={`w-1 bg-surface-700 hover:bg-primary-500 cursor-col-resize transition-colors ${isResizing ? 'bg-primary-500' : ''}`}
-              onMouseDown={handleMouseDown}
-              style={{ userSelect: 'none' }}
-            />
-
-            {/* Right Column - Environments */}
-              <div className="flex-1 overflow-y-auto pl-4">
-                <EnvironmentsPanel
-                  environments={discovery?.environments ?? []}
-                  creatingEnvs={creatingEnvs}
-                  onStart={handleStartEnv}
-                  onStop={handleStopEnv}
-                  onCreate={() => setShowNewEnvDialog(true)}
-                  onOpenInApp={handleOpenInApp}
-                  onMerge={handleMerge}
-                  onDelete={handleDelete}
-                  onAttachTmux={handleAttachTmux}
-                  onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
-                  loadingEnv={loadingEnv}
-                  tmuxStatuses={tmuxStatuses}
-                />
-              </div>
+              <InfrastructurePanel
+                services={discovery?.infrastructure ?? []}
+                onStart={handleStartInfra}
+                onStop={handleStopInfra}
+                onRestart={handleRestartInfra}
+                isLoading={loadingInfra}
+              />
             </div>
+
+            {/* Single Environment Section for Consumers */}
+            <div className="bg-surface-800 rounded-lg p-6 border border-surface-700">
+              <h3 className="text-lg font-semibold mb-4">Your Environment</h3>
+              {discovery?.environments.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-text-muted mb-4">No environment created yet</p>
+                  <button
+                    onClick={() => handleCreateEnv('main', 'dev')}
+                    className="px-6 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors font-medium"
+                  >
+                    Create Main Environment
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {discovery.environments.map(env => (
+                    <div key={env.name} className="flex items-center justify-between p-4 bg-surface-700 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: getColors(env.color || env.name).bg }}
+                        />
+                        <span className="font-medium">{env.name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          env.running ? 'bg-success-500/20 text-success-400' : 'bg-surface-600 text-text-muted'
+                        }`}>
+                          {env.status}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        {env.running ? (
+                          <>
+                            <button
+                              onClick={() => handleOpenInApp(env)}
+                              className="px-3 py-1 rounded bg-primary-500 hover:bg-primary-600 transition-colors text-sm"
+                            >
+                              Open
+                            </button>
+                            <button
+                              onClick={() => handleStopEnv(env.name)}
+                              className="px-3 py-1 rounded bg-surface-600 hover:bg-surface-500 transition-colors text-sm"
+                            >
+                              Stop
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => handleStartEnv(env.name, env.path || undefined)}
+                            className="px-3 py-1 rounded bg-success-500 hover:bg-success-600 transition-colors text-sm"
+                          >
+                            Start
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* Environments Page - Worktree Management */
+          <div className="h-full flex flex-col overflow-hidden p-4">
+            <EnvironmentsPanel
+              environments={discovery?.environments ?? []}
+              creatingEnvs={creatingEnvs}
+              onStart={handleStartEnv}
+              onStop={handleStopEnv}
+              onCreate={() => setShowNewEnvDialog(true)}
+              onOpenInApp={handleOpenInApp}
+              onMerge={handleMerge}
+              onDelete={handleDelete}
+              onAttachTmux={handleAttachTmux}
+              onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
+              loadingEnv={loadingEnv}
+              tmuxStatuses={tmuxStatuses}
+            />
           </div>
         )}
       </main>

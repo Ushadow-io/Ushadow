@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type AppMode = 'dev' | 'quick'
+export type AppMode = 'launch' | 'install' | 'environments'
 
 export interface SpoofedPrerequisites {
   git_installed: boolean | null  // null = use real value
@@ -52,7 +52,7 @@ export const useAppStore = create<AppState>()(
       // Defaults
       dryRunMode: false,
       showDevTools: false,
-      appMode: 'quick',
+      appMode: 'launch',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
       worktreesDir: '',
