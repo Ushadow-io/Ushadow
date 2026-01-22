@@ -109,7 +109,7 @@ function AppContent() {
                 <Route path="interfaces" element={<InterfacesPage />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
-                <Route path="timeline" element={<TimelinePage />} />
+                <Route path="timeline" element={<FeatureRoute featureFlag="timeline"><TimelinePage /></FeatureRoute>} />
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />
                 <Route path="settings" element={<SettingsPage />} />
