@@ -26,6 +26,7 @@ import {
   servicesApi,
   kubernetesApi,
   clusterApi,
+  deploymentsApi,
   Template,
   ServiceConfig,
   ServiceConfigSummary,
@@ -525,7 +526,7 @@ export default function ServiceConfigsPage() {
         targetId: target.id,
       })
 
-      // Load env config with deploy target
+      // Load deployment preparation (unified endpoint)
       setLoadingDeployEnv(true)
       try {
         // Determine deployment_target_id for deploy_target parameter
@@ -538,7 +539,8 @@ export default function ServiceConfigsPage() {
           deployTargetId = target.id
         }
 
-        const response = await servicesApi.getEnvConfig(templateId, deployTargetId)
+        // Use unified deployment preparation endpoint
+        const response = await deploymentsApi.prepareDeployment(templateId, deployTargetId!)
         const allVars = [...response.data.required_env_vars, ...response.data.optional_env_vars]
         setDeployEnvVars(allVars)
 
@@ -554,7 +556,7 @@ export default function ServiceConfigsPage() {
         })
         setDeployEnvConfigs(formData)
       } catch (error) {
-        console.error('Failed to load env config:', error)
+        console.error('Failed to load deployment preparation:', error)
       } finally {
         setLoadingDeployEnv(false)
       }

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { CheckCircle, Loader, ChevronRight } from 'lucide-react'
 import Modal from './Modal'
 import EnvVarEditor from './EnvVarEditor'
-import { kubernetesApi, servicesApi, svcConfigsApi, KubernetesCluster, EnvVarInfo, EnvVarConfig } from '../services/api'
+import { kubernetesApi, deploymentsApi, servicesApi, svcConfigsApi, KubernetesCluster, EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface DeployToK8sModalProps {
   isOpen: boolean
@@ -117,12 +117,12 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       console.log('🔧 Current infraServices state:', infraServices)
 
       // Load environment variable schema with suggestions from settingsStore
-      // Pass deployment_target_id for unified deployment target resolution
-      const envResponse = await servicesApi.getEnvConfig(
+      // Use unified deployment preparation endpoint
+      const response = await deploymentsApi.prepareDeployment(
         service.service_id,
         selectedCluster?.deployment_target_id || selectedCluster?.cluster_id
       )
-      const envData = envResponse.data
+      const envData = response.data
 
       // Initialize env vars and configs (EXACT same pattern as ServicesPage)
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]

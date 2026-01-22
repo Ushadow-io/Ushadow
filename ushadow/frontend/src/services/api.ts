@@ -642,7 +642,33 @@ export interface Deployment {
   exposed_port?: number
 }
 
+export interface DeploymentPreparation {
+  // Service information
+  service_id: string
+  service_name: string
+  compose_file: string
+  requires: string[]
+
+  // Deployment target information
+  target_type: 'docker' | 'k8s'
+  target_id: string
+  target_metadata: Record<string, any>
+
+  // Infrastructure scan (K8s only)
+  infrastructure?: Record<string, any>
+
+  // Resolved environment variables
+  required_env_vars: EnvVarInfo[]
+  optional_env_vars: EnvVarInfo[]
+}
+
 export const deploymentsApi = {
+  // Deployment preparation (unified endpoint)
+  prepareDeployment: (serviceId: string, deployTarget: string, configId?: string) =>
+    api.get<DeploymentPreparation>('/api/deployments/prepare', {
+      params: { service_id: serviceId, deploy_target: deployTarget, config_id: configId }
+    }),
+
   // Service definitions
   createService: (data: Omit<ServiceDefinition, 'created_at' | 'updated_at' | 'created_by'>) =>
     api.post('/api/deployments/services', data),
