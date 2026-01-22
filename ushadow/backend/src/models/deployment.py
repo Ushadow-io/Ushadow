@@ -8,7 +8,7 @@ This module defines:
 
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
 from pydantic import BaseModel, Field
 
@@ -48,9 +48,9 @@ class ServiceDefinition(BaseModel):
         default_factory=list,
         description="Volume mounts (e.g., '/host/path:/container/path')"
     )
-    command: Optional[str] = Field(
+    command: Optional[Union[str, List[str]]] = Field(
         default=None,
-        description="Override container command"
+        description="Override container command (string or array)"
     )
     restart_policy: str = Field(
         default="unless-stopped",
@@ -108,7 +108,7 @@ class ResolvedServiceDefinition(BaseModel):
 
     # Container configuration (already resolved)
     volumes: List[str] = Field(default_factory=list)
-    command: Optional[str] = None
+    command: Optional[Union[str, List[str]]] = None
     restart_policy: str = Field(default="unless-stopped")
     network: Optional[str] = None
 
@@ -225,7 +225,7 @@ class ServiceDefinitionCreate(BaseModel):
     ports: Dict[str, int] = Field(default_factory=dict)
     environment: Dict[str, str] = Field(default_factory=dict)
     volumes: List[str] = Field(default_factory=list)
-    command: Optional[str] = None
+    command: Optional[Union[str, List[str]]] = None
     restart_policy: str = Field(default="unless-stopped")
     network: Optional[str] = None
     health_check_path: Optional[str] = None
@@ -242,7 +242,7 @@ class ServiceDefinitionUpdate(BaseModel):
     ports: Optional[Dict[str, int]] = None
     environment: Optional[Dict[str, str]] = None
     volumes: Optional[List[str]] = None
-    command: Optional[str] = None
+    command: Optional[Union[str, List[str]]] = None
     restart_policy: Optional[str] = None
     network: Optional[str] = None
     health_check_path: Optional[str] = None

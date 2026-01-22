@@ -261,7 +261,10 @@ class ComposeServiceRegistry:
 
         # Extract services
         for name, service in parsed.services.items():
-            service_id = f"{filepath.stem}:{name}"
+            # Use just the service name - simpler and more user-friendly
+            # Old: "chronicle-compose:chronicle-backend"
+            # New: "chronicle-backend"
+            service_id = name
 
             discovered = DiscoveredService(
                 service_id=service_id,

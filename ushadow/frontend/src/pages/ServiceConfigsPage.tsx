@@ -38,7 +38,7 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { SystemOverview, FlatServiceCard } from '../components/wiring'
-import DeployToK8sModal from '../components/DeployToK8sModal'
+import DeployModal from '../components/DeployModal'
 import EnvVarEditor from '../components/EnvVarEditor'
 
 /**
@@ -112,33 +112,16 @@ export default function ServiceConfigsPage() {
   const [loadingProviderCard, setLoadingProviderCard] = useState(false)
   const [savingProviderCard, setSavingProviderCard] = useState(false)
 
-  // Deploy modal state
+  // Unified deploy modal state
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
     serviceId: string | null
-    targetType: 'local' | 'remote' | 'kubernetes' | null
-    selectedClusterId?: string
+    targetId?: string  // Deploy target ID (for when we have a specific target selected)
     infraServices?: Record<string, any>  // Infrastructure data to pass to modal
   }>({
     isOpen: false,
     serviceId: null,
-    targetType: null,
   })
-
-  // Simple deploy confirmation modal (for local/remote)
-  const [simpleDeployModal, setSimpleDeployModal] = useState<{
-    isOpen: boolean
-    serviceId: string | null
-    targetType: 'local' | 'remote' | null
-    targetId?: string
-  }>({
-    isOpen: false,
-    serviceId: null,
-    targetType: null,
-  })
-  const [deployEnvVars, setDeployEnvVars] = useState<EnvVarInfo[]>([])
-  const [deployEnvConfigs, setDeployEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
-  const [loadingDeployEnv, setLoadingDeployEnv] = useState(false)
   const [availableTargets, setAvailableTargets] = useState<DeployTarget[]>([])
   const [loadingTargets, setLoadingTargets] = useState(false)
 
@@ -491,8 +474,7 @@ export default function ServiceConfigsPage() {
           setDeployModalState({
             isOpen: true,
             serviceId: templateId,
-            targetType: 'kubernetes',
-            selectedClusterId: deployTarget.identifier,  // cluster_id from standardized field
+            targetId: deployTarget.id,  // deployment_target_id
             infraServices: infraData,
           })
         } else {
@@ -501,7 +483,6 @@ export default function ServiceConfigsPage() {
           setDeployModalState({
             isOpen: true,
             serviceId: templateId,
-            targetType: target.type,
           })
         }
       } catch (err) {
@@ -511,143 +492,38 @@ export default function ServiceConfigsPage() {
         setLoadingTargets(false)
       }
     } else if (target.type === 'local' || target.type === 'remote') {
-      // Show deploy confirmation modal with env vars
-      setSimpleDeployModal({
-        isOpen: true,
-        serviceId: templateId,
-        targetType: target.type,
-        targetId: target.id,
-      })
-
-      // Load deployment targets to get deployment_target_id
-      setLoadingDeployEnv(true)
+      // Load Docker targets for unified modal
+      setLoadingTargets(true)
       try {
-        let deployTargetId: string | undefined
-
-        if (target.type === 'local') {
-          // Get local leader target from unified targets endpoint
-          const targetsResponse = await deploymentsApi.listTargets()
-          const dockerTargets = targetsResponse.data.filter(t => t.type === 'docker')
-          // Use standardized is_leader field
-          const leaderTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
-          deployTargetId = leaderTarget?.id
-        } else if (target.id) {
-          deployTargetId = target.id
-        }
-
-        // Get environment variable configuration with deploy_target for proper resolution
-        const response = await servicesApi.getEnvConfig(templateId, deployTargetId)
-        const allVars = [...response.data.required_env_vars, ...response.data.optional_env_vars]
-        setDeployEnvVars(allVars)
-
-        // Initialize env configs
-        const formData: Record<string, EnvVarConfig> = {}
-        allVars.forEach(ev => {
-          formData[ev.name] = {
-            name: ev.name,
-            source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
-            setting_path: ev.setting_path,
-            value: ev.resolved_value  // Backend sends resolved_value, not value
-          }
-        })
-        setDeployEnvConfigs(formData)
-      } catch (error) {
-        console.error('Failed to load deployment preparation:', error)
-      } finally {
-        setLoadingDeployEnv(false)
-      }
-    }
-  }
-
-  const handleConfirmDeploy = async () => {
-    if (!simpleDeployModal.serviceId || !simpleDeployModal.targetType) return
-
-    const consumerId = simpleDeployModal.serviceId
-    const targetType = simpleDeployModal.targetType
-
-    setCreating(`deploy-${consumerId}`)
-    setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })
-
-    try {
-      let targetHostname: string
-
-      if (targetType === 'local') {
-        // Get local leader target from unified targets endpoint
         const targetsResponse = await deploymentsApi.listTargets()
         const dockerTargets = targetsResponse.data.filter(t => t.type === 'docker')
-        const leaderTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
-        targetHostname = leaderTarget?.identifier  // Use standardized identifier field (hostname)
+        setAvailableTargets(dockerTargets)
 
-        if (!targetHostname) {
-          setMessage({ type: 'error', text: 'Failed to find local leader unode' })
-          setCreating(null)
-          return
+        // Determine which target to use
+        let selectedTarget: DeployTarget | undefined
+        if (target.type === 'local') {
+          // Find local leader
+          selectedTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
+        } else if (target.id) {
+          // Use specified remote target
+          selectedTarget = dockerTargets.find(t => t.identifier === target.id || t.id === target.id)
         }
-      } else {
-        // Remote
-        if (!simpleDeployModal.targetId) {
-          setMessage({ type: 'error', text: 'Remote unode deployment requires selecting a target unode.' })
-          setCreating(null)
-          return
-        }
-        targetHostname = simpleDeployModal.targetId
+
+        // Open unified modal with the selected target
+        setDeployModalState({
+          isOpen: true,
+          serviceId: templateId,
+          targetId: selectedTarget?.id,
+        })
+      } catch (err) {
+        console.error('Failed to load Docker targets:', err)
+        setMessage({ type: 'error', text: 'Failed to load deployment targets' })
+      } finally {
+        setLoadingTargets(false)
       }
-
-      console.log(`🚀 Deploying ${consumerId} to ${targetType} unode: ${targetHostname}`)
-
-      // Generate unique instance ID for this deployment
-      const template = templates.find(t => t.id === consumerId)
-      const sanitizedServiceId = consumerId.replace(/[^a-z0-9-]/g, '-')
-      const timestamp = Date.now()
-      const instanceId = `${sanitizedServiceId}-unode-${timestamp}`
-
-      // Build config from env var settings
-      const config: Record<string, any> = {}
-      Object.entries(deployEnvConfigs).forEach(([name, envConfig]) => {
-        if (envConfig.source === 'setting' && envConfig.setting_path) {
-          config[name] = { _from_setting: envConfig.setting_path }
-        } else if (envConfig.source === 'new_setting' && envConfig.value) {
-          config[name] = envConfig.value
-          if (envConfig.new_setting_path) {
-            config[`_save_${name}`] = envConfig.new_setting_path
-          }
-        } else if (envConfig.value) {
-          config[name] = envConfig.value
-        }
-      })
-
-      // Step 1: Create instance with deployment target and config
-      await svcConfigsApi.createServiceConfig({
-        id: instanceId,
-        template_id: consumerId,
-        name: `${template?.name || consumerId} (${targetHostname})`,
-        description: `uNode deployment to ${targetHostname}`,
-        config,
-        deployment_target: targetHostname
-      })
-
-      // Step 2: Deploy the service config
-      await svcConfigsApi.deployServiceConfig(instanceId)
-
-      console.log('✅ Deployment successful')
-      setMessage({ type: 'success', text: `Successfully deployed ${template?.name || consumerId} to ${targetType} unode` })
-
-      // Refresh instances and service statuses
-      const [instancesRes, statusesRes] = await Promise.all([
-        svcConfigsApi.getServiceConfigs(),
-        servicesApi.getAllStatuses()
-      ])
-      setServiceConfigs(instancesRes.data)
-      setServiceStatuses(statusesRes.data || {})
-
-    } catch (err: any) {
-      console.error(`Failed to deploy to ${targetType} unode:`, err)
-      const errorMsg = getErrorMessage(err, `Failed to deploy to ${targetType} unode`)
-      setMessage({ type: 'error', text: errorMsg })
-    } finally {
-      setCreating(null)
     }
   }
+
 
   const handleEditConsumer = async (consumerId: string) => {
     // Edit a consumer service - load its env config and show in modal
@@ -1766,12 +1642,12 @@ export default function ServiceConfigsPage() {
         onCancel={() => setConfirmDialog({ isOpen: false, instanceId: null })}
       />
 
-      {/* Deploy to Kubernetes Modal */}
-      {deployModalState.isOpen && deployModalState.targetType === 'kubernetes' && (
-        <DeployToK8sModal
+      {/* Unified Deploy Modal (K8s and Docker) */}
+      {deployModalState.isOpen && (
+        <DeployModal
           isOpen={true}
-          onClose={() => setDeployModalState({ isOpen: false, serviceId: null, targetType: null })}
-          target={deployModalState.selectedClusterId ? availableTargets.find((t) => t.identifier === deployModalState.selectedClusterId) : undefined}
+          onClose={() => setDeployModalState({ isOpen: false, serviceId: null })}
+          target={deployModalState.targetId ? availableTargets.find((t) => t.id === deployModalState.targetId) : undefined}
           availableTargets={availableTargets}
           infraServices={deployModalState.infraServices || {}}
           preselectedServiceId={deployModalState.serviceId || undefined}
@@ -1875,74 +1751,6 @@ export default function ServiceConfigsPage() {
         )}
       </Modal>
 
-      {/* Simple Deploy Modal (for local/remote with env vars) */}
-      <Modal
-        isOpen={simpleDeployModal.isOpen}
-        onClose={() => setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })}
-        title={`Deploy to ${simpleDeployModal.targetType === 'local' ? 'Local' : 'Remote'} uNode`}
-        maxWidth="lg"
-        testId="simple-deploy-modal"
-      >
-        <div className="space-y-4">
-          {loadingDeployEnv && (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="h-5 w-5 animate-spin text-primary-500" />
-              <span className="ml-2 text-sm text-neutral-500">Loading configuration...</span>
-            </div>
-          )}
-
-          {!loadingDeployEnv && deployEnvVars.length > 0 && (
-            <>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                Configure environment variables for this deployment:
-              </p>
-              <div className="rounded-lg border border-neutral-200 dark:border-neutral-700 max-h-96 overflow-y-auto">
-                {deployEnvVars.map((ev) => (
-                  <EnvVarEditor
-                    key={ev.name}
-                    envVar={ev}
-                    config={deployEnvConfigs[ev.name]}
-                    onChange={(updates) => {
-                      setDeployEnvConfigs((prev) => ({
-                        ...prev,
-                        [ev.name]: { ...prev[ev.name], ...updates },
-                      }))
-                    }}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-
-          {!loadingDeployEnv && deployEnvVars.length === 0 && (
-            <p className="text-sm text-neutral-500 dark:text-neutral-400 italic">
-              No environment variables to configure.
-            </p>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-4 border-t border-neutral-200 dark:border-neutral-700">
-            <button
-              onClick={() => setSimpleDeployModal({ isOpen: false, serviceId: null, targetType: null })}
-              className="btn-secondary"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleConfirmDeploy}
-              disabled={loadingDeployEnv || creating !== null}
-              className="btn-primary flex items-center gap-2"
-              data-testid="confirm-deploy"
-            >
-              {creating !== null ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="h-4 w-4" />
-              )}
-              Deploy
-            </button>
-          </div>
-        </div>
-      </Modal>
     </div>
   )
 }

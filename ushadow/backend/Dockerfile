@@ -5,10 +5,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install uv for fast Python package management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# Install system dependencies, build tools, Docker CLI, and Tailscale
+# Install system dependencies, build tools, Docker CLI, Tailscale, and uv
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -23,7 +20,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get update \
     && apt-get install -y docker-ce-cli docker-compose-plugin \
     && curl -fsSL https://tailscale.com/install.sh | sh \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
+
+# Add uv to PATH
+ENV PATH="/root/.local/bin:$PATH"
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
