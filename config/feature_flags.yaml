@@ -57,7 +57,8 @@ flags:
   # Speaker Recognition - Speaker identification and diarization
   speaker_recognition:
     enabled: false
-    description: "Speaker Recognition - Identify and track speakers in conversations (not implemented)"
+    description: "Speaker Recognition - Identify and track speakers in conversations
+      (not implemented)"
     type: release
 
   # Notifications - User notification system
@@ -74,7 +75,7 @@ flags:
 
   # ServiceConfigs Management - Service instance deployment and wiring
   instances_management:
-    enabled: false
+    enabled: true
     description: "ServiceConfigs page - Deploy and wire service instances with capability
       resolution"
     type: release

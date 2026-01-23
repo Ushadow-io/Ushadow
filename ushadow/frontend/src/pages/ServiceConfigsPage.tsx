@@ -1683,18 +1683,23 @@ export default function ServiceConfigsPage() {
                           <h3 className="font-medium text-neutral-900 dark:text-neutral-100">
                             {template?.name || deployment.service_id}
                           </h3>
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            deployment.status === 'running'
-                              ? 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400'
-                              : deployment.status === 'stopped'
-                              ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
-                              : 'bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-400'
-                          }`}>
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              deployment.status === 'running'
+                                ? 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400'
+                                : deployment.status === 'deploying'
+                                ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-400'
+                                : deployment.status === 'stopped'
+                                ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                                : 'bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-400'
+                            }`}
+                            title={deployment.health_message || undefined}
+                          >
                             {deployment.status}
                           </span>
 
                           {/* Stop/Restart button next to status */}
-                          {deployment.status === 'running' ? (
+                          {(deployment.status === 'running' || deployment.status === 'deploying') ? (
                             <button
                               onClick={() => handleStopDeployment(deployment.id)}
                               className="p-1 text-error-600 dark:text-error-400 hover:text-error-700 dark:hover:text-error-300 hover:bg-error-50 dark:hover:bg-error-900/20 rounded"

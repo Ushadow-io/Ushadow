@@ -16,6 +16,44 @@ from src.utils.environment import get_environment_info, is_local_deployment
 logger = logging.getLogger(__name__)
 
 
+async def check_deployment_health(
+    host: str,
+    port: int,
+    health_path: str = "/health",
+    timeout: float = 3.0
+) -> tuple[bool, Optional[str]]:
+    """
+    Check if a deployment is healthy via HTTP health check.
+
+    Args:
+        host: Host to check (e.g., "localhost" or container IP)
+        port: Port to check
+        health_path: HTTP path for health endpoint
+        timeout: Request timeout in seconds
+
+    Returns:
+        Tuple of (is_healthy, error_message)
+    """
+    url = f"http://{host}:{port}{health_path}"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url)
+
+            # Consider 2xx status codes as healthy
+            if 200 <= response.status_code < 300:
+                return (True, None)
+            else:
+                return (False, f"Health check returned {response.status_code}")
+
+    except httpx.TimeoutException:
+        return (False, "Health check timed out")
+    except httpx.ConnectError:
+        return (False, "Cannot connect to service")
+    except Exception as e:
+        return (False, f"Health check failed: {str(e)}")
+
+
 class DeployPlatform(ABC):
     """
     Abstract platform implementation.
@@ -154,6 +192,12 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
             }
+
+            # Add health check configuration to labels
+            if resolved_service.health_check_path:
+                labels["ushadow.health_check_path"] = resolved_service.health_check_path
+            if resolved_service.health_check_port:
+                labels["ushadow.health_check_port"] = str(resolved_service.health_check_port)
 
             # Add compose project labels so deployed services appear in the same compose project
             labels.update(env_info.get_container_labels())
@@ -453,6 +497,40 @@ class DockerDeployPlatform(DeployPlatform):
                     container_status = container.status.lower()
                     deployment_status = status_map.get(container_status, DeploymentStatus.FAILED)
 
+                    # For running containers, perform health check if configured
+                    health_message = None
+                    healthy = None
+                    if deployment_status == DeploymentStatus.RUNNING:
+                        health_check_path = labels.get("ushadow.health_check_path")
+                        health_check_port_str = labels.get("ushadow.health_check_port")
+
+                        # Determine health check port (use exposed port if not explicitly configured)
+                        health_check_port = None
+                        if health_check_port_str:
+                            health_check_port = int(health_check_port_str)
+                        elif container.ports:
+                            # Use first exposed port
+                            for container_port, host_bindings in container.ports.items():
+                                if host_bindings:
+                                    health_check_port = int(host_bindings[0]["HostPort"])
+                                    break
+
+                        # Perform health check if we have the necessary info
+                        if health_check_path and health_check_port:
+                            is_healthy, error_msg = await check_deployment_health(
+                                host="localhost",
+                                port=health_check_port,
+                                health_path=health_check_path,
+                                timeout=2.0
+                            )
+
+                            healthy = is_healthy
+                            health_message = error_msg
+
+                            # If not healthy yet, status is DEPLOYING
+                            if not is_healthy:
+                                deployment_status = DeploymentStatus.DEPLOYING
+
                     # Extract exposed port
                     exposed_port = None
                     if container.ports:
@@ -496,6 +574,9 @@ class DockerDeployPlatform(DeployPlatform):
                         deployed_at=deployed_at,
                         exposed_port=exposed_port,
                         deployed_config=deployed_config if deployed_config else None,
+                        healthy=healthy,
+                        health_message=health_message,
+                        last_health_check=datetime.now(timezone.utc) if healthy is not None else None,
                         backend_type="docker",
                         backend_metadata={
                             "container_id": container.id,

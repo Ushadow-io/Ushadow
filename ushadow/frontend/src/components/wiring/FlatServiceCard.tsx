@@ -742,16 +742,19 @@ export function FlatServiceCard({
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
                           deployment.status === 'running'
                             ? 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400'
+                            : deployment.status === 'deploying'
+                            ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-400'
                             : deployment.status === 'stopped'
                             ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
                             : 'bg-danger-100 dark:bg-danger-900/30 text-danger-700 dark:text-danger-400'
                         }`}
+                        title={deployment.health_message || undefined}
                       >
                         {deployment.status}
                       </span>
 
                       {/* Stop/Restart button next to status */}
-                      {deployment.status === 'running' && onStopDeployment ? (
+                      {(deployment.status === 'running' || deployment.status === 'deploying') && onStopDeployment ? (
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
