@@ -18,8 +18,8 @@ grep -rn "class ClassName" ushadow/backend/src/
 # Check available services
 cat ushadow/backend/src/services/__init__.py
 
-# Check service registry
-cat ushadow/backend/src/service_registry.py
+# Check backend index (method/class reference)
+cat ushadow/backend/src/backend_index.py
 ```
 
 ### Step 3: Check Architecture

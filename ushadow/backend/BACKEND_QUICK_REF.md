@@ -10,7 +10,7 @@
    grep -rn "async def method_name" src/services/
    grep -rn "class ClassName" src/
    ```
-3. **Check service registry**: `cat src/service_registry.py`
+3. **Check backend index**: `cat src/backend_index.py`
 4. **Read architecture**: `cat src/ARCHITECTURE.md`
 5. **Only then create new code** if nothing exists
 
@@ -416,7 +416,7 @@ def test_router_get_resource(client: TestClient):
 ## Checklist Before Creating New Code
 
 - [ ] Searched for existing implementation: `grep -rn "method_name" src/`
-- [ ] Checked service registry: `cat src/service_registry.py`
+- [ ] Checked backend index: `cat src/backend_index.py`
 - [ ] Read ARCHITECTURE.md to confirm layer placement
 - [ ] Following naming convention (Manager/Registry/Store/Service)
 - [ ] Using dependency injection via `Depends()`

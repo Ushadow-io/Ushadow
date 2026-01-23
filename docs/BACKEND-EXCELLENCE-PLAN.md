@@ -25,7 +25,7 @@ This plan adapts learnings from PR #113 (Frontend Excellence) to create backend-
 | Frontend Pattern | Backend Equivalent |
 |------------------|-------------------|
 | AGENT_QUICK_REF.md | BACKEND_QUICK_REF.md |
-| ui-contract.ts | service_registry.py |
+| ui-contract.ts | backend_index.py |
 | HOOK_PATTERNS.md | SERVICE_PATTERNS.md |
 | ESLint file limits | Ruff/pylint class complexity limits |
 | Component search | Function/method search via grep + index |
@@ -102,7 +102,7 @@ async def get_join_script(self, token: str) -> str:
 
 ## Workflow
 1. **Search first**: `grep -rn "async def method_name" src/`
-2. **Check registry**: Read `src/service_registry.py`
+2. **Check backend index**: Read `src/backend_index.py`
 3. **Check patterns**: Read `docs/SERVICE_PATTERNS.md`
 4. **Follow architecture**: Read `src/ARCHITECTURE.md`
 
@@ -196,24 +196,25 @@ Layer     Logic     Access
 Never skip layers unless documented exception.
 ```
 
-#### 1.2 Create Service Registry
+#### 1.2 Create Backend Index
 
-**File**: `ushadow/backend/src/service_registry.py`
+**File**: `ushadow/backend/src/backend_index.py`
 
 ```python
 """
-Central registry of all available services and their public APIs.
+Backend method and class index for agent discovery.
 
-Agents should import this file to discover existing functionality.
+This is a static reference file (not a runtime registry like ComposeRegistry
+or ProviderRegistry). Agents should read this to discover existing functionality.
 """
 
 from typing import Dict, List, Type
 
 # =============================================================================
-# Service Discovery Registry
+# Service Index (Static Reference, NOT a runtime registry)
 # =============================================================================
 
-SERVICE_REGISTRY: Dict[str, Dict[str, any]] = {
+MANAGER_INDEX: Dict[str, Dict[str, any]] = {
     "docker": {
         "class": "DockerManager",
         "module": "src.services.docker_manager",
@@ -241,10 +242,10 @@ SERVICE_REGISTRY: Dict[str, Dict[str, any]] = {
 }
 
 # =============================================================================
-# Common Utilities Registry
+# Utility Index
 # =============================================================================
 
-UTILITY_REGISTRY: Dict[str, Dict[str, any]] = {
+UTILITY_INDEX: Dict[str, Dict[str, any]] = {
     "settings": {
         "function": "get_settings",
         "module": "src.config.omegaconf_settings",
@@ -633,7 +634,7 @@ grep -rn "async def method_name" src/services/
 grep -rn "def function_name" src/utils/
 
 # Check service registry
-cat src/service_registry.py
+cat src/backend_index.py
 
 # List available services
 cat src/services/__init__.py
@@ -667,7 +668,7 @@ cat src/services/__init__.py
 
 ### Week 1: Foundation
 - [ ] Create `BACKEND_QUICK_REF.md`
-- [ ] Create `service_registry.py`
+- [ ] Create `backend_index.py`
 - [ ] Create `SERVICE_PATTERNS.md`
 - [ ] Add Ruff configuration
 - [ ] Populate `services/__init__.py`, `utils/__init__.py`
@@ -711,7 +712,7 @@ cat src/services/__init__.py
 ## Quick Wins (Implement Today)
 
 1. **Create `BACKEND_QUICK_REF.md`** - 1 hour
-2. **Create `service_registry.py`** - 1 hour
+2. **Create `backend_index.py`** - 1 hour
 3. **Add Ruff config** - 30 min
 4. **Populate `services/__init__.py`** - 30 min
 5. **Update CLAUDE.md** - 30 min
