@@ -76,14 +76,14 @@ prerequisites:
     optional: true
     category: networking
 
-  # Development Tools (Optional)
+  # Python Package Installer (Required)
   - id: uv
     name: uv
     display_name: uv
     description: Fast Python package installer
     platforms: [macos, windows, linux]
     check_command: uv --version
-    optional: true
+    optional: false
     category: development
 
   - id: workmux

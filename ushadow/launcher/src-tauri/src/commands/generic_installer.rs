@@ -227,15 +227,39 @@ async fn install_via_script(prereq_id: &str, method: &InstallationMethod) -> Res
         .await
         .map_err(|e| format!("Failed to read script: {}", e))?;
 
-    // Save script to temp file
-    let tmp_dir = std::env::temp_dir();
-    let script_path = tmp_dir.join(format!("install_{}.sh", prereq_id));
-    std::fs::write(&script_path, script_content)
-        .map_err(|e| format!("Failed to save script: {}", e))?;
-
-    // Make executable
-    #[cfg(unix)]
+    // Platform-specific script handling
+    #[cfg(target_os = "windows")]
     {
+        // Save as PowerShell script
+        let tmp_dir = std::env::temp_dir();
+        let script_path = tmp_dir.join(format!("install_{}.ps1", prereq_id));
+        std::fs::write(&script_path, script_content)
+            .map_err(|e| format!("Failed to save script: {}", e))?;
+
+        // Execute with PowerShell (shell_command already wraps in powershell -NoProfile -Command)
+        let cmd = format!("& \"{}\"", script_path.display());
+        let output = shell_command(&cmd)
+            .output()
+            .map_err(|e| format!("Failed to execute script: {}", e))?;
+
+        if output.status.success() {
+            Ok(format!("{} installed successfully via script", prereq_id))
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Err(format!("Script installation failed:\nstderr: {}\nstdout: {}", stderr, stdout))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Save as shell script
+        let tmp_dir = std::env::temp_dir();
+        let script_path = tmp_dir.join(format!("install_{}.sh", prereq_id));
+        std::fs::write(&script_path, script_content)
+            .map_err(|e| format!("Failed to save script: {}", e))?;
+
+        // Make executable
         use std::os::unix::fs::PermissionsExt;
         let metadata = std::fs::metadata(&script_path)
             .map_err(|e| format!("Failed to get script metadata: {}", e))?;
@@ -243,18 +267,18 @@ async fn install_via_script(prereq_id: &str, method: &InstallationMethod) -> Res
         permissions.set_mode(0o755);
         std::fs::set_permissions(&script_path, permissions)
             .map_err(|e| format!("Failed to set script permissions: {}", e))?;
-    }
 
-    // Execute script
-    let output = shell_command(&format!("bash {}", script_path.display()))
-        .output()
-        .map_err(|e| format!("Failed to execute script: {}", e))?;
+        // Execute script
+        let output = shell_command(&format!("bash {}", script_path.display()))
+            .output()
+            .map_err(|e| format!("Failed to execute script: {}", e))?;
 
-    if output.status.success() {
-        Ok(format!("{} installed successfully via script", prereq_id))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Script installation failed: {}", stderr))
+        if output.status.success() {
+            Ok(format!("{} installed successfully via script", prereq_id))
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Script installation failed: {}", stderr))
+        }
     }
 }
 
