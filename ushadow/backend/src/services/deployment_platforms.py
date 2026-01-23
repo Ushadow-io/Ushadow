@@ -183,8 +183,7 @@ class DockerDeployPlatform(DeployPlatform):
                     exposed_ports[port_key] = {}
 
             # Create container with ushadow labels for stateless tracking
-            env_info = get_environment_info()
-
+            from datetime import datetime, timezone
             labels = {
                 "ushadow.deployment_id": deployment_id,
                 "ushadow.service_id": resolved_service.service_id,
@@ -192,27 +191,6 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
             }
-
-            # Add health check configuration to labels
-            if resolved_service.health_check_path:
-                labels["ushadow.health_check_path"] = resolved_service.health_check_path
-            if resolved_service.health_check_port:
-                labels["ushadow.health_check_port"] = str(resolved_service.health_check_port)
-
-            # Add compose project labels so deployed services appear in the same compose project
-            labels.update(env_info.get_container_labels())
-
-            # Determine network - use compose network if available
-            network = resolved_service.network
-            if not network:
-                # Try to use the compose default network
-                compose_network = env_info.compose_network_name
-                try:
-                    docker_client.networks.get(compose_network)
-                    network = compose_network
-                    logger.info(f"Using compose network: {compose_network}")
-                except:
-                    network = "bridge"
 
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
             container = docker_client.containers.run(
@@ -464,6 +442,9 @@ class DockerDeployPlatform(DeployPlatform):
         Returns deployments by querying containers with ushadow labels.
         This is stateless - container runtime is the source of truth.
         """
+        from datetime import datetime, timezone
+        import docker
+
         deployments = []
 
         try:
@@ -497,40 +478,6 @@ class DockerDeployPlatform(DeployPlatform):
                     container_status = container.status.lower()
                     deployment_status = status_map.get(container_status, DeploymentStatus.FAILED)
 
-                    # For running containers, perform health check if configured
-                    health_message = None
-                    healthy = None
-                    if deployment_status == DeploymentStatus.RUNNING:
-                        health_check_path = labels.get("ushadow.health_check_path")
-                        health_check_port_str = labels.get("ushadow.health_check_port")
-
-                        # Determine health check port (use exposed port if not explicitly configured)
-                        health_check_port = None
-                        if health_check_port_str:
-                            health_check_port = int(health_check_port_str)
-                        elif container.ports:
-                            # Use first exposed port
-                            for container_port, host_bindings in container.ports.items():
-                                if host_bindings:
-                                    health_check_port = int(host_bindings[0]["HostPort"])
-                                    break
-
-                        # Perform health check if we have the necessary info
-                        if health_check_path and health_check_port:
-                            is_healthy, error_msg = await check_deployment_health(
-                                host="localhost",
-                                port=health_check_port,
-                                health_path=health_check_path,
-                                timeout=2.0
-                            )
-
-                            healthy = is_healthy
-                            health_message = error_msg
-
-                            # If not healthy yet, status is DEPLOYING
-                            if not is_healthy:
-                                deployment_status = DeploymentStatus.DEPLOYING
-
                     # Extract exposed port
                     exposed_port = None
                     if container.ports:
@@ -548,22 +495,6 @@ class DockerDeployPlatform(DeployPlatform):
                         except:
                             pass
 
-                    # Build deployed_config with ports
-                    deployed_config = {}
-                    if container.ports:
-                        port_list = []
-                        for container_port, host_bindings in container.ports.items():
-                            if host_bindings:
-                                port_list.append(f"{host_bindings[0]['HostPort']}:{container_port.split('/')[0]}")
-                        deployed_config["ports"] = port_list
-
-                    # Extract environment from container
-                    if hasattr(container, 'attrs') and 'Config' in container.attrs:
-                        env_list = container.attrs['Config'].get('Env', [])
-                        deployed_config["environment"] = {
-                            k: v for k, v in (e.split('=', 1) for e in env_list if '=' in e)
-                        }
-
                     deployment = Deployment(
                         id=deployment_id,
                         service_id=labels.get("ushadow.service_id", "unknown"),
@@ -573,10 +504,6 @@ class DockerDeployPlatform(DeployPlatform):
                         container_name=container.name,
                         deployed_at=deployed_at,
                         exposed_port=exposed_port,
-                        deployed_config=deployed_config if deployed_config else None,
-                        healthy=healthy,
-                        health_message=health_message,
-                        last_health_check=datetime.now(timezone.utc) if healthy is not None else None,
                         backend_type="docker",
                         backend_metadata={
                             "container_id": container.id,

@@ -675,8 +675,37 @@ class DeploymentManager:
                 container.stop()
                 logger.info(f"Stopped local container {deployment.container_name}")
 
-                # Refresh container status
-                container.reload()
+        unode = UNode(**unode_dict)
+
+        # Create deployment target from unode with standardized fields
+        from src.models.unode import UNodeType, UNodeRole
+        from src.utils.deployment_targets import parse_deployment_target_id
+
+        parsed = parse_deployment_target_id(unode.deployment_target_id)
+        is_leader = unode.role == UNodeRole.LEADER
+
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+            identifier=unode.hostname,
+            environment=parsed["environment"],
+            status=unode.status.value if unode.status else "unknown",
+            provider="local" if is_leader else "remote",
+            region=None,
+            is_leader=is_leader,
+            namespace=None,
+            infrastructure=None,
+            raw_metadata=unode.model_dump()
+        )
+
+        # Get appropriate deployment platform
+        platform = get_deploy_platform(target)
+
+        try:
+            success = await platform.stop(target, deployment)
+
+            if success:
                 deployment.status = DeploymentStatus.STOPPED
                 deployment.stopped_at = datetime.now(timezone.utc)
 
@@ -691,46 +720,6 @@ class DeploymentManager:
             })
             if not unode_dict:
                 raise ValueError(f"U-node not found: {deployment.unode_hostname}")
-
-            unode = UNode(**unode_dict)
-
-            # Create deployment target from unode with standardized fields
-            from src.models.unode import UNodeType, UNodeRole
-            from src.utils.deployment_targets import parse_deployment_target_id
-
-            parsed = parse_deployment_target_id(unode.deployment_target_id)
-            is_leader = unode.role == UNodeRole.LEADER
-
-            target = DeployTarget(
-                id=unode.deployment_target_id,
-                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
-                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
-                identifier=unode.hostname,
-                environment=parsed["environment"],
-                status=unode.status.value if unode.status else "unknown",
-                provider="local" if is_leader else "remote",
-                region=None,
-                is_leader=is_leader,
-                namespace=None,
-                infrastructure=None,
-                raw_metadata=unode.model_dump()
-            )
-
-            # Get appropriate deployment platform
-            platform = get_deploy_platform(target)
-
-            try:
-                success = await platform.stop(target, deployment)
-
-                if success:
-                    deployment.status = DeploymentStatus.STOPPED
-                    deployment.stopped_at = datetime.now(timezone.utc)
-                else:
-                    deployment.error = "Stop failed"
-
-            except Exception as e:
-                logger.error(f"Stop failed for deployment {deployment_id}: {e}")
-                deployment.error = str(e)
 
         # Stateless: Container state is source of truth, no database update needed
         return deployment
@@ -768,19 +757,6 @@ class DeploymentManager:
             if not unode:
                 raise ValueError(f"U-node not found: {deployment.unode_hostname}")
 
-            try:
-                result = await self._send_restart_command(unode, deployment.container_name)
-
-                if result.get("success"):
-                    deployment.status = DeploymentStatus.RUNNING
-                    deployment.stopped_at = None
-                else:
-                    deployment.error = result.get("error", "Restart failed")
-
-            except Exception as e:
-                logger.error(f"Restart failed for deployment {deployment_id}: {e}")
-                deployment.error = str(e)
-
         # Stateless: Container state is source of truth, no database update needed
         return deployment
 
@@ -790,9 +766,38 @@ class DeploymentManager:
         if not deployment:
             return False
 
-        # Check if this is a local deployment
-        if _is_local_deployment(deployment.unode_hostname):
-            # Local deployment - use Docker API directly
+        unode_dict = await self.unodes_collection.find_one({
+            "hostname": deployment.unode_hostname
+        })
+
+        if unode_dict:
+            unode = UNode(**unode_dict)
+
+            # Create deployment target from unode with standardized fields
+            from src.models.unode import UNodeType, UNodeRole
+            from src.utils.deployment_targets import parse_deployment_target_id
+
+            parsed = parse_deployment_target_id(unode.deployment_target_id)
+            is_leader = unode.role == UNodeRole.LEADER
+
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=parsed["environment"],
+                status=unode.status.value if unode.status else "unknown",
+                provider="local" if is_leader else "remote",
+                region=None,
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
+            )
+
+            # Get appropriate deployment platform
+            platform = get_deploy_platform(target)
+
             try:
                 import docker
                 docker_client = docker.from_env()

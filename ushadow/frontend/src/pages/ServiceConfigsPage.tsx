@@ -118,11 +118,6 @@ export default function ServiceConfigsPage() {
   const [loadingProviderCard, setLoadingProviderCard] = useState(false)
   const [savingProviderCard, setSavingProviderCard] = useState(false)
 
-  // Deployment editing state
-  const [editingDeployment, setEditingDeployment] = useState<any | null>(null)
-  const [deploymentEnvVars, setDeploymentEnvVars] = useState<any[]>([])
-  const [deploymentEnvConfigs, setDeploymentEnvConfigs] = useState<Record<string, any>>({})
-
   // Unified deploy modal state
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
