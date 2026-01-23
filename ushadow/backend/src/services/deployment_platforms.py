@@ -2,13 +2,16 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
+from datetime import datetime, timezone
 import logging
+import os
 import httpx
 import docker
 
 from src.models.deployment import ResolvedServiceDefinition, Deployment, DeploymentStatus
 from src.models.deploy_target import DeployTarget
 from src.services.kubernetes_manager import KubernetesManager
+from src.utils.environment import get_environment_info, is_local_deployment
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +101,7 @@ class DockerDeployPlatform(DeployPlatform):
 
     def _is_local_deployment(self, hostname: str) -> bool:
         """Check if this is a local deployment (same host as backend)."""
-        import os
-        env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
-        return hostname == env_name or hostname == "localhost"
+        return is_local_deployment(hostname)
 
     def _get_target_ip(self, target: DeployTarget) -> str:
         """Get target IP (localhost for local, tailscale IP for remote)."""
@@ -144,7 +145,8 @@ class DockerDeployPlatform(DeployPlatform):
                     exposed_ports[port_key] = {}
 
             # Create container with ushadow labels for stateless tracking
-            from datetime import datetime, timezone
+            env_info = get_environment_info()
+
             labels = {
                 "ushadow.deployment_id": deployment_id,
                 "ushadow.service_id": resolved_service.service_id,
@@ -152,6 +154,21 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
             }
+
+            # Add compose project labels so deployed services appear in the same compose project
+            labels.update(env_info.get_container_labels())
+
+            # Determine network - use compose network if available
+            network = resolved_service.network
+            if not network:
+                # Try to use the compose default network
+                compose_network = env_info.compose_network_name
+                try:
+                    docker_client.networks.get(compose_network)
+                    network = compose_network
+                    logger.info(f"Using compose network: {compose_network}")
+                except:
+                    network = "bridge"
 
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
             container = docker_client.containers.run(
@@ -163,7 +180,7 @@ class DockerDeployPlatform(DeployPlatform):
                 volumes=resolved_service.volumes if resolved_service.volumes else None,
                 command=resolved_service.command,
                 restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
-                network=resolved_service.network or "bridge",
+                network=network,
                 detach=True,
                 remove=False,
             )
@@ -403,9 +420,6 @@ class DockerDeployPlatform(DeployPlatform):
         Returns deployments by querying containers with ushadow labels.
         This is stateless - container runtime is the source of truth.
         """
-        from datetime import datetime, timezone
-        import docker
-
         deployments = []
 
         try:
@@ -456,6 +470,22 @@ class DockerDeployPlatform(DeployPlatform):
                         except:
                             pass
 
+                    # Build deployed_config with ports
+                    deployed_config = {}
+                    if container.ports:
+                        port_list = []
+                        for container_port, host_bindings in container.ports.items():
+                            if host_bindings:
+                                port_list.append(f"{host_bindings[0]['HostPort']}:{container_port.split('/')[0]}")
+                        deployed_config["ports"] = port_list
+
+                    # Extract environment from container
+                    if hasattr(container, 'attrs') and 'Config' in container.attrs:
+                        env_list = container.attrs['Config'].get('Env', [])
+                        deployed_config["environment"] = {
+                            k: v for k, v in (e.split('=', 1) for e in env_list if '=' in e)
+                        }
+
                     deployment = Deployment(
                         id=deployment_id,
                         service_id=labels.get("ushadow.service_id", "unknown"),
@@ -465,6 +495,7 @@ class DockerDeployPlatform(DeployPlatform):
                         container_name=container.name,
                         deployed_at=deployed_at,
                         exposed_port=exposed_port,
+                        deployed_config=deployed_config if deployed_config else None,
                         backend_type="docker",
                         backend_metadata={
                             "container_id": container.id,

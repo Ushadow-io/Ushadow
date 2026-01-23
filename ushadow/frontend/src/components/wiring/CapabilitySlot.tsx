@@ -190,28 +190,30 @@ function CapabilitySlotDropdown({
   error,
 }: DropdownModeProps) {
   return (
-    <div>
+    <div className="flex items-center gap-3">
       {/* Capability label */}
-      <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-1">
+      <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide w-32 flex-shrink-0">
         {capability}
       </div>
       {/* Dropdown with cascading submenu */}
-      <ProviderConfigDropdown
-        capability={capability}
-        consumerId={consumerId}
-        value={selectedOption}
-        options={options}
-        templates={templates}
-        loading={loading}
-        onChange={onSelect}
-        onCreateConfig={onCreateConfig}
-        onEditConfig={onEditConfig}
-        onDeleteConfig={onDeleteConfig}
-        onUpdateConfig={onUpdateConfig}
-        onRefresh={onRefresh}
-        onCreateNew={onCreateNew}
-        error={error}
-      />
+      <div className="flex-1">
+        <ProviderConfigDropdown
+          capability={capability}
+          consumerId={consumerId}
+          value={selectedOption}
+          options={options}
+          templates={templates}
+          loading={loading}
+          onChange={onSelect}
+          onCreateConfig={onCreateConfig}
+          onEditConfig={onEditConfig}
+          onDeleteConfig={onDeleteConfig}
+          onUpdateConfig={onUpdateConfig}
+          onRefresh={onRefresh}
+          onCreateNew={onCreateNew}
+          error={error}
+        />
+      </div>
     </div>
   )
 }

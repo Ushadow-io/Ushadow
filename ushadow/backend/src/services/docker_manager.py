@@ -22,6 +22,7 @@ from docker.errors import DockerException, NotFound, APIError
 
 from src.config.secrets import mask_if_secret
 from src.services.compose_registry import get_compose_registry
+from src.utils.environment import get_compose_project_name
 
 logger = logging.getLogger(__name__)
 
@@ -588,8 +589,7 @@ class DockerManager:
             except NotFound:
                 # Container name may have project prefix (e.g., "ushadow-wiz-frame-chronicle-backend")
                 # Search by compose service label, preferring declared namespace
-                import os
-                current_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+                current_project = get_compose_project_name()
 
                 # Use declared namespace from x-ushadow, fall back to current project
                 service_namespace = service_config.get("namespace")
@@ -811,7 +811,7 @@ class DockerManager:
 
         # Build the full container name pattern to exclude (only OUR environment's container)
         # Container names follow pattern: {COMPOSE_PROJECT_NAME}-{service_name}
-        compose_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+        compose_project = get_compose_project_name()
         exclude_pattern = f"{compose_project}-{service_name}"
         logger.debug(f"Exclude pattern for self-check: {exclude_pattern}")
 
@@ -1241,7 +1241,7 @@ class DockerManager:
             # Use declared namespace from x-ushadow, fall back to COMPOSE_PROJECT_NAME
             project_name = discovered.namespace if discovered else None
             if not project_name:
-                project_name = os.environ.get("COMPOSE_PROJECT_NAME")
+                project_name = get_compose_project_name()
             if not project_name:
                 # Fallback for infra services or if env not set
                 if "infra" in str(compose_path):
