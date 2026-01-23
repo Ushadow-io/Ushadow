@@ -1,6 +1,6 @@
 [package]
 name = "ushadow-launcher"
-version = "0.5.1"
+version = "0.6.3"
 description = "Ushadow Desktop Launcher"
 authors = ["Ushadow"]
 license = "MIT"
@@ -14,6 +14,7 @@ tauri-build = { version = "1", features = [] }
 tauri = { version = "1", features = [ "clipboard-all", "path-all", "process-exit", "shell-execute", "process-relaunch", "shell-open", "process-command-api", "dialog-all", "notification-all", "system-tray"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 tokio = { version = "1", features = ["process", "time", "macros", "rt-multi-thread", "io-util", "sync"] }
 reqwest = { version = "0.11", features = ["blocking"] }
 open = "5"

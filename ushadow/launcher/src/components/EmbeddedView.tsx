@@ -10,8 +10,16 @@ interface EmbeddedViewProps {
 }
 
 export function EmbeddedView({ url, envName, envColor, envPath, onClose }: EmbeddedViewProps) {
+  // Add launcher query param so frontend knows to hide footer
+  const displayUrl = url
+  const iframeUrl = url
+    ? url.includes('?')
+      ? `${url}&launcher=true`
+      : `${url}?launcher=true`
+    : ''
+
   const handleOpenExternal = () => {
-    tauri.openBrowser(url)
+    tauri.openBrowser(displayUrl)
   }
 
   const handleRefresh = () => {
@@ -51,7 +59,14 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
             <ArrowLeft className="w-5 h-5" />
           </button>
           <span className="text-sm font-medium text-text-primary">{envName}</span>
-          <span className="text-xs text-text-muted truncate max-w-[300px]">{url}</span>
+          <button
+            onClick={handleOpenExternal}
+            className="text-xs text-text-muted hover:text-primary-400 truncate max-w-[300px] transition-colors cursor-pointer underline decoration-dotted"
+            title="Open in external browser"
+            data-testid="embedded-view-url"
+          >
+            {displayUrl}
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
@@ -109,7 +124,7 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
       <div className="flex-1 relative">
         <iframe
           id="embedded-iframe"
-          src={url}
+          src={iframeUrl}
           className="absolute inset-0 w-full h-full border-0"
           title={`${envName} environment`}
           data-testid="embedded-iframe"

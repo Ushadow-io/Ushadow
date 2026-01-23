@@ -355,81 +355,56 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
             ((hash % 50) * 10) as u16  // Gives offsets: 0, 10, 20, ... 490
         };
 
-        let mut log_messages = Vec::new();
+        let mut status_log = Vec::new();  // User-visible status messages
+        let mut debug_log = Vec::new();   // Detailed debug info (only shown on error)
 
-        log_messages.push(format!("========== INITIALIZING ENVIRONMENT =========="));
-        log_messages.push(format!("Working directory: {}", working_dir));
-        log_messages.push(format!("ENV_NAME={}", env_name));
-        log_messages.push(format!("PORT_OFFSET={} (calculated from env name hash)", port_offset));
+        // Log to both status and debug
+        status_log.push(format!("Initializing environment '{}'...", env_name));
+        debug_log.push(format!("========== INITIALIZING ENVIRONMENT =========="));
+        debug_log.push(format!("Working directory: {}", working_dir));
+        debug_log.push(format!("ENV_NAME={}", env_name));
+        debug_log.push(format!("PORT_OFFSET={} (calculated from env name hash)", port_offset));
 
-        // Install uv if needed
-        let install_script = if cfg!(target_os = "windows") {
-            std::path::Path::new(&working_dir).join("scripts/install-uv.ps1")
+        // Find uv executable (assumes uv is installed via prerequisites)
+        let uv_cmd = find_uv_executable();
+        debug_log.push(format!("Using uv at: {}", uv_cmd));
+
+        // Verify uv is accessible
+        let uv_check = if uv_cmd == "uv" {
+            // If using PATH, verify with --version
+            shell_command("uv --version").output().is_ok()
         } else {
-            std::path::Path::new(&working_dir).join("scripts/install-uv.sh")
+            // If using specific path, verify file exists
+            std::path::Path::new(&uv_cmd).exists()
         };
 
-        log_messages.push(format!("Checking for uv install script at: {}", install_script.display()));
-
-        if install_script.exists() {
-            log_messages.push(format!("✓ Found install script, running: {}", install_script.display()));
-
-            let install_output = if cfg!(target_os = "windows") {
-                log_messages.push(format!("Executing: powershell -ExecutionPolicy Bypass -File \"{}\"", install_script.display()));
-                shell_command("powershell")
-                    .args(["-ExecutionPolicy", "Bypass", "-File", install_script.to_str().unwrap()])
-                    .current_dir(&working_dir)
-                    .output()
-            } else {
-                log_messages.push(format!("Executing: bash \"{}\"", install_script.display()));
-                shell_command("bash")
-                    .arg(install_script.to_str().unwrap())
-                    .current_dir(&working_dir)
-                    .output()
-            };
-
-            match install_output {
-                Ok(out) => {
-                    let install_stdout = String::from_utf8_lossy(&out.stdout);
-                    let install_stderr = String::from_utf8_lossy(&out.stderr);
-
-                    if !install_stdout.is_empty() {
-                        log_messages.push(format!("uv installer stdout:\n{}", install_stdout));
-                    }
-                    if !install_stderr.is_empty() {
-                        log_messages.push(format!("uv installer stderr:\n{}", install_stderr));
-                    }
-
-                    if !out.status.success() {
-                        log_messages.push(format!("⚠ uv installer exited with status: {}", out.status));
-                    } else {
-                        log_messages.push(format!("✓ uv installer completed successfully"));
-                    }
-                }
-                Err(e) => {
-                    log_messages.push(format!("⚠ Failed to run uv installer: {}", e));
-                }
-            }
-        } else {
-            log_messages.push(format!("✗ Install script NOT found at: {}", install_script.display()));
-        }
-
-        // Find uv executable (handle Windows PATH not being updated)
-        let uv_cmd = find_uv_executable();
-        log_messages.push(format!("Looking for uv executable..."));
-        log_messages.push(format!("Using uv at: {}", uv_cmd));
-
-        // Check if uv actually exists
-        if uv_cmd != "uv" && !std::path::Path::new(&uv_cmd).exists() {
-            log_messages.push(format!("⚠ uv not found at: {}", uv_cmd));
+        if !uv_check {
+            let error_msg = format!(
+                "uv not found or not accessible (tried: {})\n\nPlease install uv via the Prerequisites panel before starting an environment.",
+                uv_cmd
+            );
+            status_log.push(error_msg.clone());
+            debug_log.push(error_msg);
+            return Err(format!("{}\n\n=== Debug Log ===\n{}",
+                status_log.join("\n"),
+                debug_log.join("\n")));
         }
 
         // Run setup with uv in dev mode with calculated port offset
         // Note: Removed --skip-admin flag so admin user can be auto-created from secrets.yaml
-        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick", uv_cmd));
+        status_log.push(format!("Running setup script..."));
+        debug_log.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick", uv_cmd));
 
         // Build the full command string for shell execution
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
+        // Platform-specific command syntax
+        #[cfg(target_os = "windows")]
+        let setup_command = format!(
+            "cd '{}'; $env:ENV_NAME='{}'; $env:PORT_OFFSET='{}'; {} run --with pyyaml setup/run.py --dev --quick",
+            working_dir, env_name, port_offset, uv_cmd
+        );
+
+        #[cfg(not(target_os = "windows"))]
         let setup_command = format!(
             "cd '{}' && ENV_NAME={} PORT_OFFSET={} {} run --with pyyaml setup/run.py --dev --quick",
             working_dir, env_name, port_offset, uv_cmd
@@ -438,18 +413,20 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         let output = shell_command(&setup_command)
             .output()
             .map_err(|e| {
-                let error_log = log_messages.join("\n");
-                format!("{}\n\nFailed to run setup (uv not found at '{}'. Try installing manually: https://docs.astral.sh/uv/getting-started/installation/): {}", error_log, uv_cmd, e)
+                let full_log = format!("{}\n\n=== Debug Log ===\n{}",
+                    status_log.join("\n"),
+                    debug_log.join("\n"));
+                format!("{}\n\nFailed to run setup (uv not found at '{}'. Try installing manually: https://docs.astral.sh/uv/getting-started/installation/): {}", full_log, uv_cmd, e)
             })?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         if !stdout.is_empty() {
-            log_messages.push(format!("Setup stdout:\n{}", stdout));
+            debug_log.push(format!("Setup stdout:\n{}", stdout));
         }
         if !stderr.is_empty() {
-            log_messages.push(format!("Setup stderr:\n{}", stderr));
+            debug_log.push(format!("Setup stderr:\n{}", stderr));
         }
 
         if !output.status.success() {
@@ -468,17 +445,22 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
                 &error_lines[..]
             };
 
-            let error_log = log_messages.join("\n");
+            // On error, show both status and debug logs
+            let full_log = format!("{}\n\n=== Debug Log ===\n{}",
+                status_log.join("\n"),
+                debug_log.join("\n"));
+
             return Err(format!(
-                "{}\n\nFailed to initialize environment '{}'\n\nError output:\n{}",
-                error_log,
+                "{}\n\n❌ Failed to initialize environment '{}'\n\nError output:\n{}",
+                full_log,
                 env_name,
                 context_lines.join("\n")
             ));
         }
 
-        log_messages.push(format!("✓ Environment '{}' initialized and started", env_name));
-        return Ok(log_messages.join("\n"));
+        // On success, only show status log
+        status_log.push(format!("✓ Environment '{}' initialized and started", env_name));
+        return Ok(status_log.join("\n"));
     }
 
     // Containers exist and are stopped - just start them

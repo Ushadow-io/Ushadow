@@ -36,6 +36,14 @@ function buildBugReportUrl(): string {
 export default function BugReportButton() {
   const { isDark } = useTheme()
 
+  // Check if we're running inside the launcher (via query parameter)
+  const isInLauncher = new URLSearchParams(window.location.search).has('launcher')
+
+  // Don't render button when in launcher
+  if (isInLauncher) {
+    return null
+  }
+
   return (
     <a
       href={buildBugReportUrl()}

@@ -1,0 +1,192 @@
+# Prerequisites Configuration
+# This file defines what software needs to be installed and checked
+# Modify this file to add/remove prerequisites or change detection logic
+
+prerequisites:
+  # Package Manager (macOS only)
+  - id: homebrew
+    name: Homebrew
+    display_name: Homebrew
+    description: Package manager for macOS
+    platforms: [macos]
+    check_command: brew --version
+    fallback_paths:
+      - /opt/homebrew/bin/brew  # Apple Silicon
+      - /usr/local/bin/brew      # Intel Mac
+    optional: false
+    category: package_manager
+
+  # Version Control
+  - id: git
+    name: Git
+    display_name: Git
+    description: Version control system
+    platforms: [macos, windows, linux]
+    check_command: git --version
+    optional: false
+    category: development
+
+  # Programming Languages
+  - id: python
+    name: Python 3
+    display_name: Python 3
+    description: Python programming language
+    platforms: [macos, windows, linux]
+    check_commands:
+      - python3 --version  # Preferred
+      - python --version   # Fallback
+    version_filter: "Python 3"  # Only accept Python 3.x
+    optional: false
+    category: development
+
+  # Container Platform
+  - id: docker
+    name: Docker
+    display_name: Docker
+    description: Container platform
+    platforms: [macos, windows, linux]
+    check_command: docker --version
+    check_running_command: docker info
+    fallback_paths:
+      macos:
+        - /usr/local/bin/docker
+        - /opt/homebrew/bin/docker
+        - /Applications/Docker.app/Contents/Resources/bin/docker
+      windows:
+        - C:\Program Files\Docker\Docker\resources\bin\docker.exe
+        - C:\ProgramData\DockerDesktop\version-bin\docker.exe
+      linux:
+        - /usr/bin/docker
+        - /usr/local/bin/docker
+        - /snap/bin/docker
+    optional: false
+    has_service: true  # Can be started/stopped
+    category: infrastructure
+
+  # VPN/Networking
+  - id: tailscale
+    name: Tailscale
+    display_name: Tailscale
+    description: Zero-config VPN
+    platforms: [macos, windows, linux]
+    check_command: tailscale --version
+    check_connected_command: tailscale ip -4
+    connection_validation:
+      starts_with: "100."  # Tailscale IPs start with 100.x.x.x
+    optional: true
+    category: networking
+
+  # Python Package Installer (Required)
+  - id: uv
+    name: uv
+    display_name: uv
+    description: Fast Python package installer
+    platforms: [macos, windows, linux]
+    check_command: uv --version
+    optional: false
+    category: development
+
+  - id: workmux
+    name: workmux
+    display_name: workmux
+    description: Worktree multiplexer
+    platforms: [macos, windows, linux]
+    check_command: workmux --version
+    optional: true
+    category: development
+
+  - id: tmux
+    name: tmux
+    display_name: tmux
+    description: Terminal multiplexer
+    platforms: [macos, linux]
+    check_command: tmux -V
+    optional: true
+    category: development
+
+# Installation methods per platform
+installation_methods:
+  homebrew:
+    macos:
+      method: script
+      url: https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+
+  git:
+    macos:
+      method: homebrew
+      package: git
+    windows:
+      method: download
+      url: https://git-scm.com/download/win
+    linux:
+      method: package_manager
+      packages:
+        apt: git
+        yum: git
+        dnf: git
+
+  python:
+    macos:
+      method: homebrew
+      package: python@3.12
+    windows:
+      method: download
+      url: https://www.python.org/downloads/
+    linux:
+      method: package_manager
+      packages:
+        apt: python3
+        yum: python3
+        dnf: python3
+
+  docker:
+    macos:
+      method: homebrew
+      package: docker
+    windows:
+      method: download
+      url: https://www.docker.com/products/docker-desktop
+    linux:
+      method: script
+      url: https://get.docker.com
+
+  tailscale:
+    macos:
+      method: homebrew
+      package: tailscale
+    windows:
+      method: download
+      url: https://tailscale.com/download/windows
+    linux:
+      method: script
+      url: https://tailscale.com/install.sh
+
+  uv:
+    macos:
+      method: homebrew
+      package: uv
+    windows:
+      method: script
+      url: https://astral.sh/uv/install.ps1
+    linux:
+      method: script
+      url: https://astral.sh/uv/install.sh
+
+  workmux:
+    macos:
+      method: cargo
+      package: workmux
+    linux:
+      method: cargo
+      package: workmux
+
+  tmux:
+    macos:
+      method: homebrew
+      package: tmux
+    linux:
+      method: package_manager
+      packages:
+        apt: tmux
+        yum: tmux
+        dnf: tmux
