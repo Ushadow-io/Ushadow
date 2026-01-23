@@ -213,6 +213,153 @@ async def list_deployments(
     )
 
 
+# =============================================================================
+# Exposed URLs Discovery (must come before /{deployment_id} route)
+# =============================================================================
+
+@router.get("/exposed-urls")
+async def get_exposed_urls(
+    url_type: Optional[str] = Query(None, alias="type", description="Filter by URL type (e.g., 'audio', 'http')"),
+    status: Optional[str] = Query(None, description="Filter by instance status (e.g., 'running')"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get exposed URLs from running service instances.
+
+    This enables deployment-based discovery where clients query actual running services
+    instead of using static provider registries.
+
+    Example: GET /api/deployments/exposed-urls?type=audio&status=running
+    Returns: List of audio intake endpoints from Chronicle, Mycelia, etc.
+    """
+    from src.services.service_config_manager import get_service_config_manager
+
+    manager = get_service_config_manager()
+    instances = manager.list_service_configs()
+
+    logger.info(f"[exposed-urls] Found {len(instances)} total instances")
+    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}")
+
+    result = []
+    for instance in instances:
+        logger.info(f"[exposed-urls] Checking instance {instance.id}: status={instance.status}")
+
+        # Filter by status if requested
+        if status and instance.status != status:
+            logger.info(f"[exposed-urls] Skipping {instance.id}: status {instance.status} != {status}")
+            continue
+
+        # Get full instance details with exposed_urls
+        full_instance = manager.get_service_config(instance.id)
+        if not full_instance:
+            logger.info(f"[exposed-urls] Could not load full instance for {instance.id}")
+            continue
+
+        if not hasattr(full_instance, 'exposed_urls'):
+            logger.info(f"[exposed-urls] Instance {instance.id} has no exposed_urls attribute")
+            continue
+
+        exposed_urls = getattr(full_instance, 'exposed_urls', None)
+        if not exposed_urls:
+            logger.info(f"[exposed-urls] Instance {instance.id} exposed_urls is empty")
+            continue
+
+        logger.info(f"[exposed-urls] Instance {instance.id} has {len(exposed_urls)} exposed URLs")
+
+        # Process each exposed URL
+        for exposed in exposed_urls:
+            # Handle both dict and object formats
+            if isinstance(exposed, dict):
+                exp_type = exposed.get('type')
+                exp_name = exposed.get('name')
+                exp_url = exposed.get('url')
+                exp_metadata = exposed.get('metadata', {})
+            else:
+                exp_type = getattr(exposed, 'type', None)
+                exp_name = getattr(exposed, 'name', None)
+                exp_url = getattr(exposed, 'url', None)
+                exp_metadata = getattr(exposed, 'metadata', {})
+
+            # Filter by type if requested
+            if url_type and exp_type != url_type:
+                continue
+
+            result.append({
+                "instance_id": instance.id,
+                "instance_name": instance.name,
+                "url": exp_url,
+                "type": exp_type,
+                "name": exp_name,
+                "metadata": exp_metadata,
+                "status": instance.status,
+            })
+
+    # Also check running docker containers from MANAGEABLE_SERVICES
+    # This handles services started via docker compose that don't have service_config entries
+    from src.services.docker_manager import get_docker_manager
+    from src.services.compose_registry import get_compose_registry
+    import os
+
+    docker_mgr = get_docker_manager()
+    compose_registry = get_compose_registry()
+    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+
+    logger.info(f"[exposed-urls] Checking MANAGEABLE_SERVICES for additional exposed URLs")
+
+    for service_name in docker_mgr.MANAGEABLE_SERVICES.keys():
+        # Get service info to check if it's running
+        service_info = docker_mgr.get_service_info(service_name)
+
+        # Skip if not running or if status filter doesn't match
+        if status and service_info.status.value != status:
+            continue
+
+        if service_info.status.value != "running":
+            continue
+
+        # Get compose metadata for this service
+        compose_service = compose_registry.get_service_by_name(service_name)
+        if not compose_service or not hasattr(compose_service, 'exposes') or not compose_service.exposes:
+            continue
+
+        # Get actual container name
+        try:
+            container = docker_mgr._client.containers.get(service_info.container_id)
+            container_name = container.name
+        except:
+            continue
+
+        logger.info(f"[exposed-urls] Found MANAGEABLE_SERVICE {service_name} with {len(compose_service.exposes)} exposed URLs")
+
+        # Build exposed URLs from compose metadata
+        for expose in compose_service.exposes:
+            exp_type = expose.get('type')
+            exp_name = expose.get('name')
+            path = expose.get('path', '')
+            port = expose.get('port')
+            exp_metadata = expose.get('metadata', {})
+
+            # Filter by type if requested
+            if url_type and exp_type != url_type:
+                continue
+
+            # Build URL using actual container name
+            protocol = 'ws' if exp_type == 'audio' else 'http'
+            exp_url = f"{protocol}://{container_name}:{port}{path}"
+
+            result.append({
+                "instance_id": service_name,
+                "instance_name": compose_service.display_name or service_name,
+                "url": exp_url,
+                "type": exp_type,
+                "name": exp_name,
+                "metadata": exp_metadata,
+                "status": "running",
+            })
+
+    return result
+
+
 @router.get("/{deployment_id}", response_model=Deployment)
 async def get_deployment(
     deployment_id: str,
@@ -257,6 +404,49 @@ async def restart_deployment(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Restart failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateDeploymentRequest(BaseModel):
+    """Request to update a deployment's environment variables."""
+    env_vars: Dict[str, str]
+
+
+@router.put("/{deployment_id}", response_model=Deployment)
+async def update_deployment(
+    deployment_id: str,
+    data: UpdateDeploymentRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update a deployment's environment variables and redeploy.
+
+    This updates the deployment's own configuration (not ServiceConfig)
+    and redeploys the service with the new environment variables.
+    """
+    env_vars = data.env_vars
+    manager = get_deployment_manager()
+
+    try:
+        # Get existing deployment
+        deployment = await manager.get_deployment(deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+
+        # Update the deployment's environment variables
+        # This will be stored in the deployment's deployed_config
+        updated_deployment = await manager.update_deployment(
+            deployment_id=deployment_id,
+            env_vars=env_vars
+        )
+
+        logger.info(f"Deployment {deployment_id} updated and redeployed")
+        return updated_deployment
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Update deployment failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -91,7 +91,7 @@ services:
 
       # Database Configuration - uses shared mongo from infra
       - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
-      - MONGO_URL=mongodb://mongo:27017/${MYCELIA_DATABASE_NAME:-mycelia}?directConnection=true
+      - MONGO_URL=${MONGO_URL:mongodb://mongo:27017/${MYCELIA_DATABASE_NAME:-mycelia}?directConnection=true}
 
       # Redis Configuration - uses shared redis from infra
       - REDIS_HOST=redis

@@ -16,11 +16,68 @@ from typing import Any, Optional, Dict
 
 from omegaconf import OmegaConf, DictConfig
 
-from src.config.secrets import is_secret_key
+from src.config.secrets import should_store_in_secrets
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="Store")
 
+
+# =============================================================================
+# OmegaConf Custom Resolvers
+# =============================================================================
+
+def _env_resolver(env_var_name: str, _root_: DictConfig) -> Optional[str]:
+    """
+    Search config tree for a key matching an env var name.
+
+    Strategies (in order):
+    1. Path-based: TRANSCRIPTION_PROVIDER -> transcription.provider
+    2. Key search: OPENAI_API_KEY -> api_keys.openai_api_key
+
+    Usage in YAML: ${env:MEMORY_SERVER_URL}
+    """
+    key = env_var_name.lower()
+
+    # Strategy 1: Treat underscores as path separators
+    parts = key.split('_')
+    if len(parts) >= 2:
+        section_name = parts[0]
+        key_name = '_'.join(parts[1:])
+        section = _root_.get(section_name)
+        if isinstance(section, (dict, DictConfig)) and key_name in section:
+            value = section.get(key_name)
+            if value is not None:
+                return str(value)
+
+    # Strategy 2: Search all top-level sections for exact key match
+    for section_name in _root_:
+        section = _root_.get(section_name)
+        if isinstance(section, (dict, DictConfig)) and key in section:
+            value = section.get(key)
+            if value is not None:
+                return str(value)
+
+    return None
+
+
+# Register custom resolvers (only once)
+if not OmegaConf.has_resolver("env"):
+    OmegaConf.register_new_resolver("env", _env_resolver)
+
+if not OmegaConf.has_resolver("merge_csv"):
+    # Merge comma-separated values from multiple sources, deduplicating
+    # Usage: ${merge_csv:${oc.env:CORS_ORIGINS,},http://localhost:3000}
+    OmegaConf.register_new_resolver(
+        "merge_csv",
+        lambda *args: ",".join(sorted(set(
+            o.strip() for a in args if a for o in str(a).split(",") if o.strip()
+        )))
+    )
+
+
+# =============================================================================
+# Settings Store
+# =============================================================================
 
 class SettingsStore:
     """
@@ -47,10 +104,11 @@ class SettingsStore:
 
         self.config_dir = Path(config_dir)
 
-        # File paths (merge order: defaults → secrets → overrides)
+        # File paths (merge order: defaults → secrets → overrides → instance_overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
         self.secrets_path = self.config_dir / "SECRETS" / "secrets.yaml"
         self.overrides_path = self.config_dir / "config.overrides.yaml"
+        self.instance_overrides_path = self.config_dir / "instance-overrides.yaml"
 
         self._cache: Optional[DictConfig] = None
         self._cache_timestamp: float = 0
@@ -80,7 +138,8 @@ class SettingsStore:
         Merge order (later overrides earlier):
         1. config.defaults.yaml - All default values
         2. secrets.yaml - API keys, passwords (gitignored)
-        3. config.overrides.yaml - User modifications (gitignored)
+        3. config.overrides.yaml - Template-level overrides (gitignored)
+        4. instance-overrides.yaml - Instance-level overrides (gitignored)
 
         Returns:
             OmegaConf DictConfig with all values merged
@@ -106,6 +165,10 @@ class SettingsStore:
         if cfg := self._load_yaml_if_exists(self.overrides_path):
             configs.append(cfg)
             logger.debug(f"Loaded overrides from {self.overrides_path}")
+
+        if cfg := self._load_yaml_if_exists(self.instance_overrides_path):
+            configs.append(cfg)
+            logger.debug(f"Loaded instance overrides from {self.instance_overrides_path}")
 
         # Merge all configs
         merged = OmegaConf.merge(*configs) if configs else OmegaConf.create({})
@@ -170,16 +233,53 @@ class SettingsStore:
         """Internal helper to save updates to a specific file."""
         current = self._load_yaml_if_exists(file_path) or OmegaConf.create({})
 
+        logger.info(f"[Store] _save_to_file: {file_path.name}")
+        logger.info(f"[Store] Updates to save: {updates}")
+
         for key, value in updates.items():
-            if '.' in key and not isinstance(value, dict):
-                OmegaConf.update(current, key, value)
+            logger.info(f"[Store] Processing key='{key}', value type={type(value).__name__}")
+            if '.' in key:
+                # Dotted key - need to manually navigate the path for dict values
+                if isinstance(value, dict):
+                    # Split the path and navigate/create structure
+                    parts = key.split('.')
+                    logger.info(f"[Store] Path parts: {parts}")
+
+                    # Navigate to parent, creating structure as needed
+                    node = current
+                    for part in parts[:-1]:
+                        if part not in node:
+                            node[part] = {}
+                        node = node[part]
+
+                    # Set or merge the final value
+                    final_key = parts[-1]
+                    if final_key in node and isinstance(node[final_key], dict) and isinstance(value, dict):
+                        # Merge with existing using OmegaConf.merge (preserves keys not in value)
+                        merged = OmegaConf.merge(node[final_key], value)
+                        node[final_key] = merged
+                        logger.info(f"[Store] Merged dict at path '{key}'")
+                    else:
+                        # Create new or replace non-dict
+                        node[final_key] = value
+                        logger.info(f"[Store] Set value at path '{key}'")
+                else:
+                    # For scalar values, OmegaConf.update works fine
+                    logger.info(f"[Store] Setting scalar at path '{key}': {value}")
+                    OmegaConf.update(current, key, value)
             else:
+                # Simple key - merge if dict, replace if scalar
+                logger.info(f"[Store] Updating simple key '{key}'")
                 OmegaConf.update(current, key, value, merge=True)
 
         # Ensure parent directory exists
         file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Debug: show what we're about to save
+        logger.info(f"[Store] Final config to save: {OmegaConf.to_yaml(current)}")
+
         OmegaConf.save(current, file_path)
-        logger.info(f"Saved to {file_path}: {list(updates.keys())}")
+        logger.info(f"[Store] Saved to {file_path}: {list(updates.keys())}")
 
     async def save_to_secrets(self, updates: dict) -> None:
         """
@@ -194,33 +294,6 @@ class SettingsStore:
         """Save non-sensitive values to config.overrides.yaml."""
         self._save_to_file(self.overrides_path, updates)
         self._cache = None
-
-    def _is_secret_key(self, key: str) -> bool:
-        """
-        Check if a key path should be stored in secrets.yaml.
-
-        This extends secrets.is_secret_key() with path-aware logic:
-        - Anything under api_keys.* goes to secrets
-        - security.* paths containing secret/key/password go to secrets
-        - admin.* paths containing password go to secrets
-        - Otherwise, falls back to is_secret_key() pattern matching
-
-        Args:
-            key: Full setting path (e.g., "api_keys.openai_api_key")
-
-        Returns:
-            True if this should be stored in secrets.yaml
-        """
-        key_lower = key.lower()
-        # Section-based rules (take precedence)
-        if key_lower.startswith('api_keys.'):
-            return True
-        if key_lower.startswith('security.') and any(p in key_lower for p in ['secret', 'key', 'password']):
-            return True
-        if key_lower.startswith('admin.') and 'password' in key_lower:
-            return True
-        # Fall back to pattern matching from secrets.py
-        return is_secret_key(key)
 
     async def update(self, updates: dict) -> None:
         """
@@ -246,7 +319,7 @@ class SettingsStore:
                     overrides_updates[key] = value
             else:
                 # Dot notation or simple key
-                if self._is_secret_key(key):
+                if should_store_in_secrets(key):
                     secrets_updates[key] = value
                 else:
                     overrides_updates[key] = value

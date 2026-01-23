@@ -11,7 +11,7 @@ import yaml
 import os
 
 from ..services.auth import get_current_user
-from ..config.omegaconf_settings import get_settings_store
+from ..config import get_settings_store
 
 router = APIRouter(prefix="/api/providers/audio_consumer", tags=["providers"])
 

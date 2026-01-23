@@ -13,7 +13,6 @@ The ComposeParser extracts:
 
 import logging
 import re
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
@@ -69,102 +68,6 @@ class BaseYAMLParser:
 
         with open(path, "w") as f:
             self.yaml.dump(data, f)
-
-    def get_nested(self, data: Dict, path: str, default: Any = None) -> Any:
-        """
-        Get nested value using dot notation.
-
-        Args:
-            data: Dict to traverse
-            path: Dot-separated path (e.g., "services.mem0.environment")
-            default: Value to return if path not found
-
-        Returns:
-            Value at path, or default if not found
-
-        Example:
-            >>> parser.get_nested(data, "services.mem0.image")
-            "ghcr.io/ushadow-io/u-mem0-api:latest"
-
-        .. deprecated::
-            Use OmegaConf.select(config, path) for OmegaConf configs.
-        """
-        warnings.warn(
-            "get_nested is deprecated. Use OmegaConf.select() instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        keys = path.split(".")
-        current = data
-
-        for key in keys:
-            if isinstance(current, dict) and key in current:
-                current = current[key]
-            else:
-                return default
-
-        return current
-
-    def set_nested(self, data: Dict, path: str, value: Any) -> None:
-        """
-        Set nested value using dot notation, creating intermediate dicts.
-
-        Args:
-            data: Dict to modify
-            path: Dot-separated path
-            value: Value to set
-
-        Example:
-            >>> parser.set_nested(data, "services.mem0.enabled", True)
-
-        .. deprecated::
-            Use OmegaConf.update(config, path, value) for OmegaConf configs.
-        """
-        warnings.warn(
-            "set_nested is deprecated. Use OmegaConf.update() instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        keys = path.split(".")
-        current = data
-
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-
-        current[keys[-1]] = value
-
-    def merge(self, base: Dict, overlay: Dict) -> Dict:
-        """
-        Deep merge overlay into base dict.
-
-        Overlay values override base values. Nested dicts are merged recursively.
-
-        Args:
-            base: Base dictionary
-            overlay: Dictionary to merge on top
-
-        Returns:
-            Merged dictionary (new dict, doesn't modify inputs)
-
-        .. deprecated::
-            Use OmegaConf.merge(base, overlay) for OmegaConf configs.
-        """
-        warnings.warn(
-            "merge is deprecated. Use OmegaConf.merge() instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        result = dict(base)
-
-        for key, value in overlay.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = self.merge(result[key], value)
-            else:
-                result[key] = value
-
-        return result
 
 
 # ============================================================================

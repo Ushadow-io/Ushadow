@@ -163,7 +163,8 @@ class DockerDeployPlatform(DeployPlatform):
         target: DeployTarget,
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
-        container_name: str
+        container_name: str,
+        project_name: str
     ) -> Deployment:
         """Deploy directly to local Docker (bypasses unode manager)."""
         try:
@@ -190,7 +191,22 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.unode_hostname": target.identifier,
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
+                "com.docker.compose.project": project_name,
             }
+
+            # Use ushadow-network to communicate with infrastructure (mongo, redis, qdrant)
+            # This shared network is defined as external in all compose files
+            network = "ushadow-network"
+            logger.info(f"Using network: {network}")
+
+            # Log environment variables being passed (redact sensitive values)
+            env_preview = {}
+            for key, value in (resolved_service.environment or {}).items():
+                if any(secret in key.lower() for secret in ['key', 'secret', 'token', 'password']):
+                    env_preview[key] = f"****{value[-4:]}" if value and len(value) > 4 else "****"
+                else:
+                    env_preview[key] = value
+            logger.info(f"Environment variables ({len(resolved_service.environment or {})} total): {env_preview}")
 
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
             container = docker_client.containers.run(
@@ -264,8 +280,11 @@ class DockerDeployPlatform(DeployPlatform):
         hostname = target.identifier  # Use standardized field (hostname for Docker targets)
         logger.info(f"Deploying {resolved_service.service_id} to Docker host {hostname}")
 
-        # Generate container name
-        container_name = f"{resolved_service.compose_service_name}-{deployment_id[:8]}"
+        # Generate container name with compose project prefix
+        import os
+        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+        container_name = f"{project_name}-{resolved_service.compose_service_name}-{deployment_id[:8]}"
+        logger.info(f"Generated container name: {container_name} (project: {project_name})")
 
         # Check if this is a local deployment
         if self._is_local_deployment(hostname):
@@ -275,7 +294,8 @@ class DockerDeployPlatform(DeployPlatform):
                 target,
                 resolved_service,
                 deployment_id,
-                container_name
+                container_name,
+                project_name
             )
 
         # Build deploy payload for remote unode manager
@@ -570,10 +590,23 @@ class KubernetesDeployPlatform(DeployPlatform):
         # Use cluster's default namespace if not specified
         namespace = namespace or target.namespace or "default"
 
+        # Convert ResolvedServiceDefinition to dict for K8s manager
+        # Include all resolved environment variables
+        service_def = {
+            "name": resolved_service.name,
+            "image": resolved_service.image,
+            "ports": resolved_service.ports,
+            "environment": resolved_service.environment,  # Fully resolved env vars
+        }
+
+        logger.info(f"Service environment variables: {list(service_def.get('environment', {}).keys())}")
+        if "MONGODB_DATABASE" in service_def.get("environment", {}):
+            logger.info(f"  MONGODB_DATABASE={service_def['environment']['MONGODB_DATABASE']}")
+
         # Use kubernetes_manager.deploy_to_kubernetes
         result = await self.k8s_manager.deploy_to_kubernetes(
             cluster_id=cluster_id,
-            service_id=resolved_service.service_id,
+            service_def=service_def,  # Pass resolved service definition with env vars
             namespace=namespace,
         )
 
@@ -588,6 +621,8 @@ class KubernetesDeployPlatform(DeployPlatform):
             deployed_config={
                 "image": resolved_service.image,
                 "namespace": namespace,
+                "ports": resolved_service.ports,
+                "environment": resolved_service.environment,  # Include env vars for edit
             },
             backend_type="kubernetes",
             backend_metadata={

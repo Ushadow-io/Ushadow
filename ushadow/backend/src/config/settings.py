@@ -1,89 +1,73 @@
 """
-Settings API v2 - Entity-based settings resolution
+Settings API - Entity-based settings resolution.
 
-Provides clean API for resolving settings at different entity levels:
-- for_service() - Service template level
+Provides a clean API for resolving settings at different entity levels:
+- for_service() - Service template level settings
 - for_deploy_config() - Deployment target preview
-- for_deployment() - Running instance
+- for_deployment() - Running instance (all layers)
 
 Resolution hierarchy (highest priority wins):
-6. user_override - Explicit user configuration
-5. deploy_env - Environment-specific override
-4. capability - Wired provider/capability
-3. env_file - .env file (os.environ)
-2. compose_default - Default in compose file
 1. config_default - config.defaults.yaml
+2. compose_default - Default in compose file
+3. env_file - .env file (os.environ)
+4. capability - Wired provider/capability
+5. template_override - services.{service_id} in config.overrides.yaml
+6. instance_override - instances.{deployment_id} in instance-overrides.yaml
 """
 
-import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any, Optional, List, Tuple, Dict
 
 from omegaconf import OmegaConf
 
 from src.config.store import SettingsStore, get_settings_store
-from src.config.secrets import mask_value, is_secret_key
+from src.config.secrets import is_secret_key, mask_secret_value, should_store_in_secrets
+from src.config.helpers import (
+    infer_value_type,
+    infer_setting_type,
+    env_var_matches_setting,
+)
 from src.services.provider_registry import get_provider_registry
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="Settings")
 
-# Import helpers directly to avoid circular imports
-# These are defined in omegaconf_settings.py but imported directly here for now
-# TODO: Move to helpers.py
-from src.config.secrets import SENSITIVE_PATTERNS, is_secret_key, mask_value
 
-# Inline helpers to avoid circular import
-URL_PATTERNS = ['url', 'endpoint', 'host', 'uri', 'server']
-URL_VALUE_PATTERNS = ['http://', 'https://', 'redis://', 'mongodb://', 'postgres://', 'mysql://']
+# =============================================================================
+# Data Models
+# =============================================================================
 
-
-def infer_value_type(value: str) -> str:
-    """Infer the type of a setting value."""
-    if not value:
-        return 'empty'
-    value_lower = value.lower().strip()
-    if any(value_lower.startswith(p) for p in URL_VALUE_PATTERNS):
-        return 'url'
-    if value_lower.startswith('sk-') or value_lower.startswith('pk-') or '•' in value:
-        return 'secret'
-    if value_lower in ('true', 'false', 'yes', 'no', '1', '0'):
-        return 'bool'
-    try:
-        float(value)
-        return 'number'
-    except ValueError:
-        pass
-    return 'string'
+class Source(str, Enum):
+    """Where a resolved value came from (lowest to highest priority)."""
+    CONFIG_DEFAULT = "config_default"
+    COMPOSE_DEFAULT = "compose_default"
+    ENV_FILE = "env_file"
+    CAPABILITY = "capability"
+    TEMPLATE_OVERRIDE = "template_override"  # services.{service_id} in config.overrides.yaml
+    INSTANCE_OVERRIDE = "instance_override"  # instances.{deployment_id} in instance-overrides.yaml
+    NOT_FOUND = "not_found"
 
 
-def infer_setting_type(name: str) -> str:
-    """Infer the type of a setting from its name."""
-    name_lower = name.lower()
-    if any(p in name_lower for p in SENSITIVE_PATTERNS):
-        return 'secret'
-    if any(p in name_lower for p in URL_PATTERNS):
-        return 'url'
-    return 'string'
+@dataclass
+class Resolution:
+    """Result of resolving an environment variable."""
+    value: Optional[str]
+    source: Source
+    path: Optional[str] = None
 
+    @property
+    def found(self) -> bool:
+        return self.source != Source.NOT_FOUND
 
-def mask_secret_value(value: str, path: str) -> str:
-    """Mask a secret value if the path indicates sensitive data."""
-    if not value:
-        return ""
-    if is_secret_key(path):
-        return mask_value(value).replace("****", "••••")
-    return value
-
-
-def env_var_matches_setting(env_name: str, setting_path: str) -> bool:
-    """Check if an env var name matches a setting path."""
-    env_normalized = env_name.lower().replace('_', '.')
-    path_normalized = setting_path.lower().replace('_', '.')
-    return path_normalized == env_normalized or path_normalized.endswith('.' + env_normalized)
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for API responses."""
+        return {
+            "value": self.value,
+            "source": self.source.value,
+            "path": self.path,
+        }
 
 
 @dataclass
@@ -107,106 +91,56 @@ class SettingSuggestion:
         }
 
 
-class Source(str, Enum):
-    """Where a resolved value came from (lowest to highest priority)."""
-    CONFIG_DEFAULT = "config_default"    # 1. config.defaults.yaml
-    COMPOSE_DEFAULT = "compose_default"  # 2. Default in compose file
-    ENV_FILE = "env_file"                # 3. .env file (os.environ)
-    CAPABILITY = "capability"            # 4. Wired provider/capability
-    DEPLOY_ENV = "deploy_env"            # 5. Environment-specific override
-    USER_OVERRIDE = "user_override"      # 6. Explicit user configuration
-    NOT_FOUND = "not_found"
-
-
-@dataclass
-class Resolution:
-    """Result of resolving an env var."""
-    value: Optional[str]
-    source: Source
-    path: Optional[str] = None  # settings path if source=SETTINGS
-
-    @property
-    def found(self) -> bool:
-        return self.source != Source.NOT_FOUND
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict for API responses."""
-        return {
-            "value": self.value,
-            "source": self.source.value,
-            "path": self.path,
-        }
-
+# =============================================================================
+# Settings API
+# =============================================================================
 
 class Settings:
     """
-    Settings API v2 - Entity-based resolution.
+    Settings API for entity-based resolution.
 
-    7 methods:
-    - for_service(service_id) -> Dict[str, Resolution]
-    - for_deploy_config(target, service_id) -> Dict[str, Resolution]
-    - for_deployment(deployment_id) -> Dict[str, Resolution]
-    - get_suggestions(env_var) -> List[Suggestion]
-    - get(path) / get_sync(path) -> Any
-    - set(path, value) -> None
-    - delete(path) -> bool
+    Public Methods:
+        for_service() - Get settings for a service template
+        for_deploy_config() - Get settings for a deployment target
+        for_deployment() - Get settings for a running instance
+        get_suggestions() - Get setting suggestions for an env var
+        get() / get_sync() / get_all() - Direct path access
+        set() - Update a single setting
+        delete() - Remove a setting override
+        update() - Update multiple settings
+        reset() - Clear all overrides
+        clear_cache() - Invalidate cache
     """
 
     def __init__(self, store: Optional[SettingsStore] = None):
         self._store = store or get_settings_store()
 
     # -------------------------------------------------------------------------
-    # Entity-Level Resolution
+    # Entity-Level Resolution (Public API)
     # -------------------------------------------------------------------------
 
     async def for_service(self, service_id: str) -> Dict[str, Resolution]:
         """
         Get settings for a service template.
 
-        Layers applied: config_default → compose_default → env_file → capability
-
         Args:
             service_id: Service identifier (e.g., "chronicle-compose:chronicle-backend")
 
         Returns:
-            Dict mapping env var names to their resolved values and sources
+            Dict mapping env var names to Resolution objects
+
+        Resolution layers applied:
+            config_default → compose_default → env_file → capability → template_override
         """
-        from src.services.compose_registry import get_compose_registry
-        from src.services.capability_resolver import CapabilityResolver
+        env_vars, compose_defaults, capability_values, template_overrides = \
+            await self._load_service_context(service_id)
 
-        # Get service and its env var schema
-        registry = get_compose_registry()
-        service = registry.get_service(service_id)
-        if not service:
-            return {}
-
-        # Collect all env var names
-        env_vars = [ev.name for ev in service.required_env_vars] + \
-                   [ev.name for ev in service.optional_env_vars]
-
-        # Build compose_defaults from service schema
-        compose_defaults = {
-            ev.name: ev.default_value
-            for ev in service.required_env_vars + service.optional_env_vars
-            if ev.has_default and ev.default_value
-        }
-
-        # Get capability values from wired providers
-        capability_values = {}
-        if service.requires:
-            try:
-                resolver = CapabilityResolver()
-                # resolve_for_service returns env vars from wired capabilities
-                capability_values = await resolver.resolve_for_service(service_id)
-            except Exception as e:
-                logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
-
-        return await self._resolve_internal(
+        return await self._resolve_all(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
-            deploy_env_overrides={},
-            user_overrides={},
+            template_overrides=template_overrides,
+            instance_overrides={},
         )
 
     async def for_deploy_config(
@@ -217,36 +151,205 @@ class Settings:
         """
         Get settings preview for a deployment target.
 
-        Layers applied: config_default → compose_default → env_file → capability → deploy_env
-
         Args:
-            deploy_target: Deployment target (e.g., "production", "staging")
+            deploy_target: Target environment (e.g., "production", "staging")
             service_id: Service identifier
 
         Returns:
-            Dict mapping env var names to their resolved values and sources
+            Dict mapping env var names to Resolution objects
+
+        Resolution layers applied:
+            config_default → compose_default → env_file → capability → template_override → deploy_env
         """
+        env_vars, compose_defaults, capability_values, template_overrides = \
+            await self._load_service_context(service_id)
+
+        # Note: deploy_target is not used in current implementation
+        # Could add deploy_environments.{target} overrides layer in future
+
+        return await self._resolve_all(
+            env_vars=env_vars,
+            compose_defaults=compose_defaults,
+            capability_values=capability_values,
+            template_overrides=template_overrides,
+            instance_overrides={},
+        )
+
+    async def for_deployment(self, deployment_id: str) -> Dict[str, Resolution]:
+        """
+        Get settings for a running deployment instance.
+
+        Args:
+            deployment_id: Deployment/instance identifier
+
+        Returns:
+            Dict mapping env var names to Resolution objects
+
+        Resolution layers applied:
+            ALL layers (config_default → ... → instance_override)
+        """
+        env_vars, compose_defaults, capability_values, template_overrides, instance_overrides = \
+            await self._load_deployment_context(deployment_id)
+
+        results = await self._resolve_all(
+            env_vars=env_vars,
+            compose_defaults=compose_defaults,
+            capability_values=capability_values,
+            template_overrides=template_overrides,
+            instance_overrides=instance_overrides,
+        )
+
+        self._log_resolution_summary(env_vars, results)
+        return results
+
+    # -------------------------------------------------------------------------
+    # Suggestions (Public API)
+    # -------------------------------------------------------------------------
+
+    async def get_suggestions(self, env_var: str) -> List[SettingSuggestion]:
+        """
+        Get setting suggestions that could fill an environment variable.
+
+        Used for dropdown menus in the UI.
+
+        Args:
+            env_var: Environment variable name
+
+        Returns:
+            List of SettingSuggestion objects
+        """
+        return await self._build_suggestions(env_var)
+
+    # -------------------------------------------------------------------------
+    # Direct Access (Public API)
+    # -------------------------------------------------------------------------
+
+    async def get(self, path: str, default: Any = None) -> Any:
+        """Get a value by settings path (e.g., "api_keys.openai_api_key")."""
+        return await self._store.get(path, default)
+
+    def get_sync(self, path: str, default: Any = None) -> Any:
+        """Sync version of get() for module initialization."""
+        return self._store.get_sync(path, default)
+
+    async def get_all(self) -> Dict[str, Any]:
+        """Get all settings as a plain Python dict."""
+        return await self._store._get_config_as_dict()
+
+    # -------------------------------------------------------------------------
+    # Mutations (Public API)
+    # -------------------------------------------------------------------------
+
+    async def set(self, path: str, value: Any) -> None:
+        """Set a setting value (auto-routes to secrets.yaml or config.overrides.yaml)."""
+        await self._store.update({path: value})
+
+    async def delete(self, path: str) -> bool:
+        """Delete a setting override. Returns True if it existed."""
+        current = await self._store.get(path)
+        if current is None:
+            return False
+
+        file_path = (
+            self._store.secrets_path if should_store_in_secrets(path)
+            else self._store.overrides_path
+        )
+
+        if not file_path.exists():
+            return False
+
+        config = self._store._load_yaml_if_exists(file_path)
+        if config is None:
+            return False
+
+        parts = path.split('.')
+        if len(parts) == 1:
+            if parts[0] in config:
+                del config[parts[0]]
+                OmegaConf.save(config, file_path)
+                self._store.clear_cache()
+                return True
+            return False
+
+        parent = config
+        for part in parts[:-1]:
+            if part not in parent:
+                return False
+            parent = parent[part]
+
+        key = parts[-1]
+        if key in parent:
+            del parent[key]
+            OmegaConf.save(config, file_path)
+            self._store.clear_cache()
+            return True
+
+        return False
+
+    async def update(self, updates: dict) -> None:
+        """Update multiple settings at once."""
+        await self._store.update(updates)
+
+    async def reset(self, include_secrets: bool = True) -> int:
+        """Reset all settings by deleting config files. Returns count of files deleted."""
+        return await self._store.reset(include_secrets)
+
+    def clear_cache(self) -> None:
+        """Clear the configuration cache."""
+        self._store.clear_cache()
+
+    # =========================================================================
+    # Internal Implementation (Private)
+    # =========================================================================
+
+    async def _resolve_mapping(self, value: str) -> Optional[str]:
+        """
+        Resolve @settings.path mapping syntax.
+
+        Args:
+            value: String that may contain @settings.path reference
+
+        Returns:
+            Resolved value or None if mapping not found
+
+        Examples:
+            "@settings.api_keys.openai" -> "sk-123..."
+            "literal_value" -> "literal_value"
+        """
+        if not isinstance(value, str) or not value.startswith('@settings.'):
+            return value
+
+        # Extract the path after @settings.
+        path = value[10:]  # Remove '@settings.' prefix
+        resolved = await self._store.get(path)
+
+        if resolved:
+            logger.debug(f"Resolved mapping {value} -> {path}")
+            return str(resolved)
+        else:
+            logger.warning(f"Mapping {value} not found at path: {path}")
+            return None
+
+    async def _load_service_context(
+        self, service_id: str
+    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str]]:
+        """Load service schema, resolve capabilities, and load template overrides."""
         from src.services.compose_registry import get_compose_registry
         from src.services.capability_resolver import CapabilityResolver
 
-        # Get service and its env var schema
         registry = get_compose_registry()
         service = registry.get_service(service_id)
         if not service:
-            return {}
+            return [], {}, {}, {}
 
-        # Collect all env var names
-        env_vars = [ev.name for ev in service.required_env_vars] + \
-                   [ev.name for ev in service.optional_env_vars]
+        env_vars = [ev.name for ev in service.required_env_vars + service.optional_env_vars]
 
-        # Build compose_defaults from service schema
         compose_defaults = {
             ev.name: ev.default_value
             for ev in service.required_env_vars + service.optional_env_vars
             if ev.has_default and ev.default_value
         }
 
-        # Get capability values from wired providers
         capability_values = {}
         if service.requires:
             try:
@@ -255,85 +358,56 @@ class Settings:
             except Exception as e:
                 logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
 
-        # Load deploy environment overrides
-        deploy_env_overrides = await self._store.get(
-            f"deploy_environments.{deploy_target}"
-        ) or {}
+        # Load template-level overrides from config.overrides.yaml (services.{service_id})
+        # Don't resolve mappings yet - store raw values so we can track the mapping path
+        template_overrides = {}
+        template_config = await self._store.get(f"services.{service_id}") or {}
+        if template_config:
+            for env_var, value in template_config.items():
+                if value:
+                    # Store raw value (including @settings.path if it's a mapping)
+                    template_overrides[env_var] = str(value)
+                    logger.info(f"[Load] [Template Override] {env_var} = {value}")
 
-        return await self._resolve_internal(
-            env_vars=env_vars,
-            compose_defaults=compose_defaults,
-            capability_values=capability_values,
-            deploy_env_overrides=deploy_env_overrides,
-            user_overrides={},
-        )
+        return env_vars, compose_defaults, capability_values, template_overrides
 
-    async def for_deployment(self, deployment_id: str) -> Dict[str, Resolution]:
-        """
-        Get settings for a running deployment instance.
-
-        Layers applied: ALL (config_default → compose_default → env_file → capability → deploy_env → user_override)
-
-        Args:
-            deployment_id: Deployment/instance identifier
-
-        Returns:
-            Dict mapping env var names to their resolved values and sources
-        """
+    async def _load_deployment_context(
+        self, deployment_id: str
+    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
+        """Load deployment context including template and instance overrides."""
         from src.services.compose_registry import get_compose_registry
         from src.services.capability_resolver import CapabilityResolver
-        from src.services.service_config_manager import get_service_config_manager
 
         # Parse deployment_id to get service_id
-        # Format might be "service_id" or "service_id:instance_name"
         parts = deployment_id.rsplit(':', 1) if ':' in deployment_id else [deployment_id]
         service_id = parts[0] if len(parts) == 1 else ':'.join(parts[:-1])
 
         logger.info(f"[Settings] for_deployment({deployment_id}): parsed service_id={service_id}")
 
-        # Get service and its env var schema
+        # Get service schema
         registry = get_compose_registry()
         service = registry.get_service(service_id)
-        if not service:
-            logger.info(f"[Settings] Service '{service_id}' not found in registry, trying as service config ID")
-            # Try as a service config
-            config_manager = get_service_config_manager()
-            service_config = config_manager.get_service_config(deployment_id)
-            if service_config:
-                logger.info(f"[Settings] Found service config: template_id={service_config.template_id}")
-                service_id = service_config.template_id  # Fixed: ServiceConfig has template_id, not service_id
-                service = registry.get_service(service_id)
-            else:
-                logger.warning(f"[Settings] No service config found for '{deployment_id}'")
 
         if not service:
-            logger.error(f"[Settings] Could not resolve service for deployment '{deployment_id}'")
-            return {}
+            logger.error(f"[Settings] Service '{service_id}' not found in registry")
+            return [], {}, {}, {}, {}
 
-        # Collect all env var names
-        env_vars = [ev.name for ev in service.required_env_vars] + \
-                   [ev.name for ev in service.optional_env_vars]
+        env_vars = [ev.name for ev in service.required_env_vars + service.optional_env_vars]
+        logger.info(f"[Settings] Collected {len(env_vars)} env vars from service schema")
 
-        logger.info(f"[Settings] Collected {len(env_vars)} env vars from service schema: {env_vars}")
-
-        # Build compose_defaults from service schema
         compose_defaults = {
             ev.name: ev.default_value
             for ev in service.required_env_vars + service.optional_env_vars
             if ev.has_default and ev.default_value
         }
 
-        logger.info(f"[Settings] Compose defaults ({len(compose_defaults)}): {list(compose_defaults.keys())}")
-
-        # Get capability values - use deployment-specific wiring if available
+        # Resolve capabilities
         capability_values = {}
         if service.requires:
             try:
                 resolver = CapabilityResolver()
                 capability_values = await resolver.resolve_for_instance(deployment_id)
-            except Exception as e:
-                logger.debug(f"Could not resolve capabilities for {deployment_id}: {e}")
-                # Fall back to service-level resolution
+            except Exception:
                 try:
                     capability_values = await resolver.resolve_for_service(service_id)
                 except Exception:
@@ -341,138 +415,91 @@ class Settings:
 
         logger.info(f"[Settings] Capability values ({len(capability_values)}): {list(capability_values.keys())}")
 
-        # Load deploy environment overrides (if deployment has a target)
-        deploy_env_overrides = {}
-        # TODO: Get deploy target from deployment config if available
+        # Load template-level overrides from config.overrides.yaml (services.{service_id})
+        # Don't resolve mappings yet - store raw values so we can track the mapping path
+        template_overrides = {}
+        template_config = await self._store.get(f"services.{service_id}") or {}
+        if template_config:
+            for env_var, value in template_config.items():
+                if value:
+                    # Store raw value (including @settings.path if it's a mapping)
+                    template_overrides[env_var] = str(value)
+                    logger.info(f"[Load] [Template Override] {env_var} = {value}")
 
-        # Load user overrides from ServiceConfig if this is a service config ID
-        user_overrides = {}
-        config_manager = get_service_config_manager()
-        service_config = config_manager.get_service_config(deployment_id)
-        if service_config and service_config.config and service_config.config.values:
-            # Filter out metadata keys (_save_, _from_)
-            user_overrides = {
-                k: v for k, v in service_config.config.values.items()
-                if not k.startswith('_save_') and not k.startswith('_from_') and v
-            }
+        # Load instance-level overrides from instance-overrides.yaml (instances.{deployment_id})
+        # Don't resolve mappings yet - store raw values so we can track the mapping path
+        instance_overrides = {}
+        instance_config = await self._store.get(f"instances.{deployment_id}") or {}
+        if instance_config:
+            for env_var, value in instance_config.items():
+                if value:
+                    # Store raw value (including @settings.path if it's a mapping)
+                    instance_overrides[env_var] = str(value)
+                    logger.info(f"[Load] [Instance Override] {env_var} = {value}")
 
-            # Log each override like capability resolver does
-            for key, value in user_overrides.items():
-                # Redact sensitive values
-                display_value = value
-                if any(secret in key.lower() for secret in ['key', 'secret', 'token', 'password']):
-                    display_value = f"****{value[-4:]}" if value and len(str(value)) > 4 else "****"
-                logger.info(f"[Resolve] [User Override] {key} -> {display_value} (from ServiceConfig)")
-        else:
-            logger.info(f"[Settings] No ServiceConfig found or empty config for {deployment_id}")
+        return env_vars, compose_defaults, capability_values, template_overrides, instance_overrides
 
-        results = await self._resolve_internal(
-            env_vars=env_vars,
-            compose_defaults=compose_defaults,
-            capability_values=capability_values,
-            deploy_env_overrides=deploy_env_overrides,
-            user_overrides=user_overrides,
-        )
-
-        # Log final resolution results
-        logger.info(f"[Settings] ========== Final Resolution Summary ==========")
-        for env_var in env_vars:
-            if env_var in results:
-                resolution = results[env_var]
-                display_value = resolution.value
-                # Redact sensitive values
-                if any(secret in env_var.lower() for secret in ['key', 'secret', 'token', 'password']):
-                    display_value = f"****{resolution.value[-4:]}" if resolution.value and len(str(resolution.value)) > 4 else "****"
-                logger.info(f"[Resolve] {env_var} -> {display_value} (source: {resolution.source.value})")
-            else:
-                logger.warning(f"[Resolve] {env_var} -> NOT RESOLVED")
-
-        # Count by source
-        missing = set(env_vars) - set(results.keys())
-        if missing:
-            logger.warning(f"[Settings] Failed to resolve {len(missing)} env vars: {missing}")
-        logger.info(f"[Settings] ========================================")
-
-        return results
-
-    async def _find_config_default(self, env_var: str) -> Optional[Tuple[str, Any]]:
-        """
-        Find a config default value for an env var.
-
-        Checks provider registry mapping first, then fuzzy matches config.
-
-        Returns:
-            Tuple of (setting_path, value) if found, None otherwise
-        """
-        # Try direct path mapping from provider registry
-        env_mapping = get_provider_registry().get_env_to_settings_mapping()
-        if env_var in env_mapping:
-            settings_path = env_mapping[env_var]
-            value = await self._store.get(settings_path)
-            if value:
-                return (settings_path, value)
-
-        # Fuzzy match across all config sections
-        config = await self._store._get_config_as_dict()
-        for section, section_data in config.items():
-            if not isinstance(section_data, dict):
-                continue
-            for key, value in section_data.items():
-                if value is None or isinstance(value, dict):
-                    continue
-                path = f"{section}.{key}"
-                if env_var_matches_setting(env_var, path):
-                    str_value = str(value) if value is not None else ""
-                    if str_value.strip():
-                        return (path, value)
-
-        return None
-
-    async def _resolve_internal(
+    async def _resolve_all(
         self,
         env_vars: List[str],
         compose_defaults: Dict[str, str],
         capability_values: Dict[str, str],
-        deploy_env_overrides: Dict[str, str],
-        user_overrides: Dict[str, str],
+        template_overrides: Dict[str, str],
+        instance_overrides: Dict[str, str],
     ) -> Dict[str, Resolution]:
-        """
-        Internal resolution logic.
-
-        Resolution order (highest priority wins):
-        6. user_override - Explicit user configuration
-        5. deploy_env - Environment-specific override
-        4. capability - Wired provider/capability value
-        3. env_file - .env file (os.environ)
-        2. compose_default - Default in compose file
-        1. config_default - config.defaults.yaml
-        """
+        """Resolve all env vars through the priority hierarchy."""
         results: Dict[str, Resolution] = {}
 
         for env_var in env_vars:
-            # Check from highest to lowest priority, return first found
+            # Check from highest to lowest priority
 
-            # 6. User override (highest)
-            if env_var in user_overrides:
-                value = user_overrides[env_var]
+            # 6. Instance override (highest)
+            if env_var in instance_overrides:
+                value = instance_overrides[env_var]
                 if value and str(value).strip():
-                    results[env_var] = Resolution(
-                        value=str(value),
-                        source=Source.USER_OVERRIDE,
-                        path=None
-                    )
-                    continue
+                    # Check if it's a mapping (@settings.path)
+                    if str(value).startswith('@settings.'):
+                        mapping_path = str(value)[10:]  # Remove '@settings.' prefix
+                        resolved_value = await self._resolve_mapping(value)
+                        if resolved_value:
+                            results[env_var] = Resolution(
+                                value=resolved_value,
+                                source=Source.INSTANCE_OVERRIDE,
+                                path=mapping_path  # Track the mapping path
+                            )
+                            continue
+                    else:
+                        # Direct literal value
+                        results[env_var] = Resolution(
+                            value=str(value),
+                            source=Source.INSTANCE_OVERRIDE,
+                            path=None
+                        )
+                        continue
 
-            # 5. Deploy environment override
-            if env_var in deploy_env_overrides:
-                value = deploy_env_overrides[env_var]
+            # 5. Template override
+            if env_var in template_overrides:
+                value = template_overrides[env_var]
                 if value and str(value).strip():
-                    results[env_var] = Resolution(
-                        value=str(value),
-                        source=Source.DEPLOY_ENV,
-                        path=None
-                    )
-                    continue
+                    # Check if it's a mapping (@settings.path)
+                    if str(value).startswith('@settings.'):
+                        mapping_path = str(value)[10:]  # Remove '@settings.' prefix
+                        resolved_value = await self._resolve_mapping(value)
+                        if resolved_value:
+                            results[env_var] = Resolution(
+                                value=resolved_value,
+                                source=Source.TEMPLATE_OVERRIDE,
+                                path=mapping_path  # Track the mapping path
+                            )
+                            continue
+                    else:
+                        # Direct literal value
+                        results[env_var] = Resolution(
+                            value=str(value),
+                            source=Source.TEMPLATE_OVERRIDE,
+                            path=None
+                        )
+                        continue
 
             # 4. Capability/provider wiring
             if env_var in capability_values:
@@ -506,7 +533,7 @@ class Settings:
                     )
                     continue
 
-            # 1. Config default (config.defaults.yaml via env var mapping)
+            # 1. Config default (config.defaults.yaml)
             setting_result = await self._find_config_default(env_var)
             if setting_result:
                 path, value = setting_result
@@ -527,45 +554,46 @@ class Settings:
 
         return results
 
-    # -------------------------------------------------------------------------
-    # Suggestions
-    # -------------------------------------------------------------------------
+    async def _find_config_default(self, env_var: str) -> Optional[Tuple[str, Any]]:
+        """Find a config default value for an env var."""
+        # Try direct path mapping from provider registry
+        env_mapping = get_provider_registry().get_env_to_settings_mapping()
+        if env_var in env_mapping:
+            settings_path = env_mapping[env_var]
+            value = await self._store.get(settings_path)
+            if value:
+                return (settings_path, value)
 
-    async def get_suggestions(self, env_var: str) -> List[SettingSuggestion]:
-        """
-        Get possible settings that could fill this env var.
-        Used for dropdown menus in the UI.
-        """
-        return await self._get_suggestions_for_env_var(env_var)
+        # Fuzzy match across all config sections
+        config = await self._store._get_config_as_dict()
+        for section, section_data in config.items():
+            if not isinstance(section_data, dict):
+                continue
+            for key, value in section_data.items():
+                if value is None or isinstance(value, dict):
+                    continue
+                path = f"{section}.{key}"
+                if env_var_matches_setting(env_var, path):
+                    str_value = str(value) if value is not None else ""
+                    if str_value.strip():
+                        return (path, value)
 
-    async def _get_suggestions_for_env_var(
+        return None
+
+    async def _build_suggestions(
         self,
         env_var_name: str,
         provider_registry=None,
         capabilities: Optional[List[str]] = None,
     ) -> List[SettingSuggestion]:
-        """
-        Get setting suggestions that could fill an environment variable.
-
-        Searches ALL config sections and filters by value type compatibility.
-        For example, a URL env var will show all settings that contain URL values.
-
-        Args:
-            env_var_name: Environment variable name
-            provider_registry: Optional provider registry for capability-based suggestions
-            capabilities: Optional list of required capabilities to filter providers
-
-        Returns:
-            List of SettingSuggestion objects
-        """
+        """Build setting suggestions for an env var."""
         suggestions = []
         seen_paths = set()
         config = await self._store._get_config_as_dict()
 
-        # Determine the expected type based on env var name
         expected_type = infer_setting_type(env_var_name)
 
-        # Search ALL config sections, filter by value type
+        # Search all config sections, filter by value type
         for section, section_data in config.items():
             if not isinstance(section_data, dict):
                 continue
@@ -581,13 +609,9 @@ class Settings:
                 str_value = str(value) if value is not None else ""
                 has_value = bool(str_value.strip())
 
-                # Filter by value type compatibility
                 value_type = infer_value_type(str_value) if has_value else 'empty'
 
-                # Type compatibility rules:
-                # - secret env vars: show secrets and empty slots in api_keys/security
-                # - url env vars: show urls and empty slots
-                # - string env vars: show strings, empty slots (but not urls/secrets)
+                # Type compatibility rules
                 is_compatible = False
                 if expected_type == 'secret':
                     is_compatible = (value_type == 'secret' or
@@ -596,7 +620,7 @@ class Settings:
                 elif expected_type == 'url':
                     is_compatible = (value_type == 'url' or
                                     (value_type == 'empty' and 'url' in key.lower()))
-                else:  # string type
+                else:
                     is_compatible = value_type in ('string', 'empty', 'bool', 'number')
 
                 if not is_compatible:
@@ -610,14 +634,12 @@ class Settings:
                     value=mask_secret_value(str_value, path) if has_value else None,
                 ))
 
-        # Add provider-specific mappings if registry provided
+        # Add provider-specific mappings if provided
         if provider_registry and capabilities:
             for capability in capabilities:
                 selected_id = await self._store.get(f"selected_providers.{capability}")
-
                 if not selected_id:
                     selected_id = provider_registry.get_default_provider_id(capability, 'cloud')
-
                 if not selected_id:
                     continue
 
@@ -625,7 +647,6 @@ class Settings:
                 if not provider:
                     continue
 
-                # Check provider's env_maps for matching env var
                 for env_map in provider.env_maps:
                     if env_map.key == env_var_name and env_map.settings_path:
                         if env_map.settings_path in seen_paths:
@@ -647,120 +668,36 @@ class Settings:
 
         return suggestions
 
-    # -------------------------------------------------------------------------
-    # Direct path access
-    # -------------------------------------------------------------------------
+    def _log_resolution_summary(
+        self, env_vars: List[str], results: Dict[str, Resolution]
+    ) -> None:
+        """Log final resolution results."""
+        logger.info("[Settings] ========== Final Resolution Summary ==========")
+        for env_var in env_vars:
+            if env_var in results:
+                resolution = results[env_var]
+                display_value = resolution.value
+                if any(secret in env_var.lower() for secret in ['key', 'secret', 'token', 'password']):
+                    display_value = f"****{resolution.value[-4:]}" if resolution.value and len(str(resolution.value)) > 4 else "****"
+                logger.info(f"[Resolve] {env_var} -> {display_value} (source: {resolution.source.value})")
+            else:
+                logger.warning(f"[Resolve] {env_var} -> NOT RESOLVED")
 
-    async def get(self, path: str, default: Any = None) -> Any:
-        """Get a value by settings path."""
-        return await self._store.get(path, default)
-
-    def get_sync(self, path: str, default: Any = None) -> Any:
-        """Sync version of get() for module-level initialization."""
-        return self._store.get_sync(path, default)
-
-    async def get_all(self) -> Dict[str, Any]:
-        """Get all settings as a plain Python dict."""
-        return await self._store._get_config_as_dict()
-
-    # -------------------------------------------------------------------------
-    # Mutations
-    # -------------------------------------------------------------------------
-
-    async def set(self, path: str, value: Any) -> None:
-        """
-        Set a setting value.
-        Auto-routes to secrets.yaml or config.overrides.yaml based on path.
-        """
-        await self._store.update({path: value})
-
-    async def delete(self, path: str) -> bool:
-        """
-        Delete a setting override.
-        Returns True if it existed, False otherwise.
-        """
-        # Check if value exists first
-        current = await self._store.get(path)
-        if current is None:
-            return False
-
-        # Determine which file to modify
-        if self._store._is_secret_key(path):
-            file_path = self._store.secrets_path
-        else:
-            file_path = self._store.overrides_path
-
-        if not file_path.exists():
-            return False
-
-        # Load, remove key, save
-        config = self._store._load_yaml_if_exists(file_path)
-        if config is None:
-            return False
-
-        # Navigate to parent and delete key
-        parts = path.split('.')
-        if len(parts) == 1:
-            if parts[0] in config:
-                del config[parts[0]]
-                OmegaConf.save(config, file_path)
-                self._store.clear_cache()
-                return True
-            return False
-
-        # Navigate to parent dict
-        parent = config
-        for part in parts[:-1]:
-            if part not in parent:
-                return False
-            parent = parent[part]
-
-        # Delete the key
-        key = parts[-1]
-        if key in parent:
-            del parent[key]
-            OmegaConf.save(config, file_path)
-            self._store.clear_cache()
-            return True
-
-        return False
-
-    # -------------------------------------------------------------------------
-    # Batch operations
-    # -------------------------------------------------------------------------
-
-    async def update(self, updates: dict) -> None:
-        """
-        Update multiple settings at once.
-        Auto-routes secrets to secrets.yaml, others to config.overrides.yaml.
-        """
-        await self._store.update(updates)
-
-    async def reset(self, include_secrets: bool = True) -> int:
-        """
-        Reset all settings by deleting config files.
-        Returns number of files deleted.
-        """
-        return await self._store.reset(include_secrets)
-
-    def clear_cache(self) -> None:
-        """Clear the configuration cache, forcing reload on next access."""
-        self._store.clear_cache()
-
-    def filter_masked_values(self, updates: dict) -> dict:
-        """
-        Filter out masked values (****) from updates.
-        Use before saving to prevent accidentally overwriting secrets with masks.
-        """
-        return self._store._filter_masked_values(updates)
+        missing = set(env_vars) - set(results.keys())
+        if missing:
+            logger.warning(f"[Settings] Failed to resolve {len(missing)} env vars: {missing}")
+        logger.info("[Settings] ========================================")
 
 
-# Global Settings instance
+# =============================================================================
+# Global Instance
+# =============================================================================
+
 _settings: Optional[Settings] = None
 
 
 def get_settings() -> Settings:
-    """Get global Settings instance (v2 API)."""
+    """Get global Settings instance."""
     global _settings
     if _settings is None:
         _settings = Settings()

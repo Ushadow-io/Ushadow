@@ -637,7 +637,7 @@ async def register_imported_service(
                 f.write('\n'.join(env_file_content) + '\n')
 
         # Save service configuration to settings
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         service_config_key = f"imported_services.{safe_name}"
@@ -691,7 +691,7 @@ async def list_imported_services(
 ) -> List[Dict[str, Any]]:
     """List all imported services from GitHub."""
     try:
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         imported = settings.get("imported_services", {})
@@ -715,7 +715,7 @@ async def delete_imported_service(
 ) -> Dict[str, Any]:
     """Delete an imported service."""
     try:
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         imported = settings.get("imported_services", {})
@@ -764,7 +764,7 @@ async def update_imported_service_config(
 ) -> Dict[str, Any]:
     """Update configuration for an imported service."""
     try:
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         imported = settings.get("imported_services", {})
@@ -982,7 +982,7 @@ async def register_dockerhub_service(
                 f.write('\n'.join(env_file_content) + '\n')
 
         # Save service configuration to settings
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         service_config_key = f"imported_services.{safe_name}"

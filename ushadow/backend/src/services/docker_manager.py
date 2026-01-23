@@ -601,13 +601,21 @@ class DockerManager:
                 logger.debug(f"[get_service_info] Searching by label, target_projects: {target_projects}")
 
                 containers = self._client.containers.list(
-                    all=True,
+                    all=False,  # Only search running containers
                     filters={"label": f"com.docker.compose.service={docker_container_name}"}
                 )
-                logger.debug(f"[get_service_info] Found {len(containers)} containers with label com.docker.compose.service={docker_container_name}")
+                logger.debug(f"[get_service_info] Found {len(containers)} RUNNING containers with label com.docker.compose.service={docker_container_name}")
                 for c in containers:
                     logger.debug(f"[get_service_info]   - {c.name}, project: {c.labels.get('com.docker.compose.project', 'unknown')}, status: {c.status}")
                 if containers:
+                    # Check if multiple running containers exist
+                    if len(containers) > 1:
+                        running_projects = [c.labels.get('com.docker.compose.project', 'unknown') for c in containers]
+                        logger.warning(
+                            f"[get_service_info] Multiple RUNNING containers found for {docker_container_name}: {running_projects}. "
+                            f"Will use container from {target_projects[0] if target_projects else 'first match'}"
+                        )
+
                     # Match containers from declared namespace or current project
                     for target_project in target_projects:
                         for c in containers:
@@ -623,10 +631,12 @@ class DockerManager:
                     if not container:
                         # Log what we found but didn't match
                         found_projects = [c.labels.get('com.docker.compose.project', 'unknown') for c in containers]
-                        logger.info(
-                            f"[get_service_info] Found {len(containers)} containers for {docker_container_name} "
-                            f"but none in projects {target_projects}. Found in: {found_projects}"
+                        logger.warning(
+                            f"[get_service_info] Found {len(containers)} RUNNING containers for {docker_container_name} "
+                            f"but none in target projects {target_projects}. Found in: {found_projects}. Using first container."
                         )
+                        # Use the first running container as fallback
+                        container = containers[0]
 
             if not container:
                 raise NotFound(f"Container not found: {docker_container_name}")
@@ -731,7 +741,7 @@ class DockerManager:
         Returns:
             List of port configurations with 'port', 'env_var', and 'source' keys
         """
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
 
         service_config = self.MANAGEABLE_SERVICES.get(service_name, {})
         ports = service_config.get('ports', [])
@@ -920,7 +930,7 @@ class DockerManager:
         Returns:
             Dict of env var name -> resolved value
         """
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
 
         settings = get_settings()
         compose_registry = get_compose_registry()
@@ -995,7 +1005,7 @@ class DockerManager:
                 # Add WELL_KNOWN_ENV_MAPPINGS to subprocess_env for Docker Compose variable substitution
                 # This allows compose files to use ${AUTH_SECRET_KEY} which gets substituted by Docker
                 from src.services.service_orchestrator import WELL_KNOWN_ENV_MAPPINGS
-                from src.config.omegaconf_settings import get_settings_store
+                from src.config import get_settings_store
                 settings_store = get_settings_store()
                 for env_name, settings_path in WELL_KNOWN_ENV_MAPPINGS.items():
                     if env_name not in subprocess_env:  # Don't override already-set values
@@ -1051,7 +1061,7 @@ class DockerManager:
                             # Handle _from_setting references
                             if isinstance(value, dict) and '_from_setting' in value:
                                 # Resolve the setting path
-                                from src.config.omegaconf_settings import get_settings
+                                from src.config import get_settings
                                 settings = get_settings()
                                 setting_path = value['_from_setting']
                                 resolved_value = await settings.get(setting_path)
@@ -1072,7 +1082,7 @@ class DockerManager:
                             subprocess_env[key] = str(value)
 
                 # Apply port overrides from services.{name}.ports
-                from src.config.omegaconf_settings import get_settings
+                from src.config import get_settings
                 settings = get_settings()
                 config_key = service_name.replace("-", "_")
                 port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}

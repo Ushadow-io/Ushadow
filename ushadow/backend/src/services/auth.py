@@ -25,7 +25,7 @@ from fastapi_users.authentication import (
     JWTStrategy,
 )
 
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 from src.models.user import User, UserCreate, get_user_db
 
 logger = logging.getLogger(__name__)

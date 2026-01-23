@@ -300,7 +300,7 @@ async def set_port_override(
     so that subsequent service starts will use the new port.
     """
     from src.services.docker_manager import get_docker_manager, check_port_in_use
-    from src.config.omegaconf_settings import get_settings
+    from src.config import get_settings
 
     docker_mgr = get_docker_manager()
 
@@ -564,6 +564,17 @@ async def proxy_service_request(
         # Extract container details from deployment
         container_name = matching_deployment.container_name
 
+        # Verify the container actually exists and is running
+        try:
+            container = docker_mgr._client.containers.get(container_name)
+            if container.status != "running":
+                logger.warning(f"[PROXY] Deployment container {container_name} exists but is not running (status: {container.status}), ignoring deployment")
+                matching_deployment = None
+        except Exception as e:
+            logger.warning(f"[PROXY] Deployment container {container_name} not found: {e}, ignoring deployment")
+            matching_deployment = None
+
+    if matching_deployment:
         # For Docker networking, we need the CONTAINER port, not the host port
         # Parse from deployed_config ports if available
         internal_port = 8000  # default
@@ -579,7 +590,19 @@ async def proxy_service_request(
                     internal_port = int(first_port)
 
         # Check if remote deployment
-        is_remote = matching_deployment.unode_hostname != os.getenv("UNODE_HOSTNAME", "ushadow-purple")
+        # Get current hostname from ENV_NAME, COMPOSE_PROJECT_NAME, or UNODE_HOSTNAME
+        current_hostname = (
+            os.getenv("ENV_NAME") or
+            os.getenv("COMPOSE_PROJECT_NAME", "").replace("ushadow-", "") or
+            os.getenv("UNODE_HOSTNAME", "local")
+        )
+
+        # Normalize both to compare - remove ushadow- prefix if present
+        deployment_host_normalized = (matching_deployment.unode_hostname or "").replace("ushadow-", "")
+        current_host_normalized = current_hostname.replace("ushadow-", "")
+
+        logger.info(f"[PROXY] Deployment check: deployment={deployment_host_normalized}, current={current_host_normalized}")
+        is_remote = deployment_host_normalized and deployment_host_normalized != current_host_normalized
 
         if is_remote:
             # For remote deployments, proxy through the remote unode manager
@@ -593,15 +616,41 @@ async def proxy_service_request(
 
     elif name in docker_mgr.MANAGEABLE_SERVICES:
         # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        # Use get_service_info to find the actual running container
+        service_info = docker_mgr.get_service_info(name)
+
+        if service_info.status != "running":
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' is not running (status: {service_info.status})"
+            )
+
+        if service_info.error:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' error: {service_info.error}"
+            )
+
         ports = docker_mgr.get_service_ports(name)
         if ports:
             primary_port = ports[0]
             internal_port = primary_port.get("container_port", 8000)
 
-        # Build container name with project prefix (e.g., ushadow-purple-chronicle-backend)
-        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-        container_name = f"{project_name}-{name}"
-        logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}")
+        # Use the actual container name found by get_service_info
+        # This will be something like "ushadow-orange-chronicle-backend"
+        from src.services.docker_manager import ServiceStatus
+        try:
+            # Get container object to extract name
+            container = docker_mgr._client.containers.get(service_info.container_id)
+            container_name = container.name
+            logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}")
+        except Exception as e:
+            target_url = f"http://{container_name if 'container_name' in locals() else 'unknown'}:{internal_port}"
+            logger.error(f"[PROXY] Failed to get container details for {name}: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' is not reachable (trying {target_url})"
+            )
 
     else:
         # Service not found anywhere
@@ -653,6 +702,15 @@ async def proxy_service_request(
         # Show token type and first few chars
         token_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
         logger.info(f"[PROXY] Forwarding auth: {token_preview}")
+
+        # Decode token without verification to see payload (for debugging)
+        try:
+            import jwt
+            token = auth_header.replace("Bearer ", "")
+            payload = jwt.decode(token, options={"verify_signature": False})
+            logger.info(f"[PROXY] Token payload: iss={payload.get('iss')}, aud={payload.get('aud')}, sub={payload.get('sub')}")
+        except Exception as e:
+            logger.debug(f"[PROXY] Could not decode token: {e}")
     else:
         logger.warning(f"[PROXY] No Authorization header in request to {name}")
 
@@ -714,12 +772,13 @@ async def proxy_service_request(
             )
 
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail=f"Service '{name}' request timed out")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=503, detail=f"Service '{name}' is not reachable")
+        raise HTTPException(status_code=504, detail=f"Service '{name}' request timed out (trying {target_url})")
+    except httpx.ConnectError as e:
+        logger.error(f"[PROXY] Connection failed to {target_url}: {e}")
+        raise HTTPException(status_code=503, detail=f"Service '{name}' is not reachable (trying {target_url})")
     except Exception as e:
-        logger.error(f"Proxy error for {name}: {e}")
-        raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+        logger.error(f"Proxy error for {name} at {target_url}: {e}")
+        raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)} (trying {target_url})")
 
 
 @router.get("/debug/docker-ports")
@@ -898,6 +957,9 @@ async def update_env_config(
     - "default": Use the compose file's default
     """
     env_vars = [ev.model_dump() for ev in request.env_vars]
+    logger.info(f"[API] PUT /{name}/env received {len(env_vars)} env vars")
+    for ev in env_vars:
+        logger.info(f"[API]   {ev.get('name')}: source={ev.get('source')}, setting_path={ev.get('setting_path')}, value={ev.get('value')}")
     result = await orchestrator.update_env_config(name, env_vars)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")

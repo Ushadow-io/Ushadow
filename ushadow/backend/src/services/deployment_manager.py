@@ -675,37 +675,8 @@ class DeploymentManager:
                 container.stop()
                 logger.info(f"Stopped local container {deployment.container_name}")
 
-        unode = UNode(**unode_dict)
-
-        # Create deployment target from unode with standardized fields
-        from src.models.unode import UNodeType, UNodeRole
-        from src.utils.deployment_targets import parse_deployment_target_id
-
-        parsed = parse_deployment_target_id(unode.deployment_target_id)
-        is_leader = unode.role == UNodeRole.LEADER
-
-        target = DeployTarget(
-            id=unode.deployment_target_id,
-            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
-            name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
-            identifier=unode.hostname,
-            environment=parsed["environment"],
-            status=unode.status.value if unode.status else "unknown",
-            provider="local" if is_leader else "remote",
-            region=None,
-            is_leader=is_leader,
-            namespace=None,
-            infrastructure=None,
-            raw_metadata=unode.model_dump()
-        )
-
-        # Get appropriate deployment platform
-        platform = get_deploy_platform(target)
-
-        try:
-            success = await platform.stop(target, deployment)
-
-            if success:
+                # Refresh container status
+                container.reload()
                 deployment.status = DeploymentStatus.STOPPED
                 deployment.stopped_at = datetime.now(timezone.utc)
 
@@ -720,6 +691,45 @@ class DeploymentManager:
             })
             if not unode_dict:
                 raise ValueError(f"U-node not found: {deployment.unode_hostname}")
+
+            unode = UNode(**unode_dict)
+
+            # Create deployment target from unode with standardized fields
+            from src.models.unode import UNodeType, UNodeRole
+            from src.utils.deployment_targets import parse_deployment_target_id
+
+            parsed = parse_deployment_target_id(unode.deployment_target_id)
+            is_leader = unode.role == UNodeRole.LEADER
+
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=parsed["environment"],
+                status=unode.status.value if unode.status else "unknown",
+                provider="local" if is_leader else "remote",
+                region=None,
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
+            )
+
+            # Get appropriate deployment platform
+            platform = get_deploy_platform(target)
+
+            try:
+                success = await platform.stop(target, deployment)
+
+                if success:
+                    deployment.status = DeploymentStatus.STOPPED
+                    deployment.stopped_at = datetime.now(timezone.utc)
+
+            except Exception as e:
+                logger.error(f"Failed to stop remote deployment {deployment_id}: {e}")
+                deployment.error = str(e)
+                deployment.status = DeploymentStatus.FAILED
 
         # Stateless: Container state is source of truth, no database update needed
         return deployment
@@ -759,6 +769,92 @@ class DeploymentManager:
 
         # Stateless: Container state is source of truth, no database update needed
         return deployment
+
+    async def update_deployment(
+        self,
+        deployment_id: str,
+        env_vars: Dict[str, str]
+    ) -> Deployment:
+        """
+        Update a deployment's environment variables and redeploy.
+
+        Compares provided env_vars against what Settings would normally resolve
+        (layers 1-5) and only saves actual overrides to ServiceConfig.
+        """
+        from src.services.service_config_manager import get_service_config_manager
+        from src.models.service_config import ServiceConfigCreate, ServiceConfigUpdate
+        from src.config import get_settings
+
+        # Get existing deployment
+        deployment = await self.get_deployment(deployment_id)
+        if not deployment:
+            raise ValueError(f"Deployment not found: {deployment_id}")
+
+        logger.info(f"Updating deployment {deployment_id}, received {len(env_vars)} env vars")
+
+        # Get baseline values from Settings (layers 1-5, without user overrides)
+        settings = get_settings()
+        baseline_resolutions = await settings.for_deploy_config(
+            deployment.unode_hostname,
+            deployment.service_id
+        )
+
+        # Filter to only actual overrides
+        overrides_only = {}
+        for key, new_value in env_vars.items():
+            baseline_resolution = baseline_resolutions.get(key)
+            baseline_value = baseline_resolution.value if baseline_resolution else None
+
+            # Save if different from baseline
+            if new_value != baseline_value:
+                overrides_only[key] = new_value
+                logger.info(f"  Override: {key} (baseline={baseline_value}, new={new_value})")
+            else:
+                logger.debug(f"  Skip: {key} (matches baseline)")
+
+        logger.info(f"Filtered to {len(overrides_only)} actual overrides")
+
+        config_manager = get_service_config_manager()
+        config_id = deployment.config_id
+
+        if config_id:
+            # Update existing ServiceConfig
+            logger.info(f"Updating ServiceConfig: {config_id}")
+            config_manager.update_instance(
+                config_id,
+                ServiceConfigUpdate(config=overrides_only)
+            )
+        elif overrides_only:
+            # Create new ServiceConfig only if there are overrides
+            # Use deployment.config_id if available, otherwise generate one
+            config_id = deployment.config_id or f"{deployment.service_id}-{deployment.unode_hostname}".replace(":", "-").replace("/", "-").replace("(", "").replace(")", "")
+            logger.info(f"Creating ServiceConfig: {config_id}")
+
+            config_manager.create_instance(
+                ServiceConfigCreate(
+                    id=config_id,
+                    template_id=deployment.service_id,
+                    name=f"{deployment.service_id} ({deployment.unode_hostname})",
+                    description=f"Deployment configuration",
+                    config=overrides_only,
+                    deployment_target=f"docker://{deployment.unode_hostname}"
+                )
+            )
+
+        # Stop and remove current deployment
+        await self.stop_deployment(deployment_id)
+        await self.remove_deployment(deployment_id)
+
+        # Redeploy with the config_id
+        updated_deployment = await self.deploy_service(
+            service_id=deployment.service_id,
+            unode_hostname=deployment.unode_hostname,
+            namespace=deployment.backend_metadata.get("namespace") if deployment.backend_type == "kubernetes" else None,
+            config_id=config_id if overrides_only else None
+        )
+
+        logger.info(f"Deployment updated with {len(overrides_only)} overrides")
+        return updated_deployment
 
     async def remove_deployment(self, deployment_id: str) -> bool:
         """Remove a deployment (stop and delete)."""

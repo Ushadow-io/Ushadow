@@ -31,7 +31,7 @@ from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
-from src.config.omegaconf_settings import get_settings_store
+from src.config import get_settings_store
 from src.utils.telemetry import TelemetryClient
 from src.utils.version import VERSION as BACKEND_VERSION
 

@@ -810,6 +810,35 @@ export default function UNodeDetailsPage() {
           </>
         )}
 
+        {/* Test Audio Discovery */}
+        {selectedNode && authToken && (
+          <TouchableOpacity
+            style={[styles.addNodeButton, { backgroundColor: '#FFF3E0' }]}
+            onPress={async () => {
+              try {
+                const { getAvailableAudioDestinations, buildRelayUrl } = await import('./services/audioProviderApi');
+                console.log('[Test] Querying audio destinations...');
+                const destinations = await getAvailableAudioDestinations(selectedNode.apiUrl, authToken);
+                console.log('[Test] Found destinations:', destinations);
+                Alert.alert(
+                  '✅ Audio Discovery Success',
+                  `Found ${destinations.length} destination(s):\n\n${destinations.map(d => `• ${d.instance_name} (${d.status})`).join('\n')}`
+                );
+                if (destinations.length > 0) {
+                  const relayUrl = buildRelayUrl(selectedNode.apiUrl, authToken, destinations);
+                  console.log('[Test] Relay URL:', relayUrl);
+                }
+              } catch (err) {
+                console.error('[Test] Failed:', err);
+                Alert.alert('❌ Test Failed', err instanceof Error ? err.message : 'Unknown error');
+              }
+            }}
+          >
+            <Ionicons name="radio-outline" size={24} color="#F57C00" />
+            <Text style={[styles.addNodeText, { color: '#F57C00' }]}>🧪 Test Audio Discovery</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Add Button */}
         <TouchableOpacity style={styles.addNodeButton} onPress={handleAddUNode}>
           <Ionicons name="add-circle-outline" size={24} color={colors.primary[400]} />

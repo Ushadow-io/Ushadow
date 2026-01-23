@@ -9,6 +9,7 @@ Handles:
 """
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -177,6 +178,7 @@ class ServiceConfigManager:
                     deployment_id=instance_data.get('deployment_id'),
                     container_id=instance_data.get('container_id'),
                     container_name=instance_data.get('container_name'),
+                    exposed_urls=instance_data.get('exposed_urls'),
                     # Integration-specific fields
                     integration_type=instance_data.get('integration_type'),
                     sync_enabled=instance_data.get('sync_enabled'),
@@ -281,6 +283,8 @@ class ServiceConfigManager:
                 instance_data['container_id'] = instance.container_id
             if instance.container_name:
                 instance_data['container_name'] = instance.container_name
+            if instance.exposed_urls:
+                instance_data['exposed_urls'] = instance.exposed_urls
 
             # Integration-specific fields
             if instance.integration_type is not None:
@@ -501,6 +505,48 @@ class ServiceConfigManager:
         logger.info(f"Deleted instance: {config_id}")
         return True
 
+    def _build_exposed_urls(
+        self,
+        compose_service: Any,
+        container_name: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Build exposed_urls list from compose file exposes metadata.
+
+        Args:
+            compose_service: The ComposeService from compose registry
+            container_name: Actual Docker container name
+
+        Returns:
+            List of exposed URL dicts with actual container names and correct paths
+        """
+        exposed_urls = []
+
+        if not hasattr(compose_service, 'exposes') or not compose_service.exposes:
+            return exposed_urls
+
+        for expose in compose_service.exposes:
+            # Build the URL using actual container name + port + path
+            # Note: Do NOT include route_path (e.g., /chronicle) - that's for Tailscale routing
+            name = expose.get('name')
+            url_type = expose.get('type')
+            path = expose.get('path', '')
+            port = expose.get('port')
+            metadata = expose.get('metadata', {})
+
+            # Build URL - use container name for Docker internal networking
+            protocol = 'ws' if url_type == 'audio' else 'http'
+            url = f"{protocol}://{container_name}:{port}{path}"
+
+            exposed_urls.append({
+                'name': name,
+                'url': url,
+                'type': url_type,
+                'metadata': metadata,
+            })
+
+        return exposed_urls
+
     def update_instance_status(
         self,
         config_id: str,
@@ -572,6 +618,13 @@ class ServiceConfigManager:
                     instance.container_id = deployment.container_id
                     instance.container_name = deployment.container_name
 
+                    # Build and set exposed_urls from compose metadata
+                    if deployment.container_name:
+                        instance.exposed_urls = self._build_exposed_urls(
+                            compose_service,
+                            deployment.container_name
+                        )
+
                     # Update instance status based on deployment
                     if deployment.status == "running":
                         self.update_instance_status(
@@ -599,7 +652,7 @@ class ServiceConfigManager:
                 # Local docker deployment - use ServiceOrchestrator
                 from src.services.service_orchestrator import get_service_orchestrator
                 from src.services.docker_manager import get_docker_manager
-                from src.config.omegaconf_settings import get_settings
+                from src.config import get_settings
 
                 orchestrator = get_service_orchestrator()
                 docker_mgr = get_docker_manager()
@@ -629,7 +682,7 @@ class ServiceConfigManager:
                 try:
                     result = await orchestrator.start_service(service_name, config_id=config_id)
                     if result.success:
-                        # Get the service status to find access URL
+                        # Get the service status to find access URL and container details
                         status_info = await orchestrator.get_service_status(service_name)
                         access_url = None
                         if status_info and status_info.get("status") == "running":
@@ -642,6 +695,20 @@ class ServiceConfigManager:
                                     if host_port:
                                         access_url = f"http://localhost:{host_port}"
                                         break
+
+                            # Get container details from docker
+                            if details and details.container_id:
+                                instance.container_id = details.container_id
+                                # Build container name from Docker details
+                                # Docker uses project_name-service_name format
+                                project_name = compose_service.namespace or os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+                                instance.container_name = f"{project_name}-{service_name}"
+
+                                # Build and set exposed_urls from compose metadata
+                                instance.exposed_urls = self._build_exposed_urls(
+                                    compose_service,
+                                    instance.container_name
+                                )
 
                         self.update_instance_status(
                             config_id,

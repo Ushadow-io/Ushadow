@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from src.services.auth import get_current_user, generate_jwt_for_service
 from src.models.user import User
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
 

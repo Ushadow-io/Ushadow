@@ -139,3 +139,85 @@ export function buildAudioStreamUrl(
  * await audioStreamer.startStreaming(wsUrl, 'streaming');
  * // Mobile mic → Chronicle
  */
+
+// =============================================================================
+// New Deployment-Based Discovery (Multi-Destination Support)
+// =============================================================================
+
+export interface AudioDestination {
+  instance_id: string;
+  instance_name: string;
+  url: string;
+  type: string;
+  name: string;
+  metadata?: {
+    protocol?: string;
+    data?: string;
+  };
+  status: string;
+}
+
+/**
+ * Get available audio destinations from running service instances.
+ * Uses deployment-based discovery instead of provider registry.
+ * This supports multi-destination streaming via relay.
+ */
+export async function getAvailableAudioDestinations(
+  baseUrl: string,
+  token: string
+): Promise<AudioDestination[]> {
+  const url = `${baseUrl}/api/deployments/exposed-urls?type=audio&status=running`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audio destinations: ${response.statusText}`);
+  }
+
+  const destinations: AudioDestination[] = await response.json();
+  return destinations;
+}
+
+/**
+ * Build relay WebSocket URL with multiple destinations.
+ * Connects to relay endpoint which fans out to all selected destinations.
+ */
+export function buildRelayUrl(
+  baseUrl: string,
+  token: string,
+  selectedDestinations: AudioDestination[]
+): string {
+  // Convert http(s) to ws(s)
+  const wsBaseUrl = baseUrl.replace(/^http/, 'ws');
+
+  // Build destinations array for relay
+  const destinations = selectedDestinations.map(dest => ({
+    name: dest.instance_name,
+    url: dest.url,
+  }));
+
+  // Create relay URL
+  const url = new URL(`${wsBaseUrl}/ws/audio/relay`);
+  url.searchParams.set('destinations', JSON.stringify(destinations));
+  url.searchParams.set('token', token);
+
+  return url.toString();
+}
+
+/**
+ * Build direct WebSocket URL for single destination.
+ */
+export function buildDirectUrl(
+  destination: AudioDestination,
+  token: string
+): string {
+  const url = new URL(destination.url);
+  url.searchParams.set('token', token);
+  return url.toString();
+}

@@ -17,7 +17,7 @@ from src.models.service_config import (
 )
 from src.services.auth import get_current_user
 from src.services.service_config_manager import get_service_config_manager
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ async def get_template_env_config(
     Uses the Settings v2 API for consistent behavior with services endpoint.
     Returns same format as /api/services/{name}/env for unified frontend handling.
     """
-    from src.config.omegaconf_settings import get_settings, Source
+    from src.config import get_settings, Source
 
     template = await get_template(template_id, current_user)
     settings_v2 = get_settings()

@@ -690,6 +690,8 @@ export const deploymentsApi = {
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
   stopDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/stop`),
   restartDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/restart`),
+  updateDeployment: (deploymentId: string, envVars: Record<string, string>) =>
+    api.put<Deployment>(`/api/deployments/${deploymentId}`, { env_vars: envVars }),
   removeDeployment: (deploymentId: string) => api.delete(`/api/deployments/${deploymentId}`),
   getDeploymentLogs: (deploymentId: string, tail?: number) =>
     api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
@@ -957,9 +959,25 @@ const adaptMemoryItem = (item: ApiMemoryItem): Memory => {
   }
 }
 
+export type MemorySource = 'openmemory' | 'mycelia'
+
 export const memoriesApi = {
-  /** Get OpenMemory server URL from settings or use default */
-  getServerUrl: async (): Promise<string> => {
+  /** Get memory server URL based on selected source */
+  getServerUrl: async (source: MemorySource = 'openmemory'): Promise<string> => {
+    if (source === 'mycelia') {
+      try {
+        // Get connection info from mycelia service
+        const response = await servicesApi.getConnectionInfo('mycelia')
+        if (response.data?.url) {
+          return response.data.url
+        }
+      } catch (err) {
+        console.warn('Failed to get mycelia connection info:', err)
+        throw new Error('Mycelia service not available')
+      }
+    }
+
+    // OpenMemory (mem0) - use settings or default
     try {
       const response = await settingsApi.getConfig()
       return response.data?.infrastructure?.openmemory_server_url || 'http://localhost:8765'
@@ -974,9 +992,10 @@ export const memoriesApi = {
     query?: string,
     page: number = 1,
     size: number = 10,
-    filters?: MemoryFilters
+    filters?: MemoryFilters,
+    source: MemorySource = 'openmemory'
   ): Promise<{ memories: Memory[]; total: number; pages: number }> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const response = await axios.post<MemoriesApiResponse>(
       `${serverUrl}/api/v1/memories/filter`,
       {
@@ -999,8 +1018,8 @@ export const memoriesApi = {
   },
 
   /** Get a single memory by ID */
-  getMemory: async (userId: string, memoryId: string): Promise<Memory> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+  getMemory: async (userId: string, memoryId: string, source: MemorySource = 'openmemory'): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const response = await axios.get<ApiMemoryItem>(
       `${serverUrl}/api/v1/memories/${memoryId}?user_id=${userId}`
     )
@@ -1088,10 +1107,10 @@ export const memoriesApi = {
     return response.data
   },
 
-  /** Check if OpenMemory server is available */
-  healthCheck: async (): Promise<boolean> => {
+  /** Check if memory server is available */
+  healthCheck: async (source: MemorySource = 'openmemory'): Promise<boolean> => {
     try {
-      const serverUrl = await memoriesApi.getServerUrl()
+      const serverUrl = await memoriesApi.getServerUrl(source)
       await axios.get(`${serverUrl}/docs`, { timeout: 5000 })
       return true
     } catch {
@@ -1331,9 +1350,10 @@ export const graphApi = {
   /** Fetch graph data for visualization */
   fetchGraphData: async (
     userId?: string,
-    limit: number = 100
+    limit: number = 100,
+    source: MemorySource = 'openmemory'
   ): Promise<GraphData> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string | number> = { limit }
     if (userId) params.user_id = userId
 
@@ -1345,8 +1365,8 @@ export const graphApi = {
   },
 
   /** Fetch graph statistics */
-  fetchGraphStats: async (userId?: string): Promise<GraphStats> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+  fetchGraphStats: async (userId?: string, source: MemorySource = 'openmemory'): Promise<GraphStats> => {
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string> = {}
     if (userId) params.user_id = userId
 
@@ -1361,9 +1381,10 @@ export const graphApi = {
   searchGraph: async (
     query: string,
     userId?: string,
-    limit: number = 50
+    limit: number = 50,
+    source: MemorySource = 'openmemory'
   ): Promise<GraphData> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string | number> = { query, limit }
     if (userId) params.user_id = userId
 

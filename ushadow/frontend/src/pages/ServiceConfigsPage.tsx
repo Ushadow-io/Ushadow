@@ -645,9 +645,16 @@ export default function ServiceConfigsPage() {
           }
         } else {
           // Use API response data (setting mapping or default)
+          // Convert template_override/instance_override sources to their edit format
+          let source = envVar.source || 'default'
+          if (source === 'template_override' || source === 'instance_override') {
+            // If it has a setting_path, it's a mapping
+            source = envVar.setting_path ? 'setting' : 'literal'
+          }
+
           initialEnvConfigs[envVar.name] = {
             name: envVar.name,
-            source: envVar.source || 'default',
+            source: source,
             setting_path: envVar.setting_path,
             value: envVar.resolved_value || envVar.value,
             new_setting_path: undefined,
@@ -1014,11 +1021,18 @@ export default function ServiceConfigsPage() {
                     }
                   } else {
                     // Use service default configuration
+                    // Convert template_override/instance_override sources to their edit format
+                    let source = envVar.source || 'default'
+                    if (source === 'template_override' || source === 'instance_override') {
+                      // If it has a setting_path, it's a mapping
+                      source = envVar.setting_path ? 'setting' : 'literal'
+                    }
+
                     // Try resolved_value first, then value, then default_value, then empty string
                     const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
                     initialEnvConfigs[envVar.name] = {
                       name: envVar.name,
-                      source: envVar.source || 'default',
+                      source: source,
                       setting_path: envVar.setting_path,
                       value: fallbackValue,
                       new_setting_path: undefined,
@@ -1101,9 +1115,13 @@ export default function ServiceConfigsPage() {
         // For templates, check if we have env config (compose services) or config schema (providers)
         if (envVars.length > 0) {
           // Compose service template - save env configs to settings store
-          const envVarConfigs = Object.values(envConfigs).filter(
-            (config) => config.source === 'new_setting' && config.value && config.new_setting_path
-          )
+          const envVarConfigs = Object.values(envConfigs).filter((config) => {
+            // Include configs that have actual values to save
+            if (config.source === 'new_setting' && config.value && config.new_setting_path) return true
+            if (config.source === 'setting' && config.setting_path) return true
+            if (config.source === 'literal' && config.value) return true
+            return false
+          })
 
           if (envVarConfigs.length > 0) {
             // Call the service API to update env config
@@ -1295,12 +1313,33 @@ export default function ServiceConfigsPage() {
       const deployedEnv = deployment.deployed_config?.environment || {}
 
       allEnvVars.forEach((envVar) => {
-        // Use deployed value first, then resolved value from API, then default
-        const currentValue = deployedEnv[envVar.name] || envVar.resolved_value || envVar.default_value || ''
+        // Determine value and source
+        let value: string
+        let source: string
+
+        // Check if this value is overridden in the deployed config
+        if (deployedEnv[envVar.name] !== undefined) {
+          // Value is explicitly set in deployment - this is an override
+          value = deployedEnv[envVar.name]
+          source = 'literal'
+        } else if (envVar.setting_path && envVar.resolved_value) {
+          // Value comes from a setting
+          value = envVar.resolved_value
+          source = 'setting'
+        } else if (envVar.default_value) {
+          // Using default value
+          value = envVar.default_value
+          source = 'default'
+        } else {
+          // No value
+          value = ''
+          source = 'default'
+        }
+
         initialEnvConfigs[envVar.name] = {
           name: envVar.name,
-          source: envVar.source || 'literal',
-          value: currentValue,
+          source: source as any,
+          value: value,
           setting_path: envVar.setting_path,
           new_setting_path: undefined,
         }
@@ -2108,13 +2147,38 @@ export default function ServiceConfigsPage() {
               </button>
               <button
                 onClick={async () => {
-                  // TODO: Implement deployment update API call
-                  setMessage({ type: 'success', text: 'Deployment configuration updated' })
-                  setEditingDeployment(null)
-                  setDeploymentEnvVars([])
-                  setDeploymentEnvConfigs({})
+                  if (!editingDeployment) return
+
+                  try {
+                    // Build env vars object from all configs
+                    // Backend will filter to only save actual overrides
+                    const envVars: Record<string, string> = {}
+                    Object.entries(deploymentEnvConfigs).forEach(([name, config]) => {
+                      if (config.value) {
+                        envVars[name] = config.value
+                      }
+                    })
+
+                    // Update deployment with new env vars
+                    await deploymentsApi.updateDeployment(editingDeployment.id, envVars)
+
+                    setMessage({ type: 'success', text: 'Deployment updated and redeployed successfully' })
+                    setEditingDeployment(null)
+                    setDeploymentEnvVars([])
+                    setDeploymentEnvConfigs({})
+
+                    // Refresh deployments list
+                    await refreshDeployments()
+                  } catch (error: any) {
+                    console.error('Failed to update deployment:', error)
+                    setMessage({
+                      type: 'error',
+                      text: error.response?.data?.detail || 'Failed to update deployment'
+                    })
+                  }
                 }}
                 className="btn-primary"
+                data-testid="save-deployment-changes"
               >
                 Save Changes
               </button>

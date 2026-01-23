@@ -4,199 +4,261 @@
 
 This document specifies the unified approach for resolving environment variable values across all contexts in ushadow. The goal is a single source of truth that eliminates fragmented resolution logic.
 
----
+**Implementation Status**: ✅ **IMPLEMENTED** (Jan 2026)
 
-## Sources of Settings (Priority Order)
-
-Values can come from multiple sources. When resolving, we check in this order:
-
-### 1. ServiceConfig Instance Overrides (Highest Priority)
-- **Location**: MongoDB `service_configs` collection, `config.values` field
-- **Scope**: Per-deployment instance (e.g., "my-chronicle-prod" vs "my-chronicle-dev")
-- **Use case**: User wants different API keys for different deployments of same service
-- **Example**: `{"OPENAI_API_KEY": {"_from_setting": "api_keys.openai_prod"}}`
-
-### 2. Service-Specific Saved Config
-- **Location**: OmegaConf `service_env_config.<service_id>`
-- **Scope**: Per-service (applies to all instances of that service)
-- **Use case**: User configured how to resolve env vars via UI
-- **Example**: `source: "setting", setting_path: "api_keys.openai_api_key"`
-
-### 3. Well-Known Mappings
-- **Location**: Hardcoded mapping (should be single location)
-- **Scope**: Global - applies to any service using these env var names
-- **Use case**: Standard env vars that always map to same settings path
-- **Examples**:
-  ```
-  AUTH_SECRET_KEY -> security.auth_secret_key
-  ADMIN_PASSWORD -> security.admin_password
-  MONGODB_URI -> infrastructure.mongodb_uri
-  REDIS_URL -> infrastructure.redis_url
-  ```
-
-### 4. Capability/Provider Resolution
-- **Location**: `wiring.yaml` + `capabilities.yaml` + provider configs
-- **Scope**: Per-capability (e.g., "llm", "transcription", "memory")
-- **Use case**: Service declares it needs "llm" capability, wiring says use "openai" provider
-- **Example**: Service needs `LLM_API_KEY`, wiring maps llm->openai, provider config says `api_keys.openai_api_key`
-
-### 5. OmegaConf Settings (Direct)
-- **Location**: `secrets.yaml`, `overrides.yaml`, `defaults.yaml`
-- **Scope**: Global settings store
-- **Use case**: Direct path lookup when setting_path is explicitly configured
-- **Priority within OmegaConf**: overrides.yaml > secrets.yaml > defaults.yaml
-
-### 6. OS Environment Variables
-- **Location**: `os.environ` (from shell, .env file, Docker/K8s env)
-- **Scope**: Process environment
-- **Use case**: Fallback for values not in settings store, or bootstrap values
-
-### 7. Compose File Defaults (Lowest Priority)
-- **Location**: Compose YAML `${VAR:-default}` syntax
-- **Scope**: Per-service definition
-- **Use case**: Sensible defaults when nothing else is configured
-- **Example**: `REDIS_URL=${REDIS_URL:-redis://localhost:6379}`
+For implementation details, see `/tmp/new_config_structure.md`
 
 ---
 
-## Contexts (Who Needs Settings)
+## Architecture
 
-### Context A: Local Docker Deployment
-- **Caller**: `docker_manager.start_service()`
-- **Needs**: Full env dict to pass to `docker compose up`
-- **Special considerations**:
-  - Values go to subprocess env for compose variable substitution
-  - Also injected directly into container
+### Two-Level Override System
 
-### Context B: Kubernetes Deployment
-- **Caller**: `kubernetes_manager.deploy_to_kubernetes()`
-- **Needs**: Full env dict to create ConfigMap and Secret
-- **Special considerations**:
-  - Sensitive values (matching patterns) go to K8s Secret
-  - Non-sensitive values go to K8s ConfigMap
-  - Must resolve ALL values before generating manifests
+1. **Template-Level** (`config.overrides.yaml` → `services.{service_id}`)
+   - Applies to ALL instances of a service
+   - Example: All Chronicle instances use the same Qdrant instance
 
-### Context C: UI Display (Service Config Page)
-- **Caller**: `service_orchestrator.get_env_config()`, settings API
-- **Needs**: List of env vars with current values (masked), sources, suggestions
-- **Special considerations**:
-  - Must show WHERE value came from (for debugging)
-  - Must mask sensitive values
-  - Must show suggestions for unconfigured vars
+2. **Instance-Level** (`instance-overrides.yaml` → `instances.{deployment_id}`)
+   - Applies to specific deployment instance
+   - Example: Chronicle production uses qdrant-prod, dev uses qdrant-dev
 
-### Context D: Validation (Pre-Deploy Check)
-- **Caller**: `service_orchestrator.check_env_config()`
-- **Needs**: Boolean ready/not-ready, list of missing required vars
-- **Special considerations**:
-  - Don't need actual values, just need to know if they exist
-  - Must distinguish required vs optional
+### Mapping Syntax
 
-### Context E: Self-Configuration (ushadow Backend)
-- **Caller**: `main.py` lifespan, auth module, etc.
-- **Needs**: Individual setting values for backend's own operation
-- **Special considerations**:
-  - Happens at startup before async context available
-  - Need sync access methods
-  - Bootstrap problem: need AUTH_SECRET_KEY to decrypt other secrets
+Use `@settings.path` to reference other settings:
 
-### Context F: Export (.env Generation)
-- **Caller**: `service_orchestrator.export_env_vars()`
-- **Needs**: Full env dict with UNMASKED values
-- **Special considerations**:
-  - User explicitly requested export
-  - Values must be unmasked for actual use
+```yaml
+# config.overrides.yaml
+settings:
+  qdrant_url: http://qdrant:6333
 
----
-
-## Proposed Unified Interface
-
-```python
-class SettingsResolver:
-    """Single source of truth for resolving env var values."""
-
-    async def resolve_env_var(
-        self,
-        env_name: str,
-        service_id: Optional[str] = None,
-        config_id: Optional[str] = None,  # ServiceConfig instance
-        include_source: bool = False
-    ) -> Union[str, Tuple[str, str, str], None]:
-        """
-        Resolve a single env var to its value.
-
-        Args:
-            env_name: Environment variable name (e.g., "OPENAI_API_KEY")
-            service_id: Service requesting (for service-specific config)
-            config_id: ServiceConfig instance (for instance overrides)
-            include_source: If True, return (value, source_type, source_path)
-
-        Returns:
-            Resolved value, or tuple with source info, or None
-        """
-        pass
-
-    async def resolve_for_service(
-        self,
-        service_id: str,
-        config_id: Optional[str] = None,
-        env_var_names: Optional[List[str]] = None
-    ) -> Dict[str, str]:
-        """
-        Resolve all env vars for a service deployment.
-
-        Args:
-            service_id: Service to resolve for
-            config_id: Optional instance for overrides
-            env_var_names: Specific vars to resolve (or all if None)
-
-        Returns:
-            Dict of env_name -> resolved_value (only non-empty values)
-        """
-        pass
-
-    async def check_readiness(
-        self,
-        service_id: str,
-        config_id: Optional[str] = None
-    ) -> Tuple[bool, List[str]]:
-        """
-        Check if service has all required env vars configured.
-
-        Returns:
-            (is_ready, list_of_missing_required_vars)
-        """
-        pass
+services:
+  chronicle-backend:
+    QDRANT_BASE_URL: "@settings.qdrant_url"  # Mapping reference
+    QDRANT_PORT: "6333"                       # Direct value
 ```
 
 ---
 
-## Current Problems
+## Resolution Priority (Highest Wins)
 
-1. **WELL_KNOWN_ENV_MAPPINGS duplicated** in:
-   - `service_orchestrator.py`
-   - `omegaconf_settings.py` (just added)
+When resolving an environment variable, sources are checked in this order:
 
-2. **Resolution logic duplicated** in:
-   - `docker_manager._build_env_vars_from_compose_config()`
-   - `docker_manager._build_env_vars_for_service()`
-   - `service_orchestrator.check_env_config()`
-   - `service_orchestrator.export_env_vars()`
-   - `capability_resolver.resolve_for_service()`
-   - `omegaconf_settings.resolve_env_value()`
+1. **config.defaults.yaml** - Application defaults (lowest priority)
+2. **Compose file defaults** - Service-specific defaults from `docker-compose.yaml`
+3. **os.environ (.env file)** - Environment variables
+4. **Capability** - Wired providers from `wiring.yaml`
+5. **Template Override** - `services.{service_id}` in `config.overrides.yaml`
+6. **Instance Override** - `instances.{deployment_id}` in `instance-overrides.yaml` (highest priority)
 
-3. **Inconsistent behavior**: Different contexts may resolve same env var differently
+### Source Enum
 
-4. **Hard to debug**: User can't easily see why a value resolved a certain way
+```python
+class Source(str, Enum):
+    CONFIG_DEFAULT = "config_default"
+    COMPOSE_DEFAULT = "compose_default"
+    ENV_FILE = "env_file"
+    CAPABILITY = "capability"
+    TEMPLATE_OVERRIDE = "template_override"
+    INSTANCE_OVERRIDE = "instance_override"
+    NOT_FOUND = "not_found"
+```
 
 ---
 
-## Migration Path
+## Settings API
 
-1. Create `SettingsResolver` class in `src/config/settings_resolver.py`
-2. Consolidate all WELL_KNOWN_ENV_MAPPINGS into one location
-3. Implement unified resolution with source tracking
-4. Update `docker_manager` to use `SettingsResolver.resolve_for_service()`
-5. Update `kubernetes_manager` to use same
-6. Update `service_orchestrator` UI methods to use same
-7. Remove duplicated resolution logic from individual modules
-8. Add debug endpoint to show resolution chain for any env var
+The `Settings` class provides the unified interface for all resolution needs:
+
+### For Services (Template-Level)
+
+```python
+from src.config import get_settings
+
+settings = get_settings()
+
+# Get resolutions for a service (all instances)
+resolutions = await settings.for_service("chronicle-backend")
+
+# resolutions = {
+#     "QDRANT_BASE_URL": Resolution(
+#         value="qdrant2",
+#         source=Source.TEMPLATE_OVERRIDE,
+#         found=True,
+#         path=None
+#     ),
+#     ...
+# }
+```
+
+### For Deployments (Instance-Level)
+
+```python
+# Get resolutions for specific deployment instance
+resolutions = await settings.for_deployment("chronicle-backend:prod")
+
+# Includes both template and instance overrides
+# Instance overrides take precedence
+```
+
+### For Deploy Configs (with Environment)
+
+```python
+# Get resolutions for deployment config (includes deploy_env layer)
+resolutions = await settings.for_deploy_config("purple", "chronicle-backend")
+
+# Includes environment-specific overrides from deploy_env.{environment}
+```
+
+### Direct Setting Access
+
+```python
+# Get a single setting value
+api_key = await settings.get("api_keys.openai")
+
+# Update settings (auto-routes to secrets.yaml or config.overrides.yaml)
+await settings.update({
+    "api_keys.openai": "sk-new-key",
+    "qdrant_url": "http://qdrant-prod:6333"
+})
+```
+
+---
+
+## File Structure
+
+### config.defaults.yaml
+Application defaults - committed to git
+
+```yaml
+settings:
+  qdrant_base_url: qdrant
+  qdrant_port: "6333"
+
+default_services:
+  - chronicle-backend
+  - qdrant
+```
+
+### secrets.yaml (gitignored)
+Sensitive values only
+
+```yaml
+api_keys:
+  openai: sk-prod-...
+  anthropic: sk-ant-...
+
+security:
+  auth_secret_key: secret-key-here
+```
+
+### config.overrides.yaml (gitignored)
+Template-level overrides and non-sensitive settings
+
+```yaml
+settings:
+  qdrant_base_url: qdrant2
+
+services:
+  chronicle-backend:
+    QDRANT_BASE_URL: "@settings.qdrant_base_url"
+    OPENAI_API_KEY: "@settings.api_keys.openai"
+    CUSTOM_VALUE: "literal-value-here"
+```
+
+### instance-overrides.yaml (gitignored)
+Instance-specific overrides
+
+```yaml
+instances:
+  chronicle-backend:prod:
+    QDRANT_BASE_URL: qdrant-prod
+    OPENAI_API_KEY: "@settings.api_keys.openai_prod"
+
+  chronicle-backend:dev:
+    QDRANT_BASE_URL: qdrant-dev
+    OPENAI_API_KEY: "@settings.api_keys.openai_dev"
+```
+
+---
+
+## Usage Contexts
+
+### Context A: Service Orchestration
+**Caller**: `service_orchestrator.resolve_env_vars()`
+
+```python
+# Use Settings API for all resolution
+resolutions = await self.settings.for_service(service.service_id)
+
+for ev in service.all_env_vars:
+    resolution = resolutions.get(ev.name)
+    if resolution and resolution.found:
+        resolved[ev.name] = resolution.value
+```
+
+### Context B: Docker Deployment
+**Caller**: `docker_manager.start_service()`
+
+Uses service_orchestrator which delegates to Settings API.
+
+### Context C: UI Display
+**Caller**: Frontend Service Config page
+
+```python
+# Get configuration with source tracking
+resolutions = await settings.for_service(service_id)
+
+for ev in env_vars:
+    resolution = resolutions.get(ev.name)
+    # resolution.source tells user WHERE value came from
+    # resolution.value is the actual value (masked if sensitive)
+```
+
+### Context D: Export (.env Generation)
+**Caller**: `service_orchestrator.export_env_vars()`
+
+```python
+# Get UNMASKED values for export
+resolutions = await settings.for_service(service_id)
+
+env_vars = {
+    ev.name: str(resolution.value)
+    for ev in service.all_env_vars
+    if (resolution := resolutions.get(ev.name)) and resolution.found
+}
+```
+
+---
+
+## Migration from Old Structure
+
+### Old Format (DEPRECATED)
+
+```yaml
+service_env_config:
+  chronicle-backend:
+    QDRANT_BASE_URL:
+      source: setting
+      setting_path: settings.qdrant_base_url
+```
+
+### New Format
+
+```yaml
+services:
+  chronicle-backend:
+    QDRANT_BASE_URL: "@settings.qdrant_base_url"
+```
+
+Much simpler! Direct values or mapping references.
+
+---
+
+## Key Benefits
+
+1. **Stateless**: All config in YAML files, no database needed
+2. **Clear Hierarchy**: Template vs instance overrides
+3. **Source Tracking**: Know exactly where each value came from
+4. **Unified API**: Single Settings class handles all resolution
+5. **Simple Syntax**: Direct values or `@settings.path` mappings
+6. **Automatic Routing**: Secrets go to secrets.yaml, others to config.overrides.yaml
