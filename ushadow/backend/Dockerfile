@@ -67,4 +67,5 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
 
 # Run the application (port from env var)
 # Use uv run to execute within the virtual environment
+# Note: compose/backend.yml masks /app/.venv with anonymous volume to prevent host venv triggering reloads
 CMD uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --reload

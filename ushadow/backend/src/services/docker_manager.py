@@ -1016,18 +1016,19 @@ class DockerManager:
                         else:
                             cap_env = await resolver.resolve_for_service(service_name)
 
-                        # OVERRIDE compose config with capability resolver values
-                        # This allows wired instances to override global provider config
+                        # Add capability resolver values ONLY if not already configured
+                        # This ensures user-configured values are never overridden
                         for key, value in cap_env.items():
-                            if key in container_env and container_env[key] != value:
-                                old_val = mask_if_secret(key, container_env[key])
-                                new_val = mask_if_secret(key, value)
-                                logger.info(
-                                    f"[Override] {key}: {old_val} -> {new_val} "
-                                    f"(capability resolver overrides compose config)"
+                            if key not in container_env:
+                                # Value not in compose config - use capability resolver default
+                                container_env[key] = value
+                                subprocess_env[key] = value
+                            else:
+                                # Value already configured - keep user's choice
+                                logger.debug(
+                                    f"[Keep User Config] {key}: keeping compose config "
+                                    f"(not overriding with capability resolver)"
                                 )
-                            container_env[key] = value
-                            subprocess_env[key] = value
                     except Exception as e:
                         logger.debug(f"CapabilityResolver fallback for {service_name}: {e}")
 
@@ -1280,12 +1281,13 @@ class DockerManager:
             # Build docker compose command with explicit env var passing
             # Using --env-file /dev/null to clear default .env loading
             # All env vars come from subprocess_env for ${VAR} substitution
+            # Use --force-recreate to ensure container picks up new env vars
             cmd = ["docker", "compose", "-f", str(compose_path)]
             if project_name:
                 cmd.extend(["-p", project_name])
             if compose_profile:
                 cmd.extend(["--profile", compose_profile])
-            cmd.extend(["up", "-d", docker_service_name])
+            cmd.extend(["up", "-d", "--force-recreate", docker_service_name])
 
             # Log final env vars being passed to service (with secrets masked)
             logged_vars = [f"{key}={mask_if_secret(key, value)}" for key, value in sorted(container_env.items())]
@@ -1446,6 +1448,78 @@ class DockerManager:
             # Log detailed error but return generic message
             logger.error(f"Error restarting {service_name}: {e}")
             return False, "Failed to restart service"
+
+    def get_container_environment(self, service_name: str) -> tuple[bool, Dict[str, str]]:
+        """
+        Get the actual environment variables from a running container.
+
+        This inspects the container to retrieve the env vars that were
+        actually passed to it at startup - useful for verifying deployment.
+
+        Args:
+            service_name: Name of the service
+
+        Returns:
+            Tuple of (success: bool, env_vars: dict or error_message: str)
+        """
+        # Validate service name first
+        valid, _ = self.validate_service_name(service_name)
+        if not valid:
+            logger.warning(f"Invalid service name in get_container_environment: {repr(service_name)}")
+            return False, "Service not found"
+
+        if not self.is_available():
+            return False, "Docker not available"
+
+        container_name = self._get_container_name(service_name)
+
+        # Get project name to ensure we get the right container
+        import os
+        project_name = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+
+        try:
+            # Try to find container by full name with project prefix
+            full_container_name = f"{project_name}-{container_name}"
+            container = None
+            try:
+                container = self._client.containers.get(full_container_name)
+            except NotFound:
+                # Search by compose service label AND project label
+                containers = self._client.containers.list(
+                    all=True,
+                    filters={
+                        "label": [
+                            f"com.docker.compose.service={container_name}",
+                            f"com.docker.compose.project={project_name}"
+                        ]
+                    }
+                )
+                if containers:
+                    container = containers[0]
+
+            if not container:
+                logger.error(f"Container not found for service: {service_name} (looking for: {full_container_name})")
+                return False, "Container not found"
+
+            # Get environment variables from container config
+            env_list = container.attrs.get("Config", {}).get("Env", [])
+
+            # Parse "KEY=value" format into dict
+            env_vars = {}
+            for item in env_list:
+                if "=" in item:
+                    key, value = item.split("=", 1)
+                    env_vars[key] = value
+
+            logger.info(f"Retrieved {len(env_vars)} env vars from container {container_name}")
+            return True, env_vars
+
+        except NotFound:
+            logger.error(f"Container not found for service: {service_name}")
+            return False, "Container not found"
+        except Exception as e:
+            logger.error(f"Error getting container environment for {service_name}: {e}")
+            return False, "Failed to retrieve environment"
 
     def get_service_logs(self, service_name: str, tail: int = 100) -> tuple[bool, str]:
         """

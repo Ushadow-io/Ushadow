@@ -26,7 +26,7 @@ Health Endpoint Returns 200 OK
     [Documentation]    Health endpoint should always return 200 even if services are degraded
     ...
     ...                This allows monitoring systems to detect the service is running
-    [Tags]    health    smoke    api
+    [Tags]    health    smoke    api    quick
 
     ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ...             expected_status=200

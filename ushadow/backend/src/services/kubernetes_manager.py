@@ -34,7 +34,10 @@ class KubernetesManager:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.clusters_collection = db.kubernetes_clusters
-        self._kubeconfig_dir = Path("/config/kubeconfigs")
+
+        # Use CONFIG_DIR if set (for tests), otherwise use /config
+        config_dir = os.environ.get("CONFIG_DIR", "/config")
+        self._kubeconfig_dir = Path(config_dir) / "kubeconfigs"
         self._kubeconfig_dir.mkdir(parents=True, exist_ok=True)
         # Initialize encryption for kubeconfig files
         self._fernet = self._init_fernet()

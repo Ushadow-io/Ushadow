@@ -46,14 +46,18 @@ dependencies = [
     # Logging & Monitoring
     "structlog>=24.4.0",
 
-    # YAML parsing
-    "ruamel.yaml>=0.18.6",
+    # YAML parsing (pure Python version - avoids C compilation issues)
+    "ruamel.yaml>=0.18.6,<0.19",
 
     # Configuration Management
     "omegaconf>=2.3.0",
 
     # LLM Integration
     "litellm>=1.50.0",
+
+    # CLI Interactive Shell
+    "prompt_toolkit>=3.0.48",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +65,7 @@ dev = [
     "pytest>=8.3.3",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
+    "pytest-env>=1.1.0",
     "ruff>=0.8.0",
 ]
 
@@ -100,7 +105,25 @@ markers = [
     "no_secrets: Tests that run without any secrets (safe for PR checks)",
     "requires_backend: Tests that need backend services running",
     "requires_frontend: Tests that need frontend running",
+    "tdd: TDD tests that document future functionality (expected to fail)",
+    "stable: Stable tests that must pass in CI",
 ]
 
 # Default: run only tests without secrets in CI
 addopts = "-v --strict-markers"
+
+# Environment variables for tests (set before test collection)
+# These override config files to use localhost instead of Docker hostnames
+env = [
+    "ENVIRONMENT=test",
+    "TESTING=true",
+    # Use /tmp for config to avoid read-only /config mount
+    "CONFIG_DIR=/tmp/pytest_config",
+    "PROJECT_ROOT=/tmp",
+    # Infrastructure: Use localhost (tests run on host, not in Docker)
+    # directConnection=true needed for MongoDB replica set
+    "MONGODB_URI=mongodb://localhost:27017/?directConnection=true",
+    "MONGODB_DATABASE=ushadow_test",
+    "REDIS_URL=redis://localhost:6379",
+    "MONGODB_TIMEOUT_MS=5000",
+]
