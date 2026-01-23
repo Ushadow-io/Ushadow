@@ -1,4 +1,6 @@
-use super::utils::{silent_command, shell_command};
+use super::utils::silent_command;
+#[cfg(target_os = "macos")]
+use super::utils::shell_command;
 use std::process::Command;
 use super::prerequisites::check_homebrew;
 
@@ -256,7 +258,7 @@ pub async fn start_docker_desktop_windows() -> Result<String, String> {
 
     for path in paths {
         if Path::new(path).exists() {
-            let output = Command::new(path)
+            Command::new(path)
                 .spawn()
                 .map_err(|e| format!("Failed to start Docker Desktop: {}", e))?;
 
@@ -481,7 +483,7 @@ pub fn check_project_dir(path: String) -> Result<ProjectStatus, String> {
 
 /// Clone the Ushadow repository
 #[tauri::command]
-pub async fn clone_ushadow_repo(target_dir: String) -> Result<String, String> {
+pub async fn clone_ushadow_repo(target_dir: String, branch: Option<String>) -> Result<String, String> {
     use super::permissions::check_path_permissions;
     use super::utils::expand_tilde;
 
@@ -515,9 +517,16 @@ pub async fn clone_ushadow_repo(target_dir: String) -> Result<String, String> {
         }
     }
 
+    // Build clone command with optional branch
+    let mut args = vec!["clone", "--depth", "1"];
+    if let Some(ref b) = branch {
+        args.extend(&["--branch", b.as_str()]);
+    }
+    args.extend(&[USHADOW_REPO_URL, &target_dir]);
+
     // Clone the repository
     let output = silent_command("git")
-        .args(["clone", "--depth", "1", USHADOW_REPO_URL, &target_dir])
+        .args(&args)
         .output()
         .map_err(|e| format!("Failed to run git clone: {}", e))?;
 
@@ -539,7 +548,8 @@ pub async fn clone_ushadow_repo(target_dir: String) -> Result<String, String> {
         return Err(format!("Clone completed but go.sh not found - may not be a valid Ushadow repo"));
     }
 
-    Ok(format!("Successfully cloned Ushadow to {}", target_dir))
+    let branch_msg = branch.map(|b| format!(" (branch: {})", b)).unwrap_or_default();
+    Ok(format!("Successfully cloned Ushadow to {}{}", target_dir, branch_msg))
 }
 
 /// Update an existing Ushadow repository safely (stash, pull, stash pop)
@@ -652,6 +662,127 @@ pub async fn install_git_macos() -> Result<String, String> {
 #[tauri::command]
 pub async fn install_git_macos() -> Result<String, String> {
     Err("macOS Git installation is only available on macOS".to_string())
+}
+
+/// Get current branch of a git repository
+#[tauri::command]
+pub fn get_current_branch(path: String) -> Result<String, String> {
+    let output = silent_command("git")
+        .args(["-C", &path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to get current branch: {}", stderr));
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(branch)
+}
+
+/// Checkout a branch in a git repository
+#[tauri::command]
+pub fn checkout_branch(path: String, branch: String) -> Result<String, String> {
+    let output = silent_command("git")
+        .args(["-C", &path, "checkout", &branch])
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to checkout branch: {}", stderr));
+    }
+
+    Ok(format!("Checked out branch: {}", branch))
+}
+
+/// Determine which base branch (main or dev) a worktree branch was created from
+/// Uses git merge-base to check ancestry
+#[tauri::command]
+pub fn get_base_branch(repo_path: String, branch: String) -> Result<Option<String>, String> {
+    // First check if main and dev branches exist
+    let branches_output = silent_command("git")
+        .args(["-C", &repo_path, "branch", "-a"])
+        .output()
+        .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+    if !branches_output.status.success() {
+        return Ok(None);
+    }
+
+    let branches = String::from_utf8_lossy(&branches_output.stdout);
+    let has_main = branches.lines().any(|l| l.contains("main") || l.contains("master"));
+    let has_dev = branches.lines().any(|l| l.contains("dev") && !l.contains("develop"));
+
+    if !has_main && !has_dev {
+        return Ok(None);
+    }
+
+    // Check if current branch is exactly main or dev
+    if branch == "main" || branch == "master" {
+        return Ok(Some("main".to_string()));
+    }
+    if branch == "dev" {
+        return Ok(Some("dev".to_string()));
+    }
+
+    // Check ancestry using merge-base
+    // Try dev first
+    if has_dev {
+        let dev_check = silent_command("git")
+            .args(["-C", &repo_path, "merge-base", "--is-ancestor", "dev", &branch])
+            .output();
+
+        if let Ok(output) = dev_check {
+            if output.status.success() {
+                // Branch has dev as ancestor, now check if it's more recent than main
+                if has_main {
+                    let main_base = silent_command("git")
+                        .args(["-C", &repo_path, "rev-parse", "main"])
+                        .output();
+                    let dev_base = silent_command("git")
+                        .args(["-C", &repo_path, "rev-parse", "dev"])
+                        .output();
+
+                    if let (Ok(main_out), Ok(dev_out)) = (main_base, dev_base) {
+                        if main_out.status.success() && dev_out.status.success() {
+                            let main_sha = String::from_utf8_lossy(&main_out.stdout).trim().to_string();
+                            let dev_sha = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
+
+                            // Check if dev is ahead of main (i.e., dev is based on main + extra commits)
+                            let is_dev_ahead = silent_command("git")
+                                .args(["-C", &repo_path, "merge-base", "--is-ancestor", &main_sha, &dev_sha])
+                                .output();
+
+                            if let Ok(ahead_check) = is_dev_ahead {
+                                if ahead_check.status.success() {
+                                    // Dev is ahead of main, so this branch is from dev
+                                    return Ok(Some("dev".to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+                return Ok(Some("dev".to_string()));
+            }
+        }
+    }
+
+    // Check if main is ancestor
+    if has_main {
+        let main_check = silent_command("git")
+            .args(["-C", &repo_path, "merge-base", "--is-ancestor", "main", &branch])
+            .output();
+
+        if let Ok(output) = main_check {
+            if output.status.success() {
+                return Ok(Some("main".to_string()));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]

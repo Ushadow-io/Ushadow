@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight } from 'lucide-react'
 import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
@@ -119,8 +119,8 @@ export function EnvironmentsPanel({
         className="flex-shrink-0 flex flex-col gap-4 pr-4"
         style={{ width: `${leftColumnWidth}px` }}
       >
-        <div className="bg-surface-800 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-4">
+        <div className="bg-surface-800 rounded-lg p-4 pl-2">
+          <div className="flex items-center justify-between mb-4 pl-2">
             <h3 className="text-sm font-medium">Environments</h3>
             <div className="flex gap-2">
               <button
@@ -143,7 +143,7 @@ export function EnvironmentsPanel({
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 mb-3 bg-surface-700/50 p-1 rounded-lg">
+          <div className="flex gap-1 mb-3 bg-surface-700/50 p-1 rounded-lg ml-2">
             <button
               onClick={() => setActiveTab('running')}
               className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
@@ -170,7 +170,7 @@ export function EnvironmentsPanel({
 
           {/* Creating Environments - always show at top */}
           {creatingEnvs.length > 0 && (
-            <div className="space-y-2 mb-3">
+            <div className="space-y-2 mb-3 ml-2">
               {creatingEnvs.map((env) => (
                 <CreatingEnvironmentCard
                   key={env.name}
@@ -185,7 +185,7 @@ export function EnvironmentsPanel({
           )}
 
           {/* Environment Cards */}
-          <div className="space-y-3 max-h-[calc(100vh-300px)] overflow-y-auto">
+          <div className="space-y-3 max-h-[calc(100vh-300px)] overflow-y-auto overflow-x-visible pl-2 pr-2 pb-4">
             {activeTab === 'running' ? (
               runningEnvs.length === 0 && creatingEnvs.length === 0 ? (
                 <RunningEmptyState onCreate={onCreate} hasDetected={stoppedEnvs.length > 0} />
@@ -246,19 +246,17 @@ export function EnvironmentsPanel({
               tmuxStatus={tmuxStatuses[selectedEnv.name]}
             />
           ) : (
-            <div className="p-6 h-full overflow-auto">
-              <EnvironmentDetailPanel
-                environment={selectedEnv}
-                onStart={() => onStart(selectedEnv.name)}
-                onStop={() => onStop(selectedEnv.name)}
-                onOpenInApp={handleOpenInBrowser}
-                onMerge={onMerge ? () => onMerge(selectedEnv.name) : undefined}
-                onDelete={onDelete ? () => onDelete(selectedEnv.name) : undefined}
-                onAttachTmux={onAttachTmux ? () => onAttachTmux(selectedEnv) : undefined}
-                isLoading={loadingEnv === selectedEnv.name}
-                tmuxStatus={tmuxStatuses[selectedEnv.name]}
-              />
-            </div>
+            <DetailView
+              environment={selectedEnv}
+              onStart={() => onStart(selectedEnv.name)}
+              onStop={() => onStop(selectedEnv.name)}
+              onOpenInBrowser={handleOpenInBrowser}
+              onMerge={onMerge ? () => onMerge(selectedEnv.name) : undefined}
+              onDelete={onDelete ? () => onDelete(selectedEnv.name) : undefined}
+              onAttachTmux={onAttachTmux ? () => onAttachTmux(selectedEnv) : undefined}
+              isLoading={loadingEnv === selectedEnv.name}
+              tmuxStatus={tmuxStatuses[selectedEnv.name]}
+            />
           )
         ) : (
           <div className="h-full flex items-center justify-center text-text-muted p-6">
@@ -330,7 +328,15 @@ interface BrowserViewProps {
 
 function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: BrowserViewProps) {
   const colors = getColors(environment.color || environment.name)
-  const url = environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
+  // Prefer Tailscale URL if available, otherwise use localhost
+  const baseUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
+  // Add launcher query param so frontend knows to hide footer
+  const url = baseUrl
+    ? baseUrl.includes('?')
+      ? `${baseUrl}&launcher=true`
+      : `${baseUrl}?launcher=true`
+    : ''
+  const displayUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
 
   const handleOpenVscode = () => {
     if (environment.path) {
@@ -384,15 +390,6 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleOpenInNewTab}
-              className="px-3 py-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors text-sm flex items-center gap-2"
-              title="Open in browser tab"
-              data-testid="browser-view-new-tab"
-            >
-              <AppWindow className="w-4 h-4" />
-              <span className="hidden sm:inline">New Tab</span>
-            </button>
             {environment.path && (
               <>
                 <button
@@ -433,10 +430,26 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
         {/* Bottom Row - URL and Details */}
         <div className="flex items-center justify-between px-4 py-2 bg-surface-800">
           <div className="flex items-center gap-4 text-xs">
-            <span className="text-text-muted font-mono">{url}</span>
+            <button
+              onClick={() => window.open(displayUrl, '_blank')}
+              className="text-text-muted hover:text-primary-400 font-mono transition-colors cursor-pointer underline decoration-dotted"
+              title="Open in external browser"
+              data-testid="browser-view-url"
+            >
+              {displayUrl}
+            </button>
             {environment.branch && (
-              <span className="text-text-muted">
+              <span className="text-text-muted flex items-center gap-2">
                 Branch: <span className="text-text-secondary font-medium">{environment.branch}</span>
+                {environment.base_branch && (
+                  <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                    environment.base_branch === 'dev'
+                      ? 'bg-purple-500/20 text-purple-300'
+                      : 'bg-blue-500/20 text-blue-300'
+                  }`}>
+                    {environment.base_branch}
+                  </span>
+                )}
               </span>
             )}
           </div>
@@ -464,11 +477,11 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
   )
 }
 
-interface EnvironmentDetailPanelProps {
+interface DetailViewProps {
   environment: UshadowEnvironment
   onStart: () => void
   onStop: () => void
-  onOpenInApp: () => void
+  onOpenInBrowser: () => void
   onMerge?: () => void
   onDelete?: () => void
   onAttachTmux?: () => void
@@ -476,18 +489,9 @@ interface EnvironmentDetailPanelProps {
   tmuxStatus?: TmuxStatus
 }
 
-function EnvironmentDetailPanel({
-  environment,
-  onStart,
-  onStop,
-  onOpenInApp,
-  onMerge,
-  onDelete,
-  isLoading,
-  tmuxStatus
-}: EnvironmentDetailPanelProps) {
+function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, onDelete, onAttachTmux, isLoading, tmuxStatus }: DetailViewProps) {
   const colors = getColors(environment.color || environment.name)
-  const localhostUrl = environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : null)
+  const displayUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
 
   const handleOpenVscode = () => {
     if (environment.path) {
@@ -504,172 +508,226 @@ function EnvironmentDetailPanel({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center gap-3 mb-2">
-          <div
-            className={`w-3 h-3 rounded-full ${environment.running ? 'animate-pulse' : ''}`}
-            style={{
-              backgroundColor: environment.running ? colors.primary : '#4a4a4a',
-              boxShadow: environment.running ? `0 0 12px ${colors.primary}` : undefined,
-            }}
-          />
-          <h2 className="text-2xl font-bold" style={{ color: environment.running ? colors.primary : '#888' }}>
-            {environment.name}
-          </h2>
-          {environment.is_worktree && (
-            <span className="px-2 py-1 text-xs rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">
-              Worktree
-            </span>
-          )}
-        </div>
-        {environment.branch && (
-          <p className="text-sm text-text-muted">Branch: {environment.branch}</p>
-        )}
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex gap-3 mb-6">
-        {environment.running ? (
-          <>
-            <button
-              onClick={onOpenInApp}
-              className="px-4 py-2 rounded-lg bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors flex items-center gap-2 font-medium"
-            >
-              <AppWindow className="w-5 h-5" />
-              View in Panel
-            </button>
-            <button
-              onClick={onStop}
-              disabled={isLoading}
-              className="px-4 py-2 rounded-lg bg-surface-600/50 text-text-secondary hover:bg-surface-600 transition-colors disabled:opacity-50 flex items-center gap-2 font-medium"
-            >
-              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Square className="w-5 h-5" />}
-              Stop
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={onStart}
-            disabled={isLoading}
-            className="px-4 py-2 rounded-lg bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors disabled:opacity-50 flex items-center gap-2 font-medium"
-          >
-            {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
-            Start Environment
-          </button>
-        )}
-      </div>
-
-      {/* Details Grid */}
-      <div className="flex-1 space-y-4 overflow-y-auto">
-        {/* URLs */}
-        {environment.running && (
-          <div className="bg-surface-700/30 rounded-lg p-4">
-            <h3 className="text-sm font-semibold mb-3 text-text-secondary">URLs</h3>
-            <div className="space-y-2">
-              {localhostUrl && (
-                <div className="w-full text-left px-3 py-2 rounded bg-surface-600/50 text-sm text-primary-400 font-mono">
-                  {localhostUrl}
-                </div>
-              )}
-              {environment.tailscale_url && (
-                <div className="w-full text-left px-3 py-2 rounded bg-surface-600/50 text-sm text-cyan-400 font-mono">
-                  {environment.tailscale_url}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Containers */}
-        {environment.containers.length > 0 && (
-          <div className="bg-surface-700/30 rounded-lg p-4">
-            <h3 className="text-sm font-semibold mb-3 text-text-secondary">Containers</h3>
-            <div className="flex flex-wrap gap-2">
-              {environment.containers.map((container) => (
-                <span
-                  key={container}
-                  className="px-3 py-1.5 rounded bg-surface-600/50 text-text-muted text-sm"
-                >
-                  {container.replace('ushadow-', '').replace(`${environment.name}-`, '')}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Path */}
-        {environment.path && (
-          <div className="bg-surface-700/30 rounded-lg p-4">
-            <h3 className="text-sm font-semibold mb-3 text-text-secondary">Location</h3>
-            <p className="text-sm text-text-muted font-mono">{environment.path}</p>
-            <div className="flex gap-2 mt-3">
+      {/* Enhanced Header - matching BrowserView structure */}
+      <div className="border-b border-surface-700" data-testid="detail-view-header">
+        {/* Top Row - Environment Info */}
+        <div className="flex items-center justify-between px-4 py-3 bg-surface-750">
+          <div className="flex items-center gap-3">
+            {environment.running && (
               <button
-                onClick={handleOpenVscode}
-                className="px-3 py-2 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors flex items-center gap-2 text-sm"
+                onClick={onOpenInBrowser}
+                className="p-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors"
+                title="View in panel"
+                data-testid="detail-view-forward"
               >
-                <img src="/vscode48.png" alt="VS Code" className="w-4 h-4" />
-                Open in VS Code
+                <ArrowRight className="w-4 h-4" />
               </button>
+            )}
+            <div className="flex items-center gap-2">
+              <div
+                className="w-2.5 h-2.5 rounded-full animate-pulse"
+                style={{ backgroundColor: colors.primary, boxShadow: `0 0 10px ${colors.primary}` }}
+              />
+              <span className="font-semibold text-lg" style={{ color: colors.primary }}>
+                {environment.name}
+              </span>
               {environment.is_worktree && (
-                <button
-                  onClick={handleOpenTerminal}
-                  className="px-3 py-2 rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors flex items-center gap-2 text-sm"
-                >
-                  <img src="/iterm-icon.png" alt="Terminal" className="w-4 h-4" />
-                  Open Terminal
-                </button>
+                <span className="px-2 py-0.5 text-xs rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                  Worktree
+                </span>
               )}
             </div>
           </div>
-        )}
 
-        {/* Ports */}
-        {(environment.backend_port || environment.webui_port) && (
-          <div className="bg-surface-700/30 rounded-lg p-4">
-            <h3 className="text-sm font-semibold mb-3 text-text-secondary">Ports</h3>
-            <div className="space-y-1 text-sm">
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2">
+            {environment.path && (
+              <>
+                <button
+                  onClick={handleOpenVscode}
+                  className="px-3 py-1.5 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors text-sm flex items-center gap-2"
+                  title="Open in VS Code"
+                  data-testid="detail-view-vscode"
+                >
+                  <img src="/vscode48.png" alt="VS Code" className="w-4 h-4" />
+                  <span className="hidden sm:inline">VS Code</span>
+                </button>
+                {environment.is_worktree && (
+                  <button
+                    onClick={handleOpenTerminal}
+                    className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors text-sm flex items-center gap-2"
+                    title="Open Terminal"
+                    data-testid="detail-view-terminal"
+                  >
+                    <Terminal className="w-4 h-4" />
+                    <span className="hidden sm:inline">Terminal</span>
+                  </button>
+                )}
+              </>
+            )}
+            {environment.running ? (
+              <button
+                onClick={onStop}
+                disabled={isLoading}
+                className="px-3 py-1.5 rounded-lg bg-surface-600/50 text-text-secondary hover:bg-surface-600 transition-colors disabled:opacity-50 text-sm flex items-center gap-2"
+                title="Stop environment"
+                data-testid="detail-view-stop"
+              >
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+                <span className="hidden sm:inline">Stop</span>
+              </button>
+            ) : (
+              <button
+                onClick={onStart}
+                disabled={isLoading}
+                className="px-3 py-1.5 rounded-lg bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors disabled:opacity-50 text-sm flex items-center gap-2"
+                title="Start environment"
+                data-testid="detail-view-start"
+              >
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                <span className="hidden sm:inline">Start</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Bottom Row - URL and Details */}
+        {displayUrl && (
+          <div className="flex items-center justify-between px-4 py-2 bg-surface-800">
+            <div className="flex items-center gap-4 text-xs">
+              <button
+                onClick={() => window.open(displayUrl, '_blank')}
+                className="text-text-muted hover:text-primary-400 font-mono transition-colors cursor-pointer underline decoration-dotted"
+                title="Open in external browser"
+                data-testid="detail-view-url"
+              >
+                {displayUrl}
+              </button>
+              {environment.branch && (
+                <span className="text-text-muted flex items-center gap-2">
+                  Branch: <span className="text-text-secondary font-medium">{environment.branch}</span>
+                  {environment.base_branch && (
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                      environment.base_branch === 'dev'
+                        ? 'bg-purple-500/20 text-purple-300'
+                        : 'bg-blue-500/20 text-blue-300'
+                    }`}>
+                      {environment.base_branch}
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3 text-xs text-text-muted">
               {environment.backend_port && (
-                <div className="flex justify-between">
-                  <span className="text-text-muted">Backend:</span>
-                  <span className="text-text-primary font-mono">{environment.backend_port}</span>
-                </div>
+                <span>Backend: <span className="font-mono text-text-secondary">{environment.backend_port}</span></span>
               )}
               {environment.webui_port && (
-                <div className="flex justify-between">
-                  <span className="text-text-muted">Web UI:</span>
-                  <span className="text-text-primary font-mono">{environment.webui_port}</span>
-                </div>
+                <span>WebUI: <span className="font-mono text-text-secondary">{environment.webui_port}</span></span>
               )}
             </div>
           </div>
         )}
+      </div>
 
-        {/* Advanced Actions */}
+      {/* Content */}
+      <div className="flex-1 p-6 overflow-auto">
+        <EnvironmentDetailPanel
+          environment={environment}
+          onMerge={onMerge}
+          onDelete={onDelete}
+          isLoading={isLoading}
+        />
+      </div>
+    </div>
+  )
+}
+
+interface EnvironmentDetailPanelProps {
+  environment: UshadowEnvironment
+  onMerge?: () => void
+  onDelete?: () => void
+  isLoading: boolean
+}
+
+function EnvironmentDetailPanel({
+  environment,
+  onMerge,
+  onDelete,
+  isLoading,
+}: EnvironmentDetailPanelProps) {
+  return (
+    <div className="space-y-4">
+      {/* Containers */}
+      {environment.containers.length > 0 && (
         <div className="bg-surface-700/30 rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-3 text-text-secondary">Advanced</h3>
-          <div className="flex gap-2">
-            {environment.is_worktree && onMerge && (
-              <button
-                onClick={onMerge}
-                disabled={isLoading || environment.running}
-                className="px-3 py-2 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors disabled:opacity-50 flex items-center gap-2 text-sm font-medium"
+          <h3 className="text-sm font-semibold mb-3 text-text-secondary">Containers</h3>
+          <div className="flex flex-wrap gap-2">
+            {environment.containers.map((container) => (
+              <span
+                key={container}
+                className="px-3 py-1.5 rounded bg-surface-600/50 text-text-muted text-sm"
               >
-                <GitMerge className="w-4 h-4" />
-                Merge & Cleanup
-              </button>
+                {container.replace('ushadow-', '').replace(`${environment.name}-`, '')}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Path */}
+      {environment.path && (
+        <div className="bg-surface-700/30 rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-3 text-text-secondary">Location</h3>
+          <p className="text-sm text-text-muted font-mono">{environment.path}</p>
+        </div>
+      )}
+
+      {/* Ports */}
+      {(environment.backend_port || environment.webui_port) && (
+        <div className="bg-surface-700/30 rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-3 text-text-secondary">Ports</h3>
+          <div className="space-y-1 text-sm">
+            {environment.backend_port && (
+              <div className="flex justify-between">
+                <span className="text-text-muted">Backend:</span>
+                <span className="text-text-primary font-mono">{environment.backend_port}</span>
+              </div>
             )}
-            {onDelete && (
-              <button
-                onClick={onDelete}
-                disabled={isLoading}
-                className="px-3 py-2 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50 flex items-center gap-2 text-sm font-medium"
-              >
-                <X className="w-4 h-4" />
-                Delete
-              </button>
+            {environment.webui_port && (
+              <div className="flex justify-between">
+                <span className="text-text-muted">Web UI:</span>
+                <span className="text-text-primary font-mono">{environment.webui_port}</span>
+              </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Advanced Actions */}
+      <div className="bg-surface-700/30 rounded-lg p-4">
+        <h3 className="text-sm font-semibold mb-3 text-text-secondary">Advanced</h3>
+        <div className="flex gap-2">
+          {environment.is_worktree && onMerge && (
+            <button
+              onClick={onMerge}
+              disabled={isLoading || environment.running}
+              className="px-3 py-2 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors disabled:opacity-50 flex items-center gap-2 text-sm font-medium"
+            >
+              <GitMerge className="w-4 h-4" />
+              Merge & Cleanup
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              disabled={isLoading}
+              className="px-3 py-2 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50 flex items-center gap-2 text-sm font-medium"
+            >
+              <X className="w-4 h-4" />
+              Delete
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -752,7 +810,7 @@ function EnvironmentCard({ environment, onStart, onStop, isLoading, isSelected, 
       className={`group p-3 rounded-lg transition-all duration-300 ease-out cursor-pointer relative border ${
         isSelected
           ? 'ml-4 scale-105 border-surface-500'
-          : 'hover:scale-105 ml-0 border-surface-700'
+          : 'hover:scale-[1.02] ml-0 border-surface-700'
       }`}
       style={{
         backgroundColor: environment.running ? `${colors.dark}15` : 'rgba(45, 45, 55, 0.3)',
@@ -827,6 +885,15 @@ function EnvironmentCard({ environment, onStart, onStop, isLoading, isSelected, 
             {environment.name}
           </span>
         </div>
+        {environment.base_branch && (
+          <span className={`px-1.5 py-0.5 rounded text-xs font-bold flex-shrink-0 ${
+            environment.base_branch === 'dev'
+              ? 'bg-purple-500/30 text-purple-200'
+              : 'bg-blue-500/30 text-blue-200'
+          }`}>
+            {environment.base_branch}
+          </span>
+        )}
       </div>
     </div>
   )

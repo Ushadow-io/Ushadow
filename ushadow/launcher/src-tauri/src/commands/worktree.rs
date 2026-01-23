@@ -728,7 +728,7 @@ pub async fn create_worktree_with_workmux(
     main_repo: String,
     name: String,
     base_branch: Option<String>,
-    background: Option<bool>,
+    _background: Option<bool>,
 ) -> Result<WorktreeInfo, String> {
     // Force lowercase to avoid Docker Compose naming issues
     let name = name.to_lowercase();
@@ -1317,7 +1317,7 @@ end tell"#,
     {
         // For Linux/Windows - create dedicated tmux session per environment
         // Try common terminal emulators in order of preference
-        let env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
+        let _env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
 
         // Create the tmux session if it doesn't exist
         let _ = shell_command(&format!(
@@ -1325,12 +1325,16 @@ end tell"#,
             window_name, window_name, worktree_path
         )).output();
 
+        // Create tmux commands before the array to extend their lifetime
+        let xfce_cmd = format!("tmux attach-session -t {}", window_name);
+        let xterm_cmd = format!("tmux attach-session -t {}", window_name);
+
         // Try different terminal emulators
         let terminals = vec![
             ("gnome-terminal", vec!["--", "tmux", "attach-session", "-t", &window_name]),
             ("konsole", vec!["-e", "tmux", "attach-session", "-t", &window_name]),
-            ("xfce4-terminal", vec!["-e", &format!("tmux attach-session -t {}", window_name)]),
-            ("xterm", vec!["-e", &format!("tmux attach-session -t {}", window_name)]),
+            ("xfce4-terminal", vec!["-e", xfce_cmd.as_str()]),
+            ("xterm", vec!["-e", xterm_cmd.as_str()]),
         ];
 
         for (terminal, args) in terminals {

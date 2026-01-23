@@ -18,6 +18,14 @@ export default function EnvironmentFooter() {
   // Only show environment indicator in development mode
   const showEnvIndicator = nodeEnv === 'development' && envName
 
+  // Check if we're running inside the launcher (via query parameter)
+  const isInLauncher = new URLSearchParams(window.location.search).has('launcher')
+
+  // Don't render footer when in launcher
+  if (isInLauncher) {
+    return null
+  }
+
   return (
     <footer
       className={`mt-auto ${showEnvIndicator ? `${bg} border-t-2 ${border}` : ''}`}

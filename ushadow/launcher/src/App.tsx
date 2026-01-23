@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment } from './hooks/useTauri'
-import { useAppStore } from './store/appStore'
+import { useAppStore, type BranchType } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
 import { writeText, readText } from '@tauri-apps/api/clipboard'
@@ -15,6 +15,7 @@ import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
+import { BranchToggle } from './components/BranchToggle'
 import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
 import { getColors } from './utils/colors'
 
@@ -24,6 +25,8 @@ function App() {
     dryRunMode,
     showDevTools,
     setShowDevTools,
+    logExpanded,
+    setLogExpanded,
     appMode,
     setAppMode,
     spoofedPrereqs,
@@ -32,6 +35,16 @@ function App() {
     setProjectRoot,
     worktreesDir,
     setWorktreesDir,
+    activeBranch,
+    setActiveBranch,
+    mainBranchPath,
+    setMainBranchPath,
+    devBranchPath,
+    setDevBranchPath,
+    mainWorktreesPath,
+    setMainWorktreesPath,
+    devWorktreesPath,
+    setDevWorktreesPath,
   } = useAppStore()
 
   // State
@@ -45,10 +58,10 @@ function App() {
   const [loadingInfra, setLoadingInfra] = useState(false)
   const [loadingEnv, setLoadingEnv] = useState<string | null>(null)
   const [showProjectDialog, setShowProjectDialog] = useState(false)
+  const [dialogBranchContext, setDialogBranchContext] = useState<BranchType | undefined>(undefined)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
-  const [logExpanded, setLogExpanded] = useState(true)
   const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string; envPath: string | null } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
@@ -288,18 +301,30 @@ function App() {
 
       const defaultDir = await tauri.getDefaultProjectDir()
 
+      // Migration: if old projectRoot exists but new fields are empty, migrate to branch-aware storage
+      if (projectRoot && !mainBranchPath) {
+        log('Migrating to branch-aware storage...', 'info')
+        setMainBranchPath(projectRoot)
+        setMainWorktreesPath(worktreesDir || `${projectRoot}/../worktrees/ushadow`)
+        setActiveBranch('main')
+        log('Migration complete', 'success')
+      }
+
       // Track if this is first time setup (showing project dialog)
       let isFirstTimeSetup = false
 
       // Show project setup dialog on first launch if no project root is configured
-      if (!projectRoot) {
+      if (!projectRoot && !mainBranchPath) {
         setProjectRoot(defaultDir)
         setShowProjectDialog(true)
         isFirstTimeSetup = true
         log('Please configure your repository location', 'step')
       } else {
         // Sync existing project root to Rust backend
-        await tauri.setProjectRoot(projectRoot)
+        const currentRoot = mainBranchPath || projectRoot
+        if (currentRoot) {
+          await tauri.setProjectRoot(currentRoot)
+        }
       }
 
       // Check prerequisites immediately (system-wide, no project needed)
@@ -712,8 +737,9 @@ function App() {
     }
   }
 
-  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null; path: string | null }) => {
-    const url = env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
+  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; tailscale_url?: string | null; webui_port: number | null; backend_port: number | null; path: string | null }) => {
+    // Prefer Tailscale URL if available, otherwise use localhost
+    const url = env.tailscale_url || env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
     setEmbeddedView({ url, envName: env.name, envColor: colors.primary, envPath: env.path })
@@ -992,42 +1018,61 @@ function App() {
     setShowProjectDialog(false)
 
     try {
-      // Save the project root and worktrees directory
-      await tauri.setProjectRoot(path)
-      setProjectRoot(path)
-      setWorktreesDir(worktreesPath)
-      log(`Installation path set to ${path}`, 'success')
+      // Save to branch-specific paths
+      const targetBranch = dialogBranchContext || activeBranch
+      if (targetBranch === 'dev') {
+        setDevBranchPath(path)
+        setDevWorktreesPath(worktreesPath)
+        log(`Dev branch path set to ${path}`, 'success')
+      } else {
+        setMainBranchPath(path)
+        setMainWorktreesPath(worktreesPath)
+        log(`Main branch path set to ${path}`, 'success')
+      }
       log(`Worktrees directory set to ${worktreesPath}`, 'info')
 
-      // Check if repo already exists
-      const status = await tauri.checkProjectDir(path)
+      // If this matches the active branch, update current paths too
+      if (targetBranch === activeBranch) {
+        await tauri.setProjectRoot(path)
+        setProjectRoot(path)
+        setWorktreesDir(worktreesPath)
 
-      if (status.exists && status.is_valid_repo) {
-        // Existing repo found - run discovery
-        log('Found existing Ushadow repository', 'info')
-        const disc = await refreshDiscovery()
+        // Check if repo already exists
+        const status = await tauri.checkProjectDir(path)
 
-        // Auto-switch to quick mode if no environments exist
-        if (disc && disc.environments.length === 0) {
+        if (status.exists && status.is_valid_repo) {
+          // Existing repo found - run discovery
+          log('Found existing Ushadow repository', 'info')
+          const disc = await refreshDiscovery()
+
+          // Auto-switch to quick mode if no environments exist
+          if (disc && disc.environments.length === 0) {
+            setAppMode('quick')
+            log('Ready for quick launch', 'step')
+          }
+        } else {
+          // Repo doesn't exist - will be cloned when user presses Launch
           setAppMode('quick')
-          log('Ready for quick launch', 'step')
+          log('Press Launch to install Ushadow', 'step')
         }
       } else {
-        // Repo doesn't exist - will be cloned when user presses Launch
-        setAppMode('quick')
-        log('Press Launch to install Ushadow', 'step')
+        // Different branch than active - just saved the path
+        log(`${targetBranch} branch configured (currently on ${activeBranch})`, 'info')
       }
+
+      // Reset dialog context
+      setDialogBranchContext(undefined)
     } catch (err) {
       log(`Failed to set installation path`, 'error', false)
       log(String(err), 'error', true)
     }
   }
 
-  const handleClone = async (path: string) => {
+  const handleClone = async (path: string, branch?: string) => {
     try {
-      console.log('DEBUG handleClone: Starting clone for path:', path)
+      console.log('DEBUG handleClone: Starting clone for path:', path, 'branch:', branch)
       console.log('DEBUG handleClone: dryRunMode =', dryRunMode)
-      
+
       // Check if repo already exists at this location
       const status = await tauri.checkProjectDir(path)
       console.log('DEBUG handleClone: checkProjectDir status =', status)
@@ -1044,14 +1089,15 @@ function App() {
         }
       } else {
         // No repo - clone fresh
-        log(`Cloning Ushadow to ${path}...`, 'step')
+        const branchMsg = branch ? ` (branch: ${branch})` : ''
+        log(`Cloning Ushadow to ${path}${branchMsg}...`, 'step')
         if (dryRunMode) {
-          log('[DRY RUN] Would clone repository', 'warning')
+          log(`[DRY RUN] Would clone repository${branchMsg}`, 'warning')
           await new Promise(r => setTimeout(r, 2000))
           log('[DRY RUN] Clone simulated', 'success')
         } else {
-          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path)
-          const result = await tauri.cloneUshadowRepo(path)
+          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path, 'branch:', branch)
+          const result = await tauri.cloneUshadowRepo(path, branch)
           console.log('DEBUG handleClone: Clone result from Rust:', result)
           log(result, 'success')
         }
@@ -1082,6 +1128,63 @@ function App() {
       }
     } catch (err) {
       log(`Failed to link: ${err}`, 'error')
+    }
+  }
+
+  const handleSwitchBranch = async (newBranch: BranchType) => {
+    if (activeBranch === newBranch) return
+
+    // Note: Running environments will continue running in the background.
+    // They're Docker containers that are independent of branch switching.
+    log(`Switching to ${newBranch} branch...`, 'step')
+
+    // Get target path
+    const targetPath = newBranch === 'main' ? mainBranchPath : devBranchPath
+    const targetWorktreesPath = newBranch === 'main' ? mainWorktreesPath : devWorktreesPath
+
+    // If not configured, show setup dialog
+    if (!targetPath) {
+      setDialogBranchContext(newBranch)
+      setShowProjectDialog(true)
+      log(`Please configure ${newBranch} branch location`, 'step')
+      return
+    }
+
+    try {
+      // Check if repo exists at path
+      const status = await tauri.checkProjectDir(targetPath)
+
+      if (!status.is_valid_repo) {
+        if (status.exists) {
+          log(`Directory exists at ${targetPath} but is not a valid repo`, 'warning')
+        }
+        log(`Cloning ${newBranch} branch...`, 'step')
+        await handleClone(targetPath, newBranch)
+      } else {
+        // Verify and checkout correct branch
+        try {
+          const currentBranch = await tauri.getCurrentBranch(targetPath)
+          if (currentBranch !== newBranch) {
+            log(`Checking out ${newBranch} branch...`, 'step')
+            await tauri.checkoutBranch(targetPath, newBranch)
+          }
+          await tauri.updateUshadowRepo(targetPath)
+        } catch (err) {
+          log(`Branch verification failed: ${err}`, 'warning')
+        }
+      }
+
+      // Switch active branch
+      setActiveBranch(newBranch)
+      await tauri.setProjectRoot(targetPath)
+      setProjectRoot(targetPath)
+      setWorktreesDir(targetWorktreesPath)
+
+      // Refresh discovery
+      log(`Switched to ${newBranch} branch`, 'success')
+      await refreshDiscovery()
+    } catch (err) {
+      log(`Failed to switch branch: ${err}`, 'error')
     }
   }
 
@@ -1371,6 +1474,13 @@ function App() {
               </p>
             </div>
 
+            {/* Branch Selector */}
+            <BranchToggle
+              activeBranch={activeBranch}
+              onSwitch={handleSwitchBranch}
+              disabled={isLaunching}
+            />
+
             {/* Project Folder Display */}
             <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
               <FolderOpen className="w-4 h-4 text-text-muted" />
@@ -1548,8 +1658,17 @@ function App() {
         isOpen={showProjectDialog}
         defaultPath={projectRoot}
         defaultWorktreesPath={worktreesDir}
-        onClose={() => setShowProjectDialog(false)}
+        onClose={() => {
+          setShowProjectDialog(false)
+          setDialogBranchContext(undefined)
+        }}
         onSetup={handleProjectSetup}
+        branchContext={dialogBranchContext}
+        suggestedParentPath={
+          dialogBranchContext === 'dev' && mainBranchPath
+            ? mainBranchPath.split('/').slice(0, -1).join('/')
+            : undefined
+        }
       />
 
       {/* New Environment Dialog */}

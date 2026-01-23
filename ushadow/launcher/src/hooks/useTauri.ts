@@ -34,6 +34,7 @@ export interface UshadowEnvironment {
   path: string | null
   branch: string | null
   is_worktree: boolean
+  base_branch: string | null  // "main" or "dev" - which base branch this worktree was created from
 }
 
 // Legacy alias for backward compatibility
@@ -78,8 +79,11 @@ export const tauri = {
   getDefaultProjectDir: () => invoke<string>('get_default_project_dir'),
   setProjectRoot: (path: string) => invoke<void>('set_project_root', { path }),
   checkProjectDir: (path: string) => invoke<{ path: string | null; exists: boolean; is_valid_repo: boolean }>('check_project_dir', { path }),
-  cloneUshadowRepo: (targetDir: string) => invoke<string>('clone_ushadow_repo', { targetDir }),
+  cloneUshadowRepo: (targetDir: string, branch?: string) => invoke<string>('clone_ushadow_repo', { targetDir, branch }),
   updateUshadowRepo: (projectDir: string) => invoke<string>('update_ushadow_repo', { projectDir }),
+  getCurrentBranch: (path: string) => invoke<string>('get_current_branch', { path }),
+  checkoutBranch: (path: string, branch: string) => invoke<string>('checkout_branch', { path, branch }),
+  getBaseBranch: (repoPath: string, branch: string) => invoke<string | null>('get_base_branch', { repoPath, branch }),
 
   // Infrastructure management
   startInfrastructure: () => invoke<string>('start_infrastructure'),

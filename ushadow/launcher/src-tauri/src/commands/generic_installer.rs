@@ -1,5 +1,6 @@
 use super::prerequisites_config::{PrerequisitesConfig, InstallationMethod};
 use super::utils::{silent_command, shell_command};
+#[cfg(target_os = "macos")]
 use super::installer::{check_brew_installed, get_brew_path};
 use std::process::Command;
 
@@ -55,7 +56,7 @@ pub async fn start_prerequisite(prerequisite_id: String) -> Result<String, Strin
 async fn execute_installation(
     prereq_id: &str,
     method: &InstallationMethod,
-    platform: &str,
+    _platform: &str,
 ) -> Result<String, String> {
     match method.method.as_str() {
         "homebrew" => install_via_homebrew(prereq_id, method).await,
@@ -69,6 +70,7 @@ async fn execute_installation(
 }
 
 /// Install via Homebrew (macOS)
+#[cfg(target_os = "macos")]
 async fn install_via_homebrew(prereq_id: &str, method: &InstallationMethod) -> Result<String, String> {
     if !check_brew_installed() {
         return Err("Homebrew is not installed".to_string());
@@ -126,6 +128,11 @@ async fn install_via_homebrew(prereq_id: &str, method: &InstallationMethod) -> R
             Err(format!("Homebrew install failed: {}", stderr))
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn install_via_homebrew(_prereq_id: &str, _method: &InstallationMethod) -> Result<String, String> {
+    Err("Homebrew installation is only available on macOS".to_string())
 }
 
 /// Install via winget (Windows)

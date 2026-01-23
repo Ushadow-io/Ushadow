@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use crate::models::{DiscoveryResult, EnvironmentStatus, InfraService, UshadowEnvironment, WorktreeInfo};
 use super::prerequisites::{check_docker, check_tailscale};
 use super::utils::silent_command;
@@ -13,6 +13,88 @@ const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("neo4j", "Neo4j"),
     ("qdrant", "Qdrant"),
 ];
+
+/// Determine base branch using git merge-base
+/// Finds which branch (main or dev) is the closest ancestor
+fn determine_base_branch(repo_path: &str, branch: &str) -> Option<String> {
+    // Special case: if branch is exactly main or dev
+    if branch == "main" || branch == "master" {
+        return Some("main".to_string());
+    }
+    if branch == "dev" {
+        return Some("dev".to_string());
+    }
+
+    // Get merge-base with dev
+    let dev_merge_base = silent_command("git")
+        .args(["-C", repo_path, "merge-base", branch, "dev"])
+        .output();
+
+    // Get merge-base with main
+    let main_merge_base = silent_command("git")
+        .args(["-C", repo_path, "merge-base", branch, "main"])
+        .output();
+
+    if let (Ok(dev_out), Ok(main_out)) = (dev_merge_base, main_merge_base) {
+        if dev_out.status.success() && main_out.status.success() {
+            let dev_base = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
+            let main_base = String::from_utf8_lossy(&main_out.stdout).trim().to_string();
+
+            // If the merge-bases are different, the branch is based on whichever is more recent
+            if dev_base != main_base {
+                // Check if dev_base is an ancestor of main_base (meaning main is more recent)
+                let check = silent_command("git")
+                    .args(["-C", repo_path, "merge-base", "--is-ancestor", &dev_base, &main_base])
+                    .output();
+
+                if let Ok(output) = check {
+                    if output.status.success() {
+                        // dev_base is ancestor of main_base, so main is the closer base
+                        return Some("main".to_string());
+                    } else {
+                        // dev_base is NOT an ancestor of main_base, so dev is the closer base
+                        return Some("dev".to_string());
+                    }
+                }
+            } else {
+                // Merge bases are the same - check which branch tip is closer
+                // Count commits from branch to dev
+                let dev_count = silent_command("git")
+                    .args(["-C", repo_path, "rev-list", "--count", &format!("{}..{}", "dev", branch)])
+                    .output();
+
+                let main_count = silent_command("git")
+                    .args(["-C", repo_path, "rev-list", "--count", &format!("{}..{}", "main", branch)])
+                    .output();
+
+                if let (Ok(dev_c), Ok(main_c)) = (dev_count, main_count) {
+                    if dev_c.status.success() && main_c.status.success() {
+                        let dev_commits = String::from_utf8_lossy(&dev_c.stdout).trim().parse::<i32>().unwrap_or(999);
+                        let main_commits = String::from_utf8_lossy(&main_c.stdout).trim().parse::<i32>().unwrap_or(999);
+
+                        // Fewer commits = closer base
+                        if dev_commits < main_commits {
+                            return Some("dev".to_string());
+                        } else {
+                            return Some("main".to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to path-based detection
+    if repo_path.contains("/ushadow-dev/") || repo_path.contains("/worktrees-dev/") ||
+       repo_path.contains("\\ushadow-dev\\") || repo_path.contains("\\worktrees-dev\\") {
+        Some("dev".to_string())
+    } else if repo_path.contains("/ushadow/") || repo_path.contains("/worktrees/") ||
+              repo_path.contains("\\ushadow\\") || repo_path.contains("\\worktrees\\") {
+        Some("main".to_string())
+    } else {
+        None
+    }
+}
 
 /// Environment container info
 struct EnvContainerInfo {
@@ -218,6 +300,8 @@ pub async fn discover_environments_with_config(
             (None, None) => None,
         };
 
+        let base_branch = determine_base_branch(&wt.path, &wt.branch);
+
         environments.push(UshadowEnvironment {
             name: name.clone(),
             color: primary,
@@ -233,6 +317,7 @@ pub async fn discover_environments_with_config(
             containers,
             is_worktree: true,
             created_at: final_created_at,
+            base_branch,
         });
     }
 
@@ -259,6 +344,19 @@ pub async fn discover_environments_with_config(
         };
 
         let running = status == EnvironmentStatus::Running;
+        // For non-worktree environments, we don't have a branch name, so just use path-based detection
+        let base_branch = info.working_dir.as_ref().and_then(|wd| {
+            if wd.contains("/ushadow-dev/") || wd.contains("/worktrees-dev/") ||
+               wd.contains("\\ushadow-dev\\") || wd.contains("\\worktrees-dev\\") {
+                Some("dev".to_string())
+            } else if wd.contains("/ushadow/") || wd.contains("/worktrees/") ||
+                      wd.contains("\\ushadow\\") || wd.contains("\\worktrees\\") {
+                Some("main".to_string())
+            } else {
+                None
+            }
+        });
+
         environments.push(UshadowEnvironment {
             name: name.clone(),
             color: primary,
@@ -274,6 +372,7 @@ pub async fn discover_environments_with_config(
             containers: info.containers,
             is_worktree: false,
             created_at: info.created_at,
+            base_branch,
         });
     }
 
@@ -376,7 +475,7 @@ fn get_container_working_dir(container_name: &str) -> Option<String> {
         return None;
     }
 
-    let working_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let _working_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     // Docker returns the working dir inside the container (e.g., "/app")
     // We need to map this to the host path using volume mounts
