@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
+import { ToastProvider } from './contexts/ToastContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
 import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
@@ -131,18 +132,20 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <VibeKanbanWebCompanion />
-        <AuthProvider>
-          <FeatureFlagsProvider>
-            <WizardProvider>
-              <ChronicleProvider>
-                <BrowserRouter basename={getBasename()}>
-                  <AppContent />
-                </BrowserRouter>
-              </ChronicleProvider>
-            </WizardProvider>
-          </FeatureFlagsProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <VibeKanbanWebCompanion />
+          <AuthProvider>
+            <FeatureFlagsProvider>
+              <WizardProvider>
+                <ChronicleProvider>
+                  <BrowserRouter basename={getBasename()}>
+                    <AppContent />
+                  </BrowserRouter>
+                </ChronicleProvider>
+              </WizardProvider>
+            </FeatureFlagsProvider>
+          </AuthProvider>
+        </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>
   )

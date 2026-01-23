@@ -22,15 +22,14 @@ from src.models.unode import UNode
 from src.models.deploy_target import DeployTarget
 from src.services.compose_registry import get_compose_registry
 from src.services.deployment_platforms import get_deploy_platform
+from src.utils.environment import is_local_deployment as env_is_local_deployment
 
 logger = logging.getLogger(__name__)
 
 
 def _is_local_deployment(unode_hostname: str) -> bool:
-    """Check if deployment is to the local node (same COMPOSE_PROJECT_NAME)."""
-    env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
-    # Local if hostname matches environment name or is the local machine
-    return unode_hostname == env_name or unode_hostname == "localhost"
+    """Check if deployment is to the local node."""
+    return env_is_local_deployment(unode_hostname)
 
 
 def _update_tailscale_serve_route(service_id: str, container_name: str, port: int, add: bool = True) -> bool:
@@ -666,11 +665,15 @@ class DeploymentManager:
         if not deployment:
             raise ValueError(f"Deployment not found: {deployment_id}")
 
-        unode_dict = await self.unodes_collection.find_one({
-            "hostname": deployment.unode_hostname
-        })
-        if not unode_dict:
-            raise ValueError(f"U-node not found: {deployment.unode_hostname}")
+        # Check if this is a local deployment
+        if _is_local_deployment(deployment.unode_hostname):
+            # Local deployment - use Docker API directly
+            try:
+                import docker
+                docker_client = docker.from_env()
+                container = docker_client.containers.get(deployment.container_id or deployment.container_name)
+                container.stop()
+                logger.info(f"Stopped local container {deployment.container_name}")
 
         unode = UNode(**unode_dict)
 
@@ -705,12 +708,18 @@ class DeploymentManager:
             if success:
                 deployment.status = DeploymentStatus.STOPPED
                 deployment.stopped_at = datetime.now(timezone.utc)
-            else:
-                deployment.error = "Stop failed"
 
-        except Exception as e:
-            logger.error(f"Stop failed for deployment {deployment_id}: {e}")
-            deployment.error = str(e)
+            except Exception as e:
+                logger.error(f"Failed to stop local deployment {deployment_id}: {e}")
+                deployment.error = str(e)
+                deployment.status = DeploymentStatus.FAILED
+        else:
+            # Remote deployment - use unode manager API
+            unode_dict = await self.unodes_collection.find_one({
+                "hostname": deployment.unode_hostname
+            })
+            if not unode_dict:
+                raise ValueError(f"U-node not found: {deployment.unode_hostname}")
 
         # Stateless: Container state is source of truth, no database update needed
         return deployment
@@ -721,24 +730,32 @@ class DeploymentManager:
         if not deployment:
             raise ValueError(f"Deployment not found: {deployment_id}")
 
-        unode = await self.unodes_collection.find_one({
-            "hostname": deployment.unode_hostname
-        })
-        if not unode:
-            raise ValueError(f"U-node not found: {deployment.unode_hostname}")
+        # Check if this is a local deployment
+        if _is_local_deployment(deployment.unode_hostname):
+            # Local deployment - use Docker API directly
+            try:
+                import docker
+                docker_client = docker.from_env()
+                container = docker_client.containers.get(deployment.container_id or deployment.container_name)
+                container.start()
+                logger.info(f"Started local container {deployment.container_name}")
 
-        try:
-            result = await self._send_restart_command(unode, deployment.container_name)
-
-            if result.get("success"):
-                deployment.status = DeploymentStatus.RUNNING
+                # Refresh container status
+                container.reload()
+                deployment.status = DeploymentStatus.RUNNING if container.status == "running" else DeploymentStatus.STOPPED
                 deployment.stopped_at = None
-            else:
-                deployment.error = result.get("error", "Restart failed")
 
-        except Exception as e:
-            logger.error(f"Restart failed for deployment {deployment_id}: {e}")
-            deployment.error = str(e)
+            except Exception as e:
+                logger.error(f"Failed to restart local deployment {deployment_id}: {e}")
+                deployment.error = str(e)
+                deployment.status = DeploymentStatus.FAILED
+        else:
+            # Remote deployment - use unode manager API
+            unode = await self.unodes_collection.find_one({
+                "hostname": deployment.unode_hostname
+            })
+            if not unode:
+                raise ValueError(f"U-node not found: {deployment.unode_hostname}")
 
         # Stateless: Container state is source of truth, no database update needed
         return deployment
@@ -782,9 +799,63 @@ class DeploymentManager:
             platform = get_deploy_platform(target)
 
             try:
-                await platform.remove(target, deployment)
+                import docker
+                docker_client = docker.from_env()
+
+                # Get container
+                container = docker_client.containers.get(deployment.container_id or deployment.container_name)
+
+                # Stop if running
+                if container.status == "running":
+                    container.stop(timeout=10)
+                    logger.info(f"Stopped local container {deployment.container_name}")
+
+                # Remove container
+                container.remove()
+                logger.info(f"Removed local container {deployment.container_name}")
+
             except Exception as e:
-                logger.warning(f"Failed to remove deployment on node: {e}")
+                logger.error(f"Failed to remove local deployment {deployment_id}: {e}")
+                return False
+        else:
+            # Remote deployment - use unode manager API
+            unode_dict = await self.unodes_collection.find_one({
+                "hostname": deployment.unode_hostname
+            })
+
+            if unode_dict:
+                unode = UNode(**unode_dict)
+
+                # Create deployment target from unode with standardized fields
+                from src.models.unode import UNodeType, UNodeRole
+                from src.utils.deployment_targets import parse_deployment_target_id
+
+                parsed = parse_deployment_target_id(unode.deployment_target_id)
+                is_leader = unode.role == UNodeRole.LEADER
+
+                target = DeployTarget(
+                    id=unode.deployment_target_id,
+                    type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                    name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                    identifier=unode.hostname,
+                    environment=parsed["environment"],
+                    status=unode.status.value if unode.status else "unknown",
+                    provider="local" if is_leader else "remote",
+                    region=None,
+                    is_leader=is_leader,
+                    namespace=None,
+                    infrastructure=None,
+                    raw_metadata=unode.model_dump()
+                )
+
+                # Get appropriate deployment platform
+                platform = get_deploy_platform(target)
+
+                try:
+                    await platform.remove(target, deployment)
+                except Exception as e:
+                    logger.warning(f"Failed to remove deployment on node: {e}")
+                    return False
 
         # Remove tailscale serve route for local Docker deployments
         if deployment.backend_type == "docker" and _is_local_deployment(deployment.unode_hostname):

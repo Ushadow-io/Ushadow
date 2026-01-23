@@ -1,0 +1,111 @@
+# Ushadow self-deployment definition
+# Use your local ushadow instance to deploy itself to Kubernetes!
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  ushadow-backend:
+    display_name: "Ushadow Backend"
+    description: "Service orchestration platform backend (FastAPI)"
+    requires: []  # Ushadow is self-contained
+    route_path: /api  # Tailscale route for API
+  ushadow-frontend:
+    display_name: "Ushadow Frontend"
+    description: "Service orchestration platform UI (React)"
+    requires: []
+
+services:
+  ushadow-backend:
+    # Use pre-built image (built from source via build-ushadow-images.sh)
+    image: ghcr.io/ushadow-io/ushadow/backend:latest
+    # Or build from source (uncomment and comment image above)
+    # build:
+    #   context: ../ushadow/backend
+    #   dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-backend-k8s
+    ports:
+      - "8000:8000"
+    environment:
+      # Server configuration
+      - HOST=0.0.0.0
+      - PORT=8000
+      - REDIS_URL=${REDIS_URL:-redis://redis.root.svc.cluster.local:6379/0}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb.root.svc.cluster.local:27017/ushadow}
+
+      # Config directory (mounted from ConfigMap in K8s)
+      - CONFIG_DIR=/config
+
+      # CORS for frontend access
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://ushadow-frontend.ushadow.svc.cluster.local}
+
+      # Security
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+
+    volumes:
+      # Config directory - named volume creates PVC in K8s (read-write!)
+      # Docker Compose: Named volume "ushadow-config"
+      # K8s: PVC named "ushadow-config" mounted at /config
+      # Contains: config.yml, capabilities.yaml, wiring.yaml, kubeconfigs/, etc.
+      - ushadow-config:/config
+
+      # Compose templates (for service definitions)
+      # Named volume - creates PVC in K8s for persistent, read-write storage
+      # Initialize PVC with compose files on first deploy
+      - ushadow-compose:/compose
+
+      # Persistent data
+      - ushadow-data:/app/data
+
+    # NOTE: In K8s, we DON'T mount docker.sock or use docker-in-docker
+    # Service management is handled via kubectl to the K8s API
+
+    networks:
+      - infra-network
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    restart: unless-stopped
+
+  ushadow-frontend:
+    # Use pre-built image (built from source via build-ushadow-images.sh)
+    image: ghcr.io/ushadow-io/ushadow/frontend:latest
+    # Or build from source (uncomment and comment image above)
+    # build:
+    #   context: ../ushadow/frontend
+    #   dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-frontend-k8s
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://ushadow-backend.ushadow.svc.cluster.local:8000}
+      - VITE_ENV_NAME=${VITE_ENV_NAME:-k8s}
+      # BACKEND_HOST for nginx proxy (K8s service name)
+      - BACKEND_HOST=${BACKEND_HOST:-ushadow-backend}
+    networks:
+      - infra-network
+    depends_on:
+      - ushadow-backend
+    restart: unless-stopped
+
+volumes:
+  ushadow-config:
+    driver: local
+  ushadow-compose:
+    driver: local
+  ushadow-kubeconfigs:
+    driver: local
+  ushadow-data:
+    driver: local
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true
