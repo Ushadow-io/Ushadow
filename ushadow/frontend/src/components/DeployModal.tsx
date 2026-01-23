@@ -8,6 +8,7 @@ import { kubernetesApi, servicesApi, svcConfigsApi, deploymentsApi, DeployTarget
 interface DeployModalProps {
   isOpen: boolean
   onClose: () => void
+  onSuccess?: () => void  // Called after successful deployment
   target?: DeployTarget  // Optional - if not provided, show target selection
   availableTargets?: DeployTarget[]  // For target selection
   infraServices?: Record<string, any>  // K8s only - infrastructure scan data
@@ -23,7 +24,7 @@ interface ServiceOption {
   requires?: string[]
 }
 
-export default function DeployModal({ isOpen, onClose, target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployModalProps) {
+export default function DeployModal({ isOpen, onClose, onSuccess, target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployModalProps) {
   const [step, setStep] = useState<'target' | 'select' | 'configure' | 'deploying' | 'complete'>(
     !initialTarget && availableTargets.length > 1 ? 'target' :
     preselectedServiceId ? 'configure' : 'select'
@@ -137,25 +138,26 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
         console.log(`🔍 Checking env var ${envVar.name}:`, { infraValue, infraServices })
 
         if (infraValue) {
-          // Override with infrastructure value for K8s cluster-specific endpoints
-          // Mark as locked so user can't edit
+          // Pre-fill with infrastructure value for K8s cluster-specific endpoints
+          // Don't lock - user should be able to override if needed
           initialConfigs[envVar.name] = {
             name: envVar.name,
             source: 'new_setting',
             value: infraValue,
             new_setting_path: `api_keys.${envVar.name.toLowerCase()}`,
             setting_path: undefined,
-            locked: true,
+            locked: false,  // Allow editing - infra values are suggestions, not requirements
             provider_name: 'K8s Infrastructure'
           }
         } else {
           // Use data from API response (backend already mapped to settings)
-          // Note: backend sends resolved_value, not value
+          // Try resolved_value first, then value, then default_value, then empty string
+          const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
           initialConfigs[envVar.name] = {
             name: envVar.name,
             source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
             setting_path: envVar.setting_path,
-            value: envVar.resolved_value,  // Use resolved_value from backend
+            value: fallbackValue,
             new_setting_path: undefined
           }
         }
@@ -175,13 +177,12 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
   const getInfraValueForEnvVar = (envVarName: string, infraServices: Record<string, any>): string | null => {
     const upperName = envVarName.toUpperCase()
 
-    // MongoDB - be specific about which env vars get which values
-    if (upperName === 'MONGODB_DATABASE') {
-      return 'ushadow'  // Just the database name
-    }
+    // MongoDB - only set connection URL from infrastructure, not database name
+    // Database name should come from settings/environment via MONGODB_DATABASE
     if (upperName.includes('MONGO') || upperName.includes('MONGODB')) {
       if (infraServices.mongo?.found && infraServices.mongo.endpoints.length > 0) {
-        return `mongodb://${infraServices.mongo.endpoints[0]}/ushadow`
+        // MongoDB URL without database name - services specify database separately
+        return `mongodb://${infraServices.mongo.endpoints[0]}`
       }
     }
 
@@ -192,10 +193,12 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
       }
     }
 
-    // Postgres
+    // Postgres - infrastructure detection should not hardcode credentials/database
+    // These should come from settings/environment
     if (upperName.includes('POSTGRES') || upperName.includes('DATABASE_URL')) {
       if (infraServices.postgres?.found && infraServices.postgres.endpoints.length > 0) {
-        return `postgresql://ushadow:ushadow@${infraServices.postgres.endpoints[0]}/ushadow`
+        // Return host:port only - credentials and database should come from settings
+        return infraServices.postgres.endpoints[0]
       }
     }
 
@@ -300,6 +303,9 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
 
       setDeploymentResult(deployResponse.data.message || 'Deployment successful')
       setStep('complete')
+
+      // Notify parent of successful deployment
+      onSuccess?.()
     } catch (err: any) {
       console.error('Deployment failed:', err)
       setError(`Deployment failed: ${formatError(err)}`)

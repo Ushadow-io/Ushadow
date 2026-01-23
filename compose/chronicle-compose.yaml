@@ -39,7 +39,7 @@ services:
       - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
       - MONGODB_DATABASE=${MONGODB_DATABASE}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
-      - QDRANT_BASE_URL=${QDRANT_BASE_URL:-http://qdrant:6333}
+      - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}
 
       # LLM capability (from selected provider) - REQUIRED
@@ -56,7 +56,7 @@ services:
       # Security (from settings) - AUTH_SECRET_KEY is required for JWT auth
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      - ACCEPTED_ISSUERS=${ACCEPTED_ISSUERS:-ushadow}
+      - ACCEPTED_ISSUERS=${ACCEPTED_ISSUERS:-ushadow,chronicle}
       # CORS
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
 

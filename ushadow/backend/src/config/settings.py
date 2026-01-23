@@ -289,23 +289,32 @@ class Settings:
         parts = deployment_id.rsplit(':', 1) if ':' in deployment_id else [deployment_id]
         service_id = parts[0] if len(parts) == 1 else ':'.join(parts[:-1])
 
+        logger.info(f"[Settings] for_deployment({deployment_id}): parsed service_id={service_id}")
+
         # Get service and its env var schema
         registry = get_compose_registry()
         service = registry.get_service(service_id)
         if not service:
+            logger.info(f"[Settings] Service '{service_id}' not found in registry, trying as service config ID")
             # Try as a service config
             config_manager = get_service_config_manager()
             service_config = config_manager.get_service_config(deployment_id)
             if service_config:
+                logger.info(f"[Settings] Found service config: template_id={service_config.template_id}")
                 service_id = service_config.template_id  # Fixed: ServiceConfig has template_id, not service_id
                 service = registry.get_service(service_id)
+            else:
+                logger.warning(f"[Settings] No service config found for '{deployment_id}'")
 
         if not service:
+            logger.error(f"[Settings] Could not resolve service for deployment '{deployment_id}'")
             return {}
 
         # Collect all env var names
         env_vars = [ev.name for ev in service.required_env_vars] + \
                    [ev.name for ev in service.optional_env_vars]
+
+        logger.info(f"[Settings] Collected {len(env_vars)} env vars from service schema: {env_vars}")
 
         # Build compose_defaults from service schema
         compose_defaults = {
@@ -313,6 +322,8 @@ class Settings:
             for ev in service.required_env_vars + service.optional_env_vars
             if ev.has_default and ev.default_value
         }
+
+        logger.info(f"[Settings] Compose defaults ({len(compose_defaults)}): {list(compose_defaults.keys())}")
 
         # Get capability values - use deployment-specific wiring if available
         capability_values = {}
@@ -328,26 +339,61 @@ class Settings:
                 except Exception:
                     pass
 
+        logger.info(f"[Settings] Capability values ({len(capability_values)}): {list(capability_values.keys())}")
+
         # Load deploy environment overrides (if deployment has a target)
         deploy_env_overrides = {}
         # TODO: Get deploy target from deployment config if available
 
-        # Load user overrides from saved config
-        config_key = f"service_env_config.{deployment_id.replace(':', '_')}"
-        saved_config = await self._store.get(config_key) or {}
-        user_overrides = {
-            name: cfg.get('value')
-            for name, cfg in saved_config.items()
-            if cfg.get('source') in ('literal', 'new_setting') and cfg.get('value')
-        }
+        # Load user overrides from ServiceConfig if this is a service config ID
+        user_overrides = {}
+        config_manager = get_service_config_manager()
+        service_config = config_manager.get_service_config(deployment_id)
+        if service_config and service_config.config and service_config.config.values:
+            # Filter out metadata keys (_save_, _from_)
+            user_overrides = {
+                k: v for k, v in service_config.config.values.items()
+                if not k.startswith('_save_') and not k.startswith('_from_') and v
+            }
 
-        return await self._resolve_internal(
+            # Log each override like capability resolver does
+            for key, value in user_overrides.items():
+                # Redact sensitive values
+                display_value = value
+                if any(secret in key.lower() for secret in ['key', 'secret', 'token', 'password']):
+                    display_value = f"****{value[-4:]}" if value and len(str(value)) > 4 else "****"
+                logger.info(f"[Resolve] [User Override] {key} -> {display_value} (from ServiceConfig)")
+        else:
+            logger.info(f"[Settings] No ServiceConfig found or empty config for {deployment_id}")
+
+        results = await self._resolve_internal(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
             deploy_env_overrides=deploy_env_overrides,
             user_overrides=user_overrides,
         )
+
+        # Log final resolution results
+        logger.info(f"[Settings] ========== Final Resolution Summary ==========")
+        for env_var in env_vars:
+            if env_var in results:
+                resolution = results[env_var]
+                display_value = resolution.value
+                # Redact sensitive values
+                if any(secret in env_var.lower() for secret in ['key', 'secret', 'token', 'password']):
+                    display_value = f"****{resolution.value[-4:]}" if resolution.value and len(str(resolution.value)) > 4 else "****"
+                logger.info(f"[Resolve] {env_var} -> {display_value} (source: {resolution.source.value})")
+            else:
+                logger.warning(f"[Resolve] {env_var} -> NOT RESOLVED")
+
+        # Count by source
+        missing = set(env_vars) - set(results.keys())
+        if missing:
+            logger.warning(f"[Settings] Failed to resolve {len(missing)} env vars: {missing}")
+        logger.info(f"[Settings] ========================================")
+
+        return results
 
     async def _find_config_default(self, env_var: str) -> Optional[Tuple[str, Any]]:
         """

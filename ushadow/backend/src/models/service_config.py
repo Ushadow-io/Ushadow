@@ -146,6 +146,12 @@ class ServiceConfig(BaseModel):
     container_name: Optional[str] = Field(None, description="Container name")
     deployment_id: Optional[str] = Field(None, description="Reference to Deployment record if remote")
 
+    # Exposed URLs (from compose x-ushadow.exposes)
+    exposed_urls: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="URLs exposed by this service instance (audio intake, http api, health, etc.)"
+    )
+
     # Timestamps
     created_at: Optional[datetime] = None
     deployed_at: Optional[datetime] = None

@@ -325,6 +325,9 @@ async def get_instance(
                 # Filter overrides to only include values that differ from template
                 true_overrides = {}
                 for key, value in overrides.items():
+                    # Skip metadata keys used by frontend for settings management
+                    if key.startswith('_save_') or key.startswith('_from_'):
+                        continue
                     template_value = template_defaults.get(key)
                     # Include if no template value or if values differ
                     if template_value is None or str(value) != str(template_value):
@@ -334,6 +337,9 @@ async def get_instance(
         except Exception as e:
             logger.debug(f"Could not compare with template defaults: {e}")
             # Fall back to raw overrides
+
+    # Always filter out metadata keys before returning
+    overrides = {k: v for k, v in overrides.items() if not k.startswith('_save_') and not k.startswith('_from_')}
 
     instance.config.values = overrides
     return instance

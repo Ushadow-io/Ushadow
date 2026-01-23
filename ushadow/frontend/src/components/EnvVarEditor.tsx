@@ -181,10 +181,10 @@ export default function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorP
             </span>
           </>
         ) : (
-          // No value - show input
+          // No value or editing - show input
           <input
             type={isSecret ? 'password' : 'text'}
-            value={''}
+            value={config.value || ''}
             onChange={(e) => handleValueChange(e.target.value)}
             placeholder="enter value"
             className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"

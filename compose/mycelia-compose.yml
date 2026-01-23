@@ -18,10 +18,26 @@ x-ushadow:
   mycelia-backend:
     display_name: "Mycelia"
     description: "Self-hosted AI memory and timeline - capture ideas via voice, screenshots, or text"
-    requires: ["llm", "transcription", "audio_input"]
+    requires: ["llm", "transcription"]
     provides: memory  # Primary capability (timeline, transcription are secondary)
     tags: ["ai", "memory", "voice", "transcription", "timeline"]
     wizard: "mycelia"  # ID of the setup wizard
+    exposes:
+      - name: audio_intake
+        type: audio
+        path: /ws_pcm
+        port: 5173
+        metadata:
+          protocol: wyoming
+          data: pcm
+      - name: http_api
+        type: http
+        path: /
+        port: 5173
+      - name: health
+        type: health
+        path: /health
+        port: 5173
   mycelia-frontend:
     display_name: "Mycelia Frontend"
     description: "Mycelia web interface"

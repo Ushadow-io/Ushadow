@@ -131,6 +131,11 @@ export default function ServiceConfigsPage() {
   const [availableTargets, setAvailableTargets] = useState<DeployTarget[]>([])
   const [loadingTargets, setLoadingTargets] = useState(false)
 
+  // Deployment editing state
+  const [editingDeployment, setEditingDeployment] = useState<any | null>(null)
+  const [deploymentEnvVars, setDeploymentEnvVars] = useState<EnvVarInfo[]>([])
+  const [deploymentEnvConfigs, setDeploymentEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
+
   // Service catalog state
   const [showCatalog, setShowCatalog] = useState(false)
   const [catalogServices, setCatalogServices] = useState<any[]>([])
@@ -1009,11 +1014,13 @@ export default function ServiceConfigsPage() {
                     }
                   } else {
                     // Use service default configuration
+                    // Try resolved_value first, then value, then default_value, then empty string
+                    const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
                     initialEnvConfigs[envVar.name] = {
                       name: envVar.name,
                       source: envVar.source || 'default',
                       setting_path: envVar.setting_path,
-                      value: envVar.resolved_value || envVar.value,
+                      value: fallbackValue,
                       new_setting_path: undefined,
                       locked: envVar.locked,
                       provider_name: envVar.provider_name,
@@ -1275,7 +1282,9 @@ export default function ServiceConfigsPage() {
       setLoadingEnvConfig(true)
 
       // Load environment variable configuration for this service
-      const envResponse = await servicesApi.getEnvConfig(template.id)
+      // Pass deployment target to get properly resolved values
+      const deployTarget = deployment.unode_hostname || deployment.backend_metadata?.cluster_id
+      const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget)
       const envData = envResponse.data
 
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
@@ -1286,12 +1295,13 @@ export default function ServiceConfigsPage() {
       const deployedEnv = deployment.deployed_config?.environment || {}
 
       allEnvVars.forEach((envVar) => {
-        const currentValue = deployedEnv[envVar.name] || envVar.default_value || ''
+        // Use deployed value first, then resolved value from API, then default
+        const currentValue = deployedEnv[envVar.name] || envVar.resolved_value || envVar.default_value || ''
         initialEnvConfigs[envVar.name] = {
           name: envVar.name,
-          source: 'literal',
+          source: envVar.source || 'literal',
           value: currentValue,
-          setting_path: undefined,
+          setting_path: envVar.setting_path,
           new_setting_path: undefined,
         }
       })
@@ -2178,6 +2188,7 @@ export default function ServiceConfigsPage() {
         <DeployModal
           isOpen={true}
           onClose={() => setDeployModalState({ isOpen: false, serviceId: null })}
+          onSuccess={refreshDeployments}
           target={deployModalState.targetId ? availableTargets.find((t) => t.id === deployModalState.targetId) : undefined}
           availableTargets={availableTargets}
           infraServices={deployModalState.infraServices || {}}

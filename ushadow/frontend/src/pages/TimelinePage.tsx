@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { Calendar, RefreshCw, AlertCircle, ZoomIn, ZoomOut } from 'lucide-react'
+import { Calendar, RefreshCw, AlertCircle, ZoomIn, ZoomOut, Database } from 'lucide-react'
 import Gantt from 'frappe-gantt'
 import * as d3 from 'd3'
-import { memoriesApi } from '../services/api'
+import { memoriesApi, type MemorySource } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import type { Memory } from '../types/memory'
 
@@ -776,6 +776,7 @@ export default function TimelinePage() {
   const [error, setError] = useState<string | null>(null)
   const [useDemoData, setUseDemoData] = useState(false)
   const [activeImplementation, setActiveImplementation] = useState<TimelineImplementation>('frappe')
+  const [memorySource, setMemorySource] = useState<MemorySource>('openmemory')
   const { user } = useAuth()
 
   const loadMemories = async () => {
@@ -784,7 +785,7 @@ export default function TimelinePage() {
     try {
       setLoading(true)
       setError(null)
-      const result = await memoriesApi.fetchMemories(user.id, undefined, 1, 100)
+      const result = await memoriesApi.fetchMemories(user.id, undefined, 1, 100, undefined, memorySource)
 
       // Filter memories that have timeRanges in metadata
       const memoriesWithTime = result.memories.filter((m): m is MemoryWithTimeRange => {
@@ -807,7 +808,7 @@ export default function TimelinePage() {
     } else {
       setMemories(getDemoMemories())
     }
-  }, [user?.id, useDemoData])
+  }, [user?.id, useDemoData, memorySource])
 
   const handleToggleDemo = () => {
     setUseDemoData(!useDemoData)
@@ -825,6 +826,20 @@ export default function TimelinePage() {
           <p className="text-gray-600 dark:text-gray-400 mt-1">
             Visualize your memories on an interactive timeline
           </p>
+        </div>
+
+        {/* Memory Source Toggle */}
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          <select
+            value={memorySource}
+            onChange={(e) => setMemorySource(e.target.value as MemorySource)}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm"
+            data-testid="timeline-source-select"
+          >
+            <option value="openmemory">OpenMemory</option>
+            <option value="mycelia">Mycelia</option>
+          </select>
         </div>
       </div>
 
