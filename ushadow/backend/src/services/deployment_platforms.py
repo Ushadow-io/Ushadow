@@ -2,15 +2,56 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
+from datetime import datetime, timezone
 import logging
+import os
 import httpx
 import docker
 
 from src.models.deployment import ResolvedServiceDefinition, Deployment, DeploymentStatus
 from src.models.deploy_target import DeployTarget
 from src.services.kubernetes_manager import KubernetesManager
+from src.utils.environment import get_environment_info, is_local_deployment
 
 logger = logging.getLogger(__name__)
+
+
+async def check_deployment_health(
+    host: str,
+    port: int,
+    health_path: str = "/health",
+    timeout: float = 3.0
+) -> tuple[bool, Optional[str]]:
+    """
+    Check if a deployment is healthy via HTTP health check.
+
+    Args:
+        host: Host to check (e.g., "localhost" or container IP)
+        port: Port to check
+        health_path: HTTP path for health endpoint
+        timeout: Request timeout in seconds
+
+    Returns:
+        Tuple of (is_healthy, error_message)
+    """
+    url = f"http://{host}:{port}{health_path}"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url)
+
+            # Consider 2xx status codes as healthy
+            if 200 <= response.status_code < 300:
+                return (True, None)
+            else:
+                return (False, f"Health check returned {response.status_code}")
+
+    except httpx.TimeoutException:
+        return (False, "Health check timed out")
+    except httpx.ConnectError:
+        return (False, "Cannot connect to service")
+    except Exception as e:
+        return (False, f"Health check failed: {str(e)}")
 
 
 class DeployPlatform(ABC):
@@ -98,9 +139,7 @@ class DockerDeployPlatform(DeployPlatform):
 
     def _is_local_deployment(self, hostname: str) -> bool:
         """Check if this is a local deployment (same host as backend)."""
-        import os
-        env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
-        return hostname == env_name or hostname == "localhost"
+        return is_local_deployment(hostname)
 
     def _get_target_ip(self, target: DeployTarget) -> str:
         """Get target IP (localhost for local, tailscale IP for remote)."""
@@ -163,7 +202,7 @@ class DockerDeployPlatform(DeployPlatform):
                 volumes=resolved_service.volumes if resolved_service.volumes else None,
                 command=resolved_service.command,
                 restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
-                network=resolved_service.network or "bridge",
+                network=network,
                 detach=True,
                 remove=False,
             )

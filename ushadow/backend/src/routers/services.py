@@ -367,35 +367,92 @@ async def get_service_connection_info(
         new WebSocket(`ws://localhost:${info.port}/ws_pcm`)  // -> ws://localhost:8082/ws_pcm
     """
     import httpx
+    import os
     from src.services.docker_manager import get_docker_manager
+    from src.services.deployment_manager import get_deployment_manager
 
     docker_mgr = get_docker_manager()
+    deployment_mgr = get_deployment_manager()
 
-    # Validate service exists
-    if name not in docker_mgr.MANAGEABLE_SERVICES:
+    container_name = None
+    internal_port = 8000
+    port = None
+    env_var = None
+    default_port = None
+
+    # First check deployments (user-deployed services override infrastructure)
+    all_deployments = await deployment_mgr.list_deployments()
+
+    # Find deployment matching service name
+    matching_deployment = None
+    for deployment in all_deployments:
+        if deployment.service_id == name:
+            # Prefer running deployments
+            if deployment.status == "running":
+                matching_deployment = deployment
+                break
+            elif not matching_deployment:
+                matching_deployment = deployment
+
+    if matching_deployment:
+        # Use deployment's container name and port
+        container_name = matching_deployment.container_name
+
+        # Get external port from deployment
+        port = matching_deployment.exposed_port
+
+        # Parse internal port from deployed_config
+        internal_port = 8000  # default
+        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
+            ports_list = matching_deployment.deployed_config["ports"]
+            if ports_list and len(ports_list) > 0:
+                # Parse first port mapping: "8081:8000" -> container port is 8000
+                first_port = ports_list[0]
+                if ":" in first_port:
+                    _, container_port = first_port.split(":", 1)
+                    internal_port = int(container_port)
+                else:
+                    internal_port = int(first_port)
+
+        # For deployments, we don't have env_var/default_port metadata
+        env_var = None
+        default_port = None
+
+        logger.info(f"[CONNECTION-INFO] Using deployment: {container_name}:{internal_port}, exposed port: {port}")
+
+    elif name in docker_mgr.MANAGEABLE_SERVICES:
+        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        ports_info = docker_mgr.get_service_ports(name)
+
+        if not ports_info:
+            return {
+                "service": name,
+                "proxy_url": None,
+                "direct_url": None,
+                "internal_url": None,
+                "available": False,
+                "message": "Service has no exposed ports"
+            }
+
+        # Use the first port (primary port)
+        primary_port = ports_info[0]
+        port = primary_port.get("port") or primary_port.get("default_port")
+        internal_port = primary_port.get("container_port", 8000)
+        env_var = primary_port.get("env_var")
+        default_port = primary_port.get("default_port")
+
+        # Build container name with project prefix
+        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+        container_name = f"{project_name}-{name}"
+
+        logger.info(f"[CONNECTION-INFO] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}, exposed port: {port}")
+
+    else:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
 
-    # Get resolved ports (respects user overrides)
-    ports = docker_mgr.get_service_ports(name)
-
-    if not ports:
-        return {
-            "service": name,
-            "proxy_url": None,
-            "direct_url": None,
-            "internal_url": None,
-            "available": False,
-            "message": "Service has no exposed ports"
-        }
-
-    # Use the first port (primary port)
-    primary_port = ports[0]
-    port = primary_port.get("port") or primary_port.get("default_port")
-
     # Internal URL (for backend-to-service communication only)
-    # Backend uses Docker network, not localhost
-    internal_port = primary_port.get("container_port", 8000)
-    internal_url = f"http://{name}:{internal_port}"
+    # Backend uses Docker network with actual container name
+    internal_url = f"http://{container_name}:{internal_port}"
 
     # Direct URL (for frontend WebSocket/streaming access)
     # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
@@ -438,8 +495,8 @@ async def get_service_connection_info(
         "internal_url": internal_url,  # Backend only → http://chronicle-backend:8000
         # Port information
         "port": port,  # External port (for direct connections, mainly for mobile/desktop apps)
-        "env_var": primary_port.get("env_var"),
-        "default_port": primary_port.get("default_port"),
+        "env_var": env_var,
+        "default_port": default_port,
         # Status
         "available": available,
         # Usage hints for frontend
@@ -554,6 +611,11 @@ async def proxy_service_request(
         )
 
     internal_url = f"http://{container_name}:{internal_port}"
+
+    # Log the exact URL we're going to proxy to
+    logger.info(f"[PROXY DEBUG] Container: {container_name}, Internal Port: {internal_port}, Full URL: {internal_url}")
+    if matching_deployment:
+        logger.info(f"[PROXY DEBUG] Deployment ID: {matching_deployment.id}, deployed_config ports: {matching_deployment.deployed_config.get('ports') if matching_deployment.deployed_config else 'None'}")
 
     # Extract token from query params for audio/media requests
     # We'll move it to Authorization header

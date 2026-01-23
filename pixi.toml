@@ -1,0 +1,13 @@
+[workspace]
+authors = ["Stu Alexander <thestumonkey@gmail.com>"]
+channels = ["conda-forge"]
+name = "purple"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.*"
+nodejs = ">=25.2.1,<25.3"
+rust = ">=1.92.0,<1.93"

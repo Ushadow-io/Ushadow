@@ -18,6 +18,8 @@ import {
   Database,
   Zap,
   Save,
+  PlayCircle,
+  StopCircle,
 } from 'lucide-react'
 import {
   svcConfigsApi,
@@ -76,9 +78,13 @@ export default function ServiceConfigsPage() {
   // Service status state for consumers
   const [serviceStatuses, setServiceStatuses] = useState<Record<string, any>>({})
 
+  // Deployments state
+  const [deployments, setDeployments] = useState<any[]>([])
+  const [filterCurrentEnvOnly, setFilterCurrentEnvOnly] = useState(true)
+
   // UI state
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'services' | 'providers' | 'overview'>('services')
+  const [activeTab, setActiveTab] = useState<'services' | 'providers' | 'overview' | 'deployments'>('services')
   const [creating, setCreating] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -156,11 +162,15 @@ export default function ServiceConfigsPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [templatesRes, instancesRes, wiringRes, statusesRes] = await Promise.all([
+      const [templatesRes, instancesRes, wiringRes, statusesRes, deploymentsRes] = await Promise.all([
         svcConfigsApi.getTemplates(),
         svcConfigsApi.getServiceConfigs(),
         svcConfigsApi.getWiring(),
         servicesApi.getAllStatuses().catch(() => ({ data: {} })),
+        deploymentsApi.listDeployments().catch((err) => {
+          console.error('Failed to load deployments:', err)
+          return { data: [] }
+        }),
       ])
 
       console.log('Templates loaded:', templatesRes.data)
@@ -171,6 +181,7 @@ export default function ServiceConfigsPage() {
       setServiceConfigs(instancesRes.data)
       setWiring(wiringRes.data)
       setServiceStatuses(statusesRes.data || {})
+      setDeployments(deploymentsRes.data || [])
 
       // Note: instanceDetails are loaded lazily when needed (e.g., when user
       // clicks edit or switches to overview tab) to avoid N+1 API calls
@@ -179,6 +190,16 @@ export default function ServiceConfigsPage() {
       setMessage({ type: 'error', text: 'Failed to load instances data' })
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Lightweight function to refresh just deployments without full page reload
+  const refreshDeployments = async () => {
+    try {
+      const deploymentsRes = await deploymentsApi.listDeployments()
+      setDeployments(deploymentsRes.data || [])
+    } catch (err) {
+      console.error('Failed to refresh deployments:', err)
     }
   }
 
@@ -1011,6 +1032,23 @@ export default function ServiceConfigsPage() {
   // Group templates by source - only show installed services
   const allProviderTemplates = templates.filter((t) => t.source === 'provider')
 
+  // Filter deployments by current environment
+  // Use VITE_ENV_NAME from environment variables (e.g., "purple", "orange")
+  const currentEnv = import.meta.env.VITE_ENV_NAME || 'ushadow'
+  const currentComposeProject = `ushadow-${currentEnv}`
+
+  const filteredDeployments = filterCurrentEnvOnly
+    ? deployments.filter((d) => {
+        // Match deployments from the current environment only
+        // Check if the deployment's hostname matches this environment's compose project or env name
+        return d.unode_hostname && (
+          d.unode_hostname === currentEnv ||
+          d.unode_hostname === currentComposeProject ||
+          d.unode_hostname.startsWith(`${currentComposeProject}.`)
+        )
+      })
+    : deployments
+
   // Providers in "Add" menu: not configured and not yet added
   const availableToAdd = allProviderTemplates.filter(
     (t) => (!t.configured || !t.available) && !addedProviderIds.has(t.id)
@@ -1019,6 +1057,103 @@ export default function ServiceConfigsPage() {
   const handleAddProvider = (templateId: string) => {
     setAddedProviderIds((prev) => new Set(prev).add(templateId))
     setShowAddProviderModal(false)
+  }
+
+  // Deployment action handlers
+  const handleStopDeployment = async (deploymentId: string) => {
+    // Optimistic update
+    setDeployments((prev) =>
+      prev.map((d) => (d.id === deploymentId ? { ...d, status: 'stopping' } : d))
+    )
+
+    try {
+      await deploymentsApi.stopDeployment(deploymentId)
+      setMessage({ type: 'success', text: 'Deployment stopped' })
+      // Refresh just deployments, not entire page
+      await refreshDeployments()
+    } catch (error: any) {
+      console.error('Failed to stop deployment:', error)
+      setMessage({ type: 'error', text: 'Failed to stop deployment' })
+      // Revert optimistic update on error
+      await refreshDeployments()
+    }
+  }
+
+  const handleRestartDeployment = async (deploymentId: string) => {
+    // Optimistic update
+    setDeployments((prev) =>
+      prev.map((d) => (d.id === deploymentId ? { ...d, status: 'starting' } : d))
+    )
+
+    try {
+      await deploymentsApi.restartDeployment(deploymentId)
+      setMessage({ type: 'success', text: 'Deployment restarted' })
+      // Refresh just deployments, not entire page
+      await refreshDeployments()
+    } catch (error: any) {
+      console.error('Failed to restart deployment:', error)
+      setMessage({ type: 'error', text: 'Failed to restart deployment' })
+      // Revert optimistic update on error
+      await refreshDeployments()
+    }
+  }
+
+  const handleRemoveDeployment = async (deploymentId: string, serviceName: string) => {
+    if (!confirm(`Remove deployment ${serviceName}?`)) return
+
+    // Optimistic update - remove from list immediately
+    setDeployments((prev) => prev.filter((d) => d.id !== deploymentId))
+
+    try {
+      await deploymentsApi.removeDeployment(deploymentId)
+      setMessage({ type: 'success', text: 'Deployment removed' })
+      // Refresh to ensure consistency
+      await refreshDeployments()
+    } catch (error: any) {
+      console.error('Failed to remove deployment:', error)
+      setMessage({ type: 'error', text: 'Failed to remove deployment' })
+      // Revert optimistic update on error
+      await refreshDeployments()
+    }
+  }
+
+  const handleEditDeployment = async (deployment: any) => {
+    const template = templates.find((t) => t.id === deployment.service_id)
+    if (!template) return
+
+    try {
+      setLoadingEnvConfig(true)
+
+      // Load environment variable configuration for this service
+      const envResponse = await servicesApi.getEnvConfig(template.id)
+      const envData = envResponse.data
+
+      const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+      setDeploymentEnvVars(allEnvVars)
+
+      // Initialize env configs from deployment's current config
+      const initialEnvConfigs: Record<string, any> = {}
+      const deployedEnv = deployment.deployed_config?.environment || {}
+
+      allEnvVars.forEach((envVar) => {
+        const currentValue = deployedEnv[envVar.name] || envVar.default_value || ''
+        initialEnvConfigs[envVar.name] = {
+          name: envVar.name,
+          source: 'literal',
+          value: currentValue,
+          setting_path: undefined,
+          new_setting_path: undefined,
+        }
+      })
+
+      setDeploymentEnvConfigs(initialEnvConfigs)
+      setEditingDeployment(deployment)
+    } catch (error) {
+      console.error('Failed to load deployment config:', error)
+      setMessage({ type: 'error', text: 'Failed to load deployment configuration' })
+    } finally {
+      setLoadingEnvConfig(false)
+    }
   }
 
   // Render
@@ -1040,7 +1175,10 @@ export default function ServiceConfigsPage() {
         <div>
           <div className="flex items-center space-x-2">
             <Layers className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
-            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">ServiceConfigs</h1>
+            <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-700">
+              BETA
+            </span>
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             Create and manage service instances from templates
@@ -1085,7 +1223,7 @@ export default function ServiceConfigsPage() {
           </p>
         </div>
         <div className="card-hover p-4">
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">ServiceConfigs</p>
+          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Services</p>
           <p className="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">
             {instances.length}
           </p>
@@ -1170,6 +1308,20 @@ export default function ServiceConfigsPage() {
               System Overview
             </div>
           </button>
+          <button
+            onClick={() => handleTabChange('deployments')}
+            className={`py-2 px-1 border-b-2 text-sm font-medium transition-colors ${
+              activeTab === 'deployments'
+                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:hover:text-neutral-300'
+            }`}
+            data-testid="tab-deployments"
+          >
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-4 w-4" />
+              Deployments ({filteredDeployments.length})
+            </div>
+          </button>
         </nav>
       </div>
 
@@ -1184,7 +1336,7 @@ export default function ServiceConfigsPage() {
           </div>
 
           {/* Service Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 pb-8">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
             {composeTemplates
               .filter((t) => t.requires && t.requires.length > 0)
               .map((template) => {
@@ -1199,6 +1351,9 @@ export default function ServiceConfigsPage() {
                 // Filter wiring for this consumer
                 const consumerWiring = wiring.filter((w) => w.target_config_id === consumerId)
 
+                // Get deployments for this service (filtered by environment)
+                const serviceDeployments = filteredDeployments.filter(d => d.service_id === template.id)
+
                 return (
                   <FlatServiceCard
                     key={template.id}
@@ -1207,6 +1362,12 @@ export default function ServiceConfigsPage() {
                     wiring={consumerWiring}
                     providerTemplates={providerTemplates}
                     initialConfigs={instances}
+                    instanceCount={config ? 1 : 0}
+                    deployments={serviceDeployments}
+                    onStopDeployment={handleStopDeployment}
+                    onRestartDeployment={handleRestartDeployment}
+                    onRemoveDeployment={handleRemoveDeployment}
+                    onEditDeployment={handleEditDeployment}
                     onWiringChange={async (capability, sourceConfigId) => {
                       try {
                         const newWiring = await svcConfigsApi.createWiring({
@@ -1277,7 +1438,7 @@ export default function ServiceConfigsPage() {
                     onDeleteConfig={handleDeleteSavedConfig}
                     onUpdateConfig={handleUpdateSavedConfig}
                     onStart={async () => {
-                      await handleStartConsumer(template.id)
+                      await handleDeployConsumer(template.id, { type: 'local' })
                     }}
                     onStop={async () => {
                       await handleStopConsumer(template.id)
@@ -1469,14 +1630,131 @@ export default function ServiceConfigsPage() {
             ))
           })()}
         </div>
-      ) : (
+      ) : activeTab === 'overview' ? (
         /* System Overview - Read-only Visualization */
         <SystemOverview
           templates={templates}
           configs={instances}
           wiring={wiring}
         />
-      )}
+      ) : activeTab === 'deployments' ? (
+        /* Deployments Tab */
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+              Active deployments across all services ({filteredDeployments.length} total)
+            </p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={filterCurrentEnvOnly}
+                onChange={(e) => setFilterCurrentEnvOnly(e.target.checked)}
+                className="rounded border-neutral-300 dark:border-neutral-600 text-primary-600 focus:ring-primary-500"
+                data-testid="filter-current-env-toggle"
+              />
+              <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                Current environment only
+              </span>
+            </label>
+          </div>
+
+          {filteredDeployments.length === 0 ? (
+            <div className="card p-8 text-center">
+              <HardDrive className="h-12 w-12 text-neutral-400 mx-auto mb-4" />
+              <p className="text-neutral-600 dark:text-neutral-400">No deployments found</p>
+              <p className="text-sm text-neutral-500 dark:text-neutral-500 mt-2">
+                Deploy services from the Services tab
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredDeployments.map((deployment) => {
+                const template = templates.find(t => t.id === deployment.service_id)
+                return (
+                  <div key={deployment.id} className="card p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3">
+                          <h3 className="font-medium text-neutral-900 dark:text-neutral-100">
+                            {template?.name || deployment.service_id}
+                          </h3>
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              deployment.status === 'running'
+                                ? 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400'
+                                : deployment.status === 'deploying'
+                                ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-400'
+                                : deployment.status === 'stopped'
+                                ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                                : 'bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-400'
+                            }`}
+                            title={deployment.health_message || undefined}
+                          >
+                            {deployment.status}
+                          </span>
+
+                          {/* Stop/Restart button next to status */}
+                          {(deployment.status === 'running' || deployment.status === 'deploying') ? (
+                            <button
+                              onClick={() => handleStopDeployment(deployment.id)}
+                              className="p-1 text-error-600 dark:text-error-400 hover:text-error-700 dark:hover:text-error-300 hover:bg-error-50 dark:hover:bg-error-900/20 rounded"
+                              title="Stop deployment"
+                              data-testid={`stop-deployment-${deployment.id}`}
+                            >
+                              <StopCircle className="h-3.5 w-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleRestartDeployment(deployment.id)}
+                              className="p-1 text-success-600 dark:text-success-400 hover:text-success-700 dark:hover:text-success-300 hover:bg-success-50 dark:hover:bg-success-900/20 rounded"
+                              title="Start deployment"
+                              data-testid={`restart-deployment-${deployment.id}`}
+                            >
+                              <PlayCircle className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-4 mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                          <span className="flex items-center gap-1">
+                            <HardDrive className="h-3.5 w-3.5" />
+                            {deployment.unode_hostname}
+                          </span>
+                          {deployment.exposed_port && (
+                            <span className="px-2 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-mono">
+                              :{deployment.exposed_port}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {/* Edit */}
+                        <button
+                          onClick={() => handleEditDeployment(deployment)}
+                          className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                          title="Edit deployment"
+                          data-testid={`edit-deployment-${deployment.id}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+
+                        {/* Remove */}
+                        <button
+                          onClick={() => handleRemoveDeployment(deployment.id, template?.name || deployment.service_id)}
+                          className="p-1.5 text-neutral-400 hover:text-error-600 dark:hover:text-error-400 hover:bg-error-50 dark:hover:bg-error-900/20 rounded"
+                          title="Remove deployment"
+                          data-testid={`remove-deployment-${deployment.id}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
       {/* Edit Provider/ServiceConfig Modal */}
       <Modal
         isOpen={!!editingProvider}
@@ -1575,6 +1853,109 @@ export default function ServiceConfigsPage() {
                 ) : (
                   <CheckCircle className="h-4 w-4" />
                 )}
+                Save Changes
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Edit Deployment Modal */}
+      <Modal
+        isOpen={!!editingDeployment}
+        onClose={() => {
+          setEditingDeployment(null)
+          setDeploymentEnvVars([])
+          setDeploymentEnvConfigs({})
+        }}
+        title="Edit Deployment"
+        titleIcon={<Settings className="h-5 w-5 text-primary-600" />}
+        maxWidth="lg"
+        testId="edit-deployment-modal"
+      >
+        {editingDeployment && (
+          <div className="space-y-4">
+            {/* Deployment info */}
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-900 rounded-lg">
+              <p className="font-medium text-neutral-900 dark:text-neutral-100">
+                {templates.find(t => t.id === editingDeployment.service_id)?.name || editingDeployment.service_id}
+              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs text-neutral-500">
+                  {editingDeployment.unode_hostname}
+                </span>
+                {editingDeployment.exposed_port && (
+                  <span className="px-2 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-mono">
+                    :{editingDeployment.exposed_port}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Environment variables */}
+            {loadingEnvConfig ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-primary-600" />
+                <span className="ml-2 text-sm text-neutral-600">Loading configuration...</span>
+              </div>
+            ) : deploymentEnvVars.length > 0 ? (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Environment Variables
+                </label>
+                <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+                  {deploymentEnvVars.map((envVar) => {
+                    const config = deploymentEnvConfigs[envVar.name] || {
+                      name: envVar.name,
+                      source: 'default',
+                      value: undefined,
+                      setting_path: undefined,
+                      new_setting_path: undefined,
+                    }
+
+                    return (
+                      <EnvVarEditor
+                        key={envVar.name}
+                        envVar={envVar}
+                        config={config}
+                        onChange={(updates) => {
+                          setDeploymentEnvConfigs((prev) => ({
+                            ...prev,
+                            [envVar.name]: { ...prev[envVar.name], ...updates },
+                          }))
+                        }}
+                        for_deploy={true}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-neutral-500">No environment variables to configure</p>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex justify-end gap-2 pt-4">
+              <button
+                onClick={() => {
+                  setEditingDeployment(null)
+                  setDeploymentEnvVars([])
+                  setDeploymentEnvConfigs({})
+                }}
+                className="btn-ghost"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  // TODO: Implement deployment update API call
+                  setMessage({ type: 'success', text: 'Deployment configuration updated' })
+                  setEditingDeployment(null)
+                  setDeploymentEnvVars([])
+                  setDeploymentEnvConfigs({})
+                }}
+                className="btn-primary"
+              >
                 Save Changes
               </button>
             </div>

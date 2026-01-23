@@ -24,6 +24,7 @@ import {
   Pencil,
   Rocket,
   X,
+  Trash2,
   Save,
   ChevronLeft,
   ChevronDown,
@@ -73,6 +74,18 @@ export interface FlatServiceCardProps {
   providerTemplates: Template[]
   /** Pre-fetched configs to avoid duplicate API calls */
   initialConfigs?: ServiceConfigSummary[]
+  /** Number of configured instances */
+  instanceCount?: number
+  /** Active deployments for this service */
+  deployments?: any[]
+  /** Called to stop a deployment */
+  onStopDeployment?: (deploymentId: string) => Promise<void>
+  /** Called to restart a deployment */
+  onRestartDeployment?: (deploymentId: string) => Promise<void>
+  /** Called to remove a deployment */
+  onRemoveDeployment?: (deploymentId: string, serviceName: string) => Promise<void>
+  /** Called to edit a deployment */
+  onEditDeployment?: (deployment: any) => Promise<void>
 }
 
 // ============================================================================
@@ -396,6 +409,12 @@ export function FlatServiceCard({
   onDeploy,
   providerTemplates,
   initialConfigs,
+  instanceCount = 0,
+  deployments = [],
+  onStopDeployment,
+  onRestartDeployment,
+  onRemoveDeployment,
+  onEditDeployment,
 }: FlatServiceCardProps) {
   // Memoize hook options to avoid recreating on each render
   const hookOptions = useMemo<UseProviderConfigsOptions | undefined>(() => {
@@ -693,6 +712,150 @@ export function FlatServiceCard({
             onSubmit={handleFormSubmit}
             onClose={() => setCreatingCapability(null)}
           />
+        )}
+
+        {/* Deployments Section */}
+        {deployments && deployments.length > 0 && (
+          <div className="border-t border-neutral-200 dark:border-neutral-700">
+            <div className="px-4 py-2 bg-neutral-50 dark:bg-neutral-800">
+              <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                Deployments ({deployments.length})
+              </span>
+            </div>
+            <div className="divide-y divide-neutral-200 dark:divide-neutral-700">
+              {deployments.map((deployment) => (
+                <div
+                  key={deployment.id}
+                  className="px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/30"
+                  data-testid={`deployment-row-${deployment.id}`}
+                >
+                  {/* Row 1: Target + Status + Play/Stop */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Server className="h-3.5 w-3.5 text-neutral-400" />
+                      <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                        {deployment.unode_hostname}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                          deployment.status === 'running'
+                            ? 'bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400'
+                            : deployment.status === 'deploying'
+                            ? 'bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-400'
+                            : deployment.status === 'stopped'
+                            ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                            : 'bg-danger-100 dark:bg-danger-900/30 text-danger-700 dark:text-danger-400'
+                        }`}
+                        title={deployment.health_message || undefined}
+                      >
+                        {deployment.status}
+                      </span>
+
+                      {/* Stop/Restart button next to status */}
+                      {(deployment.status === 'running' || deployment.status === 'deploying') && onStopDeployment ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            e.preventDefault()
+                            onStopDeployment(deployment.id)
+                          }}
+                          className="p-1 text-error-600 dark:text-error-400 hover:text-error-700 dark:hover:text-error-300 hover:bg-error-50 dark:hover:bg-error-900/20 rounded"
+                          title="Stop deployment"
+                          data-testid={`stop-deployment-${deployment.id}`}
+                        >
+                          <StopCircle className="h-3.5 w-3.5" />
+                        </button>
+                      ) : deployment.status === 'stopped' && onRestartDeployment ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            e.preventDefault()
+                            onRestartDeployment(deployment.id)
+                          }}
+                          className="p-1 text-success-600 dark:text-success-400 hover:text-success-700 dark:hover:text-success-300 hover:bg-success-50 dark:hover:bg-success-900/20 rounded"
+                          title="Start deployment"
+                          data-testid={`restart-deployment-${deployment.id}`}
+                        >
+                          <PlayCircle className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Row 2: Container + Ports */}
+                  <div className="flex items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400 mb-2">
+                    <span className="font-mono">{deployment.container_name}</span>
+                    {deployment.deployed_config?.ports && deployment.deployed_config.ports.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        {deployment.deployed_config.ports.map((portStr: string, idx: number) => {
+                          const [externalPort, internalPort] = portStr.includes(':')
+                            ? portStr.split(':')
+                            : [portStr, portStr]
+                          return (
+                            <span
+                              key={idx}
+                              className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800"
+                              title={`External:Internal port mapping`}
+                            >
+                              {externalPort}:{internalPort}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Row 3: URL + Actions */}
+                  <div className="flex items-center justify-between gap-2">
+                    {(() => {
+                      const url = deployment.access_url || (deployment.exposed_port ? `http://localhost:${deployment.exposed_port}` : null)
+                      return url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-primary-600 dark:text-primary-400 hover:underline truncate"
+                          data-testid={`deployment-url-${deployment.id}`}
+                        >
+                          {url}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-neutral-400">No URL</span>
+                      )
+                    })()}
+
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Edit */}
+                      {onEditDeployment && (
+                        <button
+                          onClick={() => onEditDeployment(deployment)}
+                          className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                          title="Edit deployment"
+                          data-testid={`edit-deployment-${deployment.id}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
+                      {/* Remove */}
+                      {onRemoveDeployment && (
+                        <button
+                          onClick={() => onRemoveDeployment(deployment.id, template.name)}
+                          className="p-1 text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-danger-50 dark:hover:bg-danger-900/20 rounded"
+                          title="Remove deployment"
+                          data-testid={`remove-deployment-${deployment.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </>
