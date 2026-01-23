@@ -649,7 +649,7 @@ class TailscaleManager:
         Args:
             backend_container: Backend container name (default: {env}-backend)
             frontend_container: Frontend container name (default: {env}-webui)
-            chronicle_container: Chronicle container name (default: chronicle-backend)
+            chronicle_container: Chronicle container name (default: {env}-chronicle-backend)
             backend_port: Backend internal port (default: 8000)
             frontend_port: Frontend internal port (auto-detect if None)
 
@@ -662,7 +662,7 @@ class TailscaleManager:
         if not frontend_container:
             frontend_container = f"{self.env_name}-webui"
         if not chronicle_container:
-            chronicle_container = "chronicle-backend"
+            chronicle_container = f"{self.env_name}-chronicle-backend"
 
         # Auto-detect frontend port based on dev/prod mode
         if frontend_port is None:

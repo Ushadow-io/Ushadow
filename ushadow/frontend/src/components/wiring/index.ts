@@ -1,1 +1,5 @@
 export { default as WiringBoard } from './WiringBoard'
+export { ServiceTemplateCard } from './ServiceTemplateCard'
+export { ServiceInstanceCard } from './ServiceInstanceCard'
+export { CapabilitySlot } from './CapabilitySlot'
+export { StatusIndicator } from './StatusIndicator'

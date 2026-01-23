@@ -1,6 +1,6 @@
 import { Loader2, PlayCircle, StopCircle, LucideIcon } from 'lucide-react'
 import type { ServiceStatusResult } from '../../hooks/useServiceStatus'
-import type { ServiceInstance } from '../../contexts/ServicesContext'
+import type { ServiceServiceConfig } from '../../contexts/ServicesContext'
 
 // ============================================================================
 // Types
@@ -8,7 +8,7 @@ import type { ServiceInstance } from '../../contexts/ServicesContext'
 
 interface ServiceStatusBadgeProps {
   /** The service instance */
-  service: ServiceInstance
+  service: ServiceServiceConfig
   /** Computed status from useServiceStatus hook */
   status: ServiceStatusResult
   /** Whether service is currently starting */

@@ -137,7 +137,7 @@ class IntegrationTemplate(BaseModel):
 
 class IntegrationConfig(BaseModel):
     """
-    Integration Instance Configuration.
+    Integration ServiceConfig Configuration.
 
     Integrations are external services/data sources that Ushadow connects to:
     - Cloud APIs (OpenAI, Notion, mem0.ai)
@@ -163,7 +163,7 @@ class IntegrationConfig(BaseModel):
     is_default: bool = False  # Show in quickstart wizard
     enabled: bool = True
 
-    # Instance-specific config overrides
+    # ServiceConfig-specific config overrides
     config_overrides: Dict[str, Any] = {}
 
     # Connection configuration

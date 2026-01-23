@@ -9,7 +9,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { useServiceStatus } from '../../hooks/useServiceStatus'
-import type { ServiceInstance, ContainerStatus } from '../../contexts/ServicesContext'
+import type { ServiceServiceConfig, ContainerStatus } from '../../contexts/ServicesContext'
 import { ServiceStatusBadge } from './ServiceStatusBadge'
 import { ServiceConfigForm } from './ServiceConfigForm'
 
@@ -19,7 +19,7 @@ import { ServiceConfigForm } from './ServiceConfigForm'
 
 interface ServiceCardProps {
   /** The service instance */
-  service: ServiceInstance
+  service: ServiceServiceConfig
   /** Current saved config for this service */
   config: Record<string, any>
   /** Container status for this service (local services only) */
@@ -62,7 +62,7 @@ interface ServiceCardProps {
 // Helper Functions
 // ============================================================================
 
-function getBorderClasses(service: ServiceInstance, state: string): string {
+function getBorderClasses(service: ServiceServiceConfig, state: string): string {
   // Disabled services get grayed out appearance
   if (!service.enabled) {
     return 'border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800/50 shadow-sm opacity-60'

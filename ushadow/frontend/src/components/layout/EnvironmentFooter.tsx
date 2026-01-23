@@ -1,6 +1,7 @@
 import { Layers, Mail } from 'lucide-react'
 import { getColorClasses } from './EnvironmentBanner'
 import { useTheme } from '../../contexts/ThemeContext'
+import { useState, useEffect } from 'react'
 
 /**
  * Global environment footer that appears on all pages.
@@ -11,6 +12,25 @@ export default function EnvironmentFooter() {
   const { isDark } = useTheme()
   const envName = import.meta.env.VITE_ENV_NAME as string | undefined
   const nodeEnv = import.meta.env.MODE
+  const [version, setVersion] = useState('0.1.0')
+
+  // Fetch version from backend API
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        const response = await fetch('/api/version')
+        if (response.ok) {
+          const data = await response.json()
+          setVersion(data.version)
+        }
+      } catch (error) {
+        // Silently fail and use default version
+        console.debug('Failed to fetch version:', error)
+      }
+    }
+
+    fetchVersion()
+  }, [])
 
   // Get environment-specific colors
   const { bg, text, border } = getColorClasses(envName)
@@ -28,7 +48,7 @@ export default function EnvironmentFooter() {
 
   return (
     <footer
-      className={`mt-auto ${showEnvIndicator ? `${bg} border-t-2 ${border}` : ''}`}
+      className={`fixed bottom-0 left-0 right-0 z-50 ${showEnvIndicator ? `${bg} border-t-2 ${border}` : ''}`}
       style={!showEnvIndicator ? {
         backgroundColor: isDark ? 'var(--surface-800)' : 'white',
         borderTop: isDark ? '1px solid var(--surface-500)' : '1px solid #e5e5e5',
@@ -51,7 +71,7 @@ export default function EnvironmentFooter() {
             style={{ color: showEnvIndicator ? undefined : (isDark ? 'var(--text-muted)' : '#737373') }}
           >
             <Layers className={`h-4 w-4 ${showEnvIndicator ? text : ''}`} />
-            <span className={showEnvIndicator ? text : ''}>Ushadow v0.1.0</span>
+            <span className={showEnvIndicator ? text : ''}>Ushadow v{version}</span>
           </div>
           <span className={showEnvIndicator ? text : ''} style={{ opacity: 0.4 }}>•</span>
           <a

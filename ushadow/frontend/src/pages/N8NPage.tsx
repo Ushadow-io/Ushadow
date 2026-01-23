@@ -57,7 +57,7 @@ export default function N8NPage() {
         </h2>
         <div className="flex items-center justify-between">
           <span style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}>
-            n8n Instance
+            n8n ServiceConfig
           </span>
           <span
             className="px-2.5 py-0.5 rounded-full text-xs font-medium"
