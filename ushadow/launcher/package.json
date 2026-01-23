@@ -1,6 +1,6 @@
 {
   "name": "ushadow-launcher",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Ushadow Desktop Launcher",
   "private": true,
   "type": "module",
