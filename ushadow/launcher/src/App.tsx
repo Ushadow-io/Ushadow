@@ -789,6 +789,13 @@ function App() {
     const env = discovery?.environments.find(e => e.name === envName)
     const isWorktree = env?.is_worktree || false
 
+    // Prevent deleting the root ushadow environment (main repo)
+    if (envName === 'ushadow' && !isWorktree) {
+      log('Cannot delete the root ushadow environment. Stop containers instead.', 'warning')
+      window.alert('The main "ushadow" environment is your root repository and cannot be deleted.\n\nYou can stop its containers if needed.')
+      return
+    }
+
     // Confirm with user before deleting
     const message = isWorktree
       ? `Delete environment "${envName}"?\n\n` +
@@ -899,6 +906,28 @@ function App() {
       log(`Failed to create environment`, 'error')
       log(String(err), 'error')
       setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
+    }
+  }
+
+  const handleCreateWorktree = async (name: string, branch: string) => {
+    // Force lowercase to avoid Docker Compose naming issues
+    name = name.toLowerCase()
+    branch = branch.toLowerCase()
+
+    if (!worktreesDir) {
+      log('Worktrees directory not configured', 'error')
+      throw new Error('Worktrees directory not configured')
+    }
+
+    log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
+
+    try {
+      const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch, true)
+      log(`✓ Worktree created at ${worktree.path}`, 'success')
+      return worktree
+    } catch (err) {
+      log(`Failed to create worktree: ${err}`, 'error')
+      throw err
     }
   }
 
@@ -1314,14 +1343,29 @@ function App() {
         log('You can manually install these and refresh, or continue if not critical', 'info')
       }
 
-      // Step 5: Clone if needed
+      // Step 5: Ensure main repo exists (always clone main branch, never dev)
       log('Checking project directory...', 'step')
-      log(`Using branch: ${activeBranch}`, 'info')
       const status = await tauri.checkProjectDir(projectRoot)
       if (!status.is_valid_repo) {
-        await handleClone(projectRoot, activeBranch)
+        log('Cloning main branch to project root...', 'step')
+        await handleClone(projectRoot, 'main')  // Always clone main
       } else {
         log('✓ Project directory ready', 'success')
+      }
+
+      // Step 5b: If dev branch selected, create/use worktree
+      if (activeBranch === 'dev') {
+        log('Setting up dev environment...', 'step')
+
+        // Check if dev worktree already exists
+        const devWorktree = await tauri.checkWorktreeExists(projectRoot, 'dev')
+
+        if (!devWorktree) {
+          log('Creating dev worktree from dev branch...', 'step')
+          await handleCreateWorktree('ushadow-dev', 'dev')
+        } else {
+          log(`✓ Dev worktree ready at ${devWorktree.path}`, 'success')
+        }
       }
 
       // Step 6: Start infrastructure (postgres, redis, etc.) - only if needed
@@ -1354,9 +1398,10 @@ function App() {
       }
       await refreshDiscovery()
 
-      // Step 7: Start ushadow environment
-      log('Starting Ushadow environment...', 'step')
-      await handleStartEnv('ushadow')
+      // Step 7: Start the appropriate environment based on selected branch
+      const envName = activeBranch === 'dev' ? 'ushadow-dev' : 'ushadow'
+      log(`Starting ${envName} environment...`, 'step')
+      await handleStartEnv(envName)
 
       // Switch to environments page after setup is complete
       setAppMode('environments')
