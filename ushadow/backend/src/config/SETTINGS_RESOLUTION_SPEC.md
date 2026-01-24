@@ -6,7 +6,7 @@ This document specifies the unified approach for resolving environment variable 
 
 **Implementation Status**: ✅ **IMPLEMENTED** (Jan 2026)
 
-For implementation details, see `/tmp/new_config_structure.md`
+For comprehensive documentation, see `README.md` in this directory.
 
 ---
 

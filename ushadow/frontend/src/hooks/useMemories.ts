@@ -7,7 +7,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { memoriesApi } from '../services/api'
+import { memoriesApi, type MemorySource } from '../services/api'
 import { useMemoriesStore } from '../stores/memoriesStore'
 import { useAuth } from '../contexts/AuthContext'
 import type { Memory } from '../types/memory'
@@ -15,7 +15,7 @@ import type { Memory } from '../types/memory'
 // Fallback user ID when not authenticated
 const FALLBACK_USER_ID = 'ushadow'
 
-export function useMemories() {
+export function useMemories(source: MemorySource = 'openmemory') {
   // Get user from auth context - use email as OpenMemory user_id
   const { user } = useAuth()
   const userId = user?.email || FALLBACK_USER_ID
@@ -28,25 +28,25 @@ export function useMemories() {
     clearSelection,
   } = useMemoriesStore()
 
-  // Query keys for cache management
+  // Query keys for cache management (include source in key)
   const queryKeys = {
-    memories: ['memories', userId, searchQuery, currentPage, pageSize, filters] as const,
-    memory: (id: string) => ['memory', userId, id] as const,
-    stats: ['memoryStats', userId] as const,
-    health: ['memoryHealth'] as const,
+    memories: ['memories', source, userId, searchQuery, currentPage, pageSize, filters] as const,
+    memory: (id: string) => ['memory', source, userId, id] as const,
+    stats: ['memoryStats', source, userId] as const,
+    health: ['memoryHealth', source] as const,
   }
 
   // Fetch paginated memories
   const memoriesQuery = useQuery({
     queryKey: queryKeys.memories,
-    queryFn: () => memoriesApi.fetchMemories(userId, searchQuery, currentPage, pageSize, filters),
+    queryFn: () => memoriesApi.fetchMemories(userId, searchQuery, currentPage, pageSize, filters, source),
     staleTime: 30000, // 30 seconds
   })
 
   // Health check
   const healthQuery = useQuery({
     queryKey: queryKeys.health,
-    queryFn: memoriesApi.healthCheck,
+    queryFn: () => memoriesApi.healthCheck(source),
     staleTime: 60000, // 1 minute
     retry: false,
   })

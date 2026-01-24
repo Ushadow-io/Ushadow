@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Layers,
   Plus,
@@ -65,6 +66,8 @@ function getErrorMessage(error: any, fallback: string): string {
 }
 
 export default function ServiceConfigsPage() {
+  const navigate = useNavigate()
+
   // Templates state
   const [templates, setTemplates] = useState<Template[]>([])
 
@@ -122,6 +125,7 @@ export default function ServiceConfigsPage() {
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
     serviceId: string | null
+    mode?: 'deploy' | 'create-config'  // Mode: deploy or just create config
     targetId?: string  // Deploy target ID (for when we have a specific target selected)
     infraServices?: Record<string, any>  // Infrastructure data to pass to modal
   }>({
@@ -230,6 +234,31 @@ export default function ServiceConfigsPage() {
   }
 
   const handleInstallService = async (serviceId: string) => {
+    // Find the service to check if it has a wizard
+    const serviceToInstall = catalogServices.find(s => s.service_id === serviceId)
+
+    // If service has a wizard, navigate immediately and install in background
+    if (serviceToInstall?.wizard) {
+      setShowCatalog(false)
+      navigate(`/wizard/${serviceToInstall.wizard}`)
+
+      // Continue installation in background
+      try {
+        await servicesApi.install(serviceId)
+        // Reload in background
+        const [templatesRes, catalogRes] = await Promise.all([
+          svcConfigsApi.getTemplates(),
+          servicesApi.getCatalog()
+        ])
+        setTemplates(templatesRes.data)
+        setCatalogServices(catalogRes.data)
+      } catch (error: any) {
+        console.error('Background installation failed:', error)
+      }
+      return
+    }
+
+    // For services without wizard, wait for installation to complete
     setInstallingService(serviceId)
     try {
       await servicesApi.install(serviceId)
@@ -1567,6 +1596,13 @@ export default function ServiceConfigsPage() {
                     onRestartDeployment={handleRestartDeployment}
                     onRemoveDeployment={handleRemoveDeployment}
                     onEditDeployment={handleEditDeployment}
+                    onAddConfig={() => {
+                      setDeployModalState({
+                        isOpen: true,
+                        serviceId: template.id,
+                        mode: 'create-config',
+                      })
+                    }}
                     onWiringChange={async (capability, sourceConfigId) => {
                       try {
                         const newWiring = await svcConfigsApi.createWiring({
@@ -1618,7 +1654,6 @@ export default function ServiceConfigsPage() {
                           id,
                           template_id: templateId,
                           name,
-                          deployment_target: 'local',
                           config: configValues,
                         })
                         const instancesRes = await svcConfigsApi.getServiceConfigs()
@@ -2253,6 +2288,7 @@ export default function ServiceConfigsPage() {
           isOpen={true}
           onClose={() => setDeployModalState({ isOpen: false, serviceId: null })}
           onSuccess={refreshDeployments}
+          mode={deployModalState.mode || 'deploy'}
           target={deployModalState.targetId ? availableTargets.find((t) => t.id === deployModalState.targetId) : undefined}
           availableTargets={availableTargets}
           infraServices={deployModalState.infraServices || {}}

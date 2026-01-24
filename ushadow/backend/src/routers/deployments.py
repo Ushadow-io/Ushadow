@@ -186,10 +186,13 @@ async def deploy_service(
     """Deploy a service to a u-node."""
     manager = get_deployment_manager()
     try:
+        # If config_id not provided, use service_id (template as config)
+        config_id = data.config_id or data.service_id
+
         deployment = await manager.deploy_service(
             data.service_id,
             data.unode_hostname,
-            config_id=data.config_id
+            config_id=config_id
         )
         return deployment
     except ValueError as e:

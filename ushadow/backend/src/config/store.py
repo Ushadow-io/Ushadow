@@ -233,17 +233,12 @@ class SettingsStore:
         """Internal helper to save updates to a specific file."""
         current = self._load_yaml_if_exists(file_path) or OmegaConf.create({})
 
-        logger.info(f"[Store] _save_to_file: {file_path.name}")
-        logger.info(f"[Store] Updates to save: {updates}")
-
         for key, value in updates.items():
-            logger.info(f"[Store] Processing key='{key}', value type={type(value).__name__}")
             if '.' in key:
                 # Dotted key - need to manually navigate the path for dict values
                 if isinstance(value, dict):
                     # Split the path and navigate/create structure
                     parts = key.split('.')
-                    logger.info(f"[Store] Path parts: {parts}")
 
                     # Navigate to parent, creating structure as needed
                     node = current
@@ -258,28 +253,21 @@ class SettingsStore:
                         # Merge with existing using OmegaConf.merge (preserves keys not in value)
                         merged = OmegaConf.merge(node[final_key], value)
                         node[final_key] = merged
-                        logger.info(f"[Store] Merged dict at path '{key}'")
                     else:
                         # Create new or replace non-dict
                         node[final_key] = value
-                        logger.info(f"[Store] Set value at path '{key}'")
                 else:
                     # For scalar values, OmegaConf.update works fine
-                    logger.info(f"[Store] Setting scalar at path '{key}': {value}")
                     OmegaConf.update(current, key, value)
             else:
                 # Simple key - merge if dict, replace if scalar
-                logger.info(f"[Store] Updating simple key '{key}'")
                 OmegaConf.update(current, key, value, merge=True)
 
         # Ensure parent directory exists
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Debug: show what we're about to save
-        logger.info(f"[Store] Final config to save: {OmegaConf.to_yaml(current)}")
-
         OmegaConf.save(current, file_path)
-        logger.info(f"[Store] Saved to {file_path}: {list(updates.keys())}")
+        logger.info(f"Saved to {file_path}: {list(updates.keys())}")
 
     async def save_to_secrets(self, updates: dict) -> None:
         """

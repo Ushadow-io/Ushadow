@@ -491,8 +491,8 @@ class DeploymentManager:
         self,
         service_id: str,
         unode_hostname: str,
+        config_id: str,
         namespace: Optional[str] = None,
-        config_id: Optional[str] = None
     ) -> Deployment:
         """
         Deploy a service to any deployment target (Docker unode or K8s cluster).
@@ -501,10 +501,10 @@ class DeploymentManager:
         all variables are resolved before sending to target.
 
         Args:
-            service_id: Service to deploy
+            service_id: Service to deploy (DEPRECATED - extracted from config)
             unode_hostname: Target unode hostname (Docker host or K8s cluster ID)
+            config_id: ServiceConfig ID or Template ID (required) - references config to use
             namespace: Optional K8s namespace (only used for K8s deployments)
-            config_id: Optional instance ID (for instance-based deployments)
         """
         # Resolve service with all variables substituted
         try:
@@ -820,7 +820,7 @@ class DeploymentManager:
         if config_id:
             # Update existing ServiceConfig
             logger.info(f"Updating ServiceConfig: {config_id}")
-            config_manager.update_instance(
+            config_manager.update_service_config(
                 config_id,
                 ServiceConfigUpdate(config=overrides_only)
             )
@@ -830,14 +830,13 @@ class DeploymentManager:
             config_id = deployment.config_id or f"{deployment.service_id}-{deployment.unode_hostname}".replace(":", "-").replace("/", "-").replace("(", "").replace(")", "")
             logger.info(f"Creating ServiceConfig: {config_id}")
 
-            config_manager.create_instance(
+            config_manager.create_service_config(
                 ServiceConfigCreate(
                     id=config_id,
                     template_id=deployment.service_id,
                     name=f"{deployment.service_id} ({deployment.unode_hostname})",
                     description=f"Deployment configuration",
                     config=overrides_only,
-                    deployment_target=f"docker://{deployment.unode_hostname}"
                 )
             )
 

@@ -6,6 +6,7 @@ interface EnvVarEditorProps {
   envVar: EnvVarInfo
   config: EnvVarConfig
   onChange: (updates: Partial<EnvVarConfig>) => void
+  mode?: 'config' | 'deploy' | 'target'  // Mode affects what options are shown
 }
 
 /**
@@ -17,12 +18,17 @@ interface EnvVarEditorProps {
  * - Secret masking
  * - Locked fields (provider-supplied values)
  *
+ * Modes:
+ * - 'config': Creating a ServiceConfig (shows @settings.path mappings primarily)
+ * - 'deploy': Deploying a service (shows runtime/deployment options, default)
+ * - 'target': Per-target overrides (shows target-specific values)
+ *
  * Used by:
  * - ServicesPage (for Docker service configuration)
- * - DeployToK8sModal (for K8s deployment configuration)
+ * - DeployModal (for K8s/Docker deployment configuration)
  * - ServiceConfigsPage (for instance configuration)
  */
-export default function EnvVarEditor({ envVar, config, onChange }: EnvVarEditorProps) {
+export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy' }: EnvVarEditorProps) {
   const [editing, setEditing] = useState(false)
   // If setting_path is set, this is a "mapped" value - show mapping mode
   const isMapped = !!config.setting_path

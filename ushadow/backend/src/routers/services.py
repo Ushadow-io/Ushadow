@@ -957,9 +957,6 @@ async def update_env_config(
     - "default": Use the compose file's default
     """
     env_vars = [ev.model_dump() for ev in request.env_vars]
-    logger.info(f"[API] PUT /{name}/env received {len(env_vars)} env vars")
-    for ev in env_vars:
-        logger.info(f"[API]   {ev.get('name')}: source={ev.get('source')}, setting_path={ev.get('setting_path')}, value={ev.get('value')}")
     result = await orchestrator.update_env_config(name, env_vars)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
@@ -1047,26 +1044,25 @@ async def generate_mycelia_token(
     current_user: User = Depends(get_current_user)
 ) -> Dict[str, str]:
     """
-    Generate Mycelia authentication token by running the token-create command.
+    Generate Mycelia authentication token by running the token-create command
+    inside the running container.
 
     Returns:
         Dictionary with 'token' and 'client_id' fields
     """
     import subprocess
     import re
-    from pathlib import Path
-    from src.services.compose_registry import COMPOSE_DIR
+    import os
 
     try:
-        # Run the docker compose command to generate token
-        compose_file = COMPOSE_DIR / "mycelia-compose.yml"
-        if not compose_file.exists():
-            raise HTTPException(status_code=500, detail=f"Mycelia compose file not found at {compose_file}")
+        # Get the environment name and container name
+        env_name = os.getenv("ENV_NAME", "ushadow")
+        container_name = f"ushadow-{env_name}-mycelia-backend-1"
 
+        # Execute token-create command inside the running container
         result = subprocess.run(
             [
-                "docker", "compose", "-f", str(compose_file),
-                "run", "--rm", "mycelia-backend",
+                "docker", "exec", container_name,
                 "deno", "run", "-A", "server.ts", "token-create"
             ],
             capture_output=True,

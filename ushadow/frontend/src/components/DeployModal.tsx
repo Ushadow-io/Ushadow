@@ -9,6 +9,7 @@ interface DeployModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess?: () => void  // Called after successful deployment
+  mode?: 'deploy' | 'create-config'  // Mode: deploy (default) or just create config
   target?: DeployTarget  // Optional - if not provided, show target selection
   availableTargets?: DeployTarget[]  // For target selection
   infraServices?: Record<string, any>  // K8s only - infrastructure scan data
@@ -24,7 +25,7 @@ interface ServiceOption {
   requires?: string[]
 }
 
-export default function DeployModal({ isOpen, onClose, onSuccess, target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployModalProps) {
+export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy', target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployModalProps) {
   const [step, setStep] = useState<'target' | 'select' | 'configure' | 'deploying' | 'complete'>(
     !initialTarget && availableTargets.length > 1 ? 'target' :
     preselectedServiceId ? 'configure' : 'select'
@@ -216,11 +217,56 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
   }
 
   const handleDeploy = async () => {
-    if (!selectedService || !selectedTarget) return
+    if (!selectedService) return
+    if (mode === 'deploy' && !selectedTarget) return
 
     try {
       setStep('deploying')
       setError(null)
+
+      // For create-config mode, we don't need a target
+      if (mode === 'create-config' && !selectedTarget) {
+        // Create a config without deploying
+        const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
+        const instanceId = `${sanitizedServiceId}-config-${Date.now()}`
+
+        // Convert env configs to instance config format
+        // ONLY save overrides - skip defaults and unchanged values
+        const configValues: Record<string, any> = {}
+        Object.entries(envConfigs).forEach(([name, config]) => {
+          // Skip if this is still using default value (no user override)
+          if (config.source === 'default') {
+            return  // Don't save defaults
+          }
+
+          // User explicitly mapped to a setting
+          if (config.setting_path) {
+            configValues[name] = `@${config.setting_path}`
+          }
+          // User entered a new value that should create a setting
+          else if (config.source === 'new_setting' && config.new_setting_path && config.value) {
+            configValues[name] = `@${config.new_setting_path}`
+          }
+          // User entered a literal value override
+          else if (config.value !== undefined && config.value !== '') {
+            configValues[name] = config.value
+          }
+        })
+
+        // Create ServiceConfig
+        await svcConfigsApi.createServiceConfig({
+          id: instanceId,
+          template_id: selectedService.service_id,
+          name: `${selectedService.display_name} Config`,
+          description: 'Configuration created from template',
+          config: configValues,
+        })
+
+        setDeploymentResult(`Configuration "${selectedService.display_name} Config" created successfully`)
+        setStep('complete')
+        onSuccess?.()
+        return
+      }
 
       // Generate instance ID for this deployment target (only lowercase, numbers, hyphens)
       const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
@@ -266,7 +312,6 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
           name: displayName,
           description: description,
           config: configValues,
-          deployment_target: deploymentTarget
         })
       } catch {
         // ServiceConfig doesn't exist - create it
@@ -276,7 +321,6 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
           name: displayName,
           description: description,
           config: configValues,
-          deployment_target: deploymentTarget
         })
       }
 
@@ -418,7 +462,9 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
           {selectedService?.display_name}
         </h4>
         <p className="text-sm text-primary-700 dark:text-primary-300">
-          Configure deployment settings for this service
+          {mode === 'create-config'
+            ? 'Create a configuration for this service. You can deploy it later to any target.'
+            : 'Configure deployment settings for this service'}
         </p>
       </div>
 
@@ -475,6 +521,7 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
                   envVar={envVar}
                   config={config}
                   onChange={(updates) => handleEnvConfigChange(envVar.name, updates)}
+                  mode={mode === 'create-config' ? 'config' : 'deploy'}
                 />
               )
             })}
@@ -495,7 +542,9 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
           className="btn-primary"
           data-testid="deploy-service-btn"
         >
-          Deploy to {selectedTarget?.type === 'k8s' ? 'Kubernetes' : 'Docker'}
+          {mode === 'create-config'
+            ? 'Create Configuration'
+            : `Deploy to ${selectedTarget?.type === 'k8s' ? 'Kubernetes' : 'Docker'}`}
         </button>
       </div>
     </div>
@@ -505,10 +554,14 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
     <div className="text-center py-12">
       <Loader className="h-12 w-12 text-primary-600 dark:text-primary-400 mx-auto mb-4 animate-spin" />
       <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
-        Deploying {selectedService?.display_name}...
+        {mode === 'create-config'
+          ? `Creating configuration for ${selectedService?.display_name}...`
+          : `Deploying ${selectedService?.display_name}...`}
       </h4>
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
-        Creating ConfigMap, Secret, Deployment, and Service
+        {mode === 'create-config'
+          ? 'Saving configuration mappings'
+          : 'Creating ConfigMap, Secret, Deployment, and Service'}
       </p>
     </div>
   )
@@ -547,7 +600,11 @@ export default function DeployModal({ isOpen, onClose, onSuccess, target: initia
       <Modal
         isOpen={isOpen}
         onClose={onClose}
-        title={selectedTarget ? `Deploy to ${selectedTarget.type === 'k8s' ? 'Kubernetes' : 'Docker'}` : 'Deploy Service'}
+        title={
+          mode === 'create-config'
+            ? 'Create Service Configuration'
+            : (selectedTarget ? `Deploy to ${selectedTarget.type === 'k8s' ? 'Kubernetes' : 'Docker'}` : 'Deploy Service')
+        }
         maxWidth="xl"
         testId="deploy-modal"
       >

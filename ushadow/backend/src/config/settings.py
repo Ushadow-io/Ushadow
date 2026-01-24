@@ -374,18 +374,53 @@ class Settings:
     async def _load_deployment_context(
         self, deployment_id: str
     ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
-        """Load deployment context including template and instance overrides."""
+        """
+        Load deployment context including template and instance overrides.
+
+        Handles three ID formats:
+        1. deployment_id (future: from Deployment storage)
+        2. config_id (current: ServiceConfig ID) - loads ServiceConfig to get template_id + overrides
+        3. service_id/template_id (legacy: direct template reference)
+        """
         from src.services.compose_registry import get_compose_registry
         from src.services.capability_resolver import CapabilityResolver
+        from src.services.service_config_manager import get_service_config_manager
 
-        # Parse deployment_id to get service_id
-        parts = deployment_id.rsplit(':', 1) if ':' in deployment_id else [deployment_id]
-        service_id = parts[0] if len(parts) == 1 else ':'.join(parts[:-1])
-
-        logger.info(f"[Settings] for_deployment({deployment_id}): parsed service_id={service_id}")
-
-        # Get service schema
+        config_mgr = get_service_config_manager()
         registry = get_compose_registry()
+
+        # Try to load as ServiceConfig first (handles config_id format)
+        service_config = config_mgr.get_service_config(deployment_id)
+
+        if service_config:
+            # This is a config_id - use ServiceConfig
+            logger.info(f"[Settings] for_deployment({deployment_id}): Found ServiceConfig, template={service_config.template_id}")
+
+            # Extract service_id from template_id
+            # Template IDs are like "chronicle-backend" (compose services) or "openai" (providers)
+            service_id = service_config.template_id
+
+            # Get instance overrides from ServiceConfig.config
+            # These are raw mappings like "@settings.api_keys.openai_api_key"
+            instance_overrides_from_config = {}
+            if service_config.config and service_config.config.values:
+                for env_var, value in service_config.config.values.items():
+                    if value:
+                        instance_overrides_from_config[env_var] = str(value)
+                        logger.info(f"[Load] [ServiceConfig Override] {env_var} = {value}")
+        else:
+            # Not a ServiceConfig - try as direct service_id/template_id
+            logger.info(f"[Settings] for_deployment({deployment_id}): Not a ServiceConfig, using as service_id")
+
+            # Parse deployment_id to get service_id (legacy behavior)
+            parts = deployment_id.rsplit(':', 1) if ':' in deployment_id else [deployment_id]
+            service_id = parts[0] if len(parts) == 1 else ':'.join(parts[:-1])
+
+            instance_overrides_from_config = {}
+
+        logger.info(f"[Settings] Resolved service_id={service_id}")
+
+        # Get service schema from ComposeRegistry
         service = registry.get_service(service_id)
 
         if not service:
@@ -426,16 +461,21 @@ class Settings:
                     template_overrides[env_var] = str(value)
                     logger.info(f"[Load] [Template Override] {env_var} = {value}")
 
-        # Load instance-level overrides from instance-overrides.yaml (instances.{deployment_id})
-        # Don't resolve mappings yet - store raw values so we can track the mapping path
+        # Merge instance overrides: ServiceConfig.config takes precedence over instances.{deployment_id}
+        # Priority: ServiceConfig.config > instances.{deployment_id} (legacy)
         instance_overrides = {}
-        instance_config = await self._store.get(f"instances.{deployment_id}") or {}
-        if instance_config:
-            for env_var, value in instance_config.items():
+
+        # First load from legacy instance-overrides.yaml (instances.{deployment_id})
+        legacy_instance_config = await self._store.get(f"instances.{deployment_id}") or {}
+        if legacy_instance_config:
+            for env_var, value in legacy_instance_config.items():
                 if value:
-                    # Store raw value (including @settings.path if it's a mapping)
                     instance_overrides[env_var] = str(value)
-                    logger.info(f"[Load] [Instance Override] {env_var} = {value}")
+                    logger.info(f"[Load] [Legacy Instance Override] {env_var} = {value}")
+
+        # Then apply ServiceConfig.config (higher priority)
+        for env_var, value in instance_overrides_from_config.items():
+            instance_overrides[env_var] = value
 
         return env_vars, compose_defaults, capability_values, template_overrides, instance_overrides
 

@@ -346,11 +346,11 @@ async def get_instance(
 
 
 @router.post("", response_model=ServiceConfig)
-async def create_instance(
+async def create_service_config(
     data: ServiceConfigCreate,
     current_user: dict = Depends(get_current_user),
 ) -> ServiceConfig:
-    """Create a new instance from a template.
+    """Create a new service configuration from a template.
 
     Config values that match template defaults are filtered out,
     so only actual overrides are stored.
@@ -391,7 +391,7 @@ async def create_instance(
             logger.debug(f"Could not filter against template defaults: {e}")
             # Fall back to using all provided config
 
-    # Create instance with filtered config
+    # Create service config with filtered config
     manager = get_service_config_manager()
     try:
         # Create a modified data object with filtered config
@@ -402,20 +402,19 @@ async def create_instance(
             name=data.name,
             description=data.description,
             config=filtered_config,
-            deployment_target=data.deployment_target,
         )
-        return manager.create_instance(filtered_data)
+        return manager.create_service_config(filtered_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put("/{config_id}", response_model=ServiceConfig)
-async def update_instance(
+async def update_service_config(
     config_id: str,
     data: ServiceConfigUpdate,
     current_user: dict = Depends(get_current_user),
 ) -> ServiceConfig:
-    """Update an instance.
+    """Update a service configuration.
 
     Config values that match template defaults are filtered out,
     so only actual overrides are stored.
@@ -429,14 +428,14 @@ async def update_instance(
         if filtered_config:
             try:
                 # Get the service config to find its template_id
-                instance = manager.get_service_config(config_id)
-                if instance:
+                config = manager.get_service_config(config_id)
+                if config:
                     from src.services.capability_resolver import get_capability_resolver
                     settings = get_settings()
                     resolver = get_capability_resolver()
 
                     # Get template defaults from provider registry
-                    provider = resolver.get_provider_by_id(instance.template_id)
+                    provider = resolver.get_provider_by_id(config.template_id)
                     if provider and provider.env_maps:
                         template_defaults = {}
                         for em in provider.env_maps:
@@ -465,59 +464,24 @@ async def update_instance(
             name=data.name,
             description=data.description,
             config=filtered_config,
-            deployment_target=data.deployment_target,
         )
 
     try:
-        return manager.update_instance(config_id, data)
+        return manager.update_service_config(config_id, data)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/{config_id}")
-async def delete_instance(
+async def delete_service_config(
     config_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Delete an instance."""
+    """Delete a service configuration."""
     manager = get_service_config_manager()
-    if not manager.delete_instance(config_id):
+    if not manager.delete_service_config(config_id):
         raise HTTPException(status_code=404, detail=f"ServiceConfig not found: {config_id}")
     return {"success": True, "message": f"ServiceConfig {config_id} deleted"}
-
-
-@router.post("/{config_id}/deploy")
-async def deploy_instance(
-    config_id: str,
-    current_user: dict = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Deploy/start an instance.
-
-    For compose services, this starts the docker container.
-    For cloud providers, this marks the service config as active.
-    """
-    manager = get_service_config_manager()
-    success, message = await manager.deploy_instance(config_id)
-    if not success:
-        raise HTTPException(status_code=400, detail=message)
-    return {"success": True, "message": message}
-
-
-@router.post("/{config_id}/undeploy")
-async def undeploy_instance(
-    config_id: str,
-    current_user: dict = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Stop/undeploy an instance.
-
-    For compose services, this stops the docker container.
-    For cloud providers, this marks the service config as inactive.
-    """
-    manager = get_service_config_manager()
-    success, message = await manager.undeploy_instance(config_id)
-    if not success:
-        raise HTTPException(status_code=400, detail=message)
-    return {"success": True, "message": message}
 
 
 # =============================================================================

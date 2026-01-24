@@ -549,22 +549,26 @@ class ServiceOrchestrator:
         for ev in env_vars:
             ev_name = ev.get("name")
             source = ev.get("source")
+            value = ev.get("value", "")
 
-            if source == "new_setting" and ev.get("new_setting_path") and ev.get("value"):
+            # Skip masked values - they indicate the frontend is passing back masked secrets
+            if value and isinstance(value, str) and (value.startswith("***") or value.startswith("•••")):
+                logger.debug(f"Skipping masked value for {ev_name}")
+                continue
+
+            if source == "new_setting" and ev.get("new_setting_path") and value:
                 # Create the setting and reference it
-                new_settings_to_create[ev["new_setting_path"]] = ev["value"]
+                new_settings_to_create[ev["new_setting_path"]] = value
                 template_overrides[ev_name] = f"@settings.{ev['new_setting_path']}"
-                logger.info(f"[Save] {ev_name}: new_setting -> @settings.{ev['new_setting_path']}")
 
             elif source == "setting" and ev.get("setting_path"):
                 # Reference existing setting using @settings.path syntax
+                # IMPORTANT: Ignore the value field - only use the setting_path
                 template_overrides[ev_name] = f"@settings.{ev['setting_path']}"
-                logger.info(f"[Save] {ev_name}: setting -> @settings.{ev['setting_path']}")
 
-            elif source == "literal" and ev.get("value"):
+            elif source == "literal" and value:
                 # Store literal value directly
-                template_overrides[ev_name] = ev["value"]
-                logger.info(f"[Save] {ev_name}: literal -> {ev['value']}")
+                template_overrides[ev_name] = value
 
             # else: source == "default" or empty - don't save anything (use compose default)
 
@@ -576,11 +580,10 @@ class ServiceOrchestrator:
         # Save to new structure: services.{service_id}
         # OmegaConf.merge in store will preserve existing keys not in this update
         if template_overrides:
-            logger.info(f"[Save] Saving to services.{service.service_id}: {template_overrides}")
             await self.settings.update({
                 f"services.{service.service_id}": template_overrides
             })
-            logger.info(f"Saved template overrides for {service.service_id}: {len(template_overrides)} vars")
+            logger.info(f"Saved {len(template_overrides)} template overrides for {service.service_id}")
 
         return {
             "service_id": service.service_id,

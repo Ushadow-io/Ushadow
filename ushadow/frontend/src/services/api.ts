@@ -157,6 +157,9 @@ export const settingsApi = {
   reset: () => api.post('/api/settings/reset'),
   refresh: () => api.post('/api/settings/refresh'),
 
+  /** Get unmasked secret value by path (server-side only) */
+  getSecret: (keyPath: string) => api.get<{ value: string }>(`/api/settings/secret/${keyPath}`),
+
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
   getServiceConfig: (serviceId: string) => api.get(`/api/settings/service-configs/${serviceId}`),
@@ -409,6 +412,7 @@ export interface ComposeService {
   status?: string      // Container status (running, stopped, etc.)
   health?: string      // Container health (healthy, unhealthy, etc.)
   profiles?: string[]  // Docker compose profiles
+  wizard?: string      // ID of setup wizard if available (e.g., "mycelia")
 }
 
 // Quickstart wizard endpoints (kept separate from services)
