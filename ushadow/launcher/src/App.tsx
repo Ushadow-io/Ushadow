@@ -582,15 +582,19 @@ function App() {
     // Use explicit path if provided, otherwise look up the environment
     const envPath = explicitPath || discovery?.environments.find(e => e.name === envName)?.path || undefined
 
-    // Add to creating list to show starting feedback (only if not already in list)
-    setCreatingEnvs(prev => {
-      const alreadyExists = prev.some(e => e.name === envName)
-      if (alreadyExists) {
-        // Update existing entry
-        return prev.map(e => e.name === envName ? { ...e, status: 'starting' as const } : e)
-      }
-      return [...prev, { name: envName, status: 'starting' as const }]
-    })
+    // Only add to creating list if this environment doesn't already exist in discovery
+    // (meaning it's truly being created, not just started)
+    const existsInDiscovery = discovery?.environments.some(e => e.name === envName)
+    if (!existsInDiscovery) {
+      setCreatingEnvs(prev => {
+        const alreadyExists = prev.some(e => e.name === envName)
+        if (alreadyExists) {
+          // Update existing entry
+          return prev.map(e => e.name === envName ? { ...e, status: 'starting' as const } : e)
+        }
+        return [...prev, { name: envName, status: 'starting' as const }]
+      })
+    }
 
     try {
       if (dryRunMode) {
@@ -1296,9 +1300,10 @@ function App() {
 
       // Step 5: Clone if needed
       log('Checking project directory...', 'step')
+      log(`Using branch: ${activeBranch}`, 'info')
       const status = await tauri.checkProjectDir(projectRoot)
       if (!status.is_valid_repo) {
-        await handleClone(projectRoot)
+        await handleClone(projectRoot, activeBranch)
       } else {
         log('✓ Project directory ready', 'success')
       }
@@ -1458,8 +1463,8 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
-        {appMode === 'infra' ? (
-          /* Launch Page - One-Click Launch */
+        {appMode === 'install' ? (
+          /* Install Page - One-Click Launch (Landing Page) */
           <div className="h-full flex flex-col items-center justify-center">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
@@ -1515,7 +1520,7 @@ function App() {
             </button>
           </div>
         ) : appMode === 'infra' ? (
-          /* Install Page - Prerequisites & Infrastructure Setup */
+          /* Infra Page - Prerequisites & Infrastructure Setup */
           <div className="h-full flex flex-col gap-4 overflow-y-auto">
             <div className="text-center mb-4">
               <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
