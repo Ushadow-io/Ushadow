@@ -265,6 +265,16 @@ function App() {
       const disc = await tauri.discoverEnvironments()
       setDiscovery(disc)
 
+      // Remove creating environments that are now in discovery
+      // This merges the "creating" card with the actual discovered environment
+      setCreatingEnvs(prev => {
+        return prev.filter(creatingEnv => {
+          // Keep environments that haven't been discovered yet
+          const foundInDiscovery = disc.environments.some(e => e.name === creatingEnv.name)
+          return !foundInDiscovery
+        })
+      })
+
       // Auto-start tmux if worktrees exist but tmux isn't running
       const worktrees = disc.environments.filter(e => e.is_worktree)
       if (worktrees.length > 0) {
@@ -581,6 +591,11 @@ function App() {
 
     // Use explicit path if provided, otherwise look up the environment
     const envPath = explicitPath || discovery?.environments.find(e => e.name === envName)?.path || undefined
+
+    // Log the folder path if available
+    if (envPath) {
+      log(`Creating in: ${envPath}`, 'info')
+    }
 
     // Always add to creating list when starting an environment to show immediate feedback
     // This ensures users see a loading card even if discovery already found stopped containers
