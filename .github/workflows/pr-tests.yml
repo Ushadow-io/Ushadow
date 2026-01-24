@@ -43,8 +43,8 @@ jobs:
           CI: "true"
           SKIP_INTEGRATION: "false"
         run: |
-          # Run only stable tests (exclude TDD tests that are expected to fail)
-          pytest -m "no_secrets and not tdd" --cov=src --cov-report=xml --cov-report=term
+          # Run all tests except those requiring secrets or TDD tests
+          pytest -m "not (requires_secrets or tdd)" --cov=src --cov-report=xml --cov-report=term
 
       - name: Run TDD tests (allowed to fail)
         env:
