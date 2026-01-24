@@ -1,3 +1,7 @@
+dev branch is cutting edge
+main is more stable
+
+
 # ushadow
 
 **AI Orchestration Platform** - Unified interface for Chronicle, MCP, Agent Zero, n8n, and more.

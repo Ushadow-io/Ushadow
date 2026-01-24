@@ -23,7 +23,7 @@ class TelemetryClient:
 
     def __init__(
         self,
-        endpoint: str = "https://ushadow-telemetry.your-subdomain.workers.dev",
+        endpoint: str = "https://ushadow-telemetry.stu-6b7.workers.dev",
         app_version: str = "unknown",
         config_dir: Optional[Path] = None,
     ):
@@ -42,6 +42,16 @@ class TelemetryClient:
 
         self.machine_id = self._get_or_create_machine_id()
         self.os_info = self._get_os_info()
+
+    def is_telemetry_disabled(self) -> bool:
+        """
+        Check if telemetry has been disabled by the user.
+
+        Returns:
+            True if telemetry is disabled, False otherwise
+        """
+        telemetry_disabled_file = self.config_dir / "telemetry_disabled"
+        return telemetry_disabled_file.exists()
 
     def _get_or_create_machine_id(self) -> str:
         """
@@ -122,8 +132,12 @@ class TelemetryClient:
             timeout: Request timeout in seconds
 
         Returns:
-            True if ping succeeded, False otherwise
+            True if ping succeeded, False otherwise (including if telemetry is disabled)
         """
+        # Check if telemetry is disabled
+        if self.is_telemetry_disabled():
+            return False
+
         try:
             data = {
                 'machine_id': self.machine_id,
@@ -157,8 +171,12 @@ class TelemetryClient:
             timeout: Request timeout in seconds
 
         Returns:
-            True if event sent successfully, False otherwise
+            True if event sent successfully, False otherwise (including if telemetry is disabled)
         """
+        # Check if telemetry is disabled
+        if self.is_telemetry_disabled():
+            return False
+
         try:
             data = {
                 'machine_id': self.machine_id,
@@ -185,7 +203,7 @@ class TelemetryClient:
 
 # Convenience function for simple usage
 def send_telemetry_ping(
-    endpoint: str = "https://ushadow-telemetry.your-subdomain.workers.dev",
+    endpoint: str = "https://ushadow-telemetry.stu-6b7.workers.dev",
     app_version: str = "unknown"
 ) -> bool:
     """
@@ -205,7 +223,7 @@ def send_telemetry_ping(
 if __name__ == "__main__":
     # Example usage
     client = TelemetryClient(
-        endpoint="https://ushadow-telemetry.your-subdomain.workers.dev",
+        endpoint="https://ushadow-telemetry.stu-6b7.workers.dev",
         app_version="0.2.4"
     )
 

@@ -8,15 +8,19 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install uv for fast Python package management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# Install build dependencies for Python packages (gcc, python3-dev, libyaml-dev)
+# Install build dependencies for Python packages (gcc, python3-dev, libyaml-dev, curl for uv install)
 RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
     libyaml-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast Python package management
+# Using official installation script (recommended method)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    ln -s /root/.local/bin/uv /usr/local/bin/uv && \
+    ln -s /root/.local/bin/uvx /usr/local/bin/uvx
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
@@ -32,10 +36,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install uv for running the app
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# Install only runtime dependencies (curl for healthcheck, docker-cli for volume cleanup, tailscale)
+# Install runtime dependencies (curl for healthcheck and uv install, docker-cli for volume cleanup, tailscale)
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -48,6 +49,12 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y docker-ce-cli \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv for running the app
+# Using official installation script (recommended method)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    ln -s /root/.local/bin/uv /usr/local/bin/uv && \
+    ln -s /root/.local/bin/uvx /usr/local/bin/uvx
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv

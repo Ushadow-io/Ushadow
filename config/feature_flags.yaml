@@ -72,6 +72,12 @@ flags:
     description: "Show Memories page in navigation with list view and knowledge graph"
     type: release
 
+  # Timeline - visualize memories on an interactive timeline
+  timeline:
+    enabled: true
+    description: "Timeline - Visualize memories with time ranges on Gantt charts and D3 timelines"
+    type: release
+
   # ServiceConfigs Management - Service instance deployment and wiring
   instances_management:
     enabled: false
