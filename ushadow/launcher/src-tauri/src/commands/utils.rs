@@ -32,10 +32,13 @@ pub fn shell_command(command: &str) -> Command {
         use std::os::windows::process::CommandExt;
         // Use PowerShell for better environment variable handling
         // -NoProfile: Skip loading profile for speed (environment vars are still loaded)
+        // -WindowStyle Hidden: Don't show the PowerShell window
+        // -NonInteractive: Don't wait for user input
         // -Command: Execute the command
         let mut cmd = Command::new("powershell");
-        cmd.args(["-NoProfile", "-Command", command]);
+        cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", command]);
         // CREATE_NO_WINDOW = 0x08000000
+        // This prevents the console window from being created in the first place
         cmd.creation_flags(0x08000000);
         return cmd;
     }
