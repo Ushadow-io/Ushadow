@@ -1,0 +1,6 @@
+# Minimal Chronicle service configuration for testing
+# This represents the minimum required fields for Chronicle to start
+
+database: test-chronicle-db
+llm_model: gpt-4-turbo
+admin_password: test-password-123

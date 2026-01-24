@@ -181,4 +181,9 @@ compose/speaker-compose.yaml
 # pixi environments
 .pixi/*
 !.pixi/config.toml
-robot_tests
+
+# Robot Framework test results (but keep test source files)
+robot_results/
+output.xml
+log.html
+report.html
