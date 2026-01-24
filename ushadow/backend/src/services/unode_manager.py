@@ -16,7 +16,7 @@ from aiohttp import UnixConnector
 from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 from src.config.secrets import get_auth_secret_key
 from src.utils.tailscale_serve import get_tailscale_status, TailscaleStatus
 from src.models.unode import (

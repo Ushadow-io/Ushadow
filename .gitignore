@@ -181,3 +181,4 @@ compose/speaker-compose.yaml
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+robot_tests

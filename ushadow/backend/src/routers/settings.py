@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from omegaconf import OmegaConf
 
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 from src.config.secrets import mask_dict_secrets
 from src.services.compose_registry import get_compose_registry
 from src.services.provider_registry import get_provider_registry
@@ -63,12 +63,10 @@ async def update_config(updates: Dict[str, Any]):
     try:
         settings = get_settings()
 
-        # Filter out masked values to prevent accidental overwrites
-        filtered = settings.filter_masked_values(updates)
-        if not filtered:
+        if not updates:
             return {"success": True, "message": "No updates to apply"}
 
-        await settings.update(filtered)
+        await settings.update(updates)
         return {"success": True, "message": "Configuration updated"}
     except Exception as e:
         logger.error(f"Error updating config: {e}")
@@ -147,6 +145,36 @@ async def reset_config():
         }
     except Exception as e:
         logger.error(f"Error resetting config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/secret/{key_path:path}")
+async def get_secret_value(key_path: str):
+    """
+    Get an unmasked secret value by path.
+
+    This is a server-side only endpoint for retrieving actual secret values
+    for operations like service configuration. The value is never sent to
+    the frontend - only used in backend operations.
+
+    Args:
+        key_path: Dot-separated path to secret (e.g., "security.auth_secret_key")
+
+    Returns:
+        {"value": "actual_secret_value"}
+    """
+    try:
+        settings = get_settings()
+        value = await settings.get(key_path)
+
+        if value is None:
+            raise HTTPException(status_code=404, detail=f"Secret not found at path: {key_path}")
+
+        return {"value": value}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting secret at {key_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.services.llm_client import get_llm_client
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

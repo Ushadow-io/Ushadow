@@ -677,13 +677,13 @@ class TailscaleManager:
 
         # Backend API routes - include path in target to preserve it
         # (Tailscale serve strips the --set-path prefix from the request)
-        backend_routes = ["/api", "/auth"]
+        backend_routes = ["/api", "/auth", "/ws"]
         for route in backend_routes:
             target = f"{backend_base}{route}"
             if not self.add_serve_route(route, target):
                 success = False
 
-        # WebSocket routes - direct to Chronicle for low latency
+        # WebSocket routes - direct to Chronicle for low latency (legacy/mobile)
         ws_routes = ["/ws_pcm", "/ws_omi"]
         for route in ws_routes:
             target = f"{chronicle_base}{route}"

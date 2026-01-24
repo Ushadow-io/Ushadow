@@ -12,12 +12,12 @@ services:
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8000}
       - VITE_ENV_NAME=${VITE_ENV_NAME:-}
     networks:
-      - infra-network
+      - ushadow-network
     depends_on:
       - backend
     restart: unless-stopped
 
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true

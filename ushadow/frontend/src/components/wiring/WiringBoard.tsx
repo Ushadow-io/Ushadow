@@ -6,9 +6,10 @@
  * - Right: Consumer instances with capability slots (targets)
  *
  * Drag from a provider to a consumer's capability slot to create a connection.
+ * Also supports output-to-env-var wiring with visual wire connections.
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   DndContext,
@@ -39,6 +40,8 @@ import {
   ChevronUp,
   Plug,
   Package,
+  ExternalLink,
+  Link2,
 } from 'lucide-react'
 import { ServiceTemplateCard } from './ServiceTemplateCard'
 import { ServiceInstanceCard } from './ServiceInstanceCard'
@@ -63,6 +66,12 @@ interface ProviderInfo {
   templateId: string // For templates: own ID; for instances: parent template ID
   configVars: ConfigVar[]
   configured?: boolean // Whether all required config fields have values
+  // Output wiring: available outputs for this provider
+  outputs?: {
+    access_url?: string
+    env_vars?: Record<string, string>
+    capability_values?: Record<string, any>
+  }
 }
 
 interface ConsumerInfo {
@@ -76,6 +85,13 @@ interface ConsumerInfo {
   description?: string // Service description
   isTemplate?: boolean // True for templates, false for instances
   templateId?: string // For templates: own ID; for instances: parent template ID
+  // Output wiring: env vars that can receive wired values
+  wirableEnvVars?: Array<{
+    key: string
+    label: string
+    value?: string
+    required?: boolean
+  }>
 }
 
 interface WiringInfo {
@@ -86,10 +102,33 @@ interface WiringInfo {
   target_capability: string
 }
 
+// Output wiring types
+export interface OutputWiringInfo {
+  id: string
+  source_instance_id: string
+  source_output_key: string
+  target_instance_id: string
+  target_env_var: string
+}
+
+export interface OutputInfo {
+  instanceId: string
+  instanceName: string
+  outputKey: string
+  outputLabel: string
+  value?: string
+}
+
 interface DropInfo {
   provider: ProviderInfo
   consumerId: string
   capability: string
+}
+
+interface OutputDropInfo {
+  source: OutputInfo
+  targetInstanceId: string
+  targetEnvVar: string
 }
 
 interface WiringBoardProps {
@@ -108,6 +147,10 @@ interface WiringBoardProps {
   onEditConsumer?: (consumerId: string) => void
   onStartConsumer?: (consumerId: string) => Promise<void>
   onStopConsumer?: (consumerId: string) => Promise<void>
+  // Output wiring props
+  outputWiring?: OutputWiringInfo[]
+  onOutputWiringCreate?: (dropInfo: OutputDropInfo) => Promise<void>
+  onOutputWiringDelete?: (wiringId: string) => Promise<void>
   onDeployConsumer?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
 }
 
@@ -127,6 +170,9 @@ export default function WiringBoard({
   onStartConsumer,
   onDeployConsumer,
   onStopConsumer,
+  outputWiring = [],
+  onOutputWiringCreate,
+  onOutputWiringDelete,
 }: WiringBoardProps) {
   const [activeProvider, setActiveProvider] = useState<ProviderInfo | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
@@ -167,6 +213,14 @@ export default function WiringBoard({
     setSelectingSlot(null)
   }
 
+  // Output wiring state
+  const [draggingOutput, setDraggingOutput] = useState<OutputInfo | null>(null)
+  const [wireStartPos, setWireStartPos] = useState<{ x: number; y: number } | null>(null)
+  const [hoveredTarget, setHoveredTarget] = useState<string | null>(null)
+  const boardRef = useRef<HTMLDivElement>(null)
+  const outputPortRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const envVarTargetRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+
   // Configure sensors for proper drag handling
   const mouseSensor = useSensor(MouseSensor, {
     activationConstraint: {
@@ -191,6 +245,82 @@ export default function WiringBoard({
     window.addEventListener('mousemove', handleMouseMove)
     return () => window.removeEventListener('mousemove', handleMouseMove)
   }, [activeProvider])
+
+  // Output wire dragging handlers
+  const handleOutputDragStart = useCallback((output: OutputInfo, startPos: { x: number; y: number }) => {
+    setDraggingOutput(output)
+    setWireStartPos(startPos)
+  }, [])
+
+  const handleOutputDragEnd = useCallback(async () => {
+    if (draggingOutput && hoveredTarget && onOutputWiringCreate) {
+      // Parse target: "envvar::instanceId::envVarKey"
+      const parts = hoveredTarget.split('::')
+      if (parts.length === 3 && parts[0] === 'envvar') {
+        await onOutputWiringCreate({
+          source: draggingOutput,
+          targetInstanceId: parts[1],
+          targetEnvVar: parts[2],
+        })
+      }
+    }
+    setDraggingOutput(null)
+    setWireStartPos(null)
+    setHoveredTarget(null)
+  }, [draggingOutput, hoveredTarget, onOutputWiringCreate])
+
+  // Track mouse position and detect drop targets during output wire drag
+  useEffect(() => {
+    if (!draggingOutput) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePos({ x: e.clientX, y: e.clientY })
+
+      // Check if hovering over any env var target
+      const elements = document.elementsFromPoint(e.clientX, e.clientY)
+      const targetEl = elements.find(el => el.getAttribute('data-target-id')?.startsWith('envvar::'))
+      if (targetEl) {
+        setHoveredTarget(targetEl.getAttribute('data-target-id'))
+      } else {
+        setHoveredTarget(null)
+      }
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => window.removeEventListener('mousemove', handleMouseMove)
+  }, [draggingOutput])
+
+  // Calculate wire positions for existing output wiring connections
+  const getWirePositions = useCallback(() => {
+    const positions: Array<{
+      sourceId: string
+      targetId: string
+      sourcePos: { x: number; y: number }
+      targetPos: { x: number; y: number }
+    }> = []
+
+    outputWiring.forEach((wire) => {
+      const sourceKey = `output::${wire.source_instance_id}::${wire.source_output_key}`
+      const targetKey = `envvar::${wire.target_instance_id}::${wire.target_env_var}`
+
+      const sourceEl = outputPortRefs.current.get(sourceKey)
+      const targetEl = envVarTargetRefs.current.get(targetKey)
+
+      if (sourceEl && targetEl) {
+        const sourceRect = sourceEl.getBoundingClientRect()
+        const targetRect = targetEl.getBoundingClientRect()
+
+        positions.push({
+          sourceId: sourceKey,
+          targetId: targetKey,
+          sourcePos: { x: sourceRect.right, y: sourceRect.top + sourceRect.height / 2 },
+          targetPos: { x: targetRect.left, y: targetRect.top + targetRect.height / 2 },
+        })
+      }
+    })
+
+    return positions
+  }, [outputWiring])
 
   // Group providers by capability, then by template (templates with their instances nested)
   const providersByCapability = providers.reduce(
@@ -288,7 +418,8 @@ export default function WiringBoard({
       collisionDetection={pointerWithin}
     >
       <div
-        className="grid grid-cols-2 gap-8"
+        ref={boardRef}
+        className="grid grid-cols-2 gap-8 relative"
         data-testid="wiring-board"
       >
         {/* Left Column: Providers */}
@@ -357,6 +488,10 @@ export default function WiringBoard({
                                 onStart={onStartProvider ? () => onStartProvider(instance.id, false) : undefined}
                                 onStop={onStopProvider ? () => onStopProvider(instance.id, false) : undefined}
                                 templateProvider={template}
+                                outputWiring={outputWiring}
+                                onOutputDragStart={handleOutputDragStart}
+                                onOutputDragEnd={handleOutputDragEnd}
+                                outputPortRefs={outputPortRefs.current}
                               />
                             )
                           })}
@@ -618,6 +753,11 @@ interface DraggableProviderProps {
   onStart?: () => Promise<void>
   onStop?: () => Promise<void>
   templateProvider?: ProviderInfo // Parent template for instances
+  // Output wiring props
+  outputWiring?: OutputWiringInfo[]
+  onOutputDragStart?: (output: OutputInfo, startPos: { x: number; y: number }) => void
+  onOutputDragEnd?: () => void
+  outputPortRefs?: Map<string, HTMLDivElement>
 }
 
 function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceConfig, onDelete, onStart, onStop, templateProvider }: DraggableProviderProps) {
@@ -670,159 +810,423 @@ function DraggableProvider({ provider, connectionCount, onEdit, onCreateServiceC
     <div
       ref={setNodeRef}
       className={`
-        group relative rounded-lg border transition-all
+        group relative rounded-lg border transition-all flex
         ${isDragging ? 'opacity-30 border-dashed border-primary-400 dark:border-primary-500' : 'border-neutral-200 dark:border-neutral-700'}
         ${isConnected ? 'bg-primary-50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800' : 'bg-white dark:bg-neutral-900'}
         hover:border-primary-300 dark:hover:border-primary-600
       `}
       data-testid={`provider-drag-${provider.id}`}
     >
-      {/* Draggable header */}
-      <div
-        className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical className="h-4 w-4 text-neutral-400 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
-              {provider.name}
-            </span>
-            <div className="flex items-center gap-1.5 ml-auto">
-              {/* Capability tag */}
-              <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
-                {provider.capability}
+      {/* Left side: Main content */}
+      <div className="flex-1 min-w-0">
+        {/* Draggable header */}
+        <div
+          className="px-3 py-3 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4 text-neutral-400 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
+                {provider.name}
               </span>
-              {isConnected && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
-                  {connectionCount}
+              <div className="flex items-center gap-1.5 ml-auto">
+                {/* Capability tag */}
+                <span className="px-1.5 py-0.5 text-[10px] rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-medium">
+                  {provider.capability}
+                </span>
+                {isConnected && (
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300">
+                    {connectionCount}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Start/Stop/Setup buttons for local providers */}
+            {!isCloud && onStart && onStop && (
+              <>
+                {isStarting ? (
+                  <span className="p-1">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
+                  </span>
+                ) : needsSetup && canStart ? (
+                  <button
+                    onClick={(e) => handleButtonClick(e, onEdit)}
+                    className="p-1 text-warning-500 hover:text-warning-600 hover:bg-warning-100 dark:hover:bg-warning-900/30 rounded"
+                    title="Configure required settings"
+                    data-testid={`provider-setup-${provider.id}`}
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                  </button>
+                ) : canStart ? (
+                  <button
+                    onClick={handleStartClick}
+                    className="p-1 text-success-500 hover:text-success-600 hover:bg-success-100 dark:hover:bg-success-900/30 rounded"
+                    title="Start"
+                    data-testid={`provider-start-${provider.id}`}
+                  >
+                    <PlayCircle className="h-3.5 w-3.5" />
+                  </button>
+                ) : canStop ? (
+                  <button
+                    onClick={handleStopClick}
+                    className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                    title="Stop"
+                    data-testid={`provider-stop-${provider.id}`}
+                  >
+                    <StopCircle className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </>
+            )}
+            <button
+              onClick={(e) => handleButtonClick(e, onEdit)}
+              className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+              title="Edit settings"
+              data-testid={`provider-edit-${provider.id}`}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            {provider.isTemplate && onCreateServiceConfig && (
+              <button
+                onClick={(e) => handleButtonClick(e, onCreateServiceConfig)}
+                className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                title="Create new instance"
+                data-testid={`provider-create-instance-${provider.id}`}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {!provider.isTemplate && onDelete && (
+              <button
+                onClick={(e) => handleButtonClick(e, onDelete)}
+                className="p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                title="Delete instance"
+                data-testid={`provider-delete-${provider.id}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <StatusIndicator status={provider.status} />
+        </div>
+
+        {/* Config vars display - show missing required first, then configured */}
+        {(missingRequiredVars.length > 0 || configuredVars.length > 0) && (
+          <div className="px-3 pb-2 pt-0">
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {/* Missing required fields - shown first with warning */}
+              {missingRequiredVars.slice(0, 2).map((v) => (
+                <span
+                  key={v.key}
+                  className="text-xs text-warning-600 dark:text-warning-400"
+                  title={`${v.label}: Required - not set`}
+                >
+                  <span className="text-error-500 mr-0.5">*</span>
+                  <span>{v.label}:</span>{' '}
+                  <span className="italic">Not set</span>
+                </span>
+              ))}
+              {missingRequiredVars.length > 2 && (
+                <span className="text-xs text-warning-500">
+                  +{missingRequiredVars.length - 2} required
+                </span>
+              )}
+              {/* Configured fields - color code overrides */}
+              {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
+                // Check if this value is overridden from template
+                const isOverridden = templateProvider &&
+                  templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
+
+                return (
+                  <span
+                    key={v.key}
+                    className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
+                    title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
+                  >
+                    {v.required && <span className="text-error-500 mr-0.5">*</span>}
+                    <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
+                    <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
+                  </span>
+                )
+              })}
+              {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
+                <span className="text-xs text-neutral-400">
+                  +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
                 </span>
               )}
             </div>
           </div>
-        </div>
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {/* Start/Stop/Setup buttons for local providers */}
-          {!isCloud && onStart && onStop && (
-            <>
-              {isStarting ? (
-                <span className="p-1">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
-                </span>
-              ) : needsSetup && canStart ? (
-                <button
-                  onClick={(e) => handleButtonClick(e, onEdit)}
-                  className="p-1 text-warning-500 hover:text-warning-600 hover:bg-warning-100 dark:hover:bg-warning-900/30 rounded"
-                  title="Configure required settings"
-                  data-testid={`provider-setup-${provider.id}`}
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                </button>
-              ) : canStart ? (
-                <button
-                  onClick={handleStartClick}
-                  className="p-1 text-success-500 hover:text-success-600 hover:bg-success-100 dark:hover:bg-success-900/30 rounded"
-                  title="Start"
-                  data-testid={`provider-start-${provider.id}`}
-                >
-                  <PlayCircle className="h-3.5 w-3.5" />
-                </button>
-              ) : canStop ? (
-                <button
-                  onClick={handleStopClick}
-                  className="p-1 text-neutral-400 hover:text-error-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-                  title="Stop"
-                  data-testid={`provider-stop-${provider.id}`}
-                >
-                  <StopCircle className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-            </>
-          )}
-          <button
-            onClick={(e) => handleButtonClick(e, onEdit)}
-            className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-            title="Edit settings"
-            data-testid={`provider-edit-${provider.id}`}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          {provider.isTemplate && onCreateServiceConfig && (
-            <button
-              onClick={(e) => handleButtonClick(e, onCreateServiceConfig)}
-              className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Create new instance"
-              data-testid={`provider-create-instance-${provider.id}`}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {!provider.isTemplate && onDelete && (
-            <button
-              onClick={(e) => handleButtonClick(e, onDelete)}
-              className="p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
-              title="Delete instance"
-              data-testid={`provider-delete-${provider.id}`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
-        <StatusIndicator status={provider.status} />
+        )}
       </div>
 
-      {/* Config vars display - show missing required first, then configured */}
-      {(missingRequiredVars.length > 0 || configuredVars.length > 0) && (
-        <div className="px-3 pb-2 pt-0">
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {/* Missing required fields - shown first with warning */}
-            {missingRequiredVars.slice(0, 2).map((v) => (
-              <span
-                key={v.key}
-                className="text-xs text-warning-600 dark:text-warning-400"
-                title={`${v.label}: Required - not set`}
-              >
-                <span className="text-error-500 mr-0.5">*</span>
-                <span>{v.label}:</span>{' '}
-                <span className="italic">Not set</span>
-              </span>
-            ))}
-            {missingRequiredVars.length > 2 && (
-              <span className="text-xs text-warning-500">
-                +{missingRequiredVars.length - 2} required
-              </span>
-            )}
-            {/* Configured fields - color code overrides */}
-            {configuredVars.slice(0, 3 - Math.min(missingRequiredVars.length, 2)).map((v) => {
-              // Check if this value is overridden from template
-              const isOverridden = templateProvider &&
-                templateProvider.configVars.find(tv => tv.key === v.key)?.value !== v.value
-
-              return (
-                <span
-                  key={v.key}
-                  className={`text-xs ${isOverridden ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'}`}
-                  title={`${v.label}: ${v.value}${isOverridden ? ' (overridden)' : ''}`}
-                >
-                  {v.required && <span className="text-error-500 mr-0.5">*</span>}
-                  <span className="text-neutral-400 dark:text-neutral-500">{v.label}:</span>{' '}
-                  <span className={v.isSecret ? 'font-mono' : ''}>{v.value}</span>
-                </span>
-              )
-            })}
-            {configuredVars.length > (3 - Math.min(missingRequiredVars.length, 2)) && (
-              <span className="text-xs text-neutral-400">
-                +{configuredVars.length - (3 - Math.min(missingRequiredVars.length, 2))} more
-              </span>
-            )}
-          </div>
-        </div>
+      {/* Right side: Output ports for wiring */}
+      {provider.outputs && onOutputDragStart && (
+        <OutputPortsSidePanel
+          provider={provider}
+          outputWiring={outputWiring}
+          onOutputDragStart={onOutputDragStart}
+          onOutputDragEnd={onOutputDragEnd || (() => {})}
+          outputPortRefs={outputPortRefs}
+        />
       )}
 
+    </div>
+  )
+}
+
+// =============================================================================
+// Output Ports Section - Shows draggable output ports on providers
+// =============================================================================
+
+interface OutputPortsSectionProps {
+  provider: ProviderInfo
+  outputWiring: OutputWiringInfo[]
+  onOutputDragStart: (output: OutputInfo, startPos: { x: number; y: number }) => void
+  onOutputDragEnd: () => void
+  outputPortRefs?: Map<string, HTMLDivElement>
+}
+
+function OutputPortsSection({
+  provider,
+  outputWiring,
+  onOutputDragStart,
+  onOutputDragEnd,
+  outputPortRefs,
+}: OutputPortsSectionProps) {
+  const outputs = provider.outputs
+  if (!outputs) return null
+
+  // Build list of available outputs
+  const outputList: Array<{ key: string; label: string; value?: string }> = []
+
+  if (outputs.access_url) {
+    outputList.push({ key: 'access_url', label: 'URL', value: outputs.access_url })
+  }
+
+  if (outputs.env_vars) {
+    Object.entries(outputs.env_vars).forEach(([key, value]) => {
+      outputList.push({ key: `env_vars.${key}`, label: key, value })
+    })
+  }
+
+  if (outputs.capability_values) {
+    Object.entries(outputs.capability_values).forEach(([key, value]) => {
+      outputList.push({
+        key: `capability_values.${key}`,
+        label: key,
+        value: typeof value === 'string' ? value : JSON.stringify(value),
+      })
+    })
+  }
+
+  if (outputList.length === 0) return null
+
+  return (
+    <div className="px-3 pb-2 pt-1 border-t border-neutral-100 dark:border-neutral-800">
+      <div className="text-[10px] uppercase tracking-wider text-neutral-400 flex items-center gap-1 mb-1">
+        <ExternalLink className="w-2.5 h-2.5" />
+        Outputs
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {outputList.map((output) => {
+          const connectionCount = outputWiring.filter(
+            (w) => w.source_instance_id === provider.id && w.source_output_key === output.key
+          ).length
+
+          return (
+            <OutputPortPill
+              key={output.key}
+              instanceId={provider.id}
+              instanceName={provider.name}
+              outputKey={output.key}
+              outputLabel={output.label}
+              value={output.value}
+              connectionCount={connectionCount}
+              onDragStart={onOutputDragStart}
+              onDragEnd={onOutputDragEnd}
+              portRef={(el) => {
+                if (el && outputPortRefs) {
+                  outputPortRefs.set(`output::${provider.id}::${output.key}`, el)
+                }
+              }}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
+// Output Ports Side Panel - Shows outputs on the right side of provider cards
+// =============================================================================
+
+function OutputPortsSidePanel({
+  provider,
+  outputWiring,
+  onOutputDragStart,
+  onOutputDragEnd,
+  outputPortRefs,
+}: OutputPortsSectionProps) {
+  const outputs = provider.outputs
+  if (!outputs) return null
+
+  // Build list of available outputs
+  const outputList: Array<{ key: string; label: string; value?: string }> = []
+
+  if (outputs.access_url) {
+    outputList.push({ key: 'access_url', label: 'URL', value: outputs.access_url })
+  }
+
+  if (outputs.env_vars) {
+    Object.entries(outputs.env_vars).forEach(([key, value]) => {
+      outputList.push({ key: `env_vars.${key}`, label: key, value })
+    })
+  }
+
+  if (outputs.capability_values) {
+    Object.entries(outputs.capability_values).forEach(([key, value]) => {
+      outputList.push({
+        key: `capability_values.${key}`,
+        label: key,
+        value: typeof value === 'string' ? value : JSON.stringify(value),
+      })
+    })
+  }
+
+  if (outputList.length === 0) return null
+
+  return (
+    <div className="flex flex-col justify-center gap-1 px-2 py-2 border-l border-neutral-200 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/30 rounded-r-lg">
+      {outputList.map((output) => {
+        const connectionCount = outputWiring.filter(
+          (w) => w.source_instance_id === provider.id && w.source_output_key === output.key
+        ).length
+
+        return (
+          <OutputPortPill
+            key={output.key}
+            instanceId={provider.id}
+            instanceName={provider.name}
+            outputKey={output.key}
+            outputLabel={output.label}
+            value={output.value}
+            connectionCount={connectionCount}
+            onDragStart={onOutputDragStart}
+            onDragEnd={onOutputDragEnd}
+            portRef={(el) => {
+              if (el && outputPortRefs) {
+                outputPortRefs.set(`output::${provider.id}::${output.key}`, el)
+              }
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+// =============================================================================
+// Output Port Pill - Individual draggable output port
+// =============================================================================
+
+interface OutputPortPillProps {
+  instanceId: string
+  instanceName: string
+  outputKey: string
+  outputLabel: string
+  value?: string
+  connectionCount: number
+  onDragStart: (output: OutputInfo, startPos: { x: number; y: number }) => void
+  onDragEnd: () => void
+  portRef?: (el: HTMLDivElement | null) => void
+}
+
+function OutputPortPill({
+  instanceId,
+  instanceName,
+  outputKey,
+  outputLabel,
+  value,
+  connectionCount,
+  onDragStart,
+  onDragEnd,
+  portRef,
+}: OutputPortPillProps) {
+  const [isDragging, setIsDragging] = useState(false)
+  const localRef = useRef<HTMLDivElement>(null)
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+    const rect = localRef.current?.getBoundingClientRect()
+    if (rect) {
+      onDragStart(
+        { instanceId, instanceName, outputKey, outputLabel, value },
+        { x: rect.right, y: rect.top + rect.height / 2 }
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (!isDragging) return
+
+    const handleMouseUp = () => {
+      setIsDragging(false)
+      onDragEnd()
+    }
+
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => window.removeEventListener('mouseup', handleMouseUp)
+  }, [isDragging, onDragEnd])
+
+  const setRefs = (el: HTMLDivElement | null) => {
+    localRef.current = el
+    portRef?.(el)
+  }
+
+  const isConnected = connectionCount > 0
+
+  return (
+    <div
+      ref={setRefs}
+      data-port-id={`output::${instanceId}::${outputKey}`}
+      className={`
+        group/port relative flex items-center gap-1.5 px-2 py-1 rounded cursor-grab
+        text-xs transition-all
+        ${isDragging ? 'opacity-50 scale-95' : ''}
+        ${isConnected
+          ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300'
+          : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-violet-50 dark:hover:bg-violet-900/20'
+        }
+      `}
+      onMouseDown={handleMouseDown}
+      title={value ? `${outputLabel}: ${value}` : outputLabel}
+    >
+      <span className="truncate max-w-[80px]">{outputLabel}</span>
+      <div
+        className={`
+          w-2.5 h-2.5 rounded-full border-2 flex-shrink-0 transition-all
+          ${isConnected
+            ? 'bg-violet-500 border-violet-600'
+            : 'bg-neutral-300 dark:bg-neutral-600 border-neutral-400 dark:border-neutral-500'
+          }
+          group-hover/port:scale-125 group-hover/port:border-violet-400
+        `}
+      />
+      {connectionCount > 1 && (
+        <span className="absolute -top-1 -right-1 px-1 min-w-[12px] h-[12px] text-[8px] font-bold rounded-full bg-violet-500 text-white flex items-center justify-center">
+          {connectionCount}
+        </span>
+      )}
     </div>
   )
 }
@@ -841,6 +1245,13 @@ interface ServiceCardProps {
   onEdit?: (consumerId: string) => void
   onStart?: (consumerId: string) => Promise<void>
   onStop?: (consumerId: string) => Promise<void>
+  // Output wiring props
+  outputWiring?: OutputWiringInfo[]
+  draggingOutput?: OutputInfo | null
+  hoveredTarget?: string | null
+  onOutputWiringDelete?: (wiringId: string) => Promise<void>
+  envVarTargetRefs?: Map<string, HTMLDivElement>
+  providers?: ProviderInfo[] // To get source instance names
   onDeploy?: (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
 }
 
@@ -858,6 +1269,12 @@ function ConsumerCard({
   onStart,
   onStop,
   onDeploy,
+  outputWiring = [],
+  draggingOutput,
+  hoveredTarget,
+  onOutputWiringDelete,
+  envVarTargetRefs,
+  providers = [],
 }: ServiceCardProps) {
   const [isStarting, setIsStarting] = useState(false)
   const [showDeployMenu, setShowDeployMenu] = useState(false)
@@ -1078,6 +1495,19 @@ function ConsumerCard({
         })}
       </div>
 
+      {/* Wirable Env Vars - drop targets for output wiring */}
+      {consumer.wirableEnvVars && consumer.wirableEnvVars.length > 0 && (
+        <EnvVarTargetsSection
+          consumer={consumer}
+          outputWiring={outputWiring}
+          draggingOutput={draggingOutput}
+          hoveredTarget={hoveredTarget}
+          onOutputWiringDelete={onOutputWiringDelete}
+          envVarTargetRefs={envVarTargetRefs}
+          providers={providers}
+        />
+      )}
+
       {/* Service config vars at bottom */}
       {(missingRequiredVars.length > 0 || configuredVars.length > 0) && (
         <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/50">
@@ -1230,3 +1660,204 @@ function CapabilitySlot({
     </div>
   )
 }
+
+// =============================================================================
+// Env Var Targets Section - Shows drop targets for output wiring
+// =============================================================================
+
+interface EnvVarTargetsSectionProps {
+  consumer: ConsumerInfo
+  outputWiring: OutputWiringInfo[]
+  draggingOutput?: OutputInfo | null
+  hoveredTarget?: string | null
+  onOutputWiringDelete?: (wiringId: string) => Promise<void>
+  envVarTargetRefs?: Map<string, HTMLDivElement>
+  providers: ProviderInfo[]
+}
+
+function EnvVarTargetsSection({
+  consumer,
+  outputWiring,
+  draggingOutput,
+  hoveredTarget,
+  onOutputWiringDelete,
+  envVarTargetRefs,
+  providers,
+}: EnvVarTargetsSectionProps) {
+  const envVars = consumer.wirableEnvVars || []
+  if (envVars.length === 0) return null
+
+  return (
+    <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700">
+      <div className="text-[10px] uppercase tracking-wider text-neutral-400 flex items-center gap-1 mb-2">
+        <Link2 className="w-2.5 h-2.5" />
+        Wirable Env Vars
+      </div>
+      <div className="space-y-2">
+        {envVars.map((envVar) => {
+          // Find if this env var has a wired connection
+          const connection = outputWiring.find(
+            (w) => w.target_instance_id === consumer.id && w.target_env_var === envVar.key
+          )
+
+          // Get source info if connected
+          let sourceInfo: { instanceName: string; outputLabel: string } | null = null
+          if (connection) {
+            const sourceProvider = providers.find((p) => p.id === connection.source_instance_id)
+            const outputKey = connection.source_output_key
+            let outputLabel = outputKey
+            if (outputKey === 'access_url') {
+              outputLabel = 'URL'
+            } else if (outputKey.startsWith('env_vars.')) {
+              outputLabel = outputKey.replace('env_vars.', '')
+            } else if (outputKey.startsWith('capability_values.')) {
+              outputLabel = outputKey.replace('capability_values.', '')
+            }
+            sourceInfo = {
+              instanceName: sourceProvider?.name || connection.source_instance_id,
+              outputLabel,
+            }
+          }
+
+          const targetId = `envvar::${consumer.id}::${envVar.key}`
+          const isDropTarget = draggingOutput !== null
+          const isHovered = hoveredTarget === targetId
+
+          return (
+            <EnvVarDropTargetPill
+              key={envVar.key}
+              envVarKey={envVar.key}
+              envVarLabel={envVar.label}
+              value={envVar.value}
+              required={envVar.required}
+              isConnected={!!connection}
+              sourceInfo={sourceInfo}
+              isDropTarget={isDropTarget}
+              isHovered={isHovered}
+              onDisconnect={
+                connection && onOutputWiringDelete
+                  ? () => onOutputWiringDelete(connection.id)
+                  : undefined
+              }
+              targetRef={(el) => {
+                if (el && envVarTargetRefs) {
+                  envVarTargetRefs.set(targetId, el)
+                }
+              }}
+              targetId={targetId}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
+// Env Var Drop Target Pill - Individual drop target for env vars
+// =============================================================================
+
+interface EnvVarDropTargetPillProps {
+  envVarKey: string
+  envVarLabel: string
+  value?: string
+  required?: boolean
+  isConnected: boolean
+  sourceInfo: { instanceName: string; outputLabel: string } | null
+  isDropTarget: boolean
+  isHovered: boolean
+  onDisconnect?: () => void
+  targetRef?: (el: HTMLDivElement | null) => void
+  targetId: string
+}
+
+function EnvVarDropTargetPill({
+  envVarKey,
+  envVarLabel,
+  value,
+  required,
+  isConnected,
+  sourceInfo,
+  isDropTarget,
+  isHovered,
+  onDisconnect,
+  targetRef,
+  targetId,
+}: EnvVarDropTargetPillProps) {
+  return (
+    <div
+      ref={targetRef}
+      data-target-id={targetId}
+      className={`
+        group/target flex items-center gap-2 px-3 py-2 rounded-lg transition-all
+        ${isHovered
+          ? 'bg-violet-100 dark:bg-violet-900/30 ring-2 ring-violet-400 ring-offset-1'
+          : ''
+        }
+        ${isConnected
+          ? 'bg-success-50 dark:bg-success-900/20 border border-success-200 dark:border-success-700'
+          : isDropTarget
+            ? 'bg-violet-50 dark:bg-violet-900/10 border border-dashed border-violet-300 dark:border-violet-600'
+            : 'bg-neutral-50 dark:bg-neutral-800/50 border border-dashed border-neutral-300 dark:border-neutral-600'
+        }
+      `}
+    >
+      {/* Target indicator circle */}
+      <div
+        className={`
+          w-3 h-3 rounded-full border-2 flex-shrink-0 transition-all
+          ${isConnected
+            ? 'bg-success-500 border-success-600'
+            : isHovered
+              ? 'bg-violet-400 border-violet-500 scale-125'
+              : isDropTarget
+                ? 'bg-violet-200 dark:bg-violet-700 border-violet-400 dark:border-violet-500'
+                : 'bg-neutral-200 dark:bg-neutral-600 border-neutral-400 dark:border-neutral-500'
+          }
+        `}
+      />
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          {required && <span className="text-error-500 text-xs">*</span>}
+          <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300 truncate">
+            {envVarLabel}
+          </span>
+          <span className="text-[10px] text-neutral-400 font-mono">({envVarKey})</span>
+        </div>
+        {isConnected && sourceInfo ? (
+          <span className="text-[10px] text-success-600 dark:text-success-400 flex items-center gap-1">
+            <Link2 className="w-2.5 h-2.5" />
+            <span className="truncate">
+              {sourceInfo.instanceName}.{sourceInfo.outputLabel}
+            </span>
+          </span>
+        ) : value ? (
+          <span className="text-[10px] text-neutral-500 truncate block">
+            Current: {value}
+          </span>
+        ) : isDropTarget && !isConnected ? (
+          <span className="text-[10px] text-violet-500 animate-pulse">
+            {isHovered ? 'Release to connect' : 'Drop output here'}
+          </span>
+        ) : null}
+      </div>
+
+      {/* Disconnect button */}
+      {isConnected && onDisconnect && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onDisconnect()
+          }}
+          className="p-0.5 text-neutral-400 hover:text-error-500 rounded opacity-0 group-hover/target:opacity-100 transition-opacity"
+          title="Disconnect"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  )
+}
+

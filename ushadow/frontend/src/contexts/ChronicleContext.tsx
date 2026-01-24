@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { chronicleAuthApi } from '../services/chronicleApi'
-import { useChronicleRecording, ChronicleRecordingReturn } from '../hooks/useChronicleRecording'
+import { useWebRecording, WebRecordingReturn } from '../hooks/useWebRecording'
 
 interface ChronicleContextType {
   // Connection state
@@ -13,7 +13,7 @@ interface ChronicleContextType {
   disconnect: () => void
 
   // Recording (lifted to context level for global access)
-  recording: ChronicleRecordingReturn
+  recording: WebRecordingReturn
 }
 
 const ChronicleContext = createContext<ChronicleContextType | undefined>(undefined)
@@ -24,7 +24,7 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
   const [connectionError, setConnectionError] = useState<string | null>(null)
 
   // Lift recording hook to context level
-  const recording = useChronicleRecording()
+  const recording = useWebRecording()
 
   // Check if Chronicle is connected (has valid auth token)
   const checkConnection = useCallback(async (): Promise<boolean> => {

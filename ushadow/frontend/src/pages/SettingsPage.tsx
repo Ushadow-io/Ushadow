@@ -116,17 +116,21 @@ export default function SettingsPage() {
   // Extract selected providers
   const selectedProviders = config?.selected_providers || {}
 
-  // Extract service env configs
-  const serviceEnvConfigs: ServiceEnvConfig[] = config?.service_env_config
-    ? Object.entries(config.service_env_config).map(([serviceKey, envConfig]: [string, any]) => ({
-        serviceId: serviceKey.replace('_', ':'),
-        serviceName: serviceKey.split('_').pop() || serviceKey,
-        envVars: Object.entries(envConfig || {}).map(([name, conf]: [string, any]) => ({
-          name,
-          source: conf?.source || 'unknown',
-          settingPath: conf?.setting_path,
-          value: conf?.value,
-        })),
+  // Extract service env configs from new structure: services.{service_id}
+  const serviceEnvConfigs: ServiceEnvConfig[] = config?.services
+    ? Object.entries(config.services).map(([serviceId, envConfig]: [string, any]) => ({
+        serviceId: serviceId,
+        serviceName: serviceId.split(':').pop() || serviceId,
+        envVars: Object.entries(envConfig || {}).map(([name, value]: [string, any]) => {
+          // Parse new format: direct value or @settings.path mapping
+          const isMapping = typeof value === 'string' && value.startsWith('@settings.')
+          return {
+            name,
+            source: isMapping ? 'setting' : 'literal',
+            settingPath: isMapping ? value.substring(10) : undefined, // Remove '@settings.' prefix
+            value: isMapping ? undefined : value,
+          }
+        }),
       }))
     : []
 

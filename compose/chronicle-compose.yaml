@@ -10,7 +10,7 @@ x-ushadow:
   chronicle-backend:
     display_name: "Chronicle"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
-    requires: [llm, transcription]
+    requires: [llm, transcription, audio_input]
     optional: [memory]  # Uses memory if available, works without it
     route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
   chronicle-webui:
@@ -39,7 +39,7 @@ services:
       - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
       - MONGODB_DATABASE=${MONGODB_DATABASE}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
-      - QDRANT_BASE_URL=${QDRANT_BASE_URL:-http://qdrant:6333}
+      - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}
 
       # LLM capability (from selected provider) - REQUIRED
@@ -56,7 +56,7 @@ services:
       # Security (from settings) - AUTH_SECRET_KEY is required for JWT auth
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      - ACCEPTED_ISSUERS=${ACCEPTED_ISSUERS:-ushadow}
+      - ACCEPTED_ISSUERS=${ACCEPTED_ISSUERS:-ushadow,chronicle}
       # CORS
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
 
@@ -72,7 +72,7 @@ services:
       - ${PROJECT_ROOT}/config/defaults.yml:/app/config/defaults.yml:ro
 
     networks:
-      - infra-network
+      - ushadow-network
 
     # NOTE: Depends on shared infrastructure services (mongo, redis, qdrant)
     # These must be started separately via docker-compose.infra.yml
@@ -103,7 +103,7 @@ services:
       - VITE_BACKEND_URL=http://localhost:${CHRONICLE_PORT:-8080}
       - BACKEND_URL=http://chronicle-backend:8000
     networks:
-      - infra-network
+      - ushadow-network
     depends_on:
       - chronicle-backend
     restart: unless-stopped
@@ -119,6 +119,6 @@ volumes:
 
 # Use existing shared infrastructure network
 networks:
-  infra-network:
-    name: infra-network
+  ushadow-network:
+    name: ushadow-network
     external: true

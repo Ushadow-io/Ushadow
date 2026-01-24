@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Layers,
   Plus,
@@ -65,6 +66,8 @@ function getErrorMessage(error: any, fallback: string): string {
 }
 
 export default function ServiceConfigsPage() {
+  const navigate = useNavigate()
+
   // Templates state
   const [templates, setTemplates] = useState<Template[]>([])
 
@@ -122,14 +125,21 @@ export default function ServiceConfigsPage() {
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
     serviceId: string | null
+    mode?: 'deploy' | 'create-config'  // Mode: deploy or just create config
     targetId?: string  // Deploy target ID (for when we have a specific target selected)
     infraServices?: Record<string, any>  // Infrastructure data to pass to modal
+    configId?: string  // Optional config ID to use for deployment
   }>({
     isOpen: false,
     serviceId: null,
   })
   const [availableTargets, setAvailableTargets] = useState<DeployTarget[]>([])
   const [loadingTargets, setLoadingTargets] = useState(false)
+
+  // Deployment editing state
+  const [editingDeployment, setEditingDeployment] = useState<any | null>(null)
+  const [deploymentEnvVars, setDeploymentEnvVars] = useState<EnvVarInfo[]>([])
+  const [deploymentEnvConfigs, setDeploymentEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
 
   // Service catalog state
   const [showCatalog, setShowCatalog] = useState(false)
@@ -176,12 +186,17 @@ export default function ServiceConfigsPage() {
       console.log('Templates loaded:', templatesRes.data)
       console.log('Compose templates (before filter):', templatesRes.data.filter((t: any) => t.source === 'compose'))
       console.log('Compose templates (after installed filter):', templatesRes.data.filter((t: any) => t.source === 'compose' && t.installed))
+      // Debug: show requires for each compose template
+      templatesRes.data.filter((t: any) => t.source === 'compose').forEach((t: any) => {
+        console.log(`  ${t.id}: installed=${t.installed}, requires=${JSON.stringify(t.requires)}`)
+      })
 
       setTemplates(templatesRes.data)
       setServiceConfigs(instancesRes.data)
       setWiring(wiringRes.data)
       setServiceStatuses(statusesRes.data || {})
       setDeployments(deploymentsRes.data || [])
+      console.log('🚀 Deployments loaded:', deploymentsRes.data?.length || 0, deploymentsRes.data)
 
       // Note: instanceDetails are loaded lazily when needed (e.g., when user
       // clicks edit or switches to overview tab) to avoid N+1 API calls
@@ -221,6 +236,31 @@ export default function ServiceConfigsPage() {
   }
 
   const handleInstallService = async (serviceId: string) => {
+    // Find the service to check if it has a wizard
+    const serviceToInstall = catalogServices.find(s => s.service_id === serviceId)
+
+    // If service has a wizard, navigate immediately and install in background
+    if (serviceToInstall?.wizard) {
+      setShowCatalog(false)
+      navigate(`/wizard/${serviceToInstall.wizard}`)
+
+      // Continue installation in background
+      try {
+        await servicesApi.install(serviceId)
+        // Reload in background
+        const [templatesRes, catalogRes] = await Promise.all([
+          svcConfigsApi.getTemplates(),
+          servicesApi.getCatalog()
+        ])
+        setTemplates(templatesRes.data)
+        setCatalogServices(catalogRes.data)
+      } catch (error: any) {
+        console.error('Background installation failed:', error)
+      }
+      return
+    }
+
+    // For services without wizard, wait for installation to complete
     setInstallingService(serviceId)
     try {
       await servicesApi.install(serviceId)
@@ -438,8 +478,11 @@ export default function ServiceConfigsPage() {
   // Consumer/Service handlers for WiringBoard
   const handleStartConsumer = async (consumerId: string) => {
     try {
+      // Find the consumer to get its templateId (instances have different id vs templateId)
+      const consumer = wiringConsumers.find(c => c.id === consumerId)
+      const templateId = consumer?.templateId || consumerId
       // Extract service name from template ID (format: "compose_file:service_name")
-      const serviceName = consumerId.includes(':') ? consumerId.split(':').pop()! : consumerId
+      const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.startService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} started` })
       // Reload service statuses
@@ -455,8 +498,11 @@ export default function ServiceConfigsPage() {
 
   const handleStopConsumer = async (consumerId: string) => {
     try {
+      // Find the consumer to get its templateId (instances have different id vs templateId)
+      const consumer = wiringConsumers.find(c => c.id === consumerId)
+      const templateId = consumer?.templateId || consumerId
       // Extract service name from template ID (format: "compose_file:service_name")
-      const serviceName = consumerId.includes(':') ? consumerId.split(':').pop()! : consumerId
+      const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.stopService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} stopped` })
       // Reload service statuses
@@ -470,7 +516,7 @@ export default function ServiceConfigsPage() {
     }
   }
 
-  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => {
+  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string; configId?: string }) => {
     // consumerId can be either an instance ID or a template ID (for templates without instances)
     // Try to find instance first, otherwise treat as template ID
     const consumerInstance = instances.find(inst => inst.id === consumerId)
@@ -497,6 +543,7 @@ export default function ServiceConfigsPage() {
             serviceId: templateId,
             targetId: deployTarget.id,  // deployment_target_id
             infraServices: infraData,
+            configId: target.configId,  // Optional config to use for deployment
           })
         } else {
           // Multiple clusters - need to show cluster selection
@@ -504,6 +551,7 @@ export default function ServiceConfigsPage() {
           setDeployModalState({
             isOpen: true,
             serviceId: templateId,
+            configId: target.configId,  // Optional config to use for deployment
           })
         }
       } catch (err) {
@@ -535,6 +583,7 @@ export default function ServiceConfigsPage() {
           isOpen: true,
           serviceId: templateId,
           targetId: selectedTarget?.id,
+          configId: target.configId,  // Optional config to use for deployment
         })
       } catch (err) {
         console.error('Failed to load Docker targets:', err)
@@ -630,9 +679,16 @@ export default function ServiceConfigsPage() {
           }
         } else {
           // Use API response data (setting mapping or default)
+          // Convert template_override/instance_override sources to their edit format
+          let source = envVar.source || 'default'
+          if (source === 'template_override' || source === 'instance_override') {
+            // If it has a setting_path, it's a mapping
+            source = envVar.setting_path ? 'setting' : 'literal'
+          }
+
           initialEnvConfigs[envVar.name] = {
             name: envVar.name,
-            source: envVar.source || 'default',
+            source: source,
             setting_path: envVar.setting_path,
             value: envVar.resolved_value || envVar.value,
             new_setting_path: undefined,
@@ -665,6 +721,146 @@ export default function ServiceConfigsPage() {
   const providerTemplates = templates
     .filter((t) => t.source === 'provider' && t.provides)
 
+  const wiringProviders = [
+    // Templates (defaults) - show configured ones OR client/upload/remote mode (no config needed)
+    ...providerTemplates
+      .filter((t) => t.configured || ['client', 'upload', 'remote', 'relay'].includes(t.mode)) // Client-mode providers don't need setup
+      .map((t) => {
+        // Extract config vars from schema - include all fields with required indicator
+        const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> =
+          t.config_schema
+            ?.map((field: any) => {
+              const isSecret = field.type === 'secret'
+              const hasValue = field.has_value || !!field.value
+              let displayValue = ''
+              if (hasValue) {
+                if (isSecret) {
+                  displayValue = '••••••'
+                } else if (field.value) {
+                  displayValue = String(field.value)
+                } else if (field.has_value) {
+                  // Has a value but we can't display it - show brief indicator
+                  displayValue = '(set)'
+                }
+              }
+              return {
+                key: field.key,
+                label: field.label || field.key,
+                value: displayValue,
+                isSecret,
+                required: field.required,
+              }
+            }) || []
+
+        // Cloud services: status is based on configuration, not Docker
+        // Local services: status is based on Docker availability
+        let status: string
+        if (t.mode === 'cloud') {
+          // Cloud services are either configured or need setup
+          status = t.configured ? 'configured' : 'needs_setup'
+        } else {
+          // Local services use availability (from Docker)
+          status = t.available ? 'running' : 'stopped'
+        }
+
+        // For LLM providers, append model to name for clarity
+        let displayName = t.name
+        if (t.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${t.name}-${modelVar.value}`
+          }
+        }
+
+        return {
+          id: t.id,
+          name: displayName,
+          capability: t.provides!,
+          status,
+          mode: t.mode,
+          isTemplate: true,
+          templateId: t.id,
+          configVars,
+          configured: t.configured,
+        }
+      }),
+    // Custom instances from provider templates
+    ...instances
+      .filter((i) => {
+        const template = providerTemplates.find((t) => t.id === i.template_id)
+        return template && template.provides
+      })
+      .map((i) => {
+        const template = providerTemplates.find((t) => t.id === i.template_id)!
+        // Get instance config from instanceDetails if loaded
+        const details = instanceDetails[i.id]
+        const schema = template.config_schema || []
+        const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> = []
+
+        // Build config vars from schema, merging with instance overrides
+        schema.forEach((field: any) => {
+          const overrideValue = details?.config?.values?.[field.key]
+          const isSecret = field.type === 'secret'
+          let displayValue = ''
+          if (overrideValue) {
+            // Instance has an override value
+            displayValue = isSecret ? '••••••' : String(overrideValue)
+          } else if (field.value) {
+            // Inherited from template - show the actual value
+            displayValue = isSecret ? '••••••' : String(field.value)
+          } else if (field.has_value) {
+            // Template has a value but we can't display it
+            displayValue = isSecret ? '••••••' : '(set)'
+          }
+          configVars.push({
+            key: field.key,
+            label: field.label || field.key,
+            value: displayValue,
+            isSecret,
+            required: field.required,
+          })
+        })
+
+        // Determine status based on mode
+        let instanceStatus: string
+        if (template.mode === 'cloud') {
+          // Cloud instances use config-based status
+          // Check if all required fields have values
+          const hasAllRequired = schema.every((field: any) => {
+            if (!field.required) return true
+            const overrideValue = details?.config?.values?.[field.key]
+            return !!(overrideValue || field.has_value || field.value)
+          })
+          instanceStatus = hasAllRequired ? 'configured' : 'needs_setup'
+        } else {
+          // Local instances use Docker status
+          instanceStatus = i.status === 'running' ? 'running' : i.status
+        }
+
+        // For LLM providers, append model to name for clarity
+        let displayName = i.name
+        if (template.provides === 'llm') {
+          const modelVar = configVars.find(v => v.key === 'model')
+          if (modelVar && modelVar.value && modelVar.value !== '(set)') {
+            displayName = `${i.name}-${modelVar.value}`
+          }
+        }
+
+        return {
+          id: i.id,
+          name: displayName,
+          capability: template.provides!,
+          status: instanceStatus,
+          mode: template.mode,
+          isTemplate: false,
+          templateId: i.template_id,
+          configVars,
+          configured: template.configured, // ServiceConfig inherits template's configured status
+        }
+      }),
+  ]
+
+  // Consumers: compose service templates
   const composeTemplates = templates.filter((t) => t.source === 'compose' && t.installed)
 
   // Handle inline provider card editing (Providers tab)
@@ -859,11 +1055,20 @@ export default function ServiceConfigsPage() {
                     }
                   } else {
                     // Use service default configuration
+                    // Convert template_override/instance_override sources to their edit format
+                    let source = envVar.source || 'default'
+                    if (source === 'template_override' || source === 'instance_override') {
+                      // If it has a setting_path, it's a mapping
+                      source = envVar.setting_path ? 'setting' : 'literal'
+                    }
+
+                    // Try resolved_value first, then value, then default_value, then empty string
+                    const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
                     initialEnvConfigs[envVar.name] = {
                       name: envVar.name,
-                      source: envVar.source || 'default',
+                      source: source,
                       setting_path: envVar.setting_path,
-                      value: envVar.resolved_value || envVar.value,
+                      value: fallbackValue,
                       new_setting_path: undefined,
                       locked: envVar.locked,
                       provider_name: envVar.provider_name,
@@ -944,9 +1149,13 @@ export default function ServiceConfigsPage() {
         // For templates, check if we have env config (compose services) or config schema (providers)
         if (envVars.length > 0) {
           // Compose service template - save env configs to settings store
-          const envVarConfigs = Object.values(envConfigs).filter(
-            (config) => config.source === 'new_setting' && config.value && config.new_setting_path
-          )
+          const envVarConfigs = Object.values(envConfigs).filter((config) => {
+            // Include configs that have actual values to save
+            if (config.source === 'new_setting' && config.value && config.new_setting_path) return true
+            if (config.source === 'setting' && config.setting_path) return true
+            if (config.source === 'literal' && config.value) return true
+            return false
+          })
 
           if (envVarConfigs.length > 0) {
             // Call the service API to update env config
@@ -1037,17 +1246,26 @@ export default function ServiceConfigsPage() {
   const currentEnv = import.meta.env.VITE_ENV_NAME || 'ushadow'
   const currentComposeProject = `ushadow-${currentEnv}`
 
-  const filteredDeployments = filterCurrentEnvOnly
-    ? deployments.filter((d) => {
-        // Match deployments from the current environment only
-        // Check if the deployment's hostname matches this environment's compose project or env name
-        return d.unode_hostname && (
-          d.unode_hostname === currentEnv ||
-          d.unode_hostname === currentComposeProject ||
-          d.unode_hostname.startsWith(`${currentComposeProject}.`)
-        )
-      })
-    : deployments
+  const filteredDeployments = useMemo(() => {
+    console.log(`🔍 Filtering deployments: filterCurrentEnvOnly=${filterCurrentEnvOnly}, currentEnv=${currentEnv}, currentComposeProject=${currentComposeProject}`)
+    const filtered = filterCurrentEnvOnly
+      ? deployments.filter((d) => {
+          // Match deployments from the current environment only
+          // Check if the deployment's hostname matches this environment's compose project or env name
+          const matches = d.unode_hostname && (
+            d.unode_hostname === currentEnv ||
+            d.unode_hostname === currentComposeProject ||
+            d.unode_hostname.startsWith(`${currentComposeProject}.`)
+          )
+          if (!matches && d.unode_hostname) {
+            console.log(`  ⏭️ Filtered out deployment ${d.id}: hostname=${d.unode_hostname}`)
+          }
+          return matches
+        })
+      : deployments
+    console.log(`✅ Filtered deployments: ${filtered.length} of ${deployments.length}`, filtered)
+    return filtered
+  }, [deployments, filterCurrentEnvOnly, currentEnv, currentComposeProject])
 
   // Providers in "Add" menu: not configured and not yet added
   const availableToAdd = allProviderTemplates.filter(
@@ -1125,7 +1343,9 @@ export default function ServiceConfigsPage() {
       setLoadingEnvConfig(true)
 
       // Load environment variable configuration for this service
-      const envResponse = await servicesApi.getEnvConfig(template.id)
+      // Pass deployment target to get properly resolved values
+      const deployTarget = deployment.unode_hostname || deployment.backend_metadata?.cluster_id
+      const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget)
       const envData = envResponse.data
 
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
@@ -1136,12 +1356,34 @@ export default function ServiceConfigsPage() {
       const deployedEnv = deployment.deployed_config?.environment || {}
 
       allEnvVars.forEach((envVar) => {
-        const currentValue = deployedEnv[envVar.name] || envVar.default_value || ''
+        // Determine value and source
+        let value: string
+        let source: string
+
+        // Check if this value is overridden in the deployed config
+        if (deployedEnv[envVar.name] !== undefined) {
+          // Value is explicitly set in deployment - this is an override
+          value = deployedEnv[envVar.name]
+          source = 'literal'
+        } else if (envVar.setting_path && envVar.resolved_value) {
+          // Value comes from a setting
+          value = envVar.resolved_value
+          source = 'setting'
+        } else if (envVar.default_value) {
+          // Using default value
+          value = envVar.default_value
+          source = 'default'
+        } else {
+          // No value
+          value = ''
+          source = 'default'
+        }
+
         initialEnvConfigs[envVar.name] = {
           name: envVar.name,
-          source: 'literal',
-          value: currentValue,
-          setting_path: undefined,
+          source: source as any,
+          value: value,
+          setting_path: envVar.setting_path,
           new_setting_path: undefined,
         }
       })
@@ -1340,8 +1582,10 @@ export default function ServiceConfigsPage() {
             {composeTemplates
               .filter((t) => t.requires && t.requires.length > 0)
               .map((template) => {
-                // Find the config for this template (if any)
-                const config = instances.find((i) => i.template_id === template.id) || null
+                // Find ALL configs for this template
+                const templateConfigs = instances.filter((i) => i.template_id === template.id)
+                // Show the first config (or null if none)
+                const config = templateConfigs[0] || null
                 const consumerId = config?.id || template.id
 
                 // Get service status from Docker
@@ -1353,6 +1597,9 @@ export default function ServiceConfigsPage() {
 
                 // Get deployments for this service (filtered by environment)
                 const serviceDeployments = filteredDeployments.filter(d => d.service_id === template.id)
+                if (serviceDeployments.length > 0) {
+                  console.log(`📦 Service ${template.id} has ${serviceDeployments.length} deployments:`, serviceDeployments)
+                }
 
                 return (
                   <FlatServiceCard
@@ -1361,13 +1608,20 @@ export default function ServiceConfigsPage() {
                     config={config ? { ...config, status: status?.status || config.status } : null}
                     wiring={consumerWiring}
                     providerTemplates={providerTemplates}
-                    initialConfigs={instances}
-                    instanceCount={config ? 1 : 0}
+                    initialConfigs={templateConfigs}
+                    instanceCount={templateConfigs.length}
                     deployments={serviceDeployments}
                     onStopDeployment={handleStopDeployment}
                     onRestartDeployment={handleRestartDeployment}
                     onRemoveDeployment={handleRemoveDeployment}
                     onEditDeployment={handleEditDeployment}
+                    onAddConfig={() => {
+                      setDeployModalState({
+                        isOpen: true,
+                        serviceId: template.id,
+                        mode: 'create-config',
+                      })
+                    }}
                     onWiringChange={async (capability, sourceConfigId) => {
                       try {
                         const newWiring = await svcConfigsApi.createWiring({
@@ -1419,7 +1673,6 @@ export default function ServiceConfigsPage() {
                           id,
                           template_id: templateId,
                           name,
-                          deployment_target: 'local',
                           config: configValues,
                         })
                         const instancesRes = await svcConfigsApi.getServiceConfigs()
@@ -1948,13 +2201,38 @@ export default function ServiceConfigsPage() {
               </button>
               <button
                 onClick={async () => {
-                  // TODO: Implement deployment update API call
-                  setMessage({ type: 'success', text: 'Deployment configuration updated' })
-                  setEditingDeployment(null)
-                  setDeploymentEnvVars([])
-                  setDeploymentEnvConfigs({})
+                  if (!editingDeployment) return
+
+                  try {
+                    // Build env vars object from all configs
+                    // Backend will filter to only save actual overrides
+                    const envVars: Record<string, string> = {}
+                    Object.entries(deploymentEnvConfigs).forEach(([name, config]) => {
+                      if (config.value) {
+                        envVars[name] = config.value
+                      }
+                    })
+
+                    // Update deployment with new env vars
+                    await deploymentsApi.updateDeployment(editingDeployment.id, envVars)
+
+                    setMessage({ type: 'success', text: 'Deployment updated and redeployed successfully' })
+                    setEditingDeployment(null)
+                    setDeploymentEnvVars([])
+                    setDeploymentEnvConfigs({})
+
+                    // Refresh deployments list
+                    await refreshDeployments()
+                  } catch (error: any) {
+                    console.error('Failed to update deployment:', error)
+                    setMessage({
+                      type: 'error',
+                      text: error.response?.data?.detail || 'Failed to update deployment'
+                    })
+                  }
                 }}
                 className="btn-primary"
+                data-testid="save-deployment-changes"
               >
                 Save Changes
               </button>
@@ -2028,10 +2306,19 @@ export default function ServiceConfigsPage() {
         <DeployModal
           isOpen={true}
           onClose={() => setDeployModalState({ isOpen: false, serviceId: null })}
+          onSuccess={async () => {
+            // Refresh both deployments and configs after modal completes
+            await refreshDeployments()
+            // Reload configs to show newly created ones
+            const configsRes = await svcConfigsApi.getServiceConfigs()
+            setServiceConfigs(configsRes.data)
+          }}
+          mode={deployModalState.mode || 'deploy'}
           target={deployModalState.targetId ? availableTargets.find((t) => t.id === deployModalState.targetId) : undefined}
           availableTargets={availableTargets}
           infraServices={deployModalState.infraServices || {}}
           preselectedServiceId={deployModalState.serviceId || undefined}
+          preselectedConfigId={deployModalState.configId}
         />
       )}
 

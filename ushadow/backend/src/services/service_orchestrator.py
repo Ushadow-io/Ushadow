@@ -28,7 +28,7 @@ from src.services.docker_manager import (
     ServiceType,
     ServiceEndpoint,
 )
-from src.config.omegaconf_settings import (
+from src.config import (
     get_settings,
     Settings,
     Source,
@@ -46,6 +46,7 @@ WELL_KNOWN_ENV_MAPPINGS = {
     "AUTH_SECRET_KEY": "security.auth_secret_key",
     "ADMIN_PASSWORD": "security.admin_password",
     "USER": "auth.admin_email",  # For OpenMemory backend
+    "MYCELIA_SECRET_KEY": "security.auth_secret_key",  # Mycelia JWT signing
 }
 
 
@@ -72,6 +73,7 @@ class ServiceSummary:
     profiles: List[str] = field(default_factory=list)
     required_env_count: int = 0
     optional_env_count: int = 0
+    wizard: Optional[str] = None  # ID of setup wizard if available
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -91,6 +93,7 @@ class ServiceSummary:
             "profiles": self.profiles,
             "required_env_count": self.required_env_count,
             "optional_env_count": self.optional_env_count,
+            "wizard": self.wizard,
         }
 
 
@@ -434,9 +437,8 @@ class ServiceOrchestrator:
         # Get enabled state
         enabled = await self.settings.get(f"installed_services.{service.service_name}.enabled")
 
-        # Get env config
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        env_config = await self.settings.get(config_key) or {}
+        # Get template-level env config from new structure: services.{service_id}
+        env_config = await self.settings.get(f"services.{service.service_id}") or {}
 
         # Get service preferences
         prefs_key = f"service_preferences.{service.service_name}"
@@ -535,101 +537,83 @@ class ServiceOrchestrator:
         }
 
     async def update_env_config(self, name: str, env_vars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Save environment variable configuration."""
+        """Save environment variable configuration to services.{service_id} in config.overrides.yaml."""
         service = self._find_service(name)
         if not service:
             return None
 
-        # Process env vars - handle new_setting by creating settings first
+        # Process env vars - convert to new simple format
         new_settings_to_create = {}
-        env_config = {}
+        template_overrides = {}
 
         for ev in env_vars:
             ev_name = ev.get("name")
             source = ev.get("source")
+            value = ev.get("value", "")
 
-            if source == "new_setting" and ev.get("new_setting_path") and ev.get("value"):
-                new_settings_to_create[ev["new_setting_path"]] = ev["value"]
-                env_config[ev_name] = {
-                    "source": "setting",
-                    "setting_path": ev["new_setting_path"],
-                }
-            else:
-                env_config[ev_name] = {
-                    "source": source,
-                    "setting_path": ev.get("setting_path"),
-                    "value": ev.get("value"),
-                }
+            # Skip masked values - they indicate the frontend is passing back masked secrets
+            if value and isinstance(value, str) and (value.startswith("***") or value.startswith("•••")):
+                logger.debug(f"Skipping masked value for {ev_name}")
+                continue
+
+            if source == "new_setting" and ev.get("new_setting_path") and value:
+                # Create the setting and reference it
+                new_settings_to_create[ev["new_setting_path"]] = value
+                template_overrides[ev_name] = f"@settings.{ev['new_setting_path']}"
+
+            elif source == "setting" and ev.get("setting_path"):
+                # Reference existing setting using @settings.path syntax
+                # IMPORTANT: Ignore the value field - only use the setting_path
+                template_overrides[ev_name] = f"@settings.{ev['setting_path']}"
+
+            elif source == "literal" and value:
+                # Store literal value directly
+                template_overrides[ev_name] = value
+
+            # else: source == "default" or empty - don't save anything (use compose default)
 
         # Create new settings if any
         if new_settings_to_create:
             await self.settings.update(new_settings_to_create)
             logger.info(f"Created {len(new_settings_to_create)} new settings")
 
-        # Save env config mapping
-        service_key = service.service_id.replace(':', '_')
-        await self.settings.update({
-            "service_env_config": {
-                service_key: env_config
-            }
-        })
-
-        logger.info(f"Saved env config for {service.service_id}: {len(env_config)} vars")
+        # Save to new structure: services.{service_id}
+        # OmegaConf.merge in store will preserve existing keys not in this update
+        if template_overrides:
+            await self.settings.update({
+                f"services.{service.service_id}": template_overrides
+            })
+            logger.info(f"Saved {len(template_overrides)} template overrides for {service.service_id}")
 
         return {
             "service_id": service.service_id,
-            "saved": len(env_config),
+            "saved": len(template_overrides),
             "new_settings_created": len(new_settings_to_create),
             "message": f"Environment configuration saved for {service.service_name}"
         }
 
     async def resolve_env_vars(self, name: str) -> Optional[Dict[str, Any]]:
-        """Resolve env vars to actual values for runtime."""
+        """Resolve env vars to actual values for runtime using Settings API."""
         service = self._find_service(name)
         if not service:
             return None
 
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await self.settings.get(config_key) or {}
+        # Use Settings API to get all resolutions
+        resolutions = await self.settings.for_service(service.service_id)
 
         resolved = {}
         missing = []
 
         for ev in service.all_env_vars:
-            config = saved_config.get(ev.name, {})
-            if hasattr(config, 'items'):
-                config = dict(config)
-            source = config.get("source", "default")
+            resolution = resolutions.get(ev.name)
 
-            if source == "setting":
-                setting_path = config.get("setting_path")
-                if setting_path:
-                    value = await self.settings.get(setting_path)
-                    if value:
-                        resolved[ev.name] = self._mask_sensitive(ev.name, str(value))
-                    elif ev.is_required:
-                        missing.append(f"{ev.name} (setting '{setting_path}' is empty)")
-
-            elif source == "literal":
-                value = config.get("value")
-                if value:
-                    resolved[ev.name] = self._mask_sensitive(ev.name, value)
-                elif ev.is_required:
-                    missing.append(f"{ev.name} (no value provided)")
-
-            elif source == "default":
-                if ev.has_default:
-                    resolved[ev.name] = f"(default: {ev.default_value})"
-                elif ev.name in WELL_KNOWN_ENV_MAPPINGS:
-                    # Auto-resolve well-known env vars from settings
-                    settings_path = WELL_KNOWN_ENV_MAPPINGS[ev.name]
-                    value = await self.settings.get(settings_path)
-                    if value:
-                        resolved[ev.name] = self._mask_sensitive(ev.name, str(value))
-                    elif ev.is_required:
-                        missing.append(f"{ev.name} (setting '{settings_path}' is empty)")
-                elif ev.is_required:
-                    missing.append(f"{ev.name} (no default, not configured)")
+            if resolution and resolution.found:
+                # Mask sensitive values for display
+                resolved[ev.name] = self._mask_sensitive(ev.name, resolution.value)
+            else:
+                # Not resolved
+                if ev.is_required:
+                    missing.append(f"{ev.name} (not configured)")
 
         return {
             "service_id": service.service_id,
@@ -653,39 +637,22 @@ class ServiceOrchestrator:
         if not service:
             return None
 
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await self.settings.get(config_key) or {}
+        # Use Settings API to get all resolutions (unmasked)
+        resolutions = await self.settings.for_service(service.service_id)
 
         env_vars = {}
         missing = []
 
         for ev in service.all_env_vars:
-            config = saved_config.get(ev.name, {})
-            if hasattr(config, 'items'):
-                config = dict(config)
-            source = config.get("source", "default")
+            resolution = resolutions.get(ev.name)
 
-            value = None
-
-            if source == "setting":
-                setting_path = config.get("setting_path")
-                if setting_path:
-                    value = await self.settings.get(setting_path)
-
-            elif source == "literal":
-                value = config.get("value")
-
-            elif source == "default":
-                if ev.has_default:
-                    value = ev.default_value
-                elif ev.name in WELL_KNOWN_ENV_MAPPINGS:
-                    settings_path = WELL_KNOWN_ENV_MAPPINGS[ev.name]
-                    value = await self.settings.get(settings_path)
-
-            if value is not None:
-                env_vars[ev.name] = str(value)
-            elif ev.is_required:
-                missing.append(ev.name)
+            if resolution and resolution.found:
+                # Export actual unmasked value
+                env_vars[ev.name] = str(resolution.value)
+            else:
+                # Not resolved
+                if ev.is_required:
+                    missing.append(ev.name)
 
         # Format as .env file content
         env_lines = [f"{k}={v}" for k, v in sorted(env_vars.items())]
@@ -882,6 +849,7 @@ class ServiceOrchestrator:
             profiles=service.profiles,
             required_env_count=len(service.required_env_vars),
             optional_env_count=len(service.optional_env_vars),
+            wizard=service.wizard,
         )
 
     async def _check_needs_setup(self, service: DiscoveredService) -> bool:

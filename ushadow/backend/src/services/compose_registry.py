@@ -121,6 +121,7 @@ class DiscoveredService:
     namespace: Optional[str] = None  # Docker Compose project / K8s namespace
     infra_services: List[str] = field(default_factory=list)  # Infra services to start first
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
+    wizard: Optional[str] = None  # Setup wizard ID from x-ushadow
 
     # Environment variables
     required_env_vars: List[ComposeEnvVar] = field(default_factory=list)
@@ -282,6 +283,7 @@ class ComposeServiceRegistry:
                 namespace=service.namespace,
                 infra_services=service.infra_services,
                 route_path=service.route_path,
+                wizard=service.wizard,
                 required_env_vars=service.required_env_vars,
                 optional_env_vars=service.optional_env_vars,
             )

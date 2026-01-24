@@ -21,8 +21,6 @@ from src.models.service_config import (
     ServiceConfig,
     ConfigValues,
     ServiceConfigCreate,
-    ServiceOutputs,
-    ServiceConfigStatus,
     ServiceConfigSummary,
     ServiceConfigUpdate,
     Template,
@@ -78,49 +76,6 @@ class ServiceConfigManager:
         self._defaults: Dict[str, str] = {}  # capability -> default instance
         self._loaded = False
 
-    def _parse_service_outputs(self, outputs_data: Dict[str, Any]) -> ServiceOutputs:
-        """
-        Parse ServiceOutputs from YAML data, handling both old and new formats.
-
-        Old format: env_vars is Dict[str, str]
-        New format: env_vars is Dict[str, EnvVarValue] with value/source/source_path
-
-        Args:
-            outputs_data: Raw outputs dict from YAML
-
-        Returns:
-            ServiceOutputs with properly typed env_vars
-        """
-        from src.models.service_config import EnvVarValue, EnvVarSource
-
-        env_vars_raw = outputs_data.get('env_vars', {})
-        env_vars_parsed = {}
-
-        for key, value in env_vars_raw.items():
-            if isinstance(value, dict) and 'value' in value:
-                # New format: already has EnvVarValue structure
-                env_vars_parsed[key] = EnvVarValue(
-                    value=value['value'],
-                    source=value.get('source', EnvVarSource.DEFAULT),
-                    source_path=value.get('source_path')
-                )
-            elif isinstance(value, str):
-                # Old format: just a string value
-                # Assume it came from default/provider (we don't know the exact source)
-                env_vars_parsed[key] = EnvVarValue(
-                    value=value,
-                    source=EnvVarSource.DEFAULT,
-                    source_path=None
-                )
-            else:
-                logger.warning(f"Unexpected env_vars format for {key}: {type(value)}")
-
-        return ServiceOutputs(
-            access_url=outputs_data.get('access_url'),
-            env_vars=env_vars_parsed,
-            capability_values=outputs_data.get('capability_values', {})
-        )
-
     def _ensure_loaded(self) -> None:
         """Ensure config is loaded."""
         if not self._loaded:
@@ -166,26 +121,12 @@ class ServiceConfigManager:
                     name=instance_data.get('name', config_id),
                     description=instance_data.get('description'),
                     config=ConfigValues(values=resolved_config),
-                    deployment_target=instance_data.get('deployment_target'),
-                    status=ServiceConfigStatus(instance_data.get('status', 'pending')),
-                    outputs=self._parse_service_outputs(instance_data.get('outputs', {})),
                     created_at=instance_data.get('created_at'),
-                    deployed_at=instance_data.get('deployed_at'),
                     updated_at=instance_data.get('updated_at'),
-                    error=instance_data.get('error'),
-                    # Deployment tracking
-                    deployment_id=instance_data.get('deployment_id'),
-                    container_id=instance_data.get('container_id'),
-                    container_name=instance_data.get('container_name'),
-                    # Integration-specific fields
+                    # Integration-specific fields (null for non-integrations)
                     integration_type=instance_data.get('integration_type'),
                     sync_enabled=instance_data.get('sync_enabled'),
                     sync_interval=instance_data.get('sync_interval'),
-                    last_sync_at=instance_data.get('last_sync_at'),
-                    last_sync_status=instance_data.get('last_sync_status'),
-                    last_sync_items_count=instance_data.get('last_sync_items_count'),
-                    last_sync_error=instance_data.get('last_sync_error'),
-                    next_sync_at=instance_data.get('next_sync_at'),
                 )
                 self._service_configs[config_id] = instance
 
@@ -251,54 +192,20 @@ class ServiceConfigManager:
                 else:
                     # Fallback: no raw config available, save resolved values
                     instance_data['config'] = instance.config.values
-            if instance.deployment_target:
-                instance_data['deployment_target'] = instance.deployment_target
-            if instance.status != ServiceConfigStatus.PENDING:
-                # Handle both enum and string status values
-                status_value = instance.status.value if isinstance(instance.status, ServiceConfigStatus) else instance.status
-                instance_data['status'] = status_value
-            if instance.outputs.access_url or instance.outputs.env_vars:
-                instance_data['outputs'] = {}
-                if instance.outputs.access_url:
-                    instance_data['outputs']['access_url'] = instance.outputs.access_url
-                if instance.outputs.env_vars:
-                    # Serialize EnvVarValue objects to dicts
-                    instance_data['outputs']['env_vars'] = {
-                        k: v.model_dump() if hasattr(v, 'model_dump') else v
-                        for k, v in instance.outputs.env_vars.items()
-                    }
-                if instance.outputs.capability_values:
-                    instance_data['outputs']['capability_values'] = instance.outputs.capability_values
+
+            # Timestamps
             if instance.created_at:
                 instance_data['created_at'] = instance.created_at.isoformat() if isinstance(instance.created_at, datetime) else instance.created_at
-            if instance.error:
-                instance_data['error'] = instance.error
+            if instance.updated_at:
+                instance_data['updated_at'] = instance.updated_at.isoformat() if isinstance(instance.updated_at, datetime) else instance.updated_at
 
-            # Deployment tracking fields
-            if instance.deployment_id:
-                instance_data['deployment_id'] = instance.deployment_id
-            if instance.container_id:
-                instance_data['container_id'] = instance.container_id
-            if instance.container_name:
-                instance_data['container_name'] = instance.container_name
-
-            # Integration-specific fields
+            # Integration-specific fields (null for non-integrations)
             if instance.integration_type is not None:
                 instance_data['integration_type'] = instance.integration_type
             if instance.sync_enabled is not None:
                 instance_data['sync_enabled'] = instance.sync_enabled
             if instance.sync_interval is not None:
                 instance_data['sync_interval'] = instance.sync_interval
-            if instance.last_sync_at:
-                instance_data['last_sync_at'] = instance.last_sync_at.isoformat() if isinstance(instance.last_sync_at, datetime) else instance.last_sync_at
-            if instance.last_sync_status:
-                instance_data['last_sync_status'] = instance.last_sync_status
-            if instance.last_sync_items_count is not None:
-                instance_data['last_sync_items_count'] = instance.last_sync_items_count
-            if instance.last_sync_error:
-                instance_data['last_sync_error'] = instance.last_sync_error
-            if instance.next_sync_at:
-                instance_data['next_sync_at'] = instance.next_sync_at.isoformat() if isinstance(instance.next_sync_at, datetime) else instance.next_sync_at
 
             data['instances'][config_id] = instance_data
 
@@ -345,7 +252,7 @@ class ServiceConfigManager:
     # =========================================================================
 
     def list_service_configs(self) -> List[ServiceConfigSummary]:
-        """List all instances."""
+        """List all service configurations."""
         self._ensure_loaded()
 
         # Get provider registry to look up 'provides' capability
@@ -353,21 +260,19 @@ class ServiceConfigManager:
         provider_registry = get_provider_registry()
 
         result = []
-        for inst in self._service_configs.values():
-            # Look up what capability this instance provides
+        for config in self._service_configs.values():
+            # Look up what capability this config provides
             provides = None
-            provider = provider_registry.get_provider(inst.template_id)
+            provider = provider_registry.get_provider(config.template_id)
             if provider:
                 provides = provider.capability
 
             result.append(ServiceConfigSummary(
-                id=inst.id,
-                template_id=inst.template_id,
-                name=inst.name,
-                status=inst.status,
+                id=config.id,
+                template_id=config.template_id,
+                name=config.name,
                 provides=provides,
-                deployment_target=inst.deployment_target,
-                access_url=inst.outputs.access_url,
+                description=config.description,
             ))
 
         return result
@@ -410,8 +315,8 @@ class ServiceConfigManager:
 
         return overrides
 
-    def create_instance(self, data: ServiceConfigCreate) -> ServiceConfig:
-        """Create a new instance."""
+    def create_service_config(self, data: ServiceConfigCreate) -> ServiceConfig:
+        """Create a new service configuration."""
         self._ensure_loaded()
 
         if data.id in self._service_configs:
@@ -419,71 +324,62 @@ class ServiceConfigManager:
 
         now = datetime.now(timezone.utc)
 
-        # Determine initial status
-        status = ServiceConfigStatus.PENDING
-        if data.deployment_target == "cloud":
-            status = ServiceConfigStatus.NOT_APPLICABLE
-
-        instance = ServiceConfig(
+        config = ServiceConfig(
             id=data.id,
             template_id=data.template_id,
             name=data.name,
             description=data.description,
             config=ConfigValues(values=data.config),
-            deployment_target=data.deployment_target,
-            status=status,
             created_at=now,
             updated_at=now,
         )
 
         # Store both resolved ServiceConfig and raw OmegaConf config
-        self._service_configs[data.id] = instance
+        self._service_configs[data.id] = config
         if data.config:
             # Store raw config to preserve interpolations for saving
             self._omegaconf_configs[data.id] = OmegaConf.create(data.config)
 
         self._save_service_configs()
 
-        logger.info(f"Created instance: {data.id} (template: {data.template_id})")
-        return instance
+        logger.info(f"Created service config: {data.id} (template: {data.template_id})")
+        return config
 
-    def update_instance(self, config_id: str, data: ServiceConfigUpdate) -> ServiceConfig:
-        """Update an instance."""
+    def update_service_config(self, config_id: str, data: ServiceConfigUpdate) -> ServiceConfig:
+        """Update a service configuration."""
         self._ensure_loaded()
 
-        instance = self._service_configs.get(config_id)
-        if not instance:
+        config = self._service_configs.get(config_id)
+        if not config:
             raise ValueError(f"ServiceConfig not found: {config_id}")
 
         if data.name is not None:
-            instance.name = data.name
+            config.name = data.name
         if data.description is not None:
-            instance.description = data.description
+            config.description = data.description
         if data.config is not None:
-            instance.config = ConfigValues(values=data.config)
+            config.config = ConfigValues(values=data.config)
             # Update raw OmegaConf config to preserve interpolations
             if data.config:
                 self._omegaconf_configs[config_id] = OmegaConf.create(data.config)
             elif config_id in self._omegaconf_configs:
                 # Config cleared, remove raw config too
                 del self._omegaconf_configs[config_id]
-        if data.deployment_target is not None:
-            instance.deployment_target = data.deployment_target
 
-        instance.updated_at = datetime.now(timezone.utc)
+        config.updated_at = datetime.now(timezone.utc)
 
         self._save_service_configs()
-        logger.info(f"Updated instance: {config_id}")
-        return instance
+        logger.info(f"Updated service config: {config_id}")
+        return config
 
-    def delete_instance(self, config_id: str) -> bool:
-        """Delete an instance."""
+    def delete_service_config(self, config_id: str) -> bool:
+        """Delete a service configuration."""
         self._ensure_loaded()
 
         if config_id not in self._service_configs:
             return False
 
-        # Remove any wiring referencing this instance
+        # Remove any wiring referencing this config
         self._wiring = [
             w for w in self._wiring
             if w.source_config_id != config_id and w.target_config_id != config_id
@@ -498,218 +394,8 @@ class ServiceConfigManager:
         self._save_service_configs()
         self._save_wiring()
 
-        logger.info(f"Deleted instance: {config_id}")
+        logger.info(f"Deleted service config: {config_id}")
         return True
-
-    def update_instance_status(
-        self,
-        config_id: str,
-        status: ServiceConfigStatus,
-        access_url: Optional[str] = None,
-        error: Optional[str] = None,
-    ) -> Optional[ServiceConfig]:
-        """Update instance status after deployment."""
-        self._ensure_loaded()
-
-        instance = self._service_configs.get(config_id)
-        if not instance:
-            return None
-
-        instance.status = status
-        instance.error = error
-        instance.updated_at = datetime.now(timezone.utc)
-
-        if access_url:
-            instance.outputs.access_url = access_url
-        if status == ServiceConfigStatus.RUNNING:
-            instance.deployed_at = datetime.now(timezone.utc)
-
-        self._save_service_configs()
-        return instance
-
-    async def deploy_instance(self, config_id: str) -> tuple[bool, str]:
-        """Deploy/start an instance.
-
-        Routes deployment based on deployment_target:
-        - None: Local docker (ServiceOrchestrator)
-        - "cloud": Cloud provider (marks as N/A)
-        - hostname: Remote unode (DeploymentManager)
-        """
-        self._ensure_loaded()
-
-        instance = self._service_configs.get(config_id)
-        if not instance:
-            return False, f"ServiceConfig not found: {config_id}"
-
-        # Get template to determine deployment type
-        from src.services.compose_registry import get_compose_registry
-        compose_registry = get_compose_registry()
-
-        # Check if this is a compose service
-        compose_service = compose_registry.get_service(instance.template_id)
-
-        if compose_service:
-            # Check deployment target
-            if instance.deployment_target and instance.deployment_target != "cloud":
-                # Remote unode deployment - use DeploymentManager
-                from src.services.deployment_manager import get_deployment_manager
-                deployment_manager = get_deployment_manager()
-
-                # Update status to deploying
-                instance.status = ServiceConfigStatus.DEPLOYING
-                self._save_service_configs()
-
-                try:
-                    # Deploy via deployment manager (creates Deployment record)
-                    deployment = await deployment_manager.deploy_service(
-                        service_id=compose_service.service_id,
-                        unode_hostname=instance.deployment_target,
-                        config_id=config_id
-                    )
-
-                    # Store deployment_id in instance
-                    instance.deployment_id = deployment.id
-                    instance.container_id = deployment.container_id
-                    instance.container_name = deployment.container_name
-
-                    # Update instance status based on deployment
-                    if deployment.status == "running":
-                        self.update_instance_status(
-                            config_id,
-                            ServiceConfigStatus.RUNNING,
-                            access_url=deployment.access_url,
-                        )
-                        return True, f"Service deployed to {instance.deployment_target}"
-                    else:
-                        self.update_instance_status(
-                            config_id,
-                            ServiceConfigStatus.DEPLOYING,
-                        )
-                        return True, f"Service deploying to {instance.deployment_target}"
-
-                except Exception as e:
-                    logger.exception(f"Failed to deploy instance {config_id} to unode")
-                    self.update_instance_status(
-                        config_id,
-                        ServiceConfigStatus.ERROR,
-                        error=str(e),
-                    )
-                    return False, str(e)
-            else:
-                # Local docker deployment - use ServiceOrchestrator
-                from src.services.service_orchestrator import get_service_orchestrator
-                from src.services.docker_manager import get_docker_manager
-                from src.config.omegaconf_settings import get_settings
-
-                orchestrator = get_service_orchestrator()
-                docker_mgr = get_docker_manager()
-                settings = get_settings()
-
-                # Update status to deploying
-                instance.status = ServiceConfigStatus.DEPLOYING
-                self._save_service_configs()
-
-                # Use service_name (not template_id) for orchestrator calls
-                service_name = compose_service.service_name
-
-                # Check for port conflicts before deploying
-                conflicts = docker_mgr.check_port_conflicts(service_name)
-                if conflicts:
-                    logger.info(f"Found {len(conflicts)} port conflicts for {service_name}, remapping to available ports")
-
-                    # Remap ports to suggested alternatives
-                    for conflict in conflicts:
-                        if conflict.env_var and conflict.suggested_port:
-                            # Save port override in service preferences
-                            # This matches the pattern from /api/services/{name}/port-override
-                            pref_key = f"services.{service_name}.ports.{conflict.env_var}"
-                            await settings.set(pref_key, conflict.suggested_port)
-                            logger.info(f"Remapped {conflict.env_var}: {conflict.port} -> {conflict.suggested_port}")
-
-                try:
-                    result = await orchestrator.start_service(service_name, config_id=config_id)
-                    if result.success:
-                        # Get the service status to find access URL
-                        status_info = await orchestrator.get_service_status(service_name)
-                        access_url = None
-                        if status_info and status_info.get("status") == "running":
-                            # Try to get the access URL from docker details
-                            details = await orchestrator.get_docker_details(service_name)
-                            if details and details.ports:
-                                # ports is Dict[str, str] where key is container port, value is host port
-                                # e.g., {"8080/tcp": "32768"}
-                                for container_port, host_port in details.ports.items():
-                                    if host_port:
-                                        access_url = f"http://localhost:{host_port}"
-                                        break
-
-                        self.update_instance_status(
-                            config_id,
-                            ServiceConfigStatus.RUNNING,
-                            access_url=access_url,
-                        )
-                        return True, f"Service {service_name} started"
-                    else:
-                        self.update_instance_status(
-                            config_id,
-                            ServiceConfigStatus.ERROR,
-                            error=result.message,
-                        )
-                        return False, result.message
-                except Exception as e:
-                    logger.exception(f"Failed to deploy instance {config_id}")
-                    self.update_instance_status(
-                        config_id,
-                        ServiceConfigStatus.ERROR,
-                        error=str(e),
-                    )
-                    return False, str(e)
-        else:
-            # Cloud provider - mark as N/A (always available)
-            self.update_instance_status(config_id, ServiceConfigStatus.NOT_APPLICABLE)
-            return True, "Cloud provider instance activated"
-
-    async def undeploy_instance(self, config_id: str) -> tuple[bool, str]:
-        """Stop/undeploy an instance.
-
-        For compose services: stops the docker container
-        For cloud providers: marks as stopped
-        """
-        self._ensure_loaded()
-
-        instance = self._service_configs.get(config_id)
-        if not instance:
-            return False, f"ServiceConfig not found: {config_id}"
-
-        # Get template to determine deployment type
-        from src.services.compose_registry import get_compose_registry
-        compose_registry = get_compose_registry()
-
-        # Check if this is a compose service
-        compose_service = compose_registry.get_service(instance.template_id)
-
-        if compose_service:
-            # This is a compose service - use ServiceOrchestrator
-            from src.services.service_orchestrator import get_service_orchestrator
-            orchestrator = get_service_orchestrator()
-
-            # Use service_name (not template_id) for orchestrator calls
-            service_name = compose_service.service_name
-
-            try:
-                result = orchestrator.stop_service(service_name)
-                if result.success:
-                    self.update_instance_status(config_id, ServiceConfigStatus.STOPPED)
-                    return True, f"Service {service_name} stopped"
-                else:
-                    return False, result.message
-            except Exception as e:
-                logger.exception(f"Failed to undeploy instance {config_id}")
-                return False, str(e)
-        else:
-            # Cloud provider - just mark as stopped
-            self.update_instance_status(config_id, ServiceConfigStatus.STOPPED)
-            return True, "Cloud provider instance deactivated"
 
     # =========================================================================
     # Wiring Operations

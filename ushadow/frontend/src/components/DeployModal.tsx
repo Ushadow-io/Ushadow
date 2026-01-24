@@ -1,17 +1,21 @@
 import { useState, useEffect } from 'react'
-import { CheckCircle, Loader, ChevronRight } from 'lucide-react'
+import { CheckCircle, Loader, ChevronRight, Cloud, HardDrive } from 'lucide-react'
 import Modal from './Modal'
 import ConfirmDialog from './ConfirmDialog'
 import EnvVarEditor from './EnvVarEditor'
+import DeployTargetSelector from './DeployTargetSelector'
 import { kubernetesApi, servicesApi, svcConfigsApi, deploymentsApi, DeployTarget, EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface DeployModalProps {
   isOpen: boolean
   onClose: () => void
+  onSuccess?: () => void  // Called after successful deployment
+  mode?: 'deploy' | 'create-config'  // Mode: deploy (default) or just create config
   target?: DeployTarget  // Optional - if not provided, show target selection
   availableTargets?: DeployTarget[]  // For target selection
   infraServices?: Record<string, any>  // K8s only - infrastructure scan data
   preselectedServiceId?: string  // If provided, skip service selection step
+  preselectedConfigId?: string  // If provided, use this config for deployment (overrides template defaults)
 }
 
 interface ServiceOption {
@@ -23,10 +27,16 @@ interface ServiceOption {
   requires?: string[]
 }
 
-export default function DeployModal({ isOpen, onClose, target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId }: DeployModalProps) {
+export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy', target: initialTarget, availableTargets = [], infraServices: initialInfraServices = {}, preselectedServiceId, preselectedConfigId }: DeployModalProps) {
   const [step, setStep] = useState<'target' | 'select' | 'configure' | 'deploying' | 'complete'>(
+    // If no target selected and multiple targets available, show target selection
     !initialTarget && availableTargets.length > 1 ? 'target' :
-    preselectedServiceId ? 'configure' : 'select'
+    // If we have both service and target, go to configure
+    preselectedServiceId && initialTarget ? 'configure' :
+    // If we have service but no target (deploying from config), need target selection first
+    preselectedServiceId && !initialTarget ? 'target' :
+    // Otherwise show service selection
+    'select'
   )
   const [selectedTarget, setSelectedTarget] = useState<DeployTarget | null>(initialTarget || null)
   const [infraServices, setInfraServices] = useState<Record<string, any>>(initialInfraServices)
@@ -133,30 +143,36 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
       // ONLY override with infrastructure detection for K8s-specific values
       const initialConfigs: Record<string, EnvVarConfig> = {}
       allEnvVars.forEach(envVar => {
-        const infraValue = getInfraValueForEnvVar(envVar.name, infraServices)
-        console.log(`🔍 Checking env var ${envVar.name}:`, { infraValue, infraServices })
+        // Skip infrastructure detection if no services detected or in create-config mode without target
+        const hasInfraServices = infraServices && Object.keys(infraServices).length > 0
+        const infraValue = hasInfraServices ? getInfraValueForEnvVar(envVar.name, infraServices) : null
+        console.log(`🔍 Checking env var ${envVar.name}:`, { infraValue, hasInfraServices, infraServices })
 
         if (infraValue) {
-          // Override with infrastructure value for K8s cluster-specific endpoints
-          // Mark as locked so user can't edit
+          // Pre-fill with infrastructure value for K8s cluster-specific endpoints
+          // Don't lock - user should be able to override if needed
+          // Mark as NOT template default since this is detected infra
           initialConfigs[envVar.name] = {
             name: envVar.name,
             source: 'new_setting',
             value: infraValue,
             new_setting_path: `api_keys.${envVar.name.toLowerCase()}`,
             setting_path: undefined,
-            locked: true,
-            provider_name: 'K8s Infrastructure'
+            locked: false,  // Allow editing - infra values are suggestions, not requirements
+            provider_name: 'K8s Infrastructure',
+            _isTemplateDefault: false  // This is detected infrastructure, should be saved
           }
         } else {
           // Use data from API response (backend already mapped to settings)
-          // Note: backend sends resolved_value, not value
+          // Mark as NOT user-modified initially - these are template defaults
+          const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
           initialConfigs[envVar.name] = {
             name: envVar.name,
             source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
             setting_path: envVar.setting_path,
-            value: envVar.resolved_value,  // Use resolved_value from backend
-            new_setting_path: undefined
+            value: fallbackValue,
+            new_setting_path: undefined,
+            _isTemplateDefault: true  // Mark as coming from template, not user override
           }
         }
       })
@@ -175,13 +191,12 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
   const getInfraValueForEnvVar = (envVarName: string, infraServices: Record<string, any>): string | null => {
     const upperName = envVarName.toUpperCase()
 
-    // MongoDB - be specific about which env vars get which values
-    if (upperName === 'MONGODB_DATABASE') {
-      return 'ushadow'  // Just the database name
-    }
+    // MongoDB - only set connection URL from infrastructure, not database name
+    // Database name should come from settings/environment via MONGODB_DATABASE
     if (upperName.includes('MONGO') || upperName.includes('MONGODB')) {
       if (infraServices.mongo?.found && infraServices.mongo.endpoints.length > 0) {
-        return `mongodb://${infraServices.mongo.endpoints[0]}/ushadow`
+        // MongoDB URL without database name - services specify database separately
+        return `mongodb://${infraServices.mongo.endpoints[0]}`
       }
     }
 
@@ -192,16 +207,21 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
       }
     }
 
-    // Postgres
+    // Postgres - infrastructure detection should not hardcode credentials/database
+    // These should come from settings/environment
     if (upperName.includes('POSTGRES') || upperName.includes('DATABASE_URL')) {
       if (infraServices.postgres?.found && infraServices.postgres.endpoints.length > 0) {
-        return `postgresql://ushadow:ushadow@${infraServices.postgres.endpoints[0]}/ushadow`
+        // Return host:port only - credentials and database should come from settings
+        return infraServices.postgres.endpoints[0]
       }
     }
 
     // Qdrant - be specific about port vs base URL
     if (upperName === 'QDRANT_PORT') {
-      return '6333'  // Just the port number
+      // Only return port if qdrant infrastructure is actually detected
+      if (infraServices.qdrant?.found) {
+        return '6333'  // Just the port number
+      }
     }
     if (upperName.includes('QDRANT')) {
       if (infraServices.qdrant?.found && infraServices.qdrant.endpoints.length > 0) {
@@ -213,68 +233,131 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
   }
 
   const handleDeploy = async () => {
-    if (!selectedService || !selectedTarget) return
+    if (!selectedService) return
+    if (mode === 'deploy' && !selectedTarget) return
 
     try {
       setStep('deploying')
       setError(null)
 
-      // Generate instance ID for this deployment target (only lowercase, numbers, hyphens)
-      const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
-      const targetName = selectedTarget.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-      const instanceId = `${sanitizedServiceId}-${targetName}`
+      // For create-config mode, we don't need a target
+      if (mode === 'create-config' && !selectedTarget) {
+        // Create a config without deploying
+        const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
+        const instanceId = `${sanitizedServiceId}-config-${Date.now()}`
 
-      // Build deployment_target format based on platform type
-      const deploymentTarget = selectedTarget.type === 'k8s'
-        ? `k8s://${selectedTarget.identifier}/${namespace}`
-        : `docker://${selectedTarget.identifier}`
-
-      // Convert env configs to instance config format
-      const configValues: Record<string, any> = {}
-      Object.entries(envConfigs).forEach(([name, config]) => {
-        if (config.source === 'setting' && config.setting_path) {
-          configValues[name] = { _from_setting: config.setting_path }
-        } else if (config.source === 'new_setting' && config.value) {
-          configValues[name] = config.value
-          // Also save to settings if new_setting_path is specified
-          if (config.new_setting_path) {
-            configValues[`_save_${name}`] = config.new_setting_path
+        // Convert env configs to instance config format
+        // ONLY save user modifications - skip template defaults
+        const configValues: Record<string, any> = {}
+        console.log('💾 Saving config - filtering out template defaults:')
+        Object.entries(envConfigs).forEach(([name, config]) => {
+          // Skip if this is a template default (user didn't change it)
+          if ((config as any)._isTemplateDefault) {
+            console.log(`  ⏭️  Skipping ${name} (template default)`)
+            return  // Don't save - template already defines this
           }
-        } else if (config.value) {
-          configValues[name] = config.value
-        }
-      })
+          console.log(`  ✅ Saving ${name} (user modified)`, config)
 
-      // Generate name/description based on target type
-      const displayName = selectedTarget.type === 'k8s'
-        ? `${selectedService.display_name} (${selectedTarget.name}/${namespace})`
-        : `${selectedService.display_name} (${selectedTarget.name})`
-
-      const description = selectedTarget.type === 'k8s'
-        ? `K8s deployment to ${selectedTarget.name} in ${namespace} namespace`
-        : `Docker deployment to ${selectedTarget.name}`
-
-      // Step 1: Create or update instance with this configuration
-      try {
-        // Try to get existing instance
-        await svcConfigsApi.getServiceConfig(instanceId)
-        // ServiceConfig exists - update it
-        await svcConfigsApi.updateServiceConfig(instanceId, {
-          name: displayName,
-          description: description,
-          config: configValues,
-          deployment_target: deploymentTarget
+          // User explicitly changed the mapping
+          if (config.setting_path) {
+            configValues[name] = `@${config.setting_path}`
+          }
+          // User entered a new value
+          else if (config.source === 'new_setting' && config.new_setting_path && config.value) {
+            configValues[name] = `@${config.new_setting_path}`
+          }
+          // User entered a literal value
+          else if (config.value !== undefined && config.value !== '') {
+            configValues[name] = config.value
+          }
         })
-      } catch {
-        // ServiceConfig doesn't exist - create it
+
+        console.log('📦 Final config values to save:', configValues)
+
+        // Create ServiceConfig
         await svcConfigsApi.createServiceConfig({
           id: instanceId,
           template_id: selectedService.service_id,
-          name: displayName,
-          description: description,
+          name: `${selectedService.display_name} Config`,
+          description: 'Configuration created from template',
           config: configValues,
-          deployment_target: deploymentTarget
         })
+
+        setDeploymentResult(`Configuration "${selectedService.display_name} Config" created successfully`)
+        setStep('complete')
+        onSuccess?.()
+        return
+      }
+
+      // Determine which config to use for deployment
+      let configId: string
+
+      if (preselectedConfigId) {
+        // Use existing config - don't create a new one
+        configId = preselectedConfigId
+        console.log('📦 Using preselected config:', configId)
+      } else {
+        // Generate instance ID for this deployment target (only lowercase, numbers, hyphens)
+        const sanitizedServiceId = selectedService.service_id.replace(/[^a-z0-9-]/g, '-')
+        const targetName = selectedTarget.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+        configId = `${sanitizedServiceId}-${targetName}`
+
+        // Build deployment_target format based on platform type
+        const deploymentTarget = selectedTarget.type === 'k8s'
+          ? `k8s://${selectedTarget.identifier}/${namespace}`
+          : `docker://${selectedTarget.identifier}`
+
+        // Convert env configs to instance config format
+        // ONLY save user modifications - skip template defaults
+        const configValues: Record<string, any> = {}
+        Object.entries(envConfigs).forEach(([name, config]) => {
+          // Skip if this is a template default (user didn't change it)
+          if ((config as any)._isTemplateDefault) {
+            return  // Don't save - template already defines this
+          }
+
+          if (config.source === 'setting' && config.setting_path) {
+            configValues[name] = { _from_setting: config.setting_path }
+          } else if (config.source === 'new_setting' && config.value) {
+            configValues[name] = config.value
+            // Also save to settings if new_setting_path is specified
+            if (config.new_setting_path) {
+              configValues[`_save_${name}`] = config.new_setting_path
+            }
+          } else if (config.value !== undefined && config.value !== '') {
+            configValues[name] = config.value
+          }
+        })
+
+        // Generate name/description based on target type
+        const displayName = selectedTarget.type === 'k8s'
+          ? `${selectedService.display_name} (${selectedTarget.name}/${namespace})`
+          : `${selectedService.display_name} (${selectedTarget.name})`
+
+        const description = selectedTarget.type === 'k8s'
+          ? `K8s deployment to ${selectedTarget.name} in ${namespace} namespace`
+          : `Docker deployment to ${selectedTarget.name}`
+
+        // Step 1: Create or update instance with this configuration
+        try {
+          // Try to get existing instance
+          await svcConfigsApi.getServiceConfig(configId)
+          // ServiceConfig exists - update it
+          await svcConfigsApi.updateServiceConfig(configId, {
+            name: displayName,
+            description: description,
+            config: configValues,
+          })
+        } catch {
+          // ServiceConfig doesn't exist - create it
+          await svcConfigsApi.createServiceConfig({
+            id: configId,
+            template_id: selectedService.service_id,
+            name: displayName,
+            description: description,
+            config: configValues,
+          })
+        }
       }
 
       // Step 2: Deploy based on target type
@@ -286,7 +369,7 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
           {
             service_id: selectedService.service_id,
             namespace: namespace,
-            config_id: instanceId
+            config_id: configId
           }
         )
       } else {
@@ -294,12 +377,15 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
         deployResponse = await deploymentsApi.deploy(
           selectedService.service_id,
           selectedTarget.identifier,  // unode hostname
-          instanceId
+          configId
         )
       }
 
       setDeploymentResult(deployResponse.data.message || 'Deployment successful')
       setStep('complete')
+
+      // Notify parent of successful deployment
+      onSuccess?.()
     } catch (err: any) {
       console.error('Deployment failed:', err)
       setError(`Deployment failed: ${formatError(err)}`)
@@ -310,7 +396,11 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
   const handleEnvConfigChange = (envVarName: string, updates: Partial<EnvVarConfig>) => {
     setEnvConfigs(prev => ({
       ...prev,
-      [envVarName]: { ...(prev[envVarName] || { name: envVarName }), ...updates } as EnvVarConfig
+      [envVarName]: {
+        ...(prev[envVarName] || { name: envVarName }),
+        ...updates,
+        _isTemplateDefault: false  // Mark as user-modified
+      } as EnvVarConfig
     }))
   }
 
@@ -320,41 +410,95 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
 
     // Use infrastructure from standardized DeployTarget field
     const infraData = target.infrastructure || {}
-    console.log(`🔍 Using K8s infrastructure from ${target.name}:`, infraData)
+    console.log(`🔍 Selected target ${target.name} with infrastructure:`, infraData)
     setInfraServices(infraData)
 
-    setStep('select')
+    // If service is already selected, re-query env vars with infrastructure detection
+    if (selectedService) {
+      console.log(`🔄 Re-querying env vars for ${selectedService.service_id} with target ${target.id}`)
+      setLoadingEnvVars(true)
+      try {
+        // Re-load environment variable schema with infrastructure from selected target
+        const envResponse = await servicesApi.getEnvConfig(
+          selectedService.service_id,
+          target.id
+        )
+        const envData = envResponse.data
+
+        // Re-initialize env vars and configs with new infrastructure detection
+        const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+        setEnvVars(allEnvVars)
+
+        // Re-detect infrastructure values with new target
+        const updatedConfigs: Record<string, EnvVarConfig> = {}
+        allEnvVars.forEach(envVar => {
+          const hasInfraServices = infraData && Object.keys(infraData).length > 0
+          const infraValue = hasInfraServices ? getInfraValueForEnvVar(envVar.name, infraData) : null
+
+          if (infraValue) {
+            // Infrastructure detected - mark as user-modified so it gets saved
+            updatedConfigs[envVar.name] = {
+              name: envVar.name,
+              source: 'new_setting',
+              value: infraValue,
+              new_setting_path: `api_keys.${envVar.name.toLowerCase()}`,
+              setting_path: undefined,
+              locked: false,
+              provider_name: `${target.type === 'k8s' ? 'K8s' : 'Docker'} Infrastructure`,
+              _isTemplateDefault: false  // Infrastructure values should be saved
+            }
+          } else {
+            // Use existing config or template default
+            const existing = envConfigs[envVar.name]
+            if (existing) {
+              updatedConfigs[envVar.name] = existing
+            } else {
+              const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
+              updatedConfigs[envVar.name] = {
+                name: envVar.name,
+                source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
+                setting_path: envVar.setting_path,
+                value: fallbackValue,
+                new_setting_path: undefined,
+                _isTemplateDefault: true  // Template default
+              }
+            }
+          }
+        })
+
+        setEnvConfigs(updatedConfigs)
+        setStep('configure')
+      } catch (err: any) {
+        console.error('Failed to reload env config:', err)
+        setError(`Failed to reload environment configuration: ${formatError(err)}`)
+      } finally {
+        setLoadingEnvVars(false)
+      }
+    } else if (preselectedServiceId) {
+      // Service not loaded yet, load it
+      setStep('configure')
+      await handleSelectService({
+        service_id: preselectedServiceId,
+        service_name: preselectedServiceId,
+        display_name: preselectedServiceId,
+      })
+    } else {
+      // No service selected, go to service selection
+      setStep('select')
+    }
   }
 
   const renderTargetSelection = () => (
-    <div className="space-y-4">
-      <p className="text-sm text-neutral-600 dark:text-neutral-400">
-        Select a deployment target
-      </p>
-
-      <div className="space-y-2 max-h-96 overflow-y-auto">
-        {availableTargets.map((target) => (
-          <button
-            key={target.id}
-            onClick={() => handleTargetSelection(target)}
-            className="w-full p-4 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-500 dark:hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors text-left"
-            data-testid={`select-target-${target.identifier}`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <h4 className="font-semibold text-neutral-900 dark:text-neutral-100">
-                  {target.name}
-                </h4>
-                <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
-                  {target.provider} • {target.region || 'unknown region'}
-                </p>
-              </div>
-              <ChevronRight className="h-5 w-5 text-neutral-400" />
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
+    <DeployTargetSelector
+      targets={availableTargets}
+      selectedTarget={selectedTarget}
+      onSelect={handleTargetSelection}
+      label={selectedService
+        ? `Select deployment target for ${selectedService.display_name}`
+        : 'Select a deployment target'
+      }
+      showInfrastructure={true}
+    />
   )
 
   const renderSelectService = () => (
@@ -412,13 +556,48 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
           {selectedService?.display_name}
         </h4>
         <p className="text-sm text-primary-700 dark:text-primary-300">
-          Configure deployment settings for this service
+          {mode === 'create-config'
+            ? 'Create a configuration for this service. You can deploy it later to any target.'
+            : 'Configure deployment settings for this service'}
         </p>
       </div>
 
       {error && (
         <div className="bg-danger-50 dark:bg-danger-900/20 rounded-lg p-4 text-danger-700 dark:text-danger-300 text-sm">
           {error}
+        </div>
+      )}
+
+      {/* Show selected target in deploy mode (with change button) */}
+      {mode === 'deploy' && selectedTarget && (
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            Deployment Target
+          </label>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 px-3 py-2 rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-800">
+              <div className="flex items-center gap-2">
+                {selectedTarget.type === 'k8s' ? (
+                  <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                ) : (
+                  <HardDrive className="h-4 w-4 text-neutral-600 dark:text-neutral-400" />
+                )}
+                <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                  {selectedTarget.name}
+                </span>
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                  ({selectedTarget.type === 'k8s' ? 'Kubernetes' : 'Docker'})
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => setStep('target')}
+              className="px-3 py-2 text-sm text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded transition-colors"
+              data-testid="change-deployment-target"
+            >
+              Change
+            </button>
+          </div>
         </div>
       )}
 
@@ -469,6 +648,7 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
                   envVar={envVar}
                   config={config}
                   onChange={(updates) => handleEnvConfigChange(envVar.name, updates)}
+                  mode={mode === 'create-config' ? 'config' : 'deploy'}
                 />
               )
             })}
@@ -489,7 +669,9 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
           className="btn-primary"
           data-testid="deploy-service-btn"
         >
-          Deploy to {selectedTarget?.type === 'k8s' ? 'Kubernetes' : 'Docker'}
+          {mode === 'create-config'
+            ? 'Create Configuration'
+            : `Deploy to ${selectedTarget?.type === 'k8s' ? 'Kubernetes' : 'Docker'}`}
         </button>
       </div>
     </div>
@@ -499,10 +681,14 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
     <div className="text-center py-12">
       <Loader className="h-12 w-12 text-primary-600 dark:text-primary-400 mx-auto mb-4 animate-spin" />
       <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-2">
-        Deploying {selectedService?.display_name}...
+        {mode === 'create-config'
+          ? `Creating configuration for ${selectedService?.display_name}...`
+          : `Deploying ${selectedService?.display_name}...`}
       </h4>
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
-        Creating ConfigMap, Secret, Deployment, and Service
+        {mode === 'create-config'
+          ? 'Saving configuration mappings'
+          : 'Creating ConfigMap, Secret, Deployment, and Service'}
       </p>
     </div>
   )
@@ -541,7 +727,11 @@ export default function DeployModal({ isOpen, onClose, target: initialTarget, av
       <Modal
         isOpen={isOpen}
         onClose={onClose}
-        title={selectedTarget ? `Deploy to ${selectedTarget.type === 'k8s' ? 'Kubernetes' : 'Docker'}` : 'Deploy Service'}
+        title={
+          mode === 'create-config'
+            ? 'Create Service Configuration'
+            : (selectedTarget ? `Deploy to ${selectedTarget.type === 'k8s' ? 'Kubernetes' : 'Docker'}` : 'Deploy Service')
+        }
         maxWidth="xl"
         testId="deploy-modal"
       >

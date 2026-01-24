@@ -6,34 +6,34 @@
  */
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { graphApi } from '../services/api'
+import { graphApi, type MemorySource } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import type { GraphData } from '../types/graph'
 
 const FALLBACK_USER_ID = 'ushadow'
 
-export function useGraphApi(limit: number = 100) {
+export function useGraphApi(limit: number = 100, source: MemorySource = 'openmemory') {
   const { user } = useAuth()
   const userId = user?.email || FALLBACK_USER_ID
   const queryClient = useQueryClient()
 
   const queryKeys = {
-    graphData: ['graphData', userId, limit] as const,
-    graphStats: ['graphStats', userId] as const,
-    graphSearch: (query: string) => ['graphSearch', userId, query] as const,
+    graphData: ['graphData', source, userId, limit] as const,
+    graphStats: ['graphStats', source, userId] as const,
+    graphSearch: (query: string) => ['graphSearch', source, userId, query] as const,
   }
 
   // Fetch graph data
   const graphDataQuery = useQuery({
     queryKey: queryKeys.graphData,
-    queryFn: () => graphApi.fetchGraphData(userId, limit),
+    queryFn: () => graphApi.fetchGraphData(userId, limit, source),
     staleTime: 60000, // 1 minute
   })
 
   // Fetch graph stats
   const graphStatsQuery = useQuery({
     queryKey: queryKeys.graphStats,
-    queryFn: () => graphApi.fetchGraphStats(userId),
+    queryFn: () => graphApi.fetchGraphStats(userId, source),
     staleTime: 60000, // 1 minute
   })
 
@@ -41,7 +41,7 @@ export function useGraphApi(limit: number = 100) {
   const searchGraph = async (query: string): Promise<GraphData | null> => {
     if (!query.trim()) return null
     try {
-      const data = await graphApi.searchGraph(query, userId, limit)
+      const data = await graphApi.searchGraph(query, userId, limit, source)
       // Update the cache with search results
       queryClient.setQueryData(queryKeys.graphData, data)
       return data
@@ -61,8 +61,8 @@ export function useGraphApi(limit: number = 100) {
 
   // Update limit and refetch
   const updateLimit = async (newLimit: number) => {
-    const data = await graphApi.fetchGraphData(userId, newLimit)
-    queryClient.setQueryData(['graphData', userId, newLimit], data)
+    const data = await graphApi.fetchGraphData(userId, newLimit, source)
+    queryClient.setQueryData(['graphData', source, userId, newLimit], data)
     return data
   }
 

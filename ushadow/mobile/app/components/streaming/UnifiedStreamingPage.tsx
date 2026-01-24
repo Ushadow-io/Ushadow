@@ -299,44 +299,37 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Get selected UNode
   const selectedUNode = unodes.find(u => u.id === selectedUnodeId);
 
-  // Build stream URL from apiUrl + stored config (protocol + path)
-  // This handles cases where the stored streamUrl has malformed hostname
-  const getStreamUrl = useCallback((): string | null => {
-    if (!selectedUNode?.apiUrl) return null;
+  // Build stream URL using deployment-based discovery
+  // Queries /api/deployments/exposed-urls to find running audio destinations
+  const getStreamUrl = useCallback(async (): Promise<string | null> => {
+    if (!selectedUNode?.apiUrl || !authToken) return null;
 
-    // Get the stored config (protocol + path) or use defaults
-    const storedConfig = selectedUNode.streamUrl
-      ? parseStreamUrl(selectedUNode.streamUrl)
-      : { protocol: 'wss' as const, path: '/chronicle/ws_pcm' };
+    try {
+      // Query available audio destinations from running services
+      const { getAvailableAudioDestinations, buildRelayUrl } = await import('../../services/audioProviderApi');
 
-    // Extract host from apiUrl (strip protocol)
-    const host = selectedUNode.apiUrl.replace('https://', '').replace('http://', '');
+      console.log('[UnifiedStreaming] Querying audio destinations...');
+      const destinations = await getAvailableAudioDestinations(selectedUNode.apiUrl, authToken);
 
-    // Determine endpoint based on source type
-    let path = storedConfig.path;
-    if (selectedSource.type === 'microphone') {
-      // Phone microphone - use ws_pcm
-      if (!path.includes('ws_pcm')) {
-        path = path.replace('ws_omi', 'ws_pcm');
+      if (destinations.length === 0) {
+        console.warn('[UnifiedStreaming] No audio destinations found');
+        Alert.alert('No Audio Destinations', 'No running audio services found. Please start Chronicle or Mycelia.');
+        return null;
       }
-    } else {
-      // OMI device - use ws_omi
-      if (!path.includes('ws_omi')) {
-        path = path.replace('ws_pcm', 'ws_omi');
-      }
+
+      console.log(`[UnifiedStreaming] Found ${destinations.length} destination(s):`, destinations.map(d => d.instance_name));
+
+      // Build relay URL for all destinations (multi-destination streaming)
+      const relayUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, destinations);
+      console.log('[UnifiedStreaming] Built relay URL:', relayUrl);
+
+      return relayUrl;
+    } catch (err) {
+      console.error('[UnifiedStreaming] Failed to get stream URL:', err);
+      Alert.alert('Discovery Failed', err instanceof Error ? err.message : 'Failed to discover audio destinations');
+      return null;
     }
-
-    // Use stored protocol (user can toggle between ws and wss)
-    let url = `${storedConfig.protocol}://${host}${path}`;
-
-    console.log('[UnifiedStreamingPage] Built stream URL:', url);
-
-    // Add auth token
-    if (authToken) {
-      return appendTokenToUrl(url, authToken);
-    }
-    return url;
-  }, [selectedUNode, selectedSource, authToken]);
+  }, [selectedUNode, authToken]);
 
   // Handle source change
   const handleSourceChange = useCallback(async (source: StreamSource) => {
@@ -378,9 +371,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
   // Start streaming
   const handleStartStreaming = useCallback(async () => {
-    const streamUrl = getStreamUrl();
+    const streamUrl = await getStreamUrl();
     if (!streamUrl) {
-      Alert.alert('No Destination', 'Please select a destination UNode.');
+      // Error alert already shown by getStreamUrl if needed
       return;
     }
 

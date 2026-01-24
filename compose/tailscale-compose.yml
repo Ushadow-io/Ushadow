@@ -1,0 +1,54 @@
+# Tailscale Serve Proxy
+#
+# Provides HTTPS ingress via Tailscale Serve, proxying to internal services.
+# Must be on ushadow-network to reach backend/webui containers.
+#
+# Usage:
+#   docker compose -f compose/tailscale-compose.yml up -d
+#
+# Setup:
+#   1. Start container
+#   2. Run: docker exec tailscale tailscale login
+#   3. Authenticate via URL
+#   4. Backend auto-configures Serve routes via /api/tailscale/serve-config
+
+x-ushadow:
+  tailscale:
+    display_name: "Tailscale"
+    description: "Tailscale Serve HTTPS proxy for secure external access"
+    requires: []
+    provides: tailscale
+    tags: ["networking", "proxy", "security"]
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-tailscale
+    hostname: ${COMPOSE_PROJECT_NAME:-ushadow}-tailscale
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_ACCEPT_DNS=true
+      - TS_EXTRA_ARGS=--advertise-tags=tag:container
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - ushadow-network
+      - infra-network
+    restart: unless-stopped
+    command: sh -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep 2 && tailscale up --hostname=${COMPOSE_PROJECT_NAME:-ushadow} && sleep infinity"
+
+networks:
+  ushadow-network:
+    name: ushadow-network
+    external: true
+  infra-network:
+    name: infra-network
+    external: true
+
+volumes:
+  tailscale_state:
+    driver: local

@@ -1,61 +1,70 @@
-"""Configuration module
-
-All settings are managed through OmegaConf (get_settings_store).
-Environment variables are read from YAML config files, not from a separate InfraSettings class.
+"""
+Configuration module - Settings management with entity-based resolution.
 """
 
-from .omegaconf_settings import (
-    # Primary API
+from .settings import (
     get_settings,
     Settings,
     Resolution,
     Source,
-    Suggestion,
     SettingSuggestion,
-    # Low-level store (internal, prefer get_settings())
+    Suggestion,
+)
+from .store import (
     get_settings_store,
     SettingsStore,
-    # Helpers
+)
+from .helpers import (
     infer_setting_type,
+    infer_value_type,
     categorize_setting,
-    mask_secret_value,
     env_var_matches_setting,
 )
-from .yaml_parser import BaseYAMLParser, ComposeParser, ComposeEnvVar, ComposeService, ParsedCompose
 from .secrets import (
     get_auth_secret_key,
     is_secret_key,
+    should_store_in_secrets,
     mask_value,
     mask_if_secret,
+    mask_secret_value,
     mask_dict_secrets,
+)
+from .yaml_parser import (
+    BaseYAMLParser,
+    ComposeParser,
+    ComposeEnvVar,
+    ComposeService,
+    ParsedCompose,
 )
 
 __all__ = [
-    # Primary API
+    # Settings API
     "get_settings",
     "Settings",
     "Resolution",
     "Source",
     "Suggestion",
     "SettingSuggestion",
-    # Low-level store (internal)
+    # Store
     "get_settings_store",
     "SettingsStore",
     # Helpers
     "infer_setting_type",
+    "infer_value_type",
     "categorize_setting",
-    "mask_secret_value",
     "env_var_matches_setting",
+    # Secrets
+    "get_auth_secret_key",
+    "is_secret_key",
+    "should_store_in_secrets",
+    "mask_value",
+    "mask_if_secret",
+    "mask_secret_value",
+    "mask_dict_secrets",
     # YAML parsing
     "BaseYAMLParser",
     "ComposeParser",
     "ComposeEnvVar",
     "ComposeService",
     "ParsedCompose",
-    # Secret utilities
-    "get_auth_secret_key",
-    "is_secret_key",
-    "mask_value",
-    "mask_if_secret",
-    "mask_dict_secrets",
 ]

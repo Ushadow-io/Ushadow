@@ -147,12 +147,12 @@ class Deployment(BaseModel):
     """
     A service deployed to a specific node.
 
-    Represents an instance of a ServiceDefinition running on a u-node.
+    Represents an instance running on a target: ServiceConfig + Target + Runtime State.
     """
     id: str = Field(..., description="Unique deployment ID")
-    service_id: str = Field(..., description="Reference to ServiceDefinition")
+    config_id: str = Field(..., description="ServiceConfig ID or Template ID (required)")
+    service_id: str = Field(..., description="DEPRECATED: Use config_id instead. Reference to ServiceDefinition")
     unode_hostname: str = Field(..., description="Target u-node hostname")
-    config_id: Optional[str] = Field(None, description="ServiceConfig ID (for instance-based deployments)")
 
     # Status
     status: DeploymentStatus = Field(
