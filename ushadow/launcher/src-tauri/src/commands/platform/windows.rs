@@ -2,7 +2,7 @@
 /// All Windows-specific code lives here, making it easy to maintain and test
 
 use super::PlatformOps;
-use crate::commands::utils::{silent_command, shell_command, quote_path};
+use crate::commands::utils::{silent_command, quote_path};
 use std::process::Command;
 
 pub struct Platform;

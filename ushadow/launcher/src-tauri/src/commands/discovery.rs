@@ -111,10 +111,11 @@ static TAILSCALE_CACHE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
 /// Discover Ushadow environments and infrastructure (running and stopped)
 #[tauri::command]
 pub async fn discover_environments(state: tauri::State<'_, crate::AppState>) -> Result<DiscoveryResult, String> {
-    // Get project_root from app state
-    let root = state.project_root.lock().map_err(|e| e.to_string())?;
-    let project_root = root.clone();
-    drop(root);
+    // Get project_root from app state (extract and drop guard immediately)
+    let project_root = {
+        let root = state.project_root.lock().map_err(|e| e.to_string())?;
+        root.clone()
+    }; // MutexGuard is dropped here
 
     discover_environments_with_config(project_root, None).await
 }
