@@ -200,19 +200,26 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 # Try to parse as JSON for compact logging
                 try:
                     json_body = json.loads(response_body)
-                    # Use compact JSON (no indent)
-                    compact_json = json.dumps(json_body, separators=(',', ':'))
-                    # Truncate if too long (max 500 chars)
-                    if len(compact_json) > 500:
-                        compact_json = compact_json[:500] + "..."
-                    request_logger.info(
-                        f"← {request.method} {path} - {response.status_code} - {duration_ms:.2f}ms | {compact_json}"
-                    )
+
+                    # Skip logging verbose metadata endpoints
+                    skip_body_paths = ['/connection-info', '/health', '/status']
+                    if any(skip in path for skip in skip_body_paths):
+                        request_logger.info(
+                            f"← {request.method} {path} - {response.status_code} - {duration_ms:.2f}ms"
+                        )
+                    else:
+                        # Use compact JSON (no indent)
+                        compact_json = json.dumps(json_body, separators=(',', ':'))
+                        # Truncate if too long (max 120 chars for readability)
+                        if len(compact_json) > 120:
+                            compact_json = compact_json[:120] + "..."
+                        request_logger.info(
+                            f"← {request.method} {path} - {response.status_code} - {duration_ms:.2f}ms | {compact_json}"
+                        )
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     # Not JSON or not UTF-8, just log the status
                     request_logger.info(
-                        f"← {request.method} {path} - {response.status_code} - {duration_ms:.2f}ms "
-                        f"(non-JSON response)"
+                        f"← {request.method} {path} - {response.status_code} - {duration_ms:.2f}ms"
                     )
 
                 # Recreate response with the body we consumed
