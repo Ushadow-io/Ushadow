@@ -1025,12 +1025,12 @@ function App() {
 
           // Auto-switch to quick mode if no environments exist
           if (disc && disc.environments.length === 0) {
-            setAppMode('launch')
+            setAppMode('install')
             log('Ready for quick launch', 'step')
           }
         } else {
           // Repo doesn't exist - will be cloned when user presses Launch
-          setAppMode('launch')
+          setAppMode('install')
           log('Press Launch to install Ushadow', 'step')
         }
       } else {
@@ -1101,7 +1101,7 @@ function App() {
 
       // Auto-switch to quick mode if no environments exist after link
       if (disc && disc.environments.length === 0) {
-        setAppMode('launch')
+        setAppMode('install')
         log('No environments found - ready for quick launch', 'step')
       }
     } catch (err) {
@@ -1170,11 +1170,22 @@ function App() {
   const handleQuickLaunch = async () => {
     console.log('DEBUG: handleQuickLaunch started')
     setIsLaunching(true)
-
-    // Switch to environments mode immediately to show progress
-    setAppMode('environments')
     setLogExpanded(true)
     log('🚀 Starting Ushadow quick launch...', 'step')
+
+    // Check if we need to install prereqs or start infra
+    const prereqs = getEffectivePrereqs(prerequisites)
+    const needsPrereqs = !prereqs?.git_installed || !prereqs?.python_installed || !prereqs?.docker_installed || !prereqs?.docker_running
+    const needsInfra = !discovery || !discovery.docker_ok || discovery.infrastructure.some(svc => !svc.running)
+
+    // If prereqs or infra need setup, switch to infra page first
+    if (needsPrereqs || needsInfra) {
+      setAppMode('infra')
+      log('Installing prerequisites and starting infrastructure...', 'step')
+    } else {
+      // Everything ready, go straight to environments
+      setAppMode('environments')
+    }
 
     // Give UI a brief moment to render
     await new Promise(r => setTimeout(r, 50))
@@ -1326,6 +1337,9 @@ function App() {
       log('Starting Ushadow environment...', 'step')
       await handleStartEnv('ushadow')
 
+      // Switch to environments page after setup is complete
+      setAppMode('environments')
+
       if (failedInstalls.length > 0) {
         log('Quick launch completed with warnings', 'warning')
       } else {
@@ -1334,6 +1348,8 @@ function App() {
     } catch (err) {
       console.error('DEBUG: handleQuickLaunch caught error:', err)
       log(`Quick launch failed: ${err}`, 'error')
+      // On error, also switch to environments page to show the error
+      setAppMode('environments')
     } finally {
       setIsLaunching(false)
     }
@@ -1376,24 +1392,24 @@ function App() {
           {/* Page Navigation */}
           <div className="flex rounded-lg bg-surface-700 p-0.5" data-testid="mode-toggle">
             <button
-              onClick={() => setAppMode('launch')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'launch' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
-              data-testid="nav-launch"
-            >
-              <Zap className="w-3 h-3 inline mr-1" />
-              Launch
-            </button>
-            <button
               onClick={() => setAppMode('install')}
               className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'install' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                appMode === 'infra' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
               }`}
               data-testid="nav-install"
             >
-              <Package className="w-3 h-3 inline mr-1" />
+              <Zap className="w-3 h-3 inline mr-1" />
               Install
+            </button>
+            <button
+              onClick={() => setAppMode('infra')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                appMode === 'infra' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-infra"
+            >
+              <Package className="w-3 h-3 inline mr-1" />
+              Infra
             </button>
             <button
               onClick={() => setAppMode('environments')}
@@ -1442,7 +1458,7 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
-        {appMode === 'launch' ? (
+        {appMode === 'infra' ? (
           /* Launch Page - One-Click Launch */
           <div className="h-full flex flex-col items-center justify-center">
             <div className="text-center mb-8">
@@ -1498,7 +1514,7 @@ function App() {
               )}
             </button>
           </div>
-        ) : appMode === 'install' ? (
+        ) : appMode === 'infra' ? (
           /* Install Page - Prerequisites & Infrastructure Setup */
           <div className="h-full flex flex-col gap-4 overflow-y-auto">
             <div className="text-center mb-4">

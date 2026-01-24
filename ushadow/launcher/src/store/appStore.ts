@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type AppMode = 'launch' | 'install' | 'environments'
+export type AppMode = 'install' | 'infra' | 'environments'
 export type BranchType = 'main' | 'dev'
 
 export interface SpoofedPrerequisites {
@@ -70,7 +70,7 @@ export const useAppStore = create<AppState>()(
       dryRunMode: false,
       showDevTools: false,
       logExpanded: true,
-      appMode: 'launch',
+      appMode: 'install',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
       worktreesDir: '',
