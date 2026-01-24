@@ -16,6 +16,12 @@ pub fn get_colors_for_name(name: &str) -> (String, String) {
     ];
 
     let name_lower = name.to_lowercase();
+
+    // Special case: default "ushadow" environment uses purple
+    if name_lower == "ushadow" {
+        return ("purple".to_string(), "purple".to_string());
+    }
+
     for color in &color_names {
         if name_lower.contains(color) {
             return (color.to_string(), color.to_string());
@@ -655,7 +661,15 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
 
     // Step 1: Stop containers (best effort - don't fail if they're already stopped)
     eprintln!("[delete_environment] Stopping containers for '{}'...", env_name);
-    let stop_result = shell_command(&format!("docker compose -p ushadow-{} down", env_name))
+
+    // Use correct compose project name (matches run.py logic)
+    let compose_project_name = if env_name == "ushadow" {
+        "ushadow".to_string()
+    } else {
+        format!("ushadow-{}", env_name)
+    };
+
+    let stop_result = shell_command(&format!("docker compose -p {} down", compose_project_name))
         .output();
 
     match stop_result {
