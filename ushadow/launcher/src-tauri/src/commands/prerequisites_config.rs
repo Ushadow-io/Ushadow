@@ -130,12 +130,24 @@ impl PrerequisitesConfig {
             return Ok(parent2_path);
         }
 
-        // In production, try the resources directory
-        // Note: This will be available when the app is built and packaged
-        // For now, we rely on the development paths above
+        // Try next to executable (production Windows/Linux)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let exe_sibling = exe_dir.join("prerequisites.yaml");
+                if exe_sibling.exists() {
+                    return Ok(exe_sibling);
+                }
+
+                // Windows: Try in resources subdirectory
+                let resources_path = exe_dir.join("resources").join("prerequisites.yaml");
+                if resources_path.exists() {
+                    return Ok(resources_path);
+                }
+            }
+        }
 
         Err(format!(
-            "Could not find prerequisites.yaml. Tried:\n  - {:?}\n  - {:?}\n  - {:?}\n  - {:?}",
+            "Could not find prerequisites.yaml. Tried:\n  - {:?}\n  - {:?}\n  - {:?}\n  - {:?}\n  - Next to executable\n  - In resources directory",
             dev_path, src_tauri_path, parent_path, parent2_path
         ))
     }
