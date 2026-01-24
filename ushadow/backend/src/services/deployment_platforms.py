@@ -370,11 +370,25 @@ class DockerDeployPlatform(DeployPlatform):
                 return deployment
 
             except httpx.HTTPStatusError as e:
-                logger.error(f"Deploy failed: {e.response.text}")
-                raise ValueError(f"Deploy failed: {e.response.text}")
+                error_detail = e.response.text or str(e)
+                logger.error(f"Remote deployment failed - Status {e.response.status_code}: {error_detail}")
+                logger.error(f"Target: {url}")
+                if e.response.status_code == 404:
+                    raise ValueError(
+                        f"Remote unode manager not found at {target_ip}:{self.UNODE_MANAGER_PORT}. "
+                        f"Ensure the unode manager is running on the remote host and accessible via Tailscale."
+                    )
+                else:
+                    raise ValueError(f"Remote deployment failed ({e.response.status_code}): {error_detail}")
+            except httpx.ConnectError as e:
+                logger.error(f"Failed to connect to remote unode: {str(e)}")
+                raise ValueError(
+                    f"Cannot connect to remote unode at {target_ip}:{self.UNODE_MANAGER_PORT}. "
+                    f"Check that the remote host is online and accessible via Tailscale."
+                )
             except Exception as e:
                 logger.error(f"Deploy error: {str(e)}")
-                raise ValueError(f"Deploy error: {str(e)}")
+                raise ValueError(f"Deployment error: {str(e)}")
 
     async def get_status(
         self,

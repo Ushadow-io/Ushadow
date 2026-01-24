@@ -12,7 +12,7 @@ Routers should use this layer instead of calling underlying managers directly.
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from src.services.compose_registry import (
     get_compose_registry,
@@ -28,12 +28,11 @@ from src.services.docker_manager import (
     ServiceType,
     ServiceEndpoint,
 )
-from src.config import (
-    get_settings,
-    Settings,
-    Source,
-)
 from src.services.provider_registry import get_provider_registry
+
+# Lazy imports to avoid circular dependency
+if TYPE_CHECKING:
+    from src.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +205,7 @@ class ServiceOrchestrator:
     def __init__(self):
         self._compose_registry: Optional[ComposeServiceRegistry] = None
         self._docker_manager: Optional[DockerManager] = None
-        self._settings: Optional[Settings] = None
+        self._settings: Optional['Settings'] = None
 
     @property
     def compose_registry(self) -> ComposeServiceRegistry:
@@ -221,8 +220,9 @@ class ServiceOrchestrator:
         return self._docker_manager
 
     @property
-    def settings(self) -> Settings:
+    def settings(self) -> 'Settings':
         if self._settings is None:
+            from src.config import get_settings
             self._settings = get_settings()
         return self._settings
 
@@ -467,6 +467,7 @@ class ServiceOrchestrator:
             return None
 
         schema = service.get_env_schema()
+        from src.config import get_settings
         settings_v2 = get_settings()
 
         # Get resolutions using new entity-based API
@@ -488,6 +489,8 @@ class ServiceOrchestrator:
         # Build env var config from schema + resolutions + suggestions
         async def build_env_var_info(ev: EnvVarConfig, is_required: bool) -> Dict[str, Any]:
             """Build single env var info from schema and resolution."""
+            from src.config import Source
+
             resolution = resolutions.get(ev.name)
             suggestions = await settings_v2.get_suggestions(ev.name)
 
@@ -867,6 +870,7 @@ class ServiceOrchestrator:
             return False
 
         # Use the Settings API resolution to check if values are available
+        from src.config import get_settings
         settings_v2 = get_settings()
         resolutions = await settings_v2.for_service(service.service_id)
 

@@ -245,12 +245,7 @@ async def get_exposed_urls(
 
     result = []
     for instance in instances:
-        logger.info(f"[exposed-urls] Checking instance {instance.id}: status={instance.status}")
-
-        # Filter by status if requested
-        if status and instance.status != status:
-            logger.info(f"[exposed-urls] Skipping {instance.id}: status {instance.status} != {status}")
-            continue
+        logger.info(f"[exposed-urls] Checking instance {instance.id}")
 
         # Get full instance details with exposed_urls
         full_instance = manager.get_service_config(instance.id)

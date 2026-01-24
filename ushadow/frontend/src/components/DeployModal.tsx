@@ -563,41 +563,63 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
       </div>
 
       {error && (
-        <div className="bg-danger-50 dark:bg-danger-900/20 rounded-lg p-4 text-danger-700 dark:text-danger-300 text-sm">
-          {error}
+        <div className="bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-danger-600 dark:text-danger-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h4 className="font-semibold text-danger-800 dark:text-danger-300 mb-1">Deployment Failed</h4>
+              <p className="text-sm text-danger-700 dark:text-danger-300 whitespace-pre-wrap">{error}</p>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Show selected target in deploy mode (with change button) */}
-      {mode === 'deploy' && selectedTarget && (
+      {/* Target selector dropdown in deploy mode */}
+      {mode === 'deploy' && availableTargets.length > 0 && (
         <div className="space-y-2">
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
             Deployment Target
           </label>
-          <div className="flex items-center gap-2">
-            <div className="flex-1 px-3 py-2 rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-800">
-              <div className="flex items-center gap-2">
-                {selectedTarget.type === 'k8s' ? (
-                  <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                ) : (
-                  <HardDrive className="h-4 w-4 text-neutral-600 dark:text-neutral-400" />
-                )}
-                <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                  {selectedTarget.name}
+          <select
+            value={selectedTarget?.id || ''}
+            onChange={async (e) => {
+              const target = availableTargets.find(t => t.id === e.target.value)
+              if (target) {
+                await handleTargetSelection(target)
+              }
+            }}
+            className="w-full px-3 py-2 rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            data-testid="deploy-target-selector"
+            disabled={loadingEnvVars}
+          >
+            <option value="">Select target...</option>
+            {availableTargets.map((target) => (
+              <option key={target.id} value={target.id}>
+                {target.name} ({target.type === 'k8s' ? 'Kubernetes' : 'Docker'}) - {target.status}
+              </option>
+            ))}
+          </select>
+          {selectedTarget && (
+            <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+              {selectedTarget.type === 'k8s' ? (
+                <Cloud className="h-3 w-3" />
+              ) : (
+                <HardDrive className="h-3 w-3" />
+              )}
+              <span>{selectedTarget.provider}</span>
+              {selectedTarget.environment && <span>• {selectedTarget.environment}</span>}
+              {selectedTarget.region && <span>• {selectedTarget.region}</span>}
+              {selectedTarget.infrastructure && Object.keys(selectedTarget.infrastructure).length > 0 && (
+                <span className="text-success-600 dark:text-success-400">
+                  • Infrastructure detected
                 </span>
-                <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                  ({selectedTarget.type === 'k8s' ? 'Kubernetes' : 'Docker'})
-                </span>
-              </div>
+              )}
             </div>
-            <button
-              onClick={() => setStep('target')}
-              className="px-3 py-2 text-sm text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded transition-colors"
-              data-testid="change-deployment-target"
-            >
-              Change
-            </button>
-          </div>
+          )}
         </div>
       )}
 

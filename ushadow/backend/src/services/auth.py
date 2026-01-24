@@ -25,11 +25,9 @@ from fastapi_users.authentication import (
     JWTStrategy,
 )
 
-from src.config import get_settings
 from src.models.user import User, UserCreate, get_user_db
 
 logger = logging.getLogger(__name__)
-config = get_settings()
 
 # JWT Configuration
 JWT_LIFETIME_SECONDS = 86400  # 24 hours (matches chronicle)
@@ -39,15 +37,25 @@ ALGORITHM = "HS256"
 from src.config.secrets import get_auth_secret_key
 SECRET_KEY = get_auth_secret_key()
 
-# Environment mode determines cookie security
-ENV_MODE = config.get_sync("environment.mode") or "development"
-COOKIE_SECURE = ENV_MODE == "production"
+# Lazy getters for config values to avoid circular import
+def _get_env_mode() -> str:
+    """Lazy getter for environment mode."""
+    from src.config import get_settings
+    config = get_settings()
+    return config.get_sync("environment.mode") or "development"
 
-# Admin configuration from OmegaConf (secrets.yaml -> admin.*)
-# Only creates admin on startup if explicitly configured in secrets.yaml
-ADMIN_EMAIL = config.get_sync("admin.email") or config.get_sync("auth.admin_email")
-ADMIN_PASSWORD = config.get_sync("admin.password")  # Must be explicitly set in secrets.yaml
-ADMIN_NAME = config.get_sync("admin.name") or config.get_sync("auth.admin_name") or "admin"
+def _get_cookie_secure() -> bool:
+    """Lazy getter for cookie security setting."""
+    return _get_env_mode() == "production"
+
+def _get_admin_config() -> tuple[str | None, str | None, str]:
+    """Lazy getter for admin configuration."""
+    from src.config import get_settings
+    config = get_settings()
+    admin_email = config.get_sync("admin.email") or config.get_sync("auth.admin_email")
+    admin_password = config.get_sync("admin.password")
+    admin_name = config.get_sync("admin.name") or config.get_sync("auth.admin_name") or "admin"
+    return admin_email, admin_password, admin_name
 
 # Accepted token issuers - comma-separated list of services whose tokens we accept
 ACCEPTED_ISSUERS = [
@@ -139,7 +147,7 @@ async def get_user_manager(user_db=Depends(get_user_db)):
 cookie_transport = CookieTransport(
     cookie_name="ushadow_auth",
     cookie_max_age=JWT_LIFETIME_SECONDS,
-    cookie_secure=COOKIE_SECURE,
+    cookie_secure=_get_cookie_secure(),
     cookie_httponly=True,
     cookie_samesite="lax",
 )
@@ -347,7 +355,9 @@ async def create_admin_user_if_needed():
     Only creates if both admin.email and admin.password are set in config/SECRETS/secrets.yaml.
     Writes password hash back to config/SECRETS/secrets.yaml for dependent services.
     """
-    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+    admin_email, admin_password, admin_name = _get_admin_config()
+
+    if not admin_email or not admin_password:
         logger.info("Skipping admin user creation - credentials not configured in config/SECRETS/secrets.yaml")
         return
 
@@ -357,7 +367,7 @@ async def create_admin_user_if_needed():
         user_db = await user_db_gen.__anext__()
 
         # Check if admin user already exists
-        existing_admin = await user_db.get_by_email(ADMIN_EMAIL)
+        existing_admin = await user_db.get_by_email(admin_email)
 
         if existing_admin:
             logger.info(f"✅ Admin user already exists: {existing_admin.email}")
@@ -368,11 +378,11 @@ async def create_admin_user_if_needed():
         user_manager = await user_manager_gen.__anext__()
 
         admin_create = UserCreate(
-            email=ADMIN_EMAIL,
-            password=ADMIN_PASSWORD,
+            email=admin_email,
+            password=admin_password,
             is_superuser=True,
             is_verified=True,
-            display_name=ADMIN_NAME or "Administrator",
+            display_name=admin_name or "Administrator",
         )
 
         admin_user = await user_manager.create(admin_create)
@@ -383,11 +393,12 @@ async def create_admin_user_if_needed():
         # read admin.password and admin.password_hash from config/SECRETS/secrets.yaml
         # https://linear.app/ushadow/issue/USH-5/align-container-passwords
         try:
+            from src.config import get_settings
             settings = get_settings()
             await settings.update({
                 "admin": {
                     "email": admin_user.email,
-                    "password": ADMIN_PASSWORD,
+                    "password": admin_password,
                     "password_hash": admin_user.hashed_password,
                 }
             })

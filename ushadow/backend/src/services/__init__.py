@@ -59,18 +59,15 @@ from src.services.provider_registry import ProviderRegistry
 # Specialized Services
 # =============================================================================
 
-from src.services.auth import AuthService
 from src.services.capability_resolver import CapabilityResolver
 from src.services.deployment_platforms import (
-    DeploymentPlatform,
-    DockerPlatform,
-    K8sPlatform,
-    LocalPlatform,
+    DeployPlatform,
+    DockerDeployPlatform,
+    KubernetesDeployPlatform,
 )
-from src.services.feature_flags import FeatureFlagService
+from src.services.feature_flags import YAMLFeatureFlagService
 from src.services.integration_operations import IntegrationOperations
 from src.services.llm_client import LLMClient
-from src.services.mcp_server import MCPServerManager
 
 # =============================================================================
 # Public API - What agents should use
@@ -92,16 +89,13 @@ __all__ = [
     "ComposeServiceRegistry",
     "ProviderRegistry",
     # Specialized Services
-    "AuthService",
     "CapabilityResolver",
-    "DeploymentPlatform",
-    "DockerPlatform",
-    "K8sPlatform",
-    "LocalPlatform",
-    "FeatureFlagService",
+    "DeployPlatform",
+    "DockerDeployPlatform",
+    "KubernetesDeployPlatform",
+    "YAMLFeatureFlagService",
     "IntegrationOperations",
     "LLMClient",
-    "MCPServerManager",
     # Common Types (for type hints)
     "ServiceStatus",
     "ServiceType",
@@ -133,10 +127,8 @@ SERVICE_PURPOSES = {
     "ComposeServiceRegistry": "Runtime registry of Compose services",
     "ProviderRegistry": "Runtime registry of LLM providers",
     "CapabilityResolver": "Service capability resolution",
-    "FeatureFlagService": "Feature flag management",
-    "AuthService": "Authentication and authorization",
+    "YAMLFeatureFlagService": "Feature flag management",
     "LLMClient": "LLM API client operations",
-    "MCPServerManager": "MCP server lifecycle management",
 }
 
 
