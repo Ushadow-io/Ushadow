@@ -30,7 +30,22 @@ if IS_WINDOWS:
 
 # Add setup directory to path for imports
 SCRIPT_DIR = Path(__file__).parent
+# Calculate PROJECT_ROOT robustly - go up from setup directory
+# Handle both normal location (repo/setup) and copied location (anywhere/setup)
 PROJECT_ROOT = SCRIPT_DIR.parent
+
+# Validate PROJECT_ROOT by checking for docker-compose.yml
+# If not found, this might be a copied setup script - use current working directory instead
+if not (PROJECT_ROOT / "docker-compose.yml").exists():
+    # Try current working directory (where we were cd'd to)
+    cwd = Path.cwd()
+    if (cwd / "docker-compose.yml").exists():
+        PROJECT_ROOT = cwd
+    else:
+        # Last resort: check if docker-compose.yml is one level up from cwd
+        if (cwd.parent / "docker-compose.yml").exists():
+            PROJECT_ROOT = cwd.parent
+
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from setup_utils import validate_ports, ensure_secrets_yaml, find_available_redis_db, set_redis_db_env_marker
