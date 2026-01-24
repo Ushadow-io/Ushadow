@@ -79,6 +79,7 @@ class DeployPlatform(ABC):
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         namespace: Optional[str] = None,
+        config_id: Optional[str] = None,
     ) -> Deployment:
         """
         Deploy a service to this target.
@@ -88,6 +89,7 @@ class DeployPlatform(ABC):
             resolved_service: Fully resolved service definition
             deployment_id: Unique deployment identifier
             namespace: Optional namespace (K8s only)
+            config_id: Optional ServiceConfig ID used for this deployment
 
         Returns:
             Deployment object with status and metadata
@@ -164,7 +166,8 @@ class DockerDeployPlatform(DeployPlatform):
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         container_name: str,
-        project_name: str
+        project_name: str,
+        config_id: Optional[str] = None,
     ) -> Deployment:
         """Deploy directly to local Docker (bypasses unode manager)."""
         try:
@@ -188,6 +191,7 @@ class DockerDeployPlatform(DeployPlatform):
             labels = {
                 "ushadow.deployment_id": deployment_id,
                 "ushadow.service_id": resolved_service.service_id,
+                "ushadow.config_id": config_id or resolved_service.service_id,  # Required for Deployment model
                 "ushadow.unode_hostname": target.identifier,
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
@@ -249,6 +253,7 @@ class DockerDeployPlatform(DeployPlatform):
                     "environment": resolved_service.environment,
                 },
                 exposed_port=exposed_port,
+                config_id=config_id,
                 backend_type="docker",
                 backend_metadata={
                     "container_id": container.id,
@@ -275,6 +280,7 @@ class DockerDeployPlatform(DeployPlatform):
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         namespace: Optional[str] = None,
+        config_id: Optional[str] = None,
     ) -> Deployment:
         """Deploy to a Docker host via unode manager API or local Docker."""
         hostname = target.identifier  # Use standardized field (hostname for Docker targets)
@@ -295,7 +301,8 @@ class DockerDeployPlatform(DeployPlatform):
                 resolved_service,
                 deployment_id,
                 container_name,
-                project_name
+                project_name,
+                config_id
             )
 
         # Build deploy payload for remote unode manager
@@ -303,6 +310,7 @@ class DockerDeployPlatform(DeployPlatform):
         labels = {
             "ushadow.deployment_id": deployment_id,
             "ushadow.service_id": resolved_service.service_id,
+            "ushadow.config_id": config_id or resolved_service.service_id,  # Required for Deployment model
             "ushadow.unode_hostname": hostname,
             "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
             "ushadow.backend_type": "docker",
@@ -350,6 +358,7 @@ class DockerDeployPlatform(DeployPlatform):
                     },
                     access_url=result.get("access_url"),
                     exposed_port=result.get("exposed_port"),
+                    config_id=config_id,
                     backend_type="docker",
                     backend_metadata={
                         "container_id": result.get("container_id"),
@@ -515,9 +524,13 @@ class DockerDeployPlatform(DeployPlatform):
                         except:
                             pass
 
+                    # Extract config_id from labels (or fallback to service_id for backwards compatibility)
+                    config_id = labels.get("ushadow.config_id") or labels.get("ushadow.service_id", "unknown")
+
                     deployment = Deployment(
                         id=deployment_id,
                         service_id=labels.get("ushadow.service_id", "unknown"),
+                        config_id=config_id,
                         unode_hostname=labels.get("ushadow.unode_hostname", target.identifier),
                         status=deployment_status,
                         container_id=container.id,
@@ -579,6 +592,7 @@ class KubernetesDeployPlatform(DeployPlatform):
         resolved_service: ResolvedServiceDefinition,
         deployment_id: str,
         namespace: Optional[str] = None,
+        config_id: Optional[str] = None,
     ) -> Deployment:
         """Deploy to a Kubernetes cluster."""
         # Use standardized fields
@@ -624,6 +638,7 @@ class KubernetesDeployPlatform(DeployPlatform):
                 "ports": resolved_service.ports,
                 "environment": resolved_service.environment,  # Include env vars for edit
             },
+            config_id=config_id,
             backend_type="kubernetes",
             backend_metadata={
                 "cluster_id": cluster_id,

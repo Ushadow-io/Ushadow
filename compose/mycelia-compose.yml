@@ -84,14 +84,14 @@ services:
       - MYCELIA_BACKEND_INTERNAL_URL=http://mycelia-backend:5173
       - MYCELIA_FRONTEND_HOST=http://localhost:${MYCELIA_FRONTEND_PORT:-18080}
 
-      # Authentication
-      - MYCELIA_TOKEN=${MYCELIA_TOKEN}
-      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID}
-      - SECRET_KEY=${AUTH_SECRET_KEY}
+      # Authentication (optional - configured via wizard on first start)
+      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
+      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
+      - SECRET_KEY=${AUTH_SECRET_KEY:-}
 
       # Database Configuration - uses shared mongo from infra
       - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
-      - MONGO_URL=${MONGO_URL:mongodb://mongo:27017/${MYCELIA_DATABASE_NAME:-mycelia}?directConnection=true}
+      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia?directConnection=true}
 
       # Redis Configuration - uses shared redis from infra
       - REDIS_HOST=redis

@@ -69,7 +69,7 @@ export interface FlatServiceCardProps {
   /** Called to add a new config variant */
   onAddConfig?: () => void
   /** Called to deploy the service */
-  onDeploy?: (target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => void
+  onDeploy?: (target: { type: 'local' | 'remote' | 'kubernetes'; id?: string; configId?: string }) => void
   /** Provider templates by capability (for dropdowns) */
   providerTemplates: Template[]
   /** Pre-fetched configs to avoid duplicate API calls */
@@ -712,6 +712,85 @@ export function FlatServiceCard({
             onSubmit={handleFormSubmit}
             onClose={() => setCreatingCapability(null)}
           />
+        )}
+
+        {/* Configs Section */}
+        {initialConfigs && initialConfigs.length > 0 && (
+          <div className="border-t border-neutral-200 dark:border-neutral-700">
+            <div className="px-4 py-2 bg-neutral-50 dark:bg-neutral-800">
+              <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                Configurations ({initialConfigs.length})
+              </span>
+            </div>
+            <div className="divide-y divide-neutral-200 dark:divide-neutral-700">
+              {initialConfigs.map((cfg) => (
+                <div
+                  key={cfg.id}
+                  className="px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/30"
+                  data-testid={`config-row-${cfg.id}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <Monitor className="h-3.5 w-3.5 text-neutral-400 flex-shrink-0" />
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300 truncate">
+                          {cfg.name}
+                        </span>
+                        {cfg.description && (
+                          <span className="text-xs text-neutral-500 dark:text-neutral-400 truncate">
+                            {cfg.description}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Edit */}
+                      {onEditConfig && (
+                        <button
+                          onClick={() => onEditConfig(cfg.id)}
+                          className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                          title="Edit configuration"
+                          data-testid={`edit-config-${cfg.id}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
+                      {/* Deploy */}
+                      {onDeploy && (
+                        <button
+                          onClick={() => {
+                            // When deploying a specific config, we need to open the deploy modal
+                            // This will be handled by the parent - it should open DeployModal with config_id
+                            console.log('Deploy config clicked:', cfg.id)
+                            onDeploy({ type: 'local', configId: cfg.id })
+                          }}
+                          className="p-1 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded"
+                          title="Deploy this configuration"
+                          data-testid={`deploy-config-${cfg.id}`}
+                        >
+                          <Rocket className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
+                      {/* Delete */}
+                      {onDeleteConfig && (
+                        <button
+                          onClick={() => onDeleteConfig(cfg.id)}
+                          className="p-1 text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-danger-50 dark:hover:bg-danger-900/20 rounded"
+                          title="Delete configuration"
+                          data-testid={`delete-config-${cfg.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* Deployments Section */}

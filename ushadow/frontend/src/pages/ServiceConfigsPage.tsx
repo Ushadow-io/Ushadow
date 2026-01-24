@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Layers,
@@ -128,6 +128,7 @@ export default function ServiceConfigsPage() {
     mode?: 'deploy' | 'create-config'  // Mode: deploy or just create config
     targetId?: string  // Deploy target ID (for when we have a specific target selected)
     infraServices?: Record<string, any>  // Infrastructure data to pass to modal
+    configId?: string  // Optional config ID to use for deployment
   }>({
     isOpen: false,
     serviceId: null,
@@ -195,6 +196,7 @@ export default function ServiceConfigsPage() {
       setWiring(wiringRes.data)
       setServiceStatuses(statusesRes.data || {})
       setDeployments(deploymentsRes.data || [])
+      console.log('🚀 Deployments loaded:', deploymentsRes.data?.length || 0, deploymentsRes.data)
 
       // Note: instanceDetails are loaded lazily when needed (e.g., when user
       // clicks edit or switches to overview tab) to avoid N+1 API calls
@@ -514,7 +516,7 @@ export default function ServiceConfigsPage() {
     }
   }
 
-  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string }) => {
+  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string; configId?: string }) => {
     // consumerId can be either an instance ID or a template ID (for templates without instances)
     // Try to find instance first, otherwise treat as template ID
     const consumerInstance = instances.find(inst => inst.id === consumerId)
@@ -541,6 +543,7 @@ export default function ServiceConfigsPage() {
             serviceId: templateId,
             targetId: deployTarget.id,  // deployment_target_id
             infraServices: infraData,
+            configId: target.configId,  // Optional config to use for deployment
           })
         } else {
           // Multiple clusters - need to show cluster selection
@@ -548,6 +551,7 @@ export default function ServiceConfigsPage() {
           setDeployModalState({
             isOpen: true,
             serviceId: templateId,
+            configId: target.configId,  // Optional config to use for deployment
           })
         }
       } catch (err) {
@@ -579,6 +583,7 @@ export default function ServiceConfigsPage() {
           isOpen: true,
           serviceId: templateId,
           targetId: selectedTarget?.id,
+          configId: target.configId,  // Optional config to use for deployment
         })
       } catch (err) {
         console.error('Failed to load Docker targets:', err)
@@ -1241,17 +1246,26 @@ export default function ServiceConfigsPage() {
   const currentEnv = import.meta.env.VITE_ENV_NAME || 'ushadow'
   const currentComposeProject = `ushadow-${currentEnv}`
 
-  const filteredDeployments = filterCurrentEnvOnly
-    ? deployments.filter((d) => {
-        // Match deployments from the current environment only
-        // Check if the deployment's hostname matches this environment's compose project or env name
-        return d.unode_hostname && (
-          d.unode_hostname === currentEnv ||
-          d.unode_hostname === currentComposeProject ||
-          d.unode_hostname.startsWith(`${currentComposeProject}.`)
-        )
-      })
-    : deployments
+  const filteredDeployments = useMemo(() => {
+    console.log(`🔍 Filtering deployments: filterCurrentEnvOnly=${filterCurrentEnvOnly}, currentEnv=${currentEnv}, currentComposeProject=${currentComposeProject}`)
+    const filtered = filterCurrentEnvOnly
+      ? deployments.filter((d) => {
+          // Match deployments from the current environment only
+          // Check if the deployment's hostname matches this environment's compose project or env name
+          const matches = d.unode_hostname && (
+            d.unode_hostname === currentEnv ||
+            d.unode_hostname === currentComposeProject ||
+            d.unode_hostname.startsWith(`${currentComposeProject}.`)
+          )
+          if (!matches && d.unode_hostname) {
+            console.log(`  ⏭️ Filtered out deployment ${d.id}: hostname=${d.unode_hostname}`)
+          }
+          return matches
+        })
+      : deployments
+    console.log(`✅ Filtered deployments: ${filtered.length} of ${deployments.length}`, filtered)
+    return filtered
+  }, [deployments, filterCurrentEnvOnly, currentEnv, currentComposeProject])
 
   // Providers in "Add" menu: not configured and not yet added
   const availableToAdd = allProviderTemplates.filter(
@@ -1568,8 +1582,10 @@ export default function ServiceConfigsPage() {
             {composeTemplates
               .filter((t) => t.requires && t.requires.length > 0)
               .map((template) => {
-                // Find the config for this template (if any)
-                const config = instances.find((i) => i.template_id === template.id) || null
+                // Find ALL configs for this template
+                const templateConfigs = instances.filter((i) => i.template_id === template.id)
+                // Show the first config (or null if none)
+                const config = templateConfigs[0] || null
                 const consumerId = config?.id || template.id
 
                 // Get service status from Docker
@@ -1581,6 +1597,9 @@ export default function ServiceConfigsPage() {
 
                 // Get deployments for this service (filtered by environment)
                 const serviceDeployments = filteredDeployments.filter(d => d.service_id === template.id)
+                if (serviceDeployments.length > 0) {
+                  console.log(`📦 Service ${template.id} has ${serviceDeployments.length} deployments:`, serviceDeployments)
+                }
 
                 return (
                   <FlatServiceCard
@@ -1589,8 +1608,8 @@ export default function ServiceConfigsPage() {
                     config={config ? { ...config, status: status?.status || config.status } : null}
                     wiring={consumerWiring}
                     providerTemplates={providerTemplates}
-                    initialConfigs={instances}
-                    instanceCount={config ? 1 : 0}
+                    initialConfigs={templateConfigs}
+                    instanceCount={templateConfigs.length}
                     deployments={serviceDeployments}
                     onStopDeployment={handleStopDeployment}
                     onRestartDeployment={handleRestartDeployment}
@@ -2287,12 +2306,19 @@ export default function ServiceConfigsPage() {
         <DeployModal
           isOpen={true}
           onClose={() => setDeployModalState({ isOpen: false, serviceId: null })}
-          onSuccess={refreshDeployments}
+          onSuccess={async () => {
+            // Refresh both deployments and configs after modal completes
+            await refreshDeployments()
+            // Reload configs to show newly created ones
+            const configsRes = await svcConfigsApi.getServiceConfigs()
+            setServiceConfigs(configsRes.data)
+          }}
           mode={deployModalState.mode || 'deploy'}
           target={deployModalState.targetId ? availableTargets.find((t) => t.id === deployModalState.targetId) : undefined}
           availableTargets={availableTargets}
           infraServices={deployModalState.infraServices || {}}
           preselectedServiceId={deployModalState.serviceId || undefined}
+          preselectedConfigId={deployModalState.configId}
         />
       )}
 

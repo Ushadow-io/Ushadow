@@ -607,11 +607,9 @@ class DeploymentManager:
                 target=target,
                 resolved_service=resolved_service,
                 deployment_id=deployment_id,
-                namespace=namespace
+                namespace=namespace,
+                config_id=config_id  # Pass config_id to platform for Deployment model validation
             )
-
-            # Set config_id on the deployment
-            deployment.config_id = config_id
 
             # For Docker deployments, optionally update tailscale serve routes (non-blocking)
             if deployment.backend_type == "docker":
