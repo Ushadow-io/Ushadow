@@ -2,7 +2,9 @@
 # Quick commands for development and deployment
 # All compose operations delegate to setup/run.py for single source of truth
 
-.PHONY: help up down restart logs build clean test go install status health dev prod \
+.PHONY: help up down restart logs build clean test test-integration test-tdd test-all \
+        test-robot test-robot-api test-robot-features test-robot-quick test-robot-critical test-report \
+        go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
         release
@@ -48,9 +50,22 @@ help:
 	@echo "  make svc-start SVC=x    - Start a service"
 	@echo "  make svc-stop SVC=x     - Stop a service"
 	@echo ""
+	@echo "Testing commands (Pyramid approach):"
+	@echo "  Backend (pytest):"
+	@echo "    make test             - Fast unit tests (~seconds)"
+	@echo "    make test-integration - Integration tests (need services running)"
+	@echo "    make test-all         - All backend tests (unit + integration)"
+	@echo "    make test-tdd         - TDD tests (expected failures)"
+	@echo "  Robot Framework (API/E2E):"
+	@echo "    make test-robot-quick    - Quick smoke tests (~30s)"
+	@echo "    make test-robot-critical - Critical path tests only"
+	@echo "    make test-robot-api      - All API integration tests"
+	@echo "    make test-robot-features - Feature-level tests"
+	@echo "    make test-robot          - All Robot tests (full suite)"
+	@echo "    make test-report         - View last test report in browser"
+	@echo ""
 	@echo "Development commands:"
 	@echo "  make install      - Install Python dependencies"
-	@echo "  make test         - Run tests"
 	@echo "  make lint         - Run linters"
 	@echo "  make format       - Format code"
 	@echo ""
@@ -232,16 +247,88 @@ install:
 	@echo "📦 Installing dependencies..."
 	@if command -v uv > /dev/null 2>&1; then \
 		cd ushadow/backend && uv pip install -r requirements.txt; \
+		uv pip install -r ../../robot_tests/requirements.txt --python .venv/bin/python; \
 	else \
 		echo "⚠️  uv not found, using pip (slower). Run: ./scripts/install-uv.sh"; \
 		cd ushadow/backend && pip install -r requirements.txt; \
+		pip install -r ../../robot_tests/requirements.txt; \
 	fi
 	cd frontend && npm install
 	@echo "✅ Dependencies installed"
 
+# =============================================================================
+# Backend Tests (pytest) - Test Pyramid Base
+# =============================================================================
+
+# Fast unit tests only (no services needed) - should complete in seconds
 test:
-	cd ushadow/backend && pytest
-	cd frontend && npm test
+	@echo "🧪 Running unit tests..."
+	@cd ushadow/backend && .venv/bin/pytest -m "unit and not tdd" -q --tb=short
+
+# Integration tests (need MongoDB, Redis running)
+test-integration:
+	@echo "🧪 Running integration tests..."
+	@cd ushadow/backend && .venv/bin/pytest -m "integration and not tdd" -v --tb=short
+
+# TDD tests (expected to fail - for tracking progress)
+test-tdd:
+	@echo "🧪 Running TDD tests (expected failures)..."
+	@cd ushadow/backend && .venv/bin/pytest -m "tdd" -v
+
+# All backend tests (unit + integration, excludes TDD)
+test-all:
+	@echo "🧪 Running all backend tests..."
+	@cd ushadow/backend && .venv/bin/pytest -m "not tdd" -v --tb=short
+
+# =============================================================================
+# Robot Framework Tests (API/E2E) - Test Pyramid Top
+# =============================================================================
+
+# Quick smoke tests - health checks and critical paths (~30 seconds)
+test-robot-quick:
+	@echo "🤖 Running quick smoke tests..."
+	@cd ushadow/backend && source .venv/bin/activate && \
+		robot --outputdir ../../robot_results \
+		      --include quick \
+		      ../../robot_tests/api/api_health_check.robot \
+		      ../../robot_tests/api/service_config_scenarios.robot
+
+# Critical path tests only - must-pass scenarios
+test-robot-critical:
+	@echo "🤖 Running critical path tests..."
+	@cd ushadow/backend && source .venv/bin/activate && \
+		robot --outputdir ../../robot_results \
+		      --include critical \
+		      ../../robot_tests/api/
+
+# All API integration tests
+test-robot-api:
+	@echo "🤖 Running all API tests..."
+	@cd ushadow/backend && source .venv/bin/activate && \
+		robot --outputdir ../../robot_results \
+		      --exclude wip \
+		      ../../robot_tests/api/
+
+# Feature-level tests (memory feedback, etc.)
+test-robot-features:
+	@echo "🤖 Running feature tests..."
+	@cd ushadow/backend && source .venv/bin/activate && \
+		robot --outputdir ../../robot_results \
+		      --exclude wip \
+		      ../../robot_tests/features/
+
+# All Robot tests (full suite) - may take several minutes
+test-robot:
+	@echo "🤖 Running full Robot test suite..."
+	@cd ushadow/backend && source .venv/bin/activate && \
+		robot --outputdir ../../robot_results \
+		      --exclude wip \
+		      ../../robot_tests/
+
+# View last test report in browser
+test-report:
+	@echo "📊 Opening test report..."
+	@open robot_results/report.html 2>/dev/null || xdg-open robot_results/report.html 2>/dev/null || echo "Report at: robot_results/report.html"
 
 lint:
 	cd ushadow/backend && ruff check .
