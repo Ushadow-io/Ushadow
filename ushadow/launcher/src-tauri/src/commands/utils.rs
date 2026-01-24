@@ -93,3 +93,22 @@ pub fn expand_tilde(path: &str) -> String {
     }
     path.to_string()
 }
+
+/// Quote a path for safe use in shell commands
+/// Handles paths with spaces, special characters, etc.
+///
+/// On Windows (PowerShell): Uses single quotes and escapes internal single quotes
+/// On Unix: Uses single quotes and escapes internal single quotes
+///
+/// Example: C:/Program Files/App -> 'C:/Program Files/App'
+pub fn quote_path(path: &str) -> String {
+    // Escape single quotes by replacing ' with ''  (PowerShell and bash compatible)
+    let escaped = path.replace('\'', "''");
+    format!("'{}'", escaped)
+}
+
+/// Quote a path from a PathBuf for safe use in shell commands
+/// Convenience wrapper around quote_path()
+pub fn quote_path_buf(path: &std::path::Path) -> String {
+    quote_path(&path.to_string_lossy())
+}

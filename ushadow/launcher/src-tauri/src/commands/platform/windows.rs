@@ -2,7 +2,7 @@
 /// All Windows-specific code lives here, making it easy to maintain and test
 
 use super::PlatformOps;
-use crate::commands::utils::{silent_command, shell_command};
+use crate::commands::utils::{silent_command, shell_command, quote_path};
 use std::process::Command;
 
 pub struct Platform;
@@ -72,9 +72,12 @@ impl PlatformOps for Platform {
             .map(|(k, v)| format!("$env:{}='{}'", k, v))
             .collect();
 
+        // Quote the working directory to handle spaces and special chars
+        let working_dir_quoted = quote_path(working_dir);
+
         format!(
-            "cd '{}'; {}; {}",
-            working_dir,
+            "cd {}; {}; {}",
+            working_dir_quoted,
             env_string.join("; "),
             command
         )

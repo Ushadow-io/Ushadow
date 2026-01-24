@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
-use super::utils::{silent_command, shell_command};
+use super::utils::{silent_command, shell_command, quote_path_buf};
 use super::platform::{Platform, PlatformOps};
 use super::bundled;
 
@@ -166,11 +166,11 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
 
     // Use bundled compose file if available, otherwise fallback to repo version
     let compose_file = bundled::get_compose_file(&project_root, "docker-compose.infra.yml");
-    let compose_path = compose_file.to_string_lossy();
+    let compose_path_quoted = quote_path_buf(&compose_file);
 
-    log_messages.push(format!("Running: docker compose -f {} -p infra --profile infra up -d", compose_path));
+    log_messages.push(format!("Running: docker compose -f {} -p infra --profile infra up -d", compose_path_quoted));
 
-    let compose_command = format!("docker compose -f {} -p infra --profile infra up -d", compose_path);
+    let compose_command = format!("docker compose -f {} -p infra --profile infra up -d", compose_path_quoted);
     let infra_output = shell_command(&compose_command)
         .current_dir(&project_root)
         .output()
@@ -404,9 +404,10 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         // Use bundled setup scripts if available, otherwise fallback to repo version
         let setup_dir = bundled::get_setup_dir(&working_dir);
         let run_py_path = setup_dir.join("run.py");
+        let run_py_quoted = quote_path_buf(&run_py_path);
 
         debug_log.push(format!("Using setup script: {:?}", run_py_path));
-        debug_log.push(format!("Running: {} run --with pyyaml {:?} --dev --quick", uv_cmd, run_py_path));
+        debug_log.push(format!("Running: {} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted));
 
         // Build the full command string using platform abstraction
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
@@ -414,7 +415,7 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         env_vars.insert("ENV_NAME".to_string(), env_name.clone());
         env_vars.insert("PORT_OFFSET".to_string(), port_offset.to_string());
 
-        let command = format!("{} run --with pyyaml {} --dev --quick", uv_cmd, run_py_path.display());
+        let command = format!("{} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted);
         let setup_command = Platform::build_env_command(&working_dir, env_vars, &command);
 
         let output = shell_command(&setup_command)
