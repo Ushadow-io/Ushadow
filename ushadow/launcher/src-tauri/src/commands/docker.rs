@@ -743,7 +743,7 @@ pub fn focus_window(window: tauri::Window) -> Result<(), String> {
     // On macOS, also activate the app to ensure it comes to front
     #[cfg(target_os = "macos")]
     {
-        let _ = Command::new("osascript")
+        let _ = silent_command("osascript")
             .args(["-e", "tell application \"Ushadow Launcher\" to activate"])
             .spawn();
     }
@@ -756,7 +756,7 @@ pub fn focus_window(window: tauri::Window) -> Result<(), String> {
 pub fn open_browser(url: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        silent_command("open")
             .arg(&url)
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -773,7 +773,7 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
+        silent_command("xdg-open")
             .arg(&url)
             .spawn()
             .map_err(|e| e.to_string())?;

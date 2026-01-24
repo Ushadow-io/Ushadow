@@ -582,19 +582,16 @@ function App() {
     // Use explicit path if provided, otherwise look up the environment
     const envPath = explicitPath || discovery?.environments.find(e => e.name === envName)?.path || undefined
 
-    // Only add to creating list if this environment doesn't already exist in discovery
-    // (meaning it's truly being created, not just started)
-    const existsInDiscovery = discovery?.environments.some(e => e.name === envName)
-    if (!existsInDiscovery) {
-      setCreatingEnvs(prev => {
-        const alreadyExists = prev.some(e => e.name === envName)
-        if (alreadyExists) {
-          // Update existing entry
-          return prev.map(e => e.name === envName ? { ...e, status: 'starting' as const } : e)
-        }
-        return [...prev, { name: envName, status: 'starting' as const }]
-      })
-    }
+    // Always add to creating list when starting an environment to show immediate feedback
+    // This ensures users see a loading card even if discovery already found stopped containers
+    setCreatingEnvs(prev => {
+      const alreadyExists = prev.some(e => e.name === envName)
+      if (alreadyExists) {
+        // Update existing entry
+        return prev.map(e => e.name === envName ? { ...e, status: 'starting' as const } : e)
+      }
+      return [...prev, { name: envName, status: 'starting' as const }]
+    })
 
     try {
       if (dryRunMode) {
@@ -1061,17 +1058,21 @@ function App() {
 
       if (status.exists && status.is_valid_repo) {
         // Repo exists - pull latest instead of cloning
-        log(`Repository found at ${path}, pulling latest...`, 'step')
+        const branchMsg = branch ? ` (on ${branch} branch)` : ''
+        log(`Repository found at ${path}${branchMsg}, pulling latest...`, 'step')
         if (dryRunMode) {
-          log('[DRY RUN] Would pull latest changes', 'warning')
+          log(`[DRY RUN] Would pull latest changes${branchMsg}`, 'warning')
           await new Promise(r => setTimeout(r, 1000))
         } else {
           const result = await tauri.updateUshadowRepo(path)
           log(result, 'success')
+          if (branch) {
+            log(`✓ Using ${branch} branch`, 'info')
+          }
         }
       } else {
         // No repo - clone fresh
-        const branchMsg = branch ? ` (branch: ${branch})` : ''
+        const branchMsg = branch ? ` on ${branch} branch` : ''
         log(`Cloning Ushadow to ${path}${branchMsg}...`, 'step')
         if (dryRunMode) {
           log(`[DRY RUN] Would clone repository${branchMsg}`, 'warning')

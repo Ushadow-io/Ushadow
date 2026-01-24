@@ -3,7 +3,6 @@
 
 use super::PlatformOps;
 use crate::commands::utils::{silent_command, shell_command, quote_path};
-use std::process::Command;
 
 pub struct Platform;
 
@@ -129,7 +128,7 @@ impl PlatformOps for Platform {
                 brew_path, package
             );
 
-            let output = Command::new("osascript")
+            let output = silent_command("osascript")
                 .args(["-e", &script])
                 .output()
                 .map_err(|e| format!("Failed to run osascript: {}", e))?;
@@ -161,7 +160,7 @@ impl PlatformOps for Platform {
     }
 
     async fn start_docker() -> Result<String, String> {
-        let output = Command::new("open")
+        let output = silent_command("open")
             .args(["-a", "Docker"])
             .output()
             .map_err(|e| format!("Failed to open Docker Desktop: {}", e))?;

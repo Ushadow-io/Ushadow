@@ -1,7 +1,6 @@
 use super::prerequisites_config::{PrerequisitesConfig, InstallationMethod};
-use super::utils::shell_command;
+use super::utils::{shell_command, silent_command};
 use super::platform::{Platform, PlatformOps, current_platform};
-use std::process::Command;
 
 /// Generic installer that reads from YAML configuration
 #[tauri::command]
@@ -117,7 +116,7 @@ async fn install_via_download(prereq_id: &str, method: &InstallationMethod) -> R
             .map_err(|e| format!("Failed to save installer: {}", e))?;
 
         // Open the .pkg file
-        Command::new("open")
+        silent_command("open")
             .arg(&pkg_path)
             .output()
             .map_err(|e| format!("Failed to open installer: {}", e))?;

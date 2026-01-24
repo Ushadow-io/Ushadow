@@ -350,8 +350,23 @@ pub async fn discover_environments_with_config(
         };
 
         let running = status == EnvironmentStatus::Running;
-        // For non-worktree environments, we don't have a branch name, so just use path-based detection
+
+        // For non-worktree environments, detect base_branch by checking actual git branch
         let base_branch = info.working_dir.as_ref().and_then(|wd| {
+            // First try to get the actual current branch from git
+            let branch_output = silent_command("git")
+                .args(["-C", wd, "branch", "--show-current"])
+                .output();
+
+            if let Ok(output) = branch_output {
+                if output.status.success() {
+                    let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    // Use determine_base_branch for accurate detection
+                    return determine_base_branch(wd, &current_branch);
+                }
+            }
+
+            // Fallback to path-based detection if git command fails
             if wd.contains("/ushadow-dev/") || wd.contains("/worktrees-dev/") ||
                wd.contains("\\ushadow-dev\\") || wd.contains("\\worktrees-dev\\") {
                 Some("dev".to_string())

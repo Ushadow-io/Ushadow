@@ -2,7 +2,7 @@ use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus}
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use super::utils::shell_command;
+use super::utils::{shell_command, silent_command};
 
 /// Get color name for an environment name
 /// Returns the color name that the frontend will use to look up hex codes
@@ -37,7 +37,7 @@ pub fn get_colors_for_name(name: &str) -> (String, String) {
 pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<Option<WorktreeInfo>, String> {
     let branch = branch.to_lowercase();
 
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&main_repo)
         .output()
@@ -108,7 +108,7 @@ pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<
 /// List all git worktrees in a repository
 #[tauri::command]
 pub async fn list_worktrees(main_repo: String) -> Result<Vec<WorktreeInfo>, String> {
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&main_repo)
         .output()
@@ -180,7 +180,7 @@ pub async fn list_worktrees(main_repo: String) -> Result<Vec<WorktreeInfo>, Stri
 /// List all git branches in a repository
 #[tauri::command]
 pub async fn list_git_branches(main_repo: String) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["branch", "-a", "--format=%(refname:short)"])
         .current_dir(&main_repo)
         .output()
@@ -245,7 +245,7 @@ pub async fn create_worktree(
     let desired_branch = base_branch.map(|b| b.to_lowercase()).unwrap_or_else(|| name.clone());
 
     // Check if git has this worktree registered or if the branch is in use
-    let list_output = Command::new("git")
+    let list_output = silent_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&main_repo)
         .output()
@@ -308,7 +308,7 @@ pub async fn create_worktree(
         eprintln!("[create_worktree] Using path for removal: {}", path_to_remove);
 
         // Try to remove the worktree from git's tracking (handles both directory and registration)
-        let remove_output = Command::new("git")
+        let remove_output = silent_command("git")
             .args(["worktree", "remove", "--force", &path_to_remove])
             .current_dir(&main_repo)
             .output()
@@ -320,7 +320,7 @@ pub async fn create_worktree(
             // If remove fails, try prune + manual directory removal
             eprintln!("[create_worktree] git worktree remove failed, trying prune + manual cleanup");
 
-            let prune_output = Command::new("git")
+            let prune_output = silent_command("git")
                 .args(["worktree", "prune"])
                 .current_dir(&main_repo)
                 .output()
@@ -340,7 +340,7 @@ pub async fn create_worktree(
     }
 
     // Check if the desired branch exists
-    let check_output = Command::new("git")
+    let check_output = silent_command("git")
         .args(["rev-parse", "--verify", &format!("refs/heads/{}", desired_branch)])
         .current_dir(&main_repo)
         .output()
@@ -350,7 +350,7 @@ pub async fn create_worktree(
 
     let (output, final_branch) = if branch_exists {
         // Branch exists - checkout directly into worktree
-        let output = Command::new("git")
+        let output = silent_command("git")
             .args(["worktree", "add", worktree_path.to_str().unwrap(), &desired_branch])
             .current_dir(&main_repo)
             .output()
@@ -365,7 +365,7 @@ pub async fn create_worktree(
         // Create from main (or master if main doesn't exist)
         let base = "main";
 
-        let output = Command::new("git")
+        let output = silent_command("git")
             .args(["worktree", "add", "-b", &new_branch_name, worktree_path.to_str().unwrap(), base])
             .current_dir(&main_repo)
             .output()
@@ -425,7 +425,7 @@ async fn open_in_vscode_impl(path: String, env_name: Option<String>, with_tmux: 
     }
 
     // Open VS Code (don't wait for it to finish)
-    Command::new("code")
+    silent_command("code")
         .arg(&path)
         .spawn()
         .map_err(|e| format!("Failed to open VS Code: {}", e))?;
@@ -637,7 +637,7 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
         .ok_or_else(|| format!("Worktree '{}' not found", name))?;
 
     // Remove the worktree
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["worktree", "remove", &worktree.path])
         .current_dir(&main_repo)
         .output()
