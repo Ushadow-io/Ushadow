@@ -2,11 +2,43 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::sync::Mutex;
 use std::collections::HashMap;
+use std::path::Path;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
 use super::utils::{silent_command, shell_command, quote_path_buf};
 use super::platform::{Platform, PlatformOps};
 use super::bundled;
+
+/// Recursively copy a directory and all its contents
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest_path = dst.join(entry.file_name());
+
+        if path.is_dir() {
+            // Skip __pycache__ directories
+            if entry.file_name() == "__pycache__" {
+                continue;
+            }
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            // Skip .pyc files
+            if let Some(ext) = path.extension() {
+                if ext == "pyc" {
+                    continue;
+                }
+            }
+            std::fs::copy(&path, &dest_path)?;
+        }
+    }
+
+    Ok(())
+}
 
 /// Find uv executable, checking common install locations on Windows
 /// Returns the path/command to use for running uv
@@ -164,9 +196,29 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
 
     log_messages.push("Starting infrastructure containers...".to_string());
 
-    // Use bundled compose file if available, otherwise fallback to repo version
-    let compose_file = bundled::get_compose_file(&project_root, "docker-compose.infra.yml");
-    let compose_path_quoted = quote_path_buf(&compose_file);
+    // Get bundled compose file if available
+    let bundled_compose_file = bundled::get_compose_file(&project_root, "docker-compose.infra.yml");
+
+    // Copy bundled compose to working directory if it's from the bundled location
+    // This avoids permission issues on Windows where Program Files requires admin
+    let working_compose_dir = std::path::Path::new(&project_root).join("compose");
+    let working_compose_file = working_compose_dir.join("docker-compose.infra.yml");
+
+    if bundled_compose_file != working_compose_file {
+        log_messages.push(format!("Copying bundled compose file to working directory..."));
+
+        // Create compose directory if needed
+        if !working_compose_dir.exists() {
+            std::fs::create_dir_all(&working_compose_dir)
+                .map_err(|e| format!("Failed to create compose directory: {}", e))?;
+        }
+
+        // Copy the compose file
+        std::fs::copy(&bundled_compose_file, &working_compose_file)
+            .map_err(|e| format!("Failed to copy compose file: {}", e))?;
+    }
+
+    let compose_path_quoted = quote_path_buf(&working_compose_file);
 
     log_messages.push(format!("Running: docker compose -f {} -p infra --profile infra up -d", compose_path_quoted));
 
@@ -401,9 +453,26 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         // Note: Removed --skip-admin flag so admin user can be auto-created from secrets.yaml
         status_log.push(format!("Running setup script..."));
 
-        // Use bundled setup scripts if available, otherwise fallback to repo version
-        let setup_dir = bundled::get_setup_dir(&working_dir);
-        let run_py_path = setup_dir.join("run.py");
+        // Get bundled setup scripts if available
+        let bundled_setup_dir = bundled::get_setup_dir(&working_dir);
+
+        // Copy bundled setup to working directory if it's from the bundled location
+        // This avoids permission issues on Windows where Program Files requires admin
+        let working_setup_dir = std::path::Path::new(&working_dir).join("setup");
+
+        if bundled_setup_dir != working_setup_dir {
+            debug_log.push(format!("Copying bundled setup from {:?} to {:?}", bundled_setup_dir, working_setup_dir));
+
+            // Recursively copy the entire setup directory
+            if let Err(e) = copy_dir_recursive(&bundled_setup_dir, &working_setup_dir) {
+                debug_log.push(format!("Warning: Failed to copy setup directory: {}", e));
+                // Continue anyway - might be a partial copy that still works
+            } else {
+                debug_log.push(format!("✓ Bundled setup copied successfully"));
+            }
+        }
+
+        let run_py_path = working_setup_dir.join("run.py");
         let run_py_quoted = quote_path_buf(&run_py_path);
 
         debug_log.push(format!("Using setup script: {:?}", run_py_path));
