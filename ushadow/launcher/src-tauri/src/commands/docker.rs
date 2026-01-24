@@ -6,6 +6,7 @@ use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
 use super::utils::{silent_command, shell_command};
 use super::platform::{Platform, PlatformOps};
+use super::bundled;
 
 /// Find uv executable, checking common install locations on Windows
 /// Returns the path/command to use for running uv
@@ -162,9 +163,15 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     }
 
     log_messages.push("Starting infrastructure containers...".to_string());
-    log_messages.push("Running: docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d".to_string());
 
-    let infra_output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
+    // Use bundled compose file if available, otherwise fallback to repo version
+    let compose_file = bundled::get_compose_file(&project_root, "docker-compose.infra.yml");
+    let compose_path = compose_file.to_string_lossy();
+
+    log_messages.push(format!("Running: docker compose -f {} -p infra --profile infra up -d", compose_path));
+
+    let compose_command = format!("docker compose -f {} -p infra --profile infra up -d", compose_path);
+    let infra_output = shell_command(&compose_command)
         .current_dir(&project_root)
         .output()
         .map_err(|e| {
@@ -393,7 +400,13 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         // Run setup with uv in dev mode with calculated port offset
         // Note: Removed --skip-admin flag so admin user can be auto-created from secrets.yaml
         status_log.push(format!("Running setup script..."));
-        debug_log.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick", uv_cmd));
+
+        // Use bundled setup scripts if available, otherwise fallback to repo version
+        let setup_dir = bundled::get_setup_dir(&working_dir);
+        let run_py_path = setup_dir.join("run.py");
+
+        debug_log.push(format!("Using setup script: {:?}", run_py_path));
+        debug_log.push(format!("Running: {} run --with pyyaml {:?} --dev --quick", uv_cmd, run_py_path));
 
         // Build the full command string using platform abstraction
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
@@ -401,7 +414,7 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         env_vars.insert("ENV_NAME".to_string(), env_name.clone());
         env_vars.insert("PORT_OFFSET".to_string(), port_offset.to_string());
 
-        let command = format!("{} run --with pyyaml setup/run.py --dev --quick", uv_cmd);
+        let command = format!("{} run --with pyyaml {} --dev --quick", uv_cmd, run_py_path.display());
         let setup_command = Platform::build_env_command(&working_dir, env_vars, &command);
 
         let output = shell_command(&setup_command)

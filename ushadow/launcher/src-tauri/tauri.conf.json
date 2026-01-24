@@ -73,7 +73,8 @@
         "icons/icon.ico"
       ],
       "resources": [
-        "prerequisites.yaml"
+        "prerequisites.yaml",
+        "bundled/**/*"
       ],
       "macOS": {
         "minimumSystemVersion": "10.15",

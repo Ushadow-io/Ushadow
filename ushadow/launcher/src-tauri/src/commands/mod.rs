@@ -7,6 +7,7 @@ mod generic_installer;  // YAML-driven installation
 mod utils;
 mod permissions;
 mod settings;
+mod bundled;  // Bundled resources locator
 pub mod worktree;
 pub mod platform;  // Platform abstraction layer
 // Embedded terminal module (PTY-based) - DEPRECATED in favor of native terminal integration (iTerm2/Terminal.app/gnome-terminal)
