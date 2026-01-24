@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Fallback paths can be either a simple list or platform-specific
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum FallbackPaths {
+    Simple(Vec<String>),
+    PlatformSpecific(HashMap<String, Vec<String>>),
+}
+
 /// A single prerequisite definition
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PrerequisiteDefinition {
@@ -14,13 +22,11 @@ pub struct PrerequisiteDefinition {
     pub check_commands: Option<Vec<String>>,
     pub check_running_command: Option<String>,
     pub check_connected_command: Option<String>,
-    pub fallback_paths: Option<Vec<String>>,
+    pub fallback_paths: Option<FallbackPaths>,
     pub version_filter: Option<String>,
     pub optional: bool,
     pub has_service: Option<bool>,
     pub category: String,
-    #[serde(skip)]
-    pub platform_specific_paths: Option<HashMap<String, Vec<String>>>,
     pub connection_validation: Option<ConnectionValidation>,
 }
 
@@ -43,6 +49,33 @@ pub struct InstallationMethod {
 pub struct PrerequisitesConfig {
     pub prerequisites: Vec<PrerequisiteDefinition>,
     pub installation_methods: Option<HashMap<String, HashMap<String, InstallationMethod>>>,
+}
+
+/// Platform-specific prerequisite definition (after extraction)
+#[derive(Debug, Clone, Serialize)]
+pub struct PlatformPrerequisiteDefinition {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub platforms: Vec<String>,
+    pub check_command: Option<String>,
+    pub check_commands: Option<Vec<String>>,
+    pub check_running_command: Option<String>,
+    pub check_connected_command: Option<String>,
+    pub fallback_paths: Option<Vec<String>>,  // Already extracted for this platform
+    pub version_filter: Option<String>,
+    pub optional: bool,
+    pub has_service: Option<bool>,
+    pub category: String,
+    pub connection_validation: Option<ConnectionValidation>,
+}
+
+/// Platform-specific prerequisites configuration
+#[derive(Debug, Clone, Serialize)]
+pub struct PlatformPrerequisitesConfig {
+    pub prerequisites: Vec<PlatformPrerequisiteDefinition>,
+    pub installation_methods: Option<HashMap<String, InstallationMethod>>,
 }
 
 impl PrerequisitesConfig {
@@ -129,8 +162,63 @@ pub fn get_prerequisites_config() -> Result<PrerequisitesConfig, String> {
 
 /// Tauri command to get prerequisites for current platform
 #[tauri::command]
-pub fn get_platform_prerequisites_config(platform: String) -> Result<Vec<PrerequisiteDefinition>, String> {
+pub fn get_platform_prerequisites_config(platform: String) -> Result<PlatformPrerequisitesConfig, String> {
     let config = PrerequisitesConfig::load()?;
     let prereqs = config.get_platform_prerequisites(&platform);
-    Ok(prereqs.into_iter().cloned().collect())
+
+    // Convert to platform-specific definitions with extracted fallback paths
+    let platform_prereqs: Vec<PlatformPrerequisiteDefinition> = prereqs
+        .into_iter()
+        .map(|prereq| {
+            // Extract platform-specific fallback paths
+            let fallback_paths = prereq.fallback_paths.as_ref().and_then(|paths| {
+                match paths {
+                    FallbackPaths::Simple(list) => Some(list.clone()),
+                    FallbackPaths::PlatformSpecific(map) => {
+                        map.get(&platform).cloned()
+                    }
+                }
+            });
+
+            PlatformPrerequisiteDefinition {
+                id: prereq.id.clone(),
+                name: prereq.name.clone(),
+                display_name: prereq.display_name.clone(),
+                description: prereq.description.clone(),
+                platforms: prereq.platforms.clone(),
+                check_command: prereq.check_command.clone(),
+                check_commands: prereq.check_commands.clone(),
+                check_running_command: prereq.check_running_command.clone(),
+                check_connected_command: prereq.check_connected_command.clone(),
+                fallback_paths,
+                version_filter: prereq.version_filter.clone(),
+                optional: prereq.optional,
+                has_service: prereq.has_service,
+                category: prereq.category.clone(),
+                connection_validation: prereq.connection_validation.clone(),
+            }
+        })
+        .collect();
+
+    // Extract platform-specific installation methods
+    let platform_methods = config.installation_methods
+        .as_ref()
+        .and_then(|methods| {
+            let mut platform_map = HashMap::new();
+            for (prereq_id, platforms) in methods {
+                if let Some(method) = platforms.get(&platform) {
+                    platform_map.insert(prereq_id.clone(), method.clone());
+                }
+            }
+            if platform_map.is_empty() {
+                None
+            } else {
+                Some(platform_map)
+            }
+        });
+
+    Ok(PlatformPrerequisitesConfig {
+        prerequisites: platform_prereqs,
+        installation_methods: platform_methods,
+    })
 }

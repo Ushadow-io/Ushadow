@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment } from './hooks/useTauri'
+import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, type PlatformPrerequisitesConfig } from './hooks/useTauri'
 import { useAppStore, type BranchType } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
@@ -50,6 +50,7 @@ function App() {
   // State
   const [platform, setPlatform] = useState<string>('')
   const [prerequisites, setPrerequisites] = useState<Prerequisites | null>(null)
+  const [prerequisitesConfig, setPrerequisitesConfig] = useState<PlatformPrerequisitesConfig | null>(null)
   const [discovery, setDiscovery] = useState<Discovery | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [isInstalling, setIsInstalling] = useState(false)
@@ -222,6 +223,7 @@ function App() {
       tailscale_installed: spoofedPrereqs.tailscale_installed ?? real.tailscale_installed,
       tailscale_connected: real.tailscale_connected,
       python_installed: spoofedPrereqs.python_installed ?? real.python_installed,
+      uv_installed: real.uv_installed,
       workmux_installed: real.workmux_installed,
       tmux_installed: real.tmux_installed,
       homebrew_version: real.homebrew_version,
@@ -229,6 +231,7 @@ function App() {
       tailscale_version: real.tailscale_version,
       git_version: real.git_version,
       python_version: real.python_version,
+      uv_version: real.uv_version,
       workmux_version: real.workmux_version,
       tmux_version: real.tmux_version,
     }
@@ -293,50 +296,70 @@ function App() {
   // Initialize
   useEffect(() => {
     const init = async () => {
-      log('Initializing...', 'step')
+      try {
+        log('Initializing...', 'step')
+        console.log('[Init] Starting initialization...')
 
-      const os = await tauri.getOsType()
-      setPlatform(os)
-      log(`Platform: ${os}`)
+        const os = await tauri.getOsType()
+        console.log('[Init] OS:', os)
+        setPlatform(os)
+        log(`Platform: ${os}`)
 
-      const defaultDir = await tauri.getDefaultProjectDir()
+        // Load prerequisites configuration for this platform
+        console.log('[Init] Loading prerequisites config...')
+        const config = await tauri.getPlatformPrerequisitesConfig(os)
+        console.log('[Init] Prerequisites config:', config)
+        setPrerequisitesConfig(config)
 
-      // Migration: if old projectRoot exists but new fields are empty, migrate to branch-aware storage
-      if (projectRoot && !mainBranchPath) {
-        log('Migrating to branch-aware storage...', 'info')
-        setMainBranchPath(projectRoot)
-        setMainWorktreesPath(worktreesDir || `${projectRoot}/../worktrees/ushadow`)
-        setActiveBranch('main')
-        log('Migration complete', 'success')
-      }
+        console.log('[Init] Getting default project dir...')
+        const defaultDir = await tauri.getDefaultProjectDir()
+        console.log('[Init] Default dir:', defaultDir)
 
-      // Track if this is first time setup (showing project dialog)
-      let isFirstTimeSetup = false
-
-      // Show project setup dialog on first launch if no project root is configured
-      if (!projectRoot && !mainBranchPath) {
-        setProjectRoot(defaultDir)
-        setShowProjectDialog(true)
-        isFirstTimeSetup = true
-        log('Please configure your repository location', 'step')
-      } else {
-        // Sync existing project root to Rust backend
-        const currentRoot = mainBranchPath || projectRoot
-        if (currentRoot) {
-          await tauri.setProjectRoot(currentRoot)
+        // Migration: if old projectRoot exists but new fields are empty, migrate to branch-aware storage
+        if (projectRoot && !mainBranchPath) {
+          log('Migrating to branch-aware storage...', 'info')
+          setMainBranchPath(projectRoot)
+          setMainWorktreesPath(worktreesDir || `${projectRoot}/../worktrees/ushadow`)
+          setActiveBranch('main')
+          log('Migration complete', 'success')
         }
+
+        // Track if this is first time setup (showing project dialog)
+        let isFirstTimeSetup = false
+
+        // Show project setup dialog on first launch if no project root is configured
+        if (!projectRoot && !mainBranchPath) {
+          setProjectRoot(defaultDir)
+          setShowProjectDialog(true)
+          isFirstTimeSetup = true
+          log('Please configure your repository location', 'step')
+        } else {
+          // Sync existing project root to Rust backend
+          const currentRoot = mainBranchPath || projectRoot
+          if (currentRoot) {
+            console.log('[Init] Setting project root:', currentRoot)
+            await tauri.setProjectRoot(currentRoot)
+          }
+        }
+
+        // Check prerequisites immediately (system-wide, no project needed)
+        console.log('[Init] Checking prerequisites...')
+        await refreshPrerequisites()
+
+        // Only run discovery if we have a valid project root
+        if (!isFirstTimeSetup) {
+          console.log('[Init] Running discovery...')
+          await refreshDiscovery()
+        }
+
+        log('Ready', 'success')
+        console.log('[Init] Initialization complete')
+      } catch (err) {
+        console.error('[Init] Initialization error:', err)
+        log(`Initialization failed: ${err}`, 'error')
       }
-
-      // Check prerequisites immediately (system-wide, no project needed)
-      await refreshPrerequisites()
-
-      // Only run discovery if we have a valid project root
-      if (!isFirstTimeSetup) {
-        await refreshDiscovery()
-      }
-
-      log('Ready', 'success')
     }
+
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -371,7 +394,7 @@ function App() {
   }, [refreshPrerequisites, refreshDiscovery, isWindowFocused, projectRoot])
 
   // Install handlers
-  const handleInstall = async (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => {
+  const handleInstall = async (item: string) => {
     setIsInstalling(true)
     setInstallingItem(item)
     log(`Installing ${item}...`, 'step')
@@ -430,50 +453,9 @@ function App() {
         }
         log(`[DRY RUN] ${item} installation simulated successfully`, 'success')
       } else {
-        let result: string
-        switch (item) {
-          case 'homebrew':
-            result = await tauri.installHomebrew()
-            break
-          case 'git':
-            result = platform === 'macos'
-              ? await tauri.installGitMacos()
-              : await tauri.installGitWindows()
-            break
-          case 'python':
-            if (platform === 'macos') {
-              if (!prerequisites?.homebrew_installed) {
-                log('Homebrew required first', 'warning')
-                return
-              }
-              log('Installing Python 3 via Homebrew...', 'step')
-              result = 'Python 3 can be installed via: brew install python3\nPlease run this command in your terminal.'
-            } else if (platform === 'windows') {
-              result = 'Please download Python 3 from https://www.python.org/downloads/'
-            } else {
-              result = 'Please install Python 3 using your system package manager (e.g., apt, yum)'
-            }
-            log(result, 'warning')
-            return
-          case 'docker':
-            if (platform === 'macos') {
-              if (!prerequisites?.homebrew_installed) {
-                log('Homebrew required first', 'warning')
-                return
-              }
-              result = await tauri.installDockerViaBrew()
-            } else {
-              result = await tauri.installDockerWindows()
-            }
-            break
-          case 'tailscale':
-            result = platform === 'macos'
-              ? await tauri.installTailscaleMacos()
-              : await tauri.installTailscaleWindows()
-            break
-          default:
-            throw new Error(`Unknown item: ${item}`)
-        }
+        // Use generic installer - works on all platforms via YAML config
+        log(`Installing ${item}...`, 'step')
+        const result = await tauri.installPrerequisite(item)
         log(result, 'success')
       }
 
@@ -510,19 +492,14 @@ function App() {
         setSpoofedPrereq('docker_running', true)
         log(`[DRY RUN] Docker start simulated successfully`, 'success')
       } else {
-        if (platform === 'macos') {
-          await tauri.startDockerDesktopMacos()
-        } else if (platform === 'windows') {
-          await tauri.startDockerDesktopWindows()
-        } else {
-          await tauri.startDockerServiceLinux()
-        }
-        log('Docker started', 'success')
+        // Use generic start function - works on all platforms
+        const result = await tauri.startPrerequisite('docker')
+        log(result, 'success')
       }
       await refreshPrerequisites()
     } catch (err) {
-      log(`Failed to start Docker`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to start Docker`, 'error')
+      log(String(err), 'error')
     } finally {
       setIsInstalling(false)
       setInstallingItem(null)
@@ -545,8 +522,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to start infrastructure`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to start infrastructure`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingInfra(false)
     }
@@ -567,8 +544,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to stop infrastructure`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to stop infrastructure`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingInfra(false)
     }
@@ -589,8 +566,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to restart infrastructure`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to restart infrastructure`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingInfra(false)
     }
@@ -659,6 +636,7 @@ function App() {
               path: projectRoot,
               branch: null,
               is_worktree: false,
+              base_branch: null,
             }
             return {
               ...prev,
@@ -688,9 +666,9 @@ function App() {
     } catch (err) {
       console.error(`DEBUG: handleStartEnv caught error:`, err)
       // Log simple error for State view
-      log(`Failed to start ${envName}`, 'error', false)
+      log(`Failed to start ${envName}`, 'error')
       // Log detailed error for Detail view
-      log(String(err), 'error', true)
+      log(String(err), 'error')
       // Update creating env to error state
       setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
     } finally {
@@ -730,8 +708,8 @@ function App() {
         await refreshDiscovery()
       }
     } catch (err) {
-      log(`Failed to stop ${envName}`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to stop ${envName}`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingEnv(null)
     }
@@ -902,8 +880,8 @@ function App() {
       setCreatingEnvs(prev => prev.filter(e => e.name !== name))
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to create environment`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to create environment`, 'error')
+      log(String(err), 'error')
       setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
     }
   }
@@ -923,8 +901,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to link environment`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to link environment`, 'error')
+      log(String(err), 'error')
     }
   }
 
@@ -1047,12 +1025,12 @@ function App() {
 
           // Auto-switch to quick mode if no environments exist
           if (disc && disc.environments.length === 0) {
-            setAppMode('quick')
+            setAppMode('launch')
             log('Ready for quick launch', 'step')
           }
         } else {
           // Repo doesn't exist - will be cloned when user presses Launch
-          setAppMode('quick')
+          setAppMode('launch')
           log('Press Launch to install Ushadow', 'step')
         }
       } else {
@@ -1063,8 +1041,8 @@ function App() {
       // Reset dialog context
       setDialogBranchContext(undefined)
     } catch (err) {
-      log(`Failed to set installation path`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to set installation path`, 'error')
+      log(String(err), 'error')
     }
   }
 
@@ -1123,7 +1101,7 @@ function App() {
 
       // Auto-switch to quick mode if no environments exist after link
       if (disc && disc.environments.length === 0) {
-        setAppMode('quick')
+        setAppMode('launch')
         log('No environments found - ready for quick launch', 'step')
       }
     } catch (err) {
@@ -1193,8 +1171,8 @@ function App() {
     console.log('DEBUG: handleQuickLaunch started')
     setIsLaunching(true)
 
-    // Switch to dev mode immediately to show progress
-    setAppMode('dev')
+    // Switch to environments mode immediately to show progress
+    setAppMode('environments')
     setLogExpanded(true)
     log('🚀 Starting Ushadow quick launch...', 'step')
 
@@ -1249,7 +1227,7 @@ function App() {
         }
       }
 
-      if (!prereqs.python_installed) {
+      if (!prereqs?.python_installed) {
         await handleInstall('python')
         await new Promise(r => setTimeout(r, 100))
         prereqs = getEffectivePrereqs(await refreshPrerequisites())
@@ -1261,7 +1239,7 @@ function App() {
         }
       }
 
-      if (!prereqs.docker_installed) {
+      if (!prereqs?.docker_installed) {
         await handleInstall('docker')
         await new Promise(r => setTimeout(r, 100))
         prereqs = getEffectivePrereqs(await refreshPrerequisites())
@@ -1274,7 +1252,7 @@ function App() {
       }
 
       // Step 4: Start Docker if needed
-      if (prereqs.docker_installed && !prereqs.docker_running) {
+      if (prereqs?.docker_installed && !prereqs.docker_running) {
         await handleStartDocker()
         if (dryRunMode) {
           // In dry run, just wait for state to propagate
@@ -1318,7 +1296,7 @@ function App() {
       log('Checking infrastructure...', 'step')
       // Use cached discovery first (fast), only refresh if needed
       let infraRunning = (discovery?.infrastructure.length ?? 0) > 0 &&
-                         discovery.infrastructure.every(svc => svc.running)
+                         discovery?.infrastructure.every(svc => svc.running)
 
       if (infraRunning) {
         log('✓ Infrastructure already running', 'success')
@@ -1541,7 +1519,7 @@ function App() {
               <div className="flex flex-col gap-4">
                 <PrerequisitesPanel
                   prerequisites={effectivePrereqs}
-                  platform={platform}
+                  prerequisitesConfig={prerequisitesConfig}
                   isInstalling={isInstalling}
                   installingItem={installingItem}
                   onInstall={handleInstall}
@@ -1565,11 +1543,11 @@ function App() {
             {/* Single Environment Section for Consumers */}
             <div className="bg-surface-800 rounded-lg p-6 border border-surface-700">
               <h3 className="text-lg font-semibold mb-4">Your Environment</h3>
-              {discovery?.environments.length === 0 ? (
+              {!discovery || discovery.environments.length === 0 ? (
                 <div className="text-center py-8">
                   <p className="text-text-muted mb-4">No environment created yet</p>
                   <button
-                    onClick={() => handleCreateEnv('main', 'dev')}
+                    onClick={() => handleNewEnvClone('main', 'dev')}
                     className="px-6 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors font-medium"
                   >
                     Create Main Environment
@@ -1582,7 +1560,7 @@ function App() {
                       <div className="flex items-center gap-3">
                         <div
                           className="w-3 h-3 rounded-full"
-                          style={{ backgroundColor: getColors(env.color || env.name).bg }}
+                          style={{ backgroundColor: getColors(env.color || env.name).primary }}
                         />
                         <span className="font-medium">{env.name}</span>
                         <span className={`text-xs px-2 py-0.5 rounded ${

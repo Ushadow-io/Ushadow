@@ -108,16 +108,16 @@ prerequisites:
 installation_methods:
   homebrew:
     macos:
-      method: script
-      url: https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+      method: download
+      url: https://github.com/Homebrew/brew/releases/download/5.0.9/Homebrew-5.0.9.pkg
 
   git:
     macos:
       method: homebrew
       package: git
     windows:
-      method: download
-      url: https://git-scm.com/download/win
+      method: winget
+      package: Git.Git
     linux:
       method: package_manager
       packages:
@@ -130,8 +130,8 @@ installation_methods:
       method: homebrew
       package: python@3.12
     windows:
-      method: download
-      url: https://www.python.org/downloads/
+      method: winget
+      package: Python.Python.3.12
     linux:
       method: package_manager
       packages:
@@ -144,8 +144,8 @@ installation_methods:
       method: homebrew
       package: docker
     windows:
-      method: download
-      url: https://www.docker.com/products/docker-desktop
+      method: winget
+      package: Docker.DockerDesktop
     linux:
       method: script
       url: https://get.docker.com
@@ -155,8 +155,8 @@ installation_methods:
       method: homebrew
       package: tailscale
     windows:
-      method: download
-      url: https://tailscale.com/download/windows
+      method: winget
+      package: Tailscale.Tailscale
     linux:
       method: script
       url: https://tailscale.com/install.sh

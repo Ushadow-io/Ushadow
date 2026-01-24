@@ -1,7 +1,6 @@
 use super::prerequisites_config::{PrerequisitesConfig, InstallationMethod};
-use super::utils::{silent_command, shell_command};
-#[cfg(target_os = "macos")]
-use super::installer::{check_brew_installed, get_brew_path};
+use super::utils::shell_command;
+use super::platform::{Platform, PlatformOps, current_platform};
 use std::process::Command;
 
 /// Generic installer that reads from YAML configuration
@@ -69,97 +68,23 @@ async fn execute_installation(
     }
 }
 
-/// Install via Homebrew (macOS)
-#[cfg(target_os = "macos")]
+/// Install via Homebrew - delegates to platform module
 async fn install_via_homebrew(prereq_id: &str, method: &InstallationMethod) -> Result<String, String> {
-    if !check_brew_installed() {
-        return Err("Homebrew is not installed".to_string());
-    }
-
     let package = method.package.as_ref()
         .ok_or_else(|| "No package specified for Homebrew installation".to_string())?;
 
-    let brew_path = get_brew_path();
+    // Determine if this is a cask/app or formula
+    let is_app = prereq_id == "docker" || prereq_id == "tailscale";
 
-    // Determine if this is a cask or formula
-    let is_cask = prereq_id == "docker" || prereq_id == "tailscale";
-
-    let args = if is_cask {
-        vec!["install", "--cask", package]
-    } else {
-        vec!["install", package]
-    };
-
-    eprintln!("Installing {} via Homebrew: {} {}", prereq_id, brew_path, args.join(" "));
-
-    // For apps that require admin privileges (like Docker), use osascript
-    if prereq_id == "docker" {
-        let script = format!(
-            r#"do shell script "{} install --cask {}" with administrator privileges"#,
-            brew_path, package
-        );
-
-        let output = Command::new("osascript")
-            .args(["-e", &script])
-            .output()
-            .map_err(|e| format!("Failed to run osascript: {}", e))?;
-
-        if output.status.success() {
-            Ok(format!("{} installed successfully via Homebrew", prereq_id))
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("User canceled") || stderr.contains("-128") {
-                Err("Installation cancelled by user".to_string())
-            } else {
-                Err(format!("Homebrew install failed: {}", stderr))
-            }
-        }
-    } else {
-        // For other packages, run brew directly
-        let output = silent_command(&brew_path)
-            .args(&args)
-            .output()
-            .map_err(|e| format!("Failed to run brew: {}", e))?;
-
-        if output.status.success() {
-            Ok(format!("{} installed successfully via Homebrew", prereq_id))
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Homebrew install failed: {}", stderr))
-        }
-    }
+    Platform::install_package(package, is_app).await
 }
 
-#[cfg(not(target_os = "macos"))]
-async fn install_via_homebrew(_prereq_id: &str, _method: &InstallationMethod) -> Result<String, String> {
-    Err("Homebrew installation is only available on macOS".to_string())
-}
-
-/// Install via winget (Windows)
-async fn install_via_winget(prereq_id: &str, method: &InstallationMethod) -> Result<String, String> {
+/// Install via winget - delegates to platform module
+async fn install_via_winget(_prereq_id: &str, method: &InstallationMethod) -> Result<String, String> {
     let package = method.package.as_ref()
         .ok_or_else(|| "No package specified for winget installation".to_string())?;
 
-    eprintln!("Installing {} via winget: {}", prereq_id, package);
-
-    let output = silent_command("winget")
-        .args([
-            "install",
-            "--id", package,
-            "-e",
-            "--source", "winget",
-            "--accept-package-agreements",
-            "--accept-source-agreements"
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run winget: {}", e))?;
-
-    if output.status.success() {
-        Ok(format!("{} installed successfully via winget", prereq_id))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("winget install failed: {}", stderr))
-    }
+    Platform::install_package(package, false).await
 }
 
 /// Install via download (opens URL for manual download)
@@ -282,42 +207,21 @@ async fn install_via_script(prereq_id: &str, method: &InstallationMethod) -> Res
     }
 }
 
-/// Install via package manager (apt, yum, dnf)
-async fn install_via_package_manager(prereq_id: &str, method: &InstallationMethod) -> Result<String, String> {
+/// Install via package manager (apt, yum, dnf) - delegates to platform module for Linux
+async fn install_via_package_manager(_prereq_id: &str, method: &InstallationMethod) -> Result<String, String> {
     let packages = method.packages.as_ref()
         .ok_or_else(|| "No packages specified for package manager installation".to_string())?;
 
-    // Detect package manager
-    let (pkg_mgr, package) = if let Some(pkg) = packages.get("apt") {
-        ("apt", pkg)
-    } else if let Some(pkg) = packages.get("yum") {
-        ("yum", pkg)
-    } else if let Some(pkg) = packages.get("dnf") {
-        ("dnf", pkg)
-    } else {
-        return Err("No supported package manager found".to_string());
-    };
+    // Get the platform's package manager
+    let pkg_mgr = Platform::get_package_manager_path();
 
-    eprintln!("Installing {} via {}: {}", prereq_id, pkg_mgr, package);
+    // Find the package for this package manager
+    let package = packages.get(&pkg_mgr)
+        .or_else(|| packages.get("apt"))  // Fallback to apt
+        .or_else(|| packages.values().next())  // Or any available package
+        .ok_or_else(|| "No compatible package found for this system".to_string())?;
 
-    let args = match pkg_mgr {
-        "apt" => vec!["install", "-y", package],
-        "yum" | "dnf" => vec!["install", "-y", package],
-        _ => return Err(format!("Unsupported package manager: {}", pkg_mgr))
-    };
-
-    let output = Command::new("sudo")
-        .arg(pkg_mgr)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to run {}: {}", pkg_mgr, e))?;
-
-    if output.status.success() {
-        Ok(format!("{} installed successfully via {}", prereq_id, pkg_mgr))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("{} install failed: {}", pkg_mgr, stderr))
-    }
+    Platform::install_package(package, false).await
 }
 
 /// Install via cargo
@@ -339,76 +243,22 @@ async fn install_via_cargo(prereq_id: &str, method: &InstallationMethod) -> Resu
     }
 }
 
-/// Start Docker on macOS
+/// Start Docker - delegates to platform module
 async fn start_docker_macos() -> Result<String, String> {
-    Command::new("open")
-        .args(["-a", "Docker"])
-        .output()
-        .map_err(|e| format!("Failed to open Docker Desktop: {}", e))?;
-
-    Ok("Docker Desktop starting...".to_string())
+    Platform::start_docker().await
 }
 
-/// Start Docker on Windows
+/// Start Docker - delegates to platform module
 async fn start_docker_windows() -> Result<String, String> {
-    use std::path::Path;
-
-    let paths = vec![
-        r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
-        r"C:\Program Files\Docker\Docker Desktop.exe",
-    ];
-
-    for path in paths {
-        if Path::new(path).exists() {
-            Command::new(path)
-                .spawn()
-                .map_err(|e| format!("Failed to start Docker Desktop: {}", e))?;
-
-            return Ok("Docker Desktop starting...".to_string());
-        }
-    }
-
-    Err("Docker Desktop.exe not found".to_string())
+    Platform::start_docker().await
 }
 
-/// Start Docker on Linux
+/// Start Docker - delegates to platform module
 async fn start_docker_linux() -> Result<String, String> {
-    // Try systemctl first
-    let systemctl_output = Command::new("systemctl")
-        .args(["start", "docker"])
-        .output();
-
-    if let Ok(output) = systemctl_output {
-        if output.status.success() {
-            return Ok("Docker service started via systemctl".to_string());
-        }
-    }
-
-    // Fallback to service command
-    let service_output = Command::new("service")
-        .args(["docker", "start"])
-        .output();
-
-    if let Ok(output) = service_output {
-        if output.status.success() {
-            return Ok("Docker service started via service command".to_string());
-        }
-    }
-
-    Err("Failed to start Docker service. Try: sudo systemctl start docker".to_string())
+    Platform::start_docker().await
 }
 
-/// Get current platform string
+/// Get current platform string (delegates to platform module)
 fn get_current_platform() -> String {
-    #[cfg(target_os = "macos")]
-    return "macos".to_string();
-
-    #[cfg(target_os = "windows")]
-    return "windows".to_string();
-
-    #[cfg(target_os = "linux")]
-    return "linux".to_string();
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    return "unknown".to_string();
+    current_platform().to_string()
 }

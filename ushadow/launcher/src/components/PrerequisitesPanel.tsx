@@ -1,13 +1,13 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { CheckCircle, XCircle, AlertCircle, Loader2, ChevronDown, ChevronRight, ChevronUp, Download } from 'lucide-react'
-import type { Prerequisites } from '../hooks/useTauri'
+import type { Prerequisites, PlatformPrerequisitesConfig } from '../hooks/useTauri'
 
 interface PrerequisitesPanelProps {
   prerequisites: Prerequisites | null
-  platform: string
+  prerequisitesConfig: PlatformPrerequisitesConfig | null
   isInstalling: boolean
   installingItem: string | null
-  onInstall: (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => void
+  onInstall: (item: string) => void
   onStartDocker: () => void
   showDevTools: boolean
   onToggleDevTools: () => void
@@ -15,7 +15,7 @@ interface PrerequisitesPanelProps {
 
 export function PrerequisitesPanel({
   prerequisites,
-  platform,
+  prerequisitesConfig,
   isInstalling,
   installingItem,
   onInstall,
@@ -23,16 +23,74 @@ export function PrerequisitesPanel({
   showDevTools,
   onToggleDevTools,
 }: PrerequisitesPanelProps) {
+
+  // Group prerequisites by category
+  const categorizedPrereqs = useMemo(() => {
+    if (!prerequisitesConfig) return {}
+
+    const grouped: Record<string, typeof prerequisitesConfig.prerequisites> = {}
+    prerequisitesConfig.prerequisites.forEach(prereq => {
+      if (!grouped[prereq.category]) {
+        grouped[prereq.category] = []
+      }
+      grouped[prereq.category].push(prereq)
+    })
+    return grouped
+  }, [prerequisitesConfig])
+
+  // Calculate overall status based on required prerequisites
   const getOverallStatus = () => {
-    if (!prerequisites) return 'checking'
-    const { docker_installed, docker_running, git_installed, python_installed } = prerequisites
-    if (docker_installed && docker_running && git_installed && python_installed) return 'ready'
+    if (!prerequisites || !prerequisitesConfig) return 'checking'
+
+    // Check all non-optional prerequisites
+    const requiredPrereqs = prerequisitesConfig.prerequisites.filter(p => !p.optional)
+    const allInstalled = requiredPrereqs.every(prereq => {
+      const installedKey = `${prereq.id}_installed` as keyof Prerequisites
+      return prerequisites[installedKey] === true
+    })
+
+    // Also check services (like Docker) are running
+    const servicesOk = requiredPrereqs
+      .filter(p => p.has_service)
+      .every(prereq => {
+        const runningKey = `${prereq.id}_running` as keyof Prerequisites
+        return prerequisites[runningKey] === true
+      })
+
+    if (allInstalled && servicesOk) return 'ready'
     return 'action-needed'
   }
 
   const status = getOverallStatus()
   // Start collapsed if everything is ready (all green)
   const [expanded, setExpanded] = useState(status !== 'ready')
+
+  // Helper to get prerequisite status from Prerequisites object
+  const getPrereqStatus = (prereqId: string): { installed: boolean | null; running: boolean | undefined; version: string | null } => {
+    if (!prerequisites) return { installed: null, running: undefined, version: null }
+
+    const installedKey = `${prereqId}_installed` as keyof Prerequisites
+    const runningKey = `${prereqId}_running` as keyof Prerequisites
+    const versionKey = `${prereqId}_version` as keyof Prerequisites
+
+    const installedValue = prerequisites[installedKey]
+    const runningValue = prerequisites[runningKey]
+    const versionValue = prerequisites[versionKey]
+
+    return {
+      installed: typeof installedValue === 'boolean' ? installedValue : null,
+      running: typeof runningValue === 'boolean' ? runningValue : undefined,
+      version: typeof versionValue === 'string' ? versionValue : null,
+    }
+  }
+
+  const categoryOrder = ['package_manager', 'development', 'infrastructure', 'networking']
+  const categoryLabels: Record<string, string> = {
+    package_manager: 'Package Manager',
+    development: 'Development Tools',
+    infrastructure: 'Infrastructure',
+    networking: 'Networking',
+  }
 
   return (
     <div className="bg-surface-800 rounded-lg" data-testid="prerequisites-panel">
@@ -50,67 +108,40 @@ export function PrerequisitesPanel({
       </div>
 
       {/* Content */}
-      {expanded && (
-        <div className="px-4 pb-4 space-y-3" data-testid="prerequisites-list">
-          {/* Homebrew (macOS only) */}
-          {platform === 'macos' && (
-            <>
-              <p className="text-xs text-text-muted mb-1">Package Manager</p>
-              <PrereqItem
-                label="Homebrew"
-                installed={prerequisites?.homebrew_installed ?? null}
-                showInstall={!prerequisites?.homebrew_installed}
-                onInstall={() => onInstall('homebrew')}
-                isInstalling={isInstalling}
-                installing={installingItem === 'homebrew'}
-              />
-              <div className="pt-2 border-t border-surface-600 mb-2" />
-            </>
-          )}
+      {expanded && prerequisitesConfig && (
+        <div className="px-4 pb-4" data-testid="prerequisites-list">
+          {categoryOrder.map((category, idx) => {
+            const prereqsInCategory = categorizedPrereqs[category]
+            if (!prereqsInCategory || prereqsInCategory.length === 0) return null
 
-          {/* Git */}
-          <PrereqItem
-            label="Git"
-            installed={prerequisites?.git_installed ?? null}
-            showInstall={!prerequisites?.git_installed}
-            onInstall={() => onInstall('git')}
-            isInstalling={isInstalling}
-            installing={installingItem === 'git'}
-          />
-
-          {/* Python */}
-          <PrereqItem
-            label="Python 3"
-            installed={prerequisites?.python_installed ?? null}
-            showInstall={!prerequisites?.python_installed}
-            onInstall={() => onInstall('python')}
-            isInstalling={isInstalling}
-            installing={installingItem === 'python'}
-          />
-
-          {/* Docker */}
-          <PrereqItem
-            label="Docker"
-            installed={prerequisites?.docker_installed ?? null}
-            running={prerequisites?.docker_running}
-            showInstall={!prerequisites?.docker_installed}
-            showStart={prerequisites?.docker_installed && !prerequisites?.docker_running}
-            onInstall={() => onInstall('docker')}
-            onStart={onStartDocker}
-            isInstalling={isInstalling}
-            installing={installingItem === 'docker'}
-          />
-
-          {/* Tailscale */}
-          <PrereqItem
-            label="Tailscale"
-            installed={prerequisites?.tailscale_installed ?? null}
-            optional
-            showInstall={!prerequisites?.tailscale_installed}
-            onInstall={() => onInstall('tailscale')}
-            isInstalling={isInstalling}
-            installing={installingItem === 'tailscale'}
-          />
+            return (
+              <div key={category}>
+                {idx > 0 && <div className="pt-2 border-t border-surface-600 mb-2" />}
+                <p className="text-xs text-text-muted mb-3">{categoryLabels[category] || category}</p>
+                <div className="space-y-3">
+                  {prereqsInCategory.map(prereq => {
+                    const status = getPrereqStatus(prereq.id)
+                    const showStart = prereq.has_service && status.installed === true && status.running === false
+                    return (
+                      <PrereqItem
+                        key={prereq.id}
+                        label={prereq.display_name}
+                        installed={status.installed}
+                        running={status.running}
+                        optional={prereq.optional}
+                        showInstall={!status.installed}
+                        showStart={showStart}
+                        onInstall={() => onInstall(prereq.id)}
+                        onStart={prereq.id === 'docker' ? onStartDocker : undefined}
+                        isInstalling={isInstalling}
+                        installing={installingItem === prereq.id}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 

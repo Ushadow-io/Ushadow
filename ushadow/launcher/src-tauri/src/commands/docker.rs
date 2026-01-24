@@ -1,9 +1,11 @@
 use std::net::TcpListener;
 use std::process::Command;
 use std::sync::Mutex;
+use std::collections::HashMap;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
 use super::utils::{silent_command, shell_command};
+use super::platform::{Platform, PlatformOps};
 
 /// Find uv executable, checking common install locations on Windows
 /// Returns the path/command to use for running uv
@@ -88,14 +90,12 @@ fn find_available_ports(default_backend: u16, default_webui: u16) -> (u16, u16) 
 /// Application state
 pub struct AppState {
     pub project_root: Mutex<Option<String>>,
-    pub containers_running: Mutex<bool>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             project_root: Mutex::new(None),
-            containers_running: Mutex::new(false),
         }
     }
 }
@@ -395,20 +395,14 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         status_log.push(format!("Running setup script..."));
         debug_log.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick", uv_cmd));
 
-        // Build the full command string for shell execution
+        // Build the full command string using platform abstraction
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
-        // Platform-specific command syntax
-        #[cfg(target_os = "windows")]
-        let setup_command = format!(
-            "cd '{}'; $env:ENV_NAME='{}'; $env:PORT_OFFSET='{}'; {} run --with pyyaml setup/run.py --dev --quick",
-            working_dir, env_name, port_offset, uv_cmd
-        );
+        let mut env_vars = HashMap::new();
+        env_vars.insert("ENV_NAME".to_string(), env_name.clone());
+        env_vars.insert("PORT_OFFSET".to_string(), port_offset.to_string());
 
-        #[cfg(not(target_os = "windows"))]
-        let setup_command = format!(
-            "cd '{}' && ENV_NAME={} PORT_OFFSET={} {} run --with pyyaml setup/run.py --dev --quick",
-            working_dir, env_name, port_offset, uv_cmd
-        );
+        let command = format!("{} run --with pyyaml setup/run.py --dev --quick", uv_cmd);
+        let setup_command = Platform::build_env_command(&working_dir, env_vars, &command);
 
         let output = shell_command(&setup_command)
             .output()
