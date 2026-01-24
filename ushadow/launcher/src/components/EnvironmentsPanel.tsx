@@ -466,12 +466,21 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
 
       {/* iframe */}
       <div className="flex-1 relative">
-        <iframe
-          src={url}
-          className="absolute inset-0 w-full h-full border-0"
-          title={`${environment.name} web interface`}
-          data-testid="browser-view-iframe"
-        />
+        {isLoading ? (
+          /* Loading Animation Overlay */
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 z-10">
+            <Loader2 className="w-16 h-16 text-primary-400 animate-spin mb-4" />
+            <p className="text-lg font-semibold text-text-primary mb-2">Starting containers...</p>
+            <p className="text-sm text-text-muted">This may take a moment</p>
+          </div>
+        ) : (
+          <iframe
+            src={url}
+            className="absolute inset-0 w-full h-full border-0"
+            title={`${environment.name} web interface`}
+            data-testid="browser-view-iframe"
+          />
+        )}
       </div>
     </div>
   )
@@ -631,7 +640,15 @@ function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, on
       </div>
 
       {/* Content */}
-      <div className="flex-1 p-6 overflow-auto">
+      <div className="flex-1 p-6 overflow-auto relative">
+        {isLoading && !environment.running ? (
+          /* Loading Animation Overlay */
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800/95 backdrop-blur-sm z-10">
+            <Loader2 className="w-16 h-16 text-primary-400 animate-spin mb-4" />
+            <p className="text-lg font-semibold text-text-primary mb-2">Starting containers...</p>
+            <p className="text-sm text-text-muted">This may take a moment</p>
+          </div>
+        ) : null}
         <EnvironmentDetailPanel
           environment={environment}
           onMerge={onMerge}
