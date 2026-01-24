@@ -14,8 +14,8 @@ export function InfrastructurePanel({ services, onStart, onStop, onRestart, isLo
   const hasRunningServices = services.some(s => s.running)
   const allRunning = services.length > 0 && services.every(s => s.running)
 
-  // Start collapsed if all infrastructure is running (all green)
-  const [expanded, setExpanded] = useState(!allRunning)
+  // Always start expanded
+  const [expanded, setExpanded] = useState(true)
 
   return (
     <div className="bg-surface-800 rounded-lg" data-testid="infrastructure-panel">

@@ -56,8 +56,23 @@ export function EnvironmentsPanel({
     return 0
   }).reverse()
 
-  const runningEnvs = sortedEnvironments.filter(env => env.running)
-  const stoppedEnvs = sortedEnvironments.filter(env => !env.running)
+  // Consider environments as "running" if they're in the running state OR being created/started
+  const isEnvRunningOrStarting = (env: UshadowEnvironment) => {
+    // Check if environment is actually running
+    if (env.running) return true
+
+    // Check if environment is being created/started (in creatingEnvs list)
+    const isCreating = creatingEnvs.some(ce => ce.name === env.name)
+    if (isCreating) return true
+
+    // Check if environment is being loaded (loadingEnv)
+    if (loadingEnv === env.name) return true
+
+    return false
+  }
+
+  const runningEnvs = sortedEnvironments.filter(env => isEnvRunningOrStarting(env))
+  const stoppedEnvs = sortedEnvironments.filter(env => !isEnvRunningOrStarting(env))
 
   // Auto-select first running environment if none selected
   if (!selectedEnv && runningEnvs.length > 0) {

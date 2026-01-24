@@ -62,8 +62,8 @@ export function PrerequisitesPanel({
   }
 
   const status = getOverallStatus()
-  // Start collapsed if everything is ready (all green)
-  const [expanded, setExpanded] = useState(status !== 'ready')
+  // Always start expanded
+  const [expanded, setExpanded] = useState(true)
 
   // Helper to get prerequisite status from Prerequisites object
   const getPrereqStatus = (prereqId: string): { installed: boolean | null; running: boolean | undefined; version: string | null } => {

@@ -920,10 +920,14 @@ function App() {
     }
 
     log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
+    log(`Project root: ${projectRoot}`, 'info')
+    log(`Worktrees dir: ${worktreesDir}`, 'info')
 
     try {
       const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch, true)
-      log(`✓ Worktree created at ${worktree.path}`, 'success')
+      log(`✓ Worktree created successfully`, 'success')
+      log(`Path: ${worktree.path}`, 'info')
+      log(`Branch: ${worktree.branch}`, 'info')
       return worktree
     } catch (err) {
       log(`Failed to create worktree: ${err}`, 'error')
@@ -1353,17 +1357,21 @@ function App() {
         log('✓ Project directory ready', 'success')
       }
 
-      // Step 5b: If dev branch selected, create/use worktree
+      // Step 5b: If dev branch selected, ensure dev worktree exists
+      let devWorktreePath: string | undefined = undefined
       if (activeBranch === 'dev') {
         log('Setting up dev environment...', 'step')
 
         // Check if dev worktree already exists
-        const devWorktree = await tauri.checkWorktreeExists(projectRoot, 'dev')
+        let devWorktree = await tauri.checkWorktreeExists(projectRoot, 'dev')
 
         if (!devWorktree) {
           log('Creating dev worktree from dev branch...', 'step')
-          await handleCreateWorktree('ushadow-dev', 'dev')
+          const created = await handleCreateWorktree('ushadow-dev', 'dev')
+          devWorktreePath = created.path
+          log(`✓ Dev worktree created at ${created.path}`, 'success')
         } else {
+          devWorktreePath = devWorktree.path
           log(`✓ Dev worktree ready at ${devWorktree.path}`, 'success')
         }
       }
@@ -1401,7 +1409,8 @@ function App() {
       // Step 7: Start the appropriate environment based on selected branch
       const envName = activeBranch === 'dev' ? 'ushadow-dev' : 'ushadow'
       log(`Starting ${envName} environment...`, 'step')
-      await handleStartEnv(envName)
+      // Pass the explicit path for dev worktree to ensure correct location
+      await handleStartEnv(envName, devWorktreePath)
 
       // Switch to environments page after setup is complete
       setAppMode('environments')

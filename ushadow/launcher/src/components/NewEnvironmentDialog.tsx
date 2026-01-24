@@ -16,12 +16,14 @@ export function NewEnvironmentDialog({
   onWorktree,
 }: NewEnvironmentDialogProps) {
   const [name, setName] = useState('')
+  const [branch, setBranch] = useState('')
   const [baseBranch, setBaseBranch] = useState<'main' | 'dev'>('main')
 
   // Reset form when dialog closes
   useEffect(() => {
     if (!isOpen) {
       setName('')
+      setBranch('')
       setBaseBranch('main')
     }
   }, [isOpen])
@@ -30,7 +32,9 @@ export function NewEnvironmentDialog({
 
   const handleSubmit = () => {
     if (!name.trim()) return
-    onWorktree(name.trim(), baseBranch)
+    // Use specified branch name, or fall back to base branch (main/dev)
+    const branchName = branch.trim() || baseBranch
+    onWorktree(name.trim(), branchName)
   }
 
   const isValid = name.trim()
@@ -81,6 +85,25 @@ export function NewEnvironmentDialog({
           </p>
         </div>
 
+        {/* Branch Name */}
+        <div className="mb-4">
+          <label className="block text-sm text-text-secondary mb-2">
+            Branch Name <span className="text-text-muted">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && isValid && handleSubmit()}
+            className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
+            placeholder="e.g., feature/auth, bugfix/login"
+            data-testid="branch-name-input"
+          />
+          <p className="text-xs text-text-muted mt-1">
+            Leave empty to use base branch ({baseBranch})
+          </p>
+        </div>
+
         {/* Base Branch Selection */}
         <div className="mb-4">
           <label className="block text-sm text-text-secondary mb-2">
@@ -113,13 +136,13 @@ export function NewEnvironmentDialog({
             </button>
           </div>
           <p className="text-xs text-text-muted mt-1">
-            Create worktree from {baseBranch} branch
+            Base branch to create worktree from if no branch name specified
           </p>
         </div>
 
         {/* Helper text */}
         <p className="text-xs text-text-muted mb-4">
-          Creates a git worktree for parallel development. You can run multiple environments simultaneously.
+          Creates a git worktree for parallel development. Specify a branch name or use the base branch.
         </p>
 
         {/* Actions */}
