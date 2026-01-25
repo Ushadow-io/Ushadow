@@ -7,6 +7,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import AppConfig from '../config';
 
 const AUTH_TOKEN_KEY = '@ushadow_auth_token';
 const API_URL_KEY = '@ushadow_api_url';
@@ -142,8 +143,10 @@ export function appendTokenToUrl(wsUrl: string, token: string): string {
 
 /**
  * Get the default server URL.
- * Returns user-configured default if set, otherwise returns empty string.
- * Users set this during their first login via the "Save as default" checkbox.
+ * Priority:
+ * 1. User-saved default (from "Save as default" checkbox)
+ * 2. Build-time default from EXPO_PUBLIC_DEFAULT_SERVER_URL env var
+ * 3. Empty string (user must enter URL manually)
  */
 export async function getDefaultServerUrl(): Promise<string> {
   try {
@@ -154,9 +157,8 @@ export async function getDefaultServerUrl(): Promise<string> {
   } catch (error) {
     console.error('[AuthStorage] Failed to get default server URL:', error);
   }
-  // Return empty string if no default is configured
-  // This prompts users to enter their server URL on first use
-  return '';
+  // Fall back to build-time default from env var (or empty string)
+  return AppConfig.DEFAULT_SERVER_URL;
 }
 
 /**
