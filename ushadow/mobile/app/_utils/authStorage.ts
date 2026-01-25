@@ -7,9 +7,11 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import AppConfig from '../config';
 
 const AUTH_TOKEN_KEY = '@ushadow_auth_token';
 const API_URL_KEY = '@ushadow_api_url';
+const DEFAULT_SERVER_URL_KEY = '@ushadow_default_server_url';
 
 /**
  * Store the auth token
@@ -137,4 +139,61 @@ export async function getUserEmail(): Promise<string | null> {
 export function appendTokenToUrl(wsUrl: string, token: string): string {
   const separator = wsUrl.includes('?') ? '&' : '?';
   return `${wsUrl}${separator}token=${token}`;
+}
+
+/**
+ * Get the default server URL.
+ * Returns user-configured default if set, otherwise returns app config default.
+ */
+export async function getDefaultServerUrl(): Promise<string> {
+  try {
+    const customDefault = await AsyncStorage.getItem(DEFAULT_SERVER_URL_KEY);
+    if (customDefault) {
+      return customDefault;
+    }
+  } catch (error) {
+    console.error('[AuthStorage] Failed to get default server URL:', error);
+  }
+  return AppConfig.DEFAULT_SERVER_URL;
+}
+
+/**
+ * Set a custom default server URL.
+ * This will be used instead of the app config default.
+ */
+export async function setDefaultServerUrl(url: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(DEFAULT_SERVER_URL_KEY, url);
+    console.log('[AuthStorage] Default server URL saved:', url);
+  } catch (error) {
+    console.error('[AuthStorage] Failed to save default server URL:', error);
+    throw error;
+  }
+}
+
+/**
+ * Clear the custom default server URL (revert to app config default).
+ */
+export async function clearDefaultServerUrl(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(DEFAULT_SERVER_URL_KEY);
+    console.log('[AuthStorage] Default server URL cleared');
+  } catch (error) {
+    console.error('[AuthStorage] Failed to clear default server URL:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get the effective server URL to use.
+ * Priority: stored API URL > custom default > app config default
+ */
+export async function getEffectiveServerUrl(): Promise<string> {
+  // First check if there's a stored API URL from login
+  const storedUrl = await getApiUrl();
+  if (storedUrl) {
+    return storedUrl;
+  }
+  // Otherwise return the default
+  return getDefaultServerUrl();
 }

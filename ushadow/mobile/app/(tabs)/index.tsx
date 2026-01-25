@@ -195,7 +195,6 @@ export default function HomeScreen() {
         visible={showLoginScreen}
         onClose={() => setShowLoginScreen(false)}
         onLoginSuccess={handleLoginSuccess}
-        initialApiUrl="https://blue.spangled-kettle.ts.net"
       />
 
       {/* Connection Log Viewer Modal */}
