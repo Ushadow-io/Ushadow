@@ -75,9 +75,14 @@ export function EnvironmentsPanel({
   const stoppedEnvs = sortedEnvironments.filter(env => !isEnvRunningOrStarting(env))
 
   // Auto-select first running environment if none selected
-  if (!selectedEnv && runningEnvs.length > 0) {
-    setSelectedEnv(runningEnvs[0])
-  }
+  useEffect(() => {
+    // Only auto-select if we don't have a selection and there are running environments
+    if (!selectedEnv && runningEnvs.length > 0) {
+      setSelectedEnv(runningEnvs[0])
+    }
+    // Only re-run when selectedEnv changes or the list of environment names changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEnv, runningEnvs.map(e => e.name).join(',')])
 
   // Resize handlers
   const handleMouseDown = (e: React.MouseEvent) => {
