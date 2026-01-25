@@ -25,7 +25,12 @@ import {
   ScrollView,
 } from 'react-native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
-import { saveAuthToken, saveApiUrl } from '../_utils/authStorage';
+import {
+  saveAuthToken,
+  saveApiUrl,
+  getDefaultServerUrl,
+  setDefaultServerUrl,
+} from '../_utils/authStorage';
 
 interface LoginScreenProps {
   visible: boolean;

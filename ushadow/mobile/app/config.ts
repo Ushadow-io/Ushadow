@@ -8,13 +8,13 @@
 export const AppConfig = {
   /**
    * Default server URL.
-   * This is used as the initial value when the app is first installed.
-   * Users can change this in the login screen.
+   * Empty by default - users set this during first login.
+   * Once set, it's persisted in AsyncStorage and used for future logins.
    *
    * Format: https://{your-tailscale-host}
    * Example: https://blue.spangled-kettle.ts.net
    */
-  DEFAULT_SERVER_URL: 'https://ushadow.wolf-tawny.ts.net',
+  DEFAULT_SERVER_URL: '',
 
   /**
    * App version info

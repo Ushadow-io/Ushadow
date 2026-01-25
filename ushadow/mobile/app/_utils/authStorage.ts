@@ -7,7 +7,6 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import AppConfig from '../config';
 
 const AUTH_TOKEN_KEY = '@ushadow_auth_token';
 const API_URL_KEY = '@ushadow_api_url';
@@ -143,7 +142,8 @@ export function appendTokenToUrl(wsUrl: string, token: string): string {
 
 /**
  * Get the default server URL.
- * Returns user-configured default if set, otherwise returns app config default.
+ * Returns user-configured default if set, otherwise returns empty string.
+ * Users set this during their first login via the "Save as default" checkbox.
  */
 export async function getDefaultServerUrl(): Promise<string> {
   try {
@@ -154,7 +154,9 @@ export async function getDefaultServerUrl(): Promise<string> {
   } catch (error) {
     console.error('[AuthStorage] Failed to get default server URL:', error);
   }
-  return AppConfig.DEFAULT_SERVER_URL;
+  // Return empty string if no default is configured
+  // This prompts users to enter their server URL on first use
+  return '';
 }
 
 /**
@@ -172,7 +174,8 @@ export async function setDefaultServerUrl(url: string): Promise<void> {
 }
 
 /**
- * Clear the custom default server URL (revert to app config default).
+ * Clear the custom default server URL.
+ * After clearing, users will need to enter the URL manually on next login.
  */
 export async function clearDefaultServerUrl(): Promise<void> {
   try {
@@ -186,7 +189,7 @@ export async function clearDefaultServerUrl(): Promise<void> {
 
 /**
  * Get the effective server URL to use.
- * Priority: stored API URL > custom default > app config default
+ * Priority: stored API URL from login > saved default server URL > empty string
  */
 export async function getEffectiveServerUrl(): Promise<string> {
   // First check if there's a stored API URL from login
