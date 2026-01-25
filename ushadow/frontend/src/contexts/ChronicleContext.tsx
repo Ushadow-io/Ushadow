@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { chronicleAuthApi } from '../services/chronicleApi'
-import { useChronicleRecording, ChronicleRecordingReturn } from '../hooks/useChronicleRecording'
+import { useWebRecording, WebRecordingReturn } from '../hooks/useWebRecording'
 
 interface ChronicleContextType {
   // Connection state
@@ -13,18 +13,18 @@ interface ChronicleContextType {
   disconnect: () => void
 
   // Recording (lifted to context level for global access)
-  recording: ChronicleRecordingReturn
+  recording: WebRecordingReturn
 }
 
 const ChronicleContext = createContext<ChronicleContextType | undefined>(undefined)
 
 export function ChronicleProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
-  const [isCheckingConnection, setIsCheckingConnection] = useState(true)
+  const [isCheckingConnection, setIsCheckingConnection] = useState(false)  // Start false - only true during explicit check
   const [connectionError, setConnectionError] = useState<string | null>(null)
 
   // Lift recording hook to context level
-  const recording = useChronicleRecording()
+  const recording = useWebRecording()
 
   // Check if Chronicle is connected (has valid auth token)
   const checkConnection = useCallback(async (): Promise<boolean> => {
@@ -68,10 +68,11 @@ export function ChronicleProvider({ children }: { children: ReactNode }) {
     setConnectionError(null)
   }, [recording])
 
-  // Check connection on mount and when URL changes
+  // Auto-check connection on mount so the header record button appears immediately
   useEffect(() => {
+    // Only check once on mount
     checkConnection()
-  }, [checkConnection])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-check connection periodically (every 5 minutes) if connected
   useEffect(() => {

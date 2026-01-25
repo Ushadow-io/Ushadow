@@ -14,14 +14,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from omegaconf import OmegaConf
 
-from src.config.omegaconf_settings import get_settings_store
+from src.config import get_settings
 from src.config.secrets import mask_dict_secrets
 from src.services.compose_registry import get_compose_registry
 from src.services.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-config = get_settings_store()
+config = get_settings()
 
 
 class SettingsResponse(BaseModel):
@@ -45,12 +45,11 @@ async def get_settings_info():
 async def get_config():
     """Get merged configuration with secrets masked."""
     try:
-        settings_store = get_settings_store()
-        merged = await settings_store.load_config()
-        config = OmegaConf.to_container(merged, resolve=True)
+        settings = get_settings()
+        all_config = await settings.get_all()
 
         # Recursively mask all sensitive values
-        masked_config = mask_dict_secrets(config)
+        masked_config = mask_dict_secrets(all_config)
 
         return masked_config
     except Exception as e:
@@ -62,14 +61,12 @@ async def get_config():
 async def update_config(updates: Dict[str, Any]):
     """Update configuration values."""
     try:
-        settings_store = get_settings_store()
-        
-        # Filter out masked values to prevent accidental overwrites
-        filtered = settings_store._filter_masked_values(updates)
-        if not filtered:
+        settings = get_settings()
+
+        if not updates:
             return {"success": True, "message": "No updates to apply"}
 
-        await settings_store.update(filtered)
+        await settings.update(updates)
         return {"success": True, "message": "Configuration updated"}
     except Exception as e:
         logger.error(f"Error updating config: {e}")
@@ -80,9 +77,8 @@ async def update_config(updates: Dict[str, Any]):
 async def get_all_service_configs():
     """Get all service-specific configurations."""
     try:
-        settings_store = get_settings_store()
-        merged = await settings_store.load_config()
-        return OmegaConf.to_container(merged.service_preferences, resolve=True)
+        settings = get_settings()
+        return await settings.get("service_preferences", {})
     except Exception as e:
         logger.error(f"Error getting service configs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -92,12 +88,8 @@ async def get_all_service_configs():
 async def get_service_config(service_id: str):
     """Get configuration for a specific service."""
     try:
-        settings_store = get_settings_store()
-        merged = await settings_store.load_config()
-        service_prefs = getattr(merged.service_preferences, service_id, None)
-        if service_prefs:
-            return OmegaConf.to_container(service_prefs, resolve=True)
-        return {}
+        settings = get_settings()
+        return await settings.get(f"service_preferences.{service_id}", {})
     except Exception as e:
         logger.error(f"Error getting service config for {service_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -107,8 +99,8 @@ async def get_service_config(service_id: str):
 async def update_service_config(service_id: str, updates: Dict[str, Any]):
     """Update configuration for a specific service."""
     try:
-        settings_store = get_settings_store()
-        await settings_store.update({
+        settings = get_settings()
+        await settings.update({
             "service_preferences": {
                 service_id: updates
             }
@@ -123,8 +115,8 @@ async def update_service_config(service_id: str, updates: Dict[str, Any]):
 async def delete_service_config(service_id: str):
     """Delete configuration for a specific service."""
     try:
-        settings_store = get_settings_store()
-        await settings_store.update({
+        settings = get_settings()
+        await settings.update({
             "service_preferences": {
                 service_id: {}
             }
@@ -144,8 +136,8 @@ async def reset_config():
     returning to factory defaults.
     """
     try:
-        settings_store = get_settings_store()
-        deleted = await settings_store.reset(include_secrets=True)
+        settings = get_settings()
+        deleted = await settings.reset(include_secrets=True)
         return {
             "success": True,
             "message": "All settings reset to defaults",
@@ -153,6 +145,36 @@ async def reset_config():
         }
     except Exception as e:
         logger.error(f"Error resetting config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/secret/{key_path:path}")
+async def get_secret_value(key_path: str):
+    """
+    Get an unmasked secret value by path.
+
+    This is a server-side only endpoint for retrieving actual secret values
+    for operations like service configuration. The value is never sent to
+    the frontend - only used in backend operations.
+
+    Args:
+        key_path: Dot-separated path to secret (e.g., "security.auth_secret_key")
+
+    Returns:
+        {"value": "actual_secret_value"}
+    """
+    try:
+        settings = get_settings()
+        value = await settings.get(key_path)
+
+        if value is None:
+            raise HTTPException(status_code=404, detail=f"Secret not found at path: {key_path}")
+
+        return {"value": value}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting secret at {key_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -170,8 +192,8 @@ async def refresh_config() -> Dict[str, Any]:
     """
     try:
         # Clear OmegaConf settings cache
-        settings_store = get_settings_store()
-        settings_store.clear_cache()
+        settings = get_settings()
+        settings.clear_cache()
 
         # Refresh compose registry
         compose_registry = get_compose_registry()

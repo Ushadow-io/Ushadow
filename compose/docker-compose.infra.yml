@@ -17,15 +17,40 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch(e) { 0 }"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     networks:
+      - ushadow-network
       - infra-network
     restart: unless-stopped
+
+  # One-time replica set initialization (runs and exits)
+  mongo-init:
+    image: mongo:8.0
+    container_name: mongo-init
+    profiles: ["infra"]
+    depends_on:
+      mongo:
+        condition: service_started
+    entrypoint: >
+      mongosh --host mongo --quiet --eval "
+        try {
+          rs.status();
+          print('Replica set already initialized');
+        } catch(e) {
+          print('Initializing replica set...');
+          rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]});
+          print('Replica set initialized');
+        }
+      "
+    networks:
+      - infra-network
+    restart: "no"
 
   redis:
     image: redis:7-alpine
@@ -42,6 +67,7 @@ services:
       timeout: 3s
       retries: 5
     networks:
+      - ushadow-network
       - infra-network
     restart: unless-stopped
 
@@ -55,6 +81,7 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
+      - ushadow-network
       - infra-network
     restart: unless-stopped
     healthcheck:
@@ -80,6 +107,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ../config/postgres-init:/docker-entrypoint-initdb.d:ro
     networks:
+      - ushadow-network
       - infra-network
     restart: unless-stopped
     healthcheck:
@@ -97,11 +125,12 @@ services:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
     environment:
-      - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD}
+      # - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD}
       - NEO4J_PLUGINS=["apoc"]
     volumes:
       - neo4j_data:/data
     networks:
+      - ushadow-network
       - infra-network
     restart: unless-stopped
 
@@ -128,11 +157,14 @@ services:
   #     - NET_ADMIN
   #     - NET_RAW
   #   networks:
-  #     - infra-network
+  #     - ushadow-network
   #   restart: unless-stopped
   #   command: sh -c "tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity"
 
 networks:
+  ushadow-network:
+    name: ushadow-network
+    external: true
   infra-network:
     name: infra-network
     external: true

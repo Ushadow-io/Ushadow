@@ -1,0 +1,1034 @@
+{
+  "timestamp": "2026-01-23T15:36:15.123562",
+  "metrics": {
+    "file_sizes": {
+      "violations": [
+        [
+          "ushadow/backend/src/routers/unodes.py",
+          735,
+          500
+        ],
+        [
+          "ushadow/backend/src/routers/services.py",
+          947,
+          500
+        ],
+        [
+          "ushadow/backend/src/routers/github_import.py",
+          1130,
+          500
+        ],
+        [
+          "ushadow/backend/src/routers/service_configs.py",
+          696,
+          500
+        ],
+        [
+          "ushadow/backend/src/routers/tailscale.py",
+          1522,
+          500
+        ],
+        [
+          "ushadow/backend/src/services/service_config_manager.py",
+          890,
+          800
+        ],
+        [
+          "ushadow/backend/src/services/service_orchestrator.py",
+          942,
+          800
+        ],
+        [
+          "ushadow/backend/src/services/unode_manager.py",
+          1670,
+          800
+        ],
+        [
+          "ushadow/backend/src/services/deployment_manager.py",
+          1124,
+          800
+        ],
+        [
+          "ushadow/backend/src/services/tailscale_manager.py",
+          1024,
+          800
+        ],
+        [
+          "ushadow/backend/src/services/kubernetes_manager.py",
+          1505,
+          800
+        ],
+        [
+          "ushadow/backend/src/services/docker_manager.py",
+          1537,
+          800
+        ],
+        [
+          "ushadow/backend/src/utils/tailscale_serve.py",
+          424,
+          300
+        ],
+        [
+          "ushadow/backend/src/models/github_import.py",
+          406,
+          400
+        ]
+      ],
+      "total_files": 49,
+      "violation_count": 14,
+      "violation_rate": 0.2857142857142857,
+      "largest_file": [
+        "ushadow/backend/src/services/unode_manager.py",
+        1670
+      ],
+      "top_5_largest": [
+        [
+          "ushadow/backend/src/services/unode_manager.py",
+          1670
+        ],
+        [
+          "ushadow/backend/src/services/docker_manager.py",
+          1537
+        ],
+        [
+          "ushadow/backend/src/routers/tailscale.py",
+          1522
+        ],
+        [
+          "ushadow/backend/src/services/kubernetes_manager.py",
+          1505
+        ],
+        [
+          "ushadow/backend/src/routers/github_import.py",
+          1130
+        ]
+      ]
+    },
+    "method_duplication": {
+      "duplicates": {
+        "list_unodes": [
+          {
+            "file": "ushadow/backend/src/routers/unodes.py",
+            "line": 167
+          },
+          {
+            "file": "ushadow/backend/src/services/unode_manager.py",
+            "line": 740
+          }
+        ],
+        "create_join_token": [
+          {
+            "file": "ushadow/backend/src/routers/unodes.py",
+            "line": 545
+          },
+          {
+            "file": "ushadow/backend/src/services/unode_manager.py",
+            "line": 312
+          }
+        ],
+        "update_unode_status": [
+          {
+            "file": "ushadow/backend/src/routers/unodes.py",
+            "line": 611
+          },
+          {
+            "file": "ushadow/backend/src/services/unode_manager.py",
+            "line": 940
+          }
+        ],
+        "list_services": [
+          {
+            "file": "ushadow/backend/src/routers/services.py",
+            "line": 126
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_manager.py",
+            "line": 429
+          },
+          {
+            "file": "ushadow/backend/src/services/docker_manager.py",
+            "line": 694
+          },
+          {
+            "file": "ushadow/backend/src/services/mcp_server.py",
+            "line": 56
+          }
+        ],
+        "list_catalog": [
+          {
+            "file": "ushadow/backend/src/routers/services.py",
+            "line": 139
+          },
+          {
+            "file": "ushadow/backend/src/services/service_orchestrator.py",
+            "line": 245
+          }
+        ],
+        "start_service": [
+          {
+            "file": "ushadow/backend/src/routers/services.py",
+            "line": 680
+          },
+          {
+            "file": "ushadow/backend/src/services/service_orchestrator.py",
+            "line": 371
+          },
+          {
+            "file": "ushadow/backend/src/services/docker_manager.py",
+            "line": 853
+          },
+          {
+            "file": "ushadow/backend/src/services/mcp_server.py",
+            "line": 177
+          }
+        ],
+        "stop_service": [
+          {
+            "file": "ushadow/backend/src/routers/services.py",
+            "line": 705
+          },
+          {
+            "file": "ushadow/backend/src/services/service_orchestrator.py",
+            "line": 376
+          },
+          {
+            "file": "ushadow/backend/src/services/docker_manager.py",
+            "line": 1316
+          },
+          {
+            "file": "ushadow/backend/src/services/mcp_server.py",
+            "line": 199
+          }
+        ],
+        "update_env_config": [
+          {
+            "file": "ushadow/backend/src/routers/services.py",
+            "line": 824
+          },
+          {
+            "file": "ushadow/backend/src/services/service_orchestrator.py",
+            "line": 537
+          },
+          {
+            "file": "ushadow/backend/src/services/compose_registry.py",
+            "line": 408
+          }
+        ],
+        "list_providers": [
+          {
+            "file": "ushadow/backend/src/routers/providers.py",
+            "line": 123
+          },
+          {
+            "file": "ushadow/backend/src/services/mcp_server.py",
+            "line": 279
+          }
+        ],
+        "list_capabilities": [
+          {
+            "file": "ushadow/backend/src/routers/providers.py",
+            "line": 158
+          },
+          {
+            "file": "ushadow/backend/src/services/mcp_server.py",
+            "line": 247
+          }
+        ],
+        "list_service_configs": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 276
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 347
+          }
+        ],
+        "create_instance": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 343
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 413
+          }
+        ],
+        "update_instance": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 407
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 450
+          }
+        ],
+        "delete_instance": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 472
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 479
+          }
+        ],
+        "deploy_instance": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 484
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 530
+          }
+        ],
+        "list_wiring": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 522
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 718
+          }
+        ],
+        "create_wiring": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 555
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 769
+          }
+        ],
+        "delete_wiring": [
+          {
+            "file": "ushadow/backend/src/routers/service_configs.py",
+            "line": 568
+          },
+          {
+            "file": "ushadow/backend/src/services/service_config_manager.py",
+            "line": 810
+          }
+        ],
+        "list_clusters": [
+          {
+            "file": "ushadow/backend/src/routers/kubernetes.py",
+            "line": 66
+          },
+          {
+            "file": "ushadow/backend/src/services/kubernetes_manager.py",
+            "line": 161
+          }
+        ],
+        "list_pods": [
+          {
+            "file": "ushadow/backend/src/routers/kubernetes.py",
+            "line": 387
+          },
+          {
+            "file": "ushadow/backend/src/services/kubernetes_manager.py",
+            "line": 983
+          }
+        ],
+        "deploy_service": [
+          {
+            "file": "ushadow/backend/src/routers/deployments.py",
+            "line": 182
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_manager.py",
+            "line": 491
+          }
+        ],
+        "list_deployments": [
+          {
+            "file": "ushadow/backend/src/routers/deployments.py",
+            "line": 203
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_manager.py",
+            "line": 839
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 395
+          }
+        ],
+        "stop_deployment": [
+          {
+            "file": "ushadow/backend/src/routers/deployments.py",
+            "line": 230
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_manager.py",
+            "line": 663
+          }
+        ],
+        "update": [
+          {
+            "file": "ushadow/backend/src/config/store.py",
+            "line": 225
+          },
+          {
+            "file": "ushadow/backend/src/config/settings.py",
+            "line": 686
+          }
+        ],
+        "delete": [
+          {
+            "file": "ushadow/backend/src/config/secret_store.py",
+            "line": 206
+          },
+          {
+            "file": "ushadow/backend/src/config/settings.py",
+            "line": 631
+          }
+        ],
+        "deployment_target_id": [
+          {
+            "file": "ushadow/backend/src/models/unode.py",
+            "line": 84
+          },
+          {
+            "file": "ushadow/backend/src/models/kubernetes.py",
+            "line": 41
+          }
+        ],
+        "deploy": [
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 35
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 217
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 517
+          }
+        ],
+        "get_status": [
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 57
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 311
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 565
+          }
+        ],
+        "stop": [
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 66
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 339
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 598
+          }
+        ],
+        "get_logs": [
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 84
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 375
+          },
+          {
+            "file": "ushadow/backend/src/services/deployment_platforms.py",
+            "line": 680
+          }
+        ]
+      },
+      "duplicate_count": 30,
+      "total_methods": 585,
+      "commonly_duplicated": [
+        [
+          "list_services",
+          [
+            {
+              "file": "ushadow/backend/src/routers/services.py",
+              "line": 126
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_manager.py",
+              "line": 429
+            },
+            {
+              "file": "ushadow/backend/src/services/docker_manager.py",
+              "line": 694
+            },
+            {
+              "file": "ushadow/backend/src/services/mcp_server.py",
+              "line": 56
+            }
+          ]
+        ],
+        [
+          "start_service",
+          [
+            {
+              "file": "ushadow/backend/src/routers/services.py",
+              "line": 680
+            },
+            {
+              "file": "ushadow/backend/src/services/service_orchestrator.py",
+              "line": 371
+            },
+            {
+              "file": "ushadow/backend/src/services/docker_manager.py",
+              "line": 853
+            },
+            {
+              "file": "ushadow/backend/src/services/mcp_server.py",
+              "line": 177
+            }
+          ]
+        ],
+        [
+          "stop_service",
+          [
+            {
+              "file": "ushadow/backend/src/routers/services.py",
+              "line": 705
+            },
+            {
+              "file": "ushadow/backend/src/services/service_orchestrator.py",
+              "line": 376
+            },
+            {
+              "file": "ushadow/backend/src/services/docker_manager.py",
+              "line": 1316
+            },
+            {
+              "file": "ushadow/backend/src/services/mcp_server.py",
+              "line": 199
+            }
+          ]
+        ],
+        [
+          "update_env_config",
+          [
+            {
+              "file": "ushadow/backend/src/routers/services.py",
+              "line": 824
+            },
+            {
+              "file": "ushadow/backend/src/services/service_orchestrator.py",
+              "line": 537
+            },
+            {
+              "file": "ushadow/backend/src/services/compose_registry.py",
+              "line": 408
+            }
+          ]
+        ],
+        [
+          "list_deployments",
+          [
+            {
+              "file": "ushadow/backend/src/routers/deployments.py",
+              "line": 203
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_manager.py",
+              "line": 839
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 395
+            }
+          ]
+        ],
+        [
+          "deploy",
+          [
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 35
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 217
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 517
+            }
+          ]
+        ],
+        [
+          "get_status",
+          [
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 57
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 311
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 565
+            }
+          ]
+        ],
+        [
+          "stop",
+          [
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 66
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 339
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 598
+            }
+          ]
+        ],
+        [
+          "get_logs",
+          [
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 84
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 375
+            },
+            {
+              "file": "ushadow/backend/src/services/deployment_platforms.py",
+              "line": 680
+            }
+          ]
+        ],
+        [
+          "list_unodes",
+          [
+            {
+              "file": "ushadow/backend/src/routers/unodes.py",
+              "line": 167
+            },
+            {
+              "file": "ushadow/backend/src/services/unode_manager.py",
+              "line": 740
+            }
+          ]
+        ]
+      ]
+    },
+    "layer_violations": {
+      "router_violations": [
+        {
+          "file": "ushadow/backend/src/routers/unodes.py",
+          "function": "register_unode",
+          "lines": 37,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/unodes.py",
+          "function": "claim_node",
+          "lines": 37,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/unodes.py",
+          "function": "get_manager_versions",
+          "lines": 80,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/unodes.py",
+          "function": "get_leader_info",
+          "lines": 127,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/unodes.py",
+          "function": "upgrade_unode",
+          "lines": 47,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/unodes.py",
+          "function": "upgrade_all_unodes",
+          "lines": 33,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/auth.py",
+          "function": "login",
+          "lines": 95,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/auth.py",
+          "function": "create_initial_admin",
+          "lines": 76,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/services.py",
+          "function": "preflight_check",
+          "lines": 37,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/services.py",
+          "function": "set_port_override",
+          "lines": 46,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/services.py",
+          "function": "get_service_connection_info",
+          "lines": 111,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/services.py",
+          "function": "proxy_service_request",
+          "lines": 205,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/feature_flags.py",
+          "function": "get_feature_flags_status",
+          "lines": 35,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/feature_flags.py",
+          "function": "toggle_feature_flag",
+          "lines": 40,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "parse_env_var_line",
+          "lines": 42,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "extract_services_from_compose",
+          "lines": 67,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "generate_compose_from_dockerhub",
+          "lines": 123,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "scan_github_repo",
+          "lines": 65,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "parse_compose_file",
+          "lines": 48,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "register_imported_service",
+          "lines": 148,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "delete_imported_service",
+          "lines": 44,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "update_imported_service_config",
+          "lines": 47,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "scan_dockerhub_image",
+          "lines": 57,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "register_dockerhub_service",
+          "lines": 162,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/github_import.py",
+          "function": "unified_scan",
+          "lines": 84,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/providers.py",
+          "function": "check_local_provider_available",
+          "lines": 55,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/providers.py",
+          "function": "list_capabilities",
+          "lines": 72,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/wizard.py",
+          "function": "update_wizard_api_keys",
+          "lines": 40,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/wizard.py",
+          "function": "get_huggingface_status",
+          "lines": 62,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/wizard.py",
+          "function": "check_huggingface_models",
+          "lines": 116,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/wizard.py",
+          "function": "get_quickstart_config",
+          "lines": 45,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/chat.py",
+          "function": "fetch_memory_context",
+          "lines": 46,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/chat.py",
+          "function": "chat",
+          "lines": 82,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/chat.py",
+          "function": "chat_simple",
+          "lines": 70,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/service_configs.py",
+          "function": "list_templates",
+          "lines": 135,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/service_configs.py",
+          "function": "get_template_env_config",
+          "lines": 68,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/service_configs.py",
+          "function": "get_instance",
+          "lines": 54,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/service_configs.py",
+          "function": "create_instance",
+          "lines": 60,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/service_configs.py",
+          "function": "update_instance",
+          "lines": 61,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/kubernetes.py",
+          "function": "get_infra_services",
+          "lines": 33,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/kubernetes.py",
+          "function": "scan_cluster_for_infra",
+          "lines": 34,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/kubernetes.py",
+          "function": "create_or_update_envmap",
+          "lines": 35,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/kubernetes.py",
+          "function": "deploy_service_to_cluster",
+          "lines": 111,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/kubernetes.py",
+          "function": "get_pod_logs",
+          "lines": 41,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "detect_platform",
+          "lines": 36,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "get_installation_guide",
+          "lines": 84,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "generate_serve_config",
+          "lines": 33,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "generate_caddyfile",
+          "lines": 59,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "get_access_urls",
+          "lines": 36,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "test_connection",
+          "lines": 40,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "exec_in_container",
+          "lines": 37,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "get_mobile_connection_qr",
+          "lines": 97,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "clear_tailscale_auth",
+          "lines": 38,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "reset_tailscale",
+          "lines": 152,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "start_tailscale_container",
+          "lines": 126,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "start_tailscale_with_caddy",
+          "lines": 47,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "start_caddy_container",
+          "lines": 70,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "enable_https_provisioning",
+          "lines": 32,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "configure_tailscale_serve",
+          "lines": 45,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/tailscale.py",
+          "function": "update_cors_origins",
+          "lines": 54,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/settings.py",
+          "function": "refresh_config",
+          "lines": 32,
+          "issue": "Endpoint function >30 lines"
+        },
+        {
+          "file": "ushadow/backend/src/routers/deployments.py",
+          "function": "list_deployment_targets",
+          "lines": 67,
+          "issue": "Endpoint function >30 lines"
+        }
+      ],
+      "service_violations": [],
+      "total_violations": 62
+    },
+    "code_reuse": {
+      "commits_analyzed": 20,
+      "new_methods_created": 135,
+      "methods_modified": -775,
+      "reuse_rate": 0
+    },
+    "discovery": {
+      "backend_index_exists": true,
+      "backend_index_size_kb": 18.84,
+      "estimated_discovery_seconds": 1.9,
+      "improvement_factor": 63.7
+    }
+  },
+  "health_score": 59.4,
+  "grade": "F"
+}

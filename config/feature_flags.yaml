@@ -52,16 +52,37 @@ flags:
   n8n_workflows:
     enabled: false
     description: "n8n Workflows - Visual workflow automation and integrations"
+    type: release
+
+  # Speaker Recognition - Speaker identification and diarization
+  speaker_recognition:
+    enabled: false
+    description: "Speaker Recognition - Identify and track speakers in conversations
+      (not implemented)"
+    type: release
+
+  # Notifications - User notification system
+  notifications:
+    enabled: true
+    description: "Notifications - Real-time user notifications and alerts (not implemented)"
+    type: release
+
   # OpenMemory memories page with knowledge graph visualization
   memories_page:
     enabled: true
     description: "Show Memories page in navigation with list view and knowledge graph"
     type: release
 
-  # Instances Management - Service instance deployment and wiring
+  # Timeline - visualize memories on an interactive timeline
+  timeline:
+    enabled: true
+    description: "Timeline - Visualize memories with time ranges on Gantt charts and D3 timelines"
+    type: release
+
+  # ServiceConfigs Management - Service instance deployment and wiring
   instances_management:
     enabled: true
-    description: "Instances page - Deploy and wire service instances with capability
+    description: "ServiceConfigs page - Deploy and wire service instances with capability
       resolution"
     type: release
 

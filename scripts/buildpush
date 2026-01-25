@@ -1,0 +1,106 @@
+#!/bin/bash
+# Build and push multi-arch Docker images for a service
+#
+# Usage:
+#   ./scripts/buildpush <service> [tag]
+#
+# Examples:
+#   ./scripts/buildpush ushadow          # builds backend + frontend
+#   ./scripts/buildpush ushadow-backend  # backend only
+#   ./scripts/buildpush ushadow v1.0.0   # with specific tag
+
+set -e
+
+SERVICE="${1:-}"
+TAG="${2:-latest}"
+REGISTRY="ghcr.io/ushadow-io"
+PLATFORMS="linux/amd64,linux/arm64"
+BUILDER_NAME="ushadow-builder"
+
+build_image() {
+    local context="$1"
+    local image_name="$2"
+    local dockerfile="${context}/Dockerfile"
+    local full_image="${REGISTRY}/${image_name}:${TAG}"
+
+    if [[ ! -d "$context" ]]; then
+        echo "Skipping: directory not found: ${context}"
+        return 0
+    fi
+
+    if [[ ! -f "$dockerfile" ]]; then
+        echo "Skipping: no Dockerfile in ${context}"
+        return 0
+    fi
+
+    echo "---------------------------------------------"
+    echo "Building ${image_name}"
+    echo "  Context:    ${context}"
+    echo "  Image:      ${full_image}"
+    echo "  Platforms:  ${PLATFORMS}"
+    echo "---------------------------------------------"
+
+    docker buildx build \
+        --platform "$PLATFORMS" \
+        --tag "$full_image" \
+        --file "$dockerfile" \
+        --no-cache \
+        --pull \
+        --push \
+        "$context"
+
+    echo ""
+    echo "Pushed: ${full_image}"
+    echo ""
+}
+
+# Ensure buildx builder exists
+ensure_builder() {
+    if ! docker buildx inspect "$BUILDER_NAME" &>/dev/null; then
+        echo "Creating buildx builder: ${BUILDER_NAME}"
+        docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap
+    fi
+    docker buildx use "$BUILDER_NAME"
+}
+
+case "$SERVICE" in
+    ushadow)
+        echo "============================================="
+        echo "Building ushadow (tag: ${TAG})"
+        echo "============================================="
+        ensure_builder
+        build_image "ushadow/backend" "ushadow/backend"
+        build_image "ushadow/frontend" "ushadow/frontend"
+        ;;
+    ushadow-backend)
+        echo "============================================="
+        echo "Building ushadow-backend (tag: ${TAG})"
+        echo "============================================="
+        ensure_builder
+        build_image "ushadow/backend" "ushadow/backend"
+        ;;
+    ushadow-frontend)
+        echo "============================================="
+        echo "Building ushadow-frontend (tag: ${TAG})"
+        echo "============================================="
+        ensure_builder
+        build_image "ushadow/frontend" "ushadow/frontend"
+        ;;
+    *)
+        echo "Usage: $0 <service> [tag]"
+        echo ""
+        echo "Available services:"
+        echo "  ushadow          - Build backend + frontend"
+        echo "  ushadow-backend  - Build backend only"
+        echo "  ushadow-frontend - Build frontend only"
+        echo ""
+        echo "Examples:"
+        echo "  $0 ushadow"
+        echo "  $0 ushadow-backend v1.0.0"
+        exit 1
+        ;;
+esac
+
+echo "============================================="
+echo "Done!"
+echo "============================================="

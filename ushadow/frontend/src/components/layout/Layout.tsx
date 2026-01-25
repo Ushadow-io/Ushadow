@@ -1,13 +1,18 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, AlertTriangle } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
+import { useMobileQrCode } from '../../hooks/useQrCode'
+import { svcConfigsApi } from '../../services/api'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
+import { StatusBadge, type BadgeVariant } from '../StatusBadge'
+import Modal from '../Modal'
+import TailscaleOriginBanner from '../TailscaleOriginBanner'
 import type { LucideIcon } from 'lucide-react'
 
 interface NavigationItem {
@@ -17,6 +22,7 @@ interface NavigationItem {
   separator?: boolean
   featureFlag?: string
   badge?: string
+  badgeVariant?: BadgeVariant
 }
 
 export default function Layout() {
@@ -30,6 +36,10 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
+  const [isDesktopMicWired, setIsDesktopMicWired] = useState(false)
+
+  // QR code hook
+  const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
 
   // Get dynamic wizard label (includes path, label, level, and icon)
   const wizardLabel = getSetupLabel()
@@ -47,22 +57,45 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Check if desktop-mic (or any audio_input provider) is wired
+  useEffect(() => {
+    const checkAudioWiring = async () => {
+      try {
+        const wiringRes = await svcConfigsApi.getWiring()
+        // Check if any audio_input provider is wired
+        const hasAudioWiring = wiringRes.data.some(
+          (w: any) => w.source_capability === 'audio_input' ||
+                      w.source_config_id?.includes('desktop-mic') ||
+                      w.source_config_id?.includes('mobile-app')
+        )
+        setIsDesktopMicWired(hasAudioWiring)
+      } catch (err) {
+        // Silently fail - user might not be logged in yet
+      }
+    }
+    checkAudioWiring()
+    // Re-check periodically (every 30 seconds)
+    const interval = setInterval(checkAudioWiring, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
   // Define navigation items with optional feature flag requirements
   const allNavigationItems: NavigationItem[] = [
     // Separator after wizard section
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
-    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users },
+    { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
     { path: '/services', label: 'Services', icon: Server },
-    { path: '/instances', label: 'Instances', icon: Layers, featureFlag: 'instances_management' },
+    { path: '/instances', label: 'Services', icon: Layers, badgeVariant: 'beta', featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
-    { path: '/cluster', label: 'Cluster', icon: Network },
+    { path: '/timeline', label: 'Timeline', icon: Calendar, featureFlag: 'timeline' },
+    { path: '/cluster', label: 'Cluster', icon: Network, badgeVariant: 'beta' },
     { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },
     { path: '/settings', label: 'Settings', icon: Settings },
     ...(isAdmin ? [
@@ -160,7 +193,7 @@ export default function Layout() {
                   placeholder="Search services, workflows..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg text-sm transition-all focus:outline-none focus:ring-2"
+                  className="w-full pl-10 pr-32 py-2 rounded-lg text-sm transition-all focus:outline-none focus:ring-2"
                   style={{
                     backgroundColor: isDark ? 'var(--surface-700)' : '#f5f5f5',
                     border: isDark ? '1px solid var(--surface-500)' : '1px solid transparent',
@@ -169,26 +202,14 @@ export default function Layout() {
                   } as React.CSSProperties}
                   data-testid="search-input"
                 />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <StatusBadge variant="not-implemented" testId="badge-search" />
+                </div>
               </div>
             </div>
 
             {/* Header Actions */}
             <div className="flex items-center space-x-1">
-              {/* Chronicle Service Status Warning - show when not connected */}
-              {!isChronicleChecking && !isChronicleConnected && (
-                <Link
-                  to="/wizard/quickstart"
-                  className="flex items-center space-x-2 px-3 py-2 rounded-lg font-medium transition-all bg-red-600/20 hover:bg-red-600/30 border border-red-500/50"
-                  title={chronicleError || 'Chronicle service is not running'}
-                  data-testid="chronicle-error-indicator"
-                >
-                  <AlertTriangle className="h-4 w-4 text-red-400" />
-                  <span className="hidden sm:inline text-sm text-red-400">
-                    Chronicle Down
-                  </span>
-                </Link>
-              )}
-
               {/* Chronicle Record Button - only show when connected */}
               {isChronicleConnected && (
                 <button
@@ -242,7 +263,7 @@ export default function Layout() {
 
               {/* Search Icon (Mobile) */}
               <button
-                className="p-2.5 rounded-lg md:hidden transition-colors"
+                className="p-2.5 rounded-lg md:hidden transition-colors relative"
                 style={{
                   color: isDark ? 'var(--text-secondary)' : '#525252',
                 }}
@@ -250,23 +271,24 @@ export default function Layout() {
                 data-testid="mobile-search-btn"
               >
                 <Search className="h-5 w-5" />
+                <div className="absolute -top-1 -right-1">
+                  <StatusBadge variant="not-implemented" testId="badge-search-mobile" />
+                </div>
               </button>
 
               {/* Notifications */}
-              <button
-                className="p-2.5 rounded-lg relative transition-colors"
-                style={{
-                  color: isDark ? 'var(--text-secondary)' : '#525252',
-                }}
-                aria-label="Notifications"
-                data-testid="notifications-btn"
-              >
-                <Bell className="h-5 w-5" />
-                <span
-                  className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
-                  style={{ backgroundColor: 'var(--primary-400)' }}
-                />
-              </button>
+              {isEnabled('notifications') && (
+                <button
+                  className="p-2.5 rounded-lg relative transition-colors"
+                  style={{
+                    color: isDark ? 'var(--text-secondary)' : '#525252',
+                  }}
+                  aria-label="Notifications"
+                  data-testid="notifications-btn"
+                >
+                  <Bell className="h-5 w-5" />
+                </button>
+              )}
 
               {/* Feature Flags */}
               <button
@@ -431,6 +453,9 @@ export default function Layout() {
         </div>
       </header>
 
+      {/* Tailscale Origin Banner */}
+      <TailscaleOriginBanner />
+
       {/* Main Container */}
       <div className="flex-1 flex">
         <div className="max-w-[1600px] mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex flex-col lg:flex-row gap-6">
@@ -507,7 +532,7 @@ export default function Layout() {
                 )}
               </div>
 
-              {navigationItems.map(({ path, label, icon: Icon, separator, badge }) => {
+              {navigationItems.map(({ path, label, icon: Icon, separator, badge, badgeVariant }) => {
                 const isActive = location.pathname === path ||
                   (path !== '/' && location.pathname.startsWith(path))
 
@@ -570,10 +595,40 @@ export default function Layout() {
                           {badge}
                         </span>
                       )}
+
+                      {/* Status Badge */}
+                      {badgeVariant && (
+                        <StatusBadge
+                          variant={badgeVariant}
+                          className="ml-auto"
+                          testId={`badge-${path.replace('/', '')}`}
+                        />
+                      )}
                     </Link>
                   </div>
                 )
               })}
+            </div>
+
+            {/* Scan QR Code Button - Separate from menu */}
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={fetchQrCode}
+                disabled={loadingQrCode}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 hover:scale-[1.05] active:scale-[0.95]"
+                style={{
+                  backgroundColor: '#a855f7',
+                  color: '#ffffff',
+                  boxShadow: isDark
+                    ? '0 0 20px rgba(168, 85, 247, 0.3)'
+                    : '0 4px 6px rgba(168, 85, 247, 0.3)',
+                  opacity: loadingQrCode ? 0.6 : 1,
+                }}
+                data-testid="sidebar-scan-qr"
+              >
+                <QrCode className="h-5 w-5" />
+                {loadingQrCode ? 'Loading...' : 'Scan'}
+              </button>
             </div>
           </nav>
 
@@ -597,6 +652,54 @@ export default function Layout() {
         isOpen={featureFlagsDrawerOpen}
         onClose={() => setFeatureFlagsDrawerOpen(false)}
       />
+
+      {/* QR Code Modal */}
+      <Modal
+        isOpen={showQrModal}
+        onClose={closeModal}
+        title="Connect Mobile App"
+        maxWidth="lg"
+        testId="mobile-qr-modal"
+      >
+        <div className="flex flex-col items-center space-y-6 p-6">
+          {qrData && (
+            <>
+              <div className="p-4 bg-white rounded-xl shadow-lg">
+                <img
+                  src={qrData.qr_code_data}
+                  alt="Connection QR Code"
+                  className="w-64 h-64"
+                  data-testid="sidebar-qr-code"
+                />
+              </div>
+              <div className="text-center space-y-2">
+                <p
+                  className="text-lg font-semibold"
+                  style={{ color: isDark ? 'var(--text-primary)' : '#0f0f13' }}
+                >
+                  Scan with Ushadow Mobile
+                </p>
+                <p
+                  className="text-sm"
+                  style={{ color: isDark ? 'var(--text-secondary)' : '#71717a' }}
+                >
+                  Open the Ushadow mobile app and scan this QR code to connect to this server
+                </p>
+                <div
+                  className="mt-4 p-3 rounded-lg font-mono text-xs"
+                  style={{
+                    backgroundColor: isDark ? 'var(--surface-700)' : '#f4f4f5',
+                    color: isDark ? 'var(--text-secondary)' : '#52525b',
+                  }}
+                >
+                  <div>Server: {qrData.hostname}</div>
+                  <div>IP: {qrData.tailscale_ip}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

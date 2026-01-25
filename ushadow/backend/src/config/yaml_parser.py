@@ -69,78 +69,6 @@ class BaseYAMLParser:
         with open(path, "w") as f:
             self.yaml.dump(data, f)
 
-    def get_nested(self, data: Dict, path: str, default: Any = None) -> Any:
-        """
-        Get nested value using dot notation.
-
-        Args:
-            data: Dict to traverse
-            path: Dot-separated path (e.g., "services.mem0.environment")
-            default: Value to return if path not found
-
-        Returns:
-            Value at path, or default if not found
-
-        Example:
-            >>> parser.get_nested(data, "services.mem0.image")
-            "ghcr.io/ushadow-io/u-mem0-api:latest"
-        """
-        keys = path.split(".")
-        current = data
-
-        for key in keys:
-            if isinstance(current, dict) and key in current:
-                current = current[key]
-            else:
-                return default
-
-        return current
-
-    def set_nested(self, data: Dict, path: str, value: Any) -> None:
-        """
-        Set nested value using dot notation, creating intermediate dicts.
-
-        Args:
-            data: Dict to modify
-            path: Dot-separated path
-            value: Value to set
-
-        Example:
-            >>> parser.set_nested(data, "services.mem0.enabled", True)
-        """
-        keys = path.split(".")
-        current = data
-
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-
-        current[keys[-1]] = value
-
-    def merge(self, base: Dict, overlay: Dict) -> Dict:
-        """
-        Deep merge overlay into base dict.
-
-        Overlay values override base values. Nested dicts are merged recursively.
-
-        Args:
-            base: Base dictionary
-            overlay: Dictionary to merge on top
-
-        Returns:
-            Merged dictionary (new dict, doesn't modify inputs)
-        """
-        result = dict(base)
-
-        for key, value in overlay.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = self.merge(result[key], value)
-            else:
-                result[key] = value
-
-        return result
-
 
 # ============================================================================
 # Compose Parser Data Classes
@@ -209,6 +137,8 @@ class ComposeService:
     namespace: Optional[str] = None  # Docker Compose project name / K8s namespace
     infra_services: List[str] = field(default_factory=list)  # Infra services to start first
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
+    wizard: Optional[str] = None  # Setup wizard ID
+    exposes: List[Dict[str, Any]] = field(default_factory=list)  # URLs this service exposes (audio intake, http api, etc.)
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -361,6 +291,8 @@ class ComposeParser(BaseYAMLParser):
         provides = service_meta.get("provides")  # Capability this service implements
         display_name = service_meta.get("display_name")
         description = service_meta.get("description")
+        wizard = service_meta.get("wizard")  # Setup wizard ID
+        exposes = service_meta.get("exposes", [])  # URLs this service exposes
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
@@ -385,6 +317,8 @@ class ComposeParser(BaseYAMLParser):
             namespace=namespace,
             infra_services=infra_services,
             route_path=route_path,
+            wizard=wizard,
+            exposes=exposes,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:

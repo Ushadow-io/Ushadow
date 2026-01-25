@@ -1,0 +1,96 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.0.0, v0.2.1, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Verify version consistency
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Check frontend package.json
+          FRONTEND_VERSION=$(grep -o '"version": *"[^"]*"' ushadow/frontend/package.json | head -1 | sed 's/"version": *"\(.*\)"/\1/')
+          echo "Frontend version: $FRONTEND_VERSION"
+
+          # Check backend pyproject.toml
+          BACKEND_VERSION=$(grep '^version = ' ushadow/backend/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "Backend version: $BACKEND_VERSION"
+
+          # Verify all versions match the tag
+          if [ "$FRONTEND_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "❌ Frontend version ($FRONTEND_VERSION) doesn't match tag ($EXPECTED_VERSION)"
+            exit 1
+          fi
+
+          if [ "$BACKEND_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "❌ Backend version ($BACKEND_VERSION) doesn't match tag ($EXPECTED_VERSION)"
+            exit 1
+          fi
+
+          echo "✅ All versions match tag v$EXPECTED_VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        env:
+          TAG_REF: ${{ github.ref }}
+        run: |
+          # Get the previous tag
+          PREVIOUS_TAG=$(git describe --abbrev=0 --tags ${TAG_REF}^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "First release - no previous tag found"
+            CHANGELOG="Initial release of Ushadow v${{ steps.version.outputs.version }}"
+          else
+            echo "Generating changelog from $PREVIOUS_TAG to ${TAG_REF#refs/tags/}"
+
+            # Generate changelog from commits
+            CHANGELOG=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"- %s (%h)" --no-merges)
+
+            # If no commits found, use a default message
+            if [ -z "$CHANGELOG" ]; then
+              CHANGELOG="Version bump to v${{ steps.version.outputs.version }}"
+            fi
+          fi
+
+          # Save changelog to file for the release
+          echo "$CHANGELOG" > CHANGELOG.txt
+          cat CHANGELOG.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Ushadow v${{ steps.version.outputs.version }}
+          body_path: CHANGELOG.txt
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "🎉 Successfully created release v$VERSION"
+          echo "Release URL: https://github.com/$REPO/releases/tag/v$VERSION"

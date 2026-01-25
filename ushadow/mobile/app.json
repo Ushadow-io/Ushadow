@@ -19,7 +19,9 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Ushadow needs camera access to scan QR codes for connecting to your leader node.",
         "NSBluetoothAlwaysUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device.",
-        "NSBluetoothPeripheralUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device."
+        "NSBluetoothPeripheralUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device.",
+        "NSSpeechRecognitionUsageDescription": "Ushadow uses speech recognition for voice input in chat.",
+        "NSMicrophoneUsageDescription": "Ushadow needs microphone access for voice input."
       },
       "appleTeamId": "6SJ7NH4HSZ"
     },
@@ -44,6 +46,7 @@
     },
     "plugins": [
       "expo-router",
+      "@react-native-voice/voice",
       [
         "expo-camera",
         {

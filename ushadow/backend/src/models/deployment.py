@@ -3,12 +3,12 @@ Deployment models for service orchestration across u-nodes.
 
 This module defines:
 - ServiceDefinition: A deployable service configuration (Docker container spec)
-- Deployment: An instance of a service deployed to a specific node
+- Deployment: A service config of a service deployed to a specific node
 """
 
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
 from pydantic import BaseModel, Field
 
@@ -48,9 +48,9 @@ class ServiceDefinition(BaseModel):
         default_factory=list,
         description="Volume mounts (e.g., '/host/path:/container/path')"
     )
-    command: Optional[str] = Field(
+    command: Optional[Union[str, List[str]]] = Field(
         default=None,
-        description="Override container command"
+        description="Override container command (string or array)"
     )
     restart_policy: str = Field(
         default="unless-stopped",
@@ -82,14 +82,76 @@ class ServiceDefinition(BaseModel):
         use_enum_values = True
 
 
+class ResolvedServiceDefinition(BaseModel):
+    """
+    A fully resolved service definition with all variables substituted.
+
+    This model represents a service after docker-compose config resolution,
+    where all ${VAR:-default} syntax has been replaced with actual values.
+    Used as input for all deployment targets (local docker, unode, kubernetes).
+    """
+    service_id: str = Field(..., description="Unique identifier for the service")
+    name: str = Field(..., description="Service name from compose")
+    image: str = Field(..., description="Fully resolved Docker image (no variables)")
+
+    # Ports as list of strings in Docker format: "host:container" or "container"
+    ports: List[str] = Field(
+        default_factory=list,
+        description="Resolved port mappings: ['3000:8080', '9090']"
+    )
+
+    # Fully resolved environment variables
+    environment: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Resolved environment variables (no placeholders)"
+    )
+
+    # Container configuration (already resolved)
+    volumes: List[str] = Field(default_factory=list)
+    command: Optional[Union[str, List[str]]] = None
+    restart_policy: str = Field(default="unless-stopped")
+    network: Optional[str] = None
+
+    # Health check configuration
+    health_check_path: Optional[str] = None
+    health_check_port: Optional[int] = None
+
+    # Original compose file reference
+    compose_file: str = Field(..., description="Source compose file path")
+    compose_service_name: str = Field(..., description="Service name in compose file")
+
+    # Metadata
+    description: Optional[str] = None
+    namespace: Optional[str] = None  # From x-ushadow metadata
+    requires: List[str] = Field(default_factory=list)  # Capability dependencies
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "service_id": "openmemory-compose:mem0-ui",
+                "name": "mem0-ui",
+                "image": "ghcr.io/ushadow-io/u-mem0-ui:latest",
+                "ports": ["3002:3000"],
+                "environment": {
+                    "VITE_API_URL": "http://localhost:8765",
+                    "API_URL": "http://mem0:8765"
+                },
+                "compose_file": "/compose/openmemory-compose.yaml",
+                "compose_service_name": "mem0-ui",
+                "namespace": "openmemory"
+            }
+        }
+
+
 class Deployment(BaseModel):
     """
     A service deployed to a specific node.
 
-    Represents an instance of a ServiceDefinition running on a u-node.
+    Represents an instance running on a target: ServiceConfig + Target + Runtime State.
     """
     id: str = Field(..., description="Unique deployment ID")
-    service_id: str = Field(..., description="Reference to ServiceDefinition")
+    config_id: str = Field(..., description="ServiceConfig ID or Template ID (required)")
+    service_id: str = Field(..., description="DEPRECATED: Use config_id instead. Reference to ServiceDefinition")
     unode_hostname: str = Field(..., description="Target u-node hostname")
 
     # Status
@@ -133,6 +195,16 @@ class Deployment(BaseModel):
         description="Primary exposed port for the service"
     )
 
+    # Backend information
+    backend_type: str = Field(
+        default="docker",
+        description="Deployment backend type: 'docker' or 'kubernetes'"
+    )
+    backend_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Backend-specific metadata (container_id for Docker, pod info for K8s)"
+    )
+
     class Config:
         use_enum_values = True
 
@@ -141,6 +213,7 @@ class DeployRequest(BaseModel):
     """Request to deploy a service to a node."""
     service_id: str
     unode_hostname: str
+    config_id: Optional[str] = Field(None, description="ServiceConfig ID with env var overrides")
 
 
 class ServiceDefinitionCreate(BaseModel):
@@ -152,7 +225,7 @@ class ServiceDefinitionCreate(BaseModel):
     ports: Dict[str, int] = Field(default_factory=dict)
     environment: Dict[str, str] = Field(default_factory=dict)
     volumes: List[str] = Field(default_factory=list)
-    command: Optional[str] = None
+    command: Optional[Union[str, List[str]]] = None
     restart_policy: str = Field(default="unless-stopped")
     network: Optional[str] = None
     health_check_path: Optional[str] = None
@@ -169,7 +242,7 @@ class ServiceDefinitionUpdate(BaseModel):
     ports: Optional[Dict[str, int]] = None
     environment: Optional[Dict[str, str]] = None
     volumes: Optional[List[str]] = None
-    command: Optional[str] = None
+    command: Optional[Union[str, List[str]]] = None
     restart_policy: Optional[str] = None
     network: Optional[str] = None
     health_check_path: Optional[str] = None

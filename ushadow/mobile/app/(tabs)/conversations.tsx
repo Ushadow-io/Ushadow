@@ -21,7 +21,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
 import { fetchConversations, Conversation, getChronicleAudioUrl } from '../services/chronicleApi';
-import { isAuthenticated } from '../utils/authStorage';
+import { isAuthenticated } from '../_utils/authStorage';
 import ConversationAudioPlayer from '../components/AudioPlayer';
 
 export default function ConversationsScreen() {

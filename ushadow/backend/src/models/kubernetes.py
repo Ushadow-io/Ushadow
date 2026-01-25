@@ -2,7 +2,7 @@
 
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class KubernetesClusterStatus(str, Enum):
@@ -27,8 +27,27 @@ class KubernetesCluster(BaseModel):
     node_count: Optional[int] = Field(None, description="Number of nodes in cluster")
     namespace: str = Field("default", description="Default namespace for deployments")
 
+    # Infrastructure scan results (cached per namespace)
+    infra_scans: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Cached infrastructure scan results per namespace. Key: namespace, Value: scan results"
+    )
+
     # Labels for organization
     labels: Dict[str, str] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def deployment_target_id(self) -> str:
+        """
+        Get unified deployment target ID.
+
+        Format: {name}.k8s.{environment}
+        Example: "my-cluster.k8s.purple"
+        """
+        from src.utils.deployment_targets import make_deployment_target_id
+        # Use name (human-readable) as identifier for k8s clusters
+        return make_deployment_target_id(self.name, "k8s")
 
     class Config:
         json_schema_extra = {
@@ -42,6 +61,61 @@ class KubernetesCluster(BaseModel):
                 "node_count": 5,
                 "namespace": "ushadow-prod",
                 "labels": {"env": "production", "region": "us-west"}
+            }
+        }
+
+
+class KubernetesNode(BaseModel):
+    """Represents a node in a Kubernetes cluster."""
+
+    name: str = Field(..., description="Node name")
+    cluster_id: str = Field(..., description="Parent cluster ID")
+
+    # Node status
+    status: str = Field(..., description="Node status: Ready, NotReady, Unknown")
+    ready: bool = Field(False, description="Whether node is ready")
+
+    # Node info
+    kubelet_version: Optional[str] = Field(None, description="Kubelet version")
+    os_image: Optional[str] = Field(None, description="OS image")
+    kernel_version: Optional[str] = Field(None, description="Kernel version")
+    container_runtime: Optional[str] = Field(None, description="Container runtime")
+
+    # Capacity and allocatable resources
+    cpu_capacity: Optional[str] = Field(None, description="Total CPU capacity")
+    memory_capacity: Optional[str] = Field(None, description="Total memory capacity")
+    cpu_allocatable: Optional[str] = Field(None, description="Allocatable CPU")
+    memory_allocatable: Optional[str] = Field(None, description="Allocatable memory")
+
+    # Node roles
+    roles: List[str] = Field(default_factory=list, description="Node roles: control-plane, worker")
+
+    # Addresses
+    internal_ip: Optional[str] = Field(None, description="Internal IP address")
+    external_ip: Optional[str] = Field(None, description="External IP address")
+    hostname: Optional[str] = Field(None, description="Hostname")
+
+    # Taints and labels
+    taints: List[Dict[str, str]] = Field(default_factory=list, description="Node taints")
+    labels: Dict[str, str] = Field(default_factory=dict, description="Node labels")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "node-1",
+                "cluster_id": "prod-us-west",
+                "status": "Ready",
+                "ready": True,
+                "kubelet_version": "v1.28.3",
+                "os_image": "Ubuntu 22.04 LTS",
+                "container_runtime": "containerd://1.7.2",
+                "cpu_capacity": "4",
+                "memory_capacity": "16Gi",
+                "cpu_allocatable": "3.5",
+                "memory_allocatable": "14Gi",
+                "roles": ["worker"],
+                "internal_ip": "10.0.1.5",
+                "labels": {"node.kubernetes.io/instance-type": "n2-standard-4"}
             }
         }
 
@@ -88,6 +162,18 @@ class KubernetesDeploymentSpec(BaseModel):
                 "tls": True
             }
         }
+    )
+
+    # Health checks
+    health_check_path: Optional[str] = Field(
+        None,
+        description="HTTP path for liveness/readiness probes. Set to None to disable health checks. Default: /health"
+    )
+
+    # DNS configuration
+    dns_policy: Optional[str] = Field(
+        None,
+        description="DNS policy for pod (ClusterFirst, Default, ClusterFirstWithHostNet, None). Default: ClusterFirst"
     )
 
     # Advanced options

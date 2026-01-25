@@ -38,6 +38,11 @@ const getBackendUrl = () => {
   // Fallback - calculate backend port from frontend port
   // Frontend runs on 3000 + offset, backend on 8000 + offset
   const frontendPort = parseInt(port)
+  if (isNaN(frontendPort)) {
+    // Invalid or empty port - use relative URLs as safest default
+    console.log('Unknown port, using relative URLs via proxy')
+    return ''
+  }
   const backendPort = frontendPort - 3000 + 8000
   console.log('Calculated backend port:', backendPort)
   return `${protocol}//${hostname}:${backendPort}`
@@ -152,6 +157,9 @@ export const settingsApi = {
   reset: () => api.post('/api/settings/reset'),
   refresh: () => api.post('/api/settings/refresh'),
 
+  /** Get unmasked secret value by path (server-side only) */
+  getSecret: (keyPath: string) => api.get<{ value: string }>(`/api/settings/secret/${keyPath}`),
+
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
   getServiceConfig: (serviceId: string) => api.get(`/api/settings/service-configs/${serviceId}`),
@@ -260,14 +268,14 @@ export const servicesApi = {
   getConfig: (name: string) => api.get(`/api/services/${name}/config`),
 
   /** Get environment variable configuration with suggestions */
-  getEnvConfig: (name: string) => api.get<{
+  getEnvConfig: (name: string, deployTarget?: string) => api.get<{
     service_id: string
     service_name: string
     compose_file: string
     requires: string[]
     required_env_vars: EnvVarInfo[]
     optional_env_vars: EnvVarInfo[]
-  }>(`/api/services/${name}/env`),
+  }>(`/api/services/${name}/env${deployTarget ? `?deploy_target=${encodeURIComponent(deployTarget)}` : ''}`),
 
   /** Save environment variable configuration */
   updateEnvConfig: (name: string, envVars: EnvVarConfig[]) =>
@@ -308,15 +316,22 @@ export const servicesApi = {
     compose_file?: string
     metadata?: Record<string, any>
   }) => api.post<{ success: boolean; message: string }>('/api/services/register', config),
+
+  /** Generate Mycelia authentication token */
+  generateMyceliaToken: () => api.post<{ token: string; client_id: string }>('/api/services/mycelia/generate-token'),
 }
 
 // Compose service configuration endpoints
 export interface EnvVarConfig {
   name: string
-  source: 'setting' | 'new_setting' | 'literal' | 'default'
+  // Old sources: 'setting' | 'new_setting' | 'literal' | 'default'
+  // New v2 sources: 'config_default' | 'compose_default' | 'env_file' | 'capability' | 'deploy_env' | 'user_override' | 'not_found'
+  source: string
   setting_path?: string      // For source='setting' - existing setting to map
   new_setting_path?: string  // For source='new_setting' - new setting path to create
-  value?: string             // For source='literal' or 'new_setting'
+  value?: string             // For source='literal' or 'new_setting', or resolved value
+  locked?: boolean           // For provider-supplied values that cannot be edited
+  provider_name?: string     // Name of the provider supplying this value
 }
 
 export interface EnvVarSuggestion {
@@ -331,13 +346,12 @@ export interface EnvVarSuggestion {
 export interface EnvVarInfo {
   name: string
   is_required: boolean
-  has_default: boolean
-  default_value?: string
   source: string
   setting_path?: string
-  value?: string
   resolved_value?: string
   suggestions: EnvVarSuggestion[]
+  locked?: boolean
+  provider_name?: string
 }
 
 /** Missing key that needs to be configured for a provider */
@@ -398,6 +412,7 @@ export interface ComposeService {
   status?: string      // Container status (running, stopped, etc.)
   health?: string      // Container health (healthy, unhealthy, etc.)
   profiles?: string[]  // Docker compose profiles
+  wizard?: string      // ID of setup wizard if available (e.g., "mycelia")
 }
 
 // Quickstart wizard endpoints (kept separate from services)
@@ -541,6 +556,8 @@ export interface KubernetesCluster {
   node_count?: number
   namespace: string
   labels: Record<string, string>
+  infra_scans?: Record<string, any>
+  deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
 }
 
 export const kubernetesApi = {
@@ -552,6 +569,43 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
+
+  // Service management
+  getAvailableServices: () =>
+    api.get<{ services: any[] }>('/api/kubernetes/services/available'),
+  getInfraServices: () =>
+    api.get<{ services: any[] }>('/api/kubernetes/services/infra'),
+
+  // Cluster operations
+  scanInfraServices: (clusterId: string, namespace: string = 'default') =>
+    api.post<{ cluster_id: string; namespace: string; infra_services: Record<string, any> }>(
+      `/api/kubernetes/${clusterId}/scan-infra`,
+      { namespace }
+    ),
+  createEnvmap: (clusterId: string, data: { service_name: string; namespace?: string; env_vars: Record<string, string> }) =>
+    api.post<{ success: boolean; configmap: string | null; secret: string | null; namespace: string }>(
+      `/api/kubernetes/${clusterId}/envmap`,
+      { namespace: 'default', ...data }
+    ),
+  deployService: (clusterId: string, data: { service_id: string; namespace?: string; k8s_spec?: any; config_id?: string }) =>
+    api.post<{ success: boolean; message: string; service_id: string; namespace: string }>(
+      `/api/kubernetes/${clusterId}/deploy`,
+      { namespace: 'default', ...data }
+    ),
+
+  // Pod operations
+  listPods: (clusterId: string, namespace: string = 'ushadow') =>
+    api.get<{ pods: Array<{ name: string; namespace: string; status: string; restarts: number; age: string; labels: Record<string, string>; node: string }>; namespace: string }>(
+      `/api/kubernetes/${clusterId}/pods?namespace=${namespace}`
+    ),
+  getPodLogs: (clusterId: string, podName: string, namespace: string = 'ushadow', previous: boolean = false, tailLines: number = 100) =>
+    api.get<{ pod_name: string; namespace: string; previous: boolean; logs: string }>(
+      `/api/kubernetes/${clusterId}/pods/${podName}/logs?namespace=${namespace}&previous=${previous}&tail_lines=${tailLines}`
+    ),
+  getPodEvents: (clusterId: string, podName: string, namespace: string = 'ushadow') =>
+    api.get<{ pod_name: string; namespace: string; events: Array<{ type: string; reason: string; message: string; count: number; first_timestamp: string | null; last_timestamp: string | null }> }>(
+      `/api/kubernetes/${clusterId}/pods/${podName}/events?namespace=${namespace}`
+    ),
 }
 
 // Service Definition and Deployment types
@@ -595,7 +649,34 @@ export interface Deployment {
   exposed_port?: number
 }
 
+export interface DeployTarget {
+  // Core identity fields (always present)
+  id: string  // deployment_target_id format: {identifier}.{type}.{environment}
+  type: 'docker' | 'k8s'
+  name: string  // Human-readable name
+  identifier: string  // hostname (docker) or cluster_id (k8s)
+  environment: string  // e.g., 'purple', 'production'
+
+  // Status and health
+  status: string  // online/offline/healthy/unknown
+
+  // Platform-specific fields (optional)
+  namespace?: string  // K8s namespace (k8s only)
+  infrastructure?: Record<string, any>  // Infrastructure scan data (k8s only)
+
+  // Common metadata
+  provider?: string  // local/remote/eks/gke/aks
+  region?: string  // Region or location
+  is_leader?: boolean  // Is this the leader node (docker only)
+
+  // Raw data for advanced use cases
+  raw_metadata: Record<string, any>  // Original UNode or KubernetesCluster data
+}
+
 export const deploymentsApi = {
+  // Deployment targets (unified)
+  listTargets: () => api.get<DeployTarget[]>('/api/deployments/targets'),
+
   // Service definitions
   createService: (data: Omit<ServiceDefinition, 'created_at' | 'updated_at' | 'created_by'>) =>
     api.post('/api/deployments/services', data),
@@ -606,13 +687,15 @@ export const deploymentsApi = {
   deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
 
   // Deployments
-  deploy: (serviceId: string, unodeHostname: string) =>
-    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname }),
+  deploy: (serviceId: string, unodeHostname: string, configId?: string) =>
+    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId }),
   listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
   stopDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/stop`),
   restartDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/restart`),
+  updateDeployment: (deploymentId: string, envVars: Record<string, string>) =>
+    api.put<Deployment>(`/api/deployments/${deploymentId}`, { env_vars: envVars }),
   removeDeployment: (deploymentId: string) => api.delete(`/api/deployments/${deploymentId}`),
   getDeploymentLogs: (deploymentId: string, tail?: number) =>
     api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
@@ -628,7 +711,7 @@ export interface TailscaleConfig {
   https_enabled: boolean
   use_caddy_proxy: boolean
   backend_port: number
-  frontend_port: number
+  frontend_port: number | null  // null = auto-detect (5173 dev, 80 prod)
   environments: string[]
 }
 
@@ -637,6 +720,7 @@ export interface PlatformInfo {
   os_version: string
   architecture: string
   is_docker: boolean
+  tailscale_installed: boolean
 }
 
 export interface EnvironmentInfo {
@@ -879,9 +963,25 @@ const adaptMemoryItem = (item: ApiMemoryItem): Memory => {
   }
 }
 
+export type MemorySource = 'openmemory' | 'mycelia'
+
 export const memoriesApi = {
-  /** Get OpenMemory server URL from settings or use default */
-  getServerUrl: async (): Promise<string> => {
+  /** Get memory server URL based on selected source */
+  getServerUrl: async (source: MemorySource = 'openmemory'): Promise<string> => {
+    if (source === 'mycelia') {
+      try {
+        // Get connection info from mycelia service
+        const response = await servicesApi.getConnectionInfo('mycelia')
+        if (response.data?.url) {
+          return response.data.url
+        }
+      } catch (err) {
+        console.warn('Failed to get mycelia connection info:', err)
+        throw new Error('Mycelia service not available')
+      }
+    }
+
+    // OpenMemory (mem0) - use settings or default
     try {
       const response = await settingsApi.getConfig()
       return response.data?.infrastructure?.openmemory_server_url || 'http://localhost:8765'
@@ -896,9 +996,10 @@ export const memoriesApi = {
     query?: string,
     page: number = 1,
     size: number = 10,
-    filters?: MemoryFilters
+    filters?: MemoryFilters,
+    source: MemorySource = 'openmemory'
   ): Promise<{ memories: Memory[]; total: number; pages: number }> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const response = await axios.post<MemoriesApiResponse>(
       `${serverUrl}/api/v1/memories/filter`,
       {
@@ -921,8 +1022,8 @@ export const memoriesApi = {
   },
 
   /** Get a single memory by ID */
-  getMemory: async (userId: string, memoryId: string): Promise<Memory> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+  getMemory: async (userId: string, memoryId: string, source: MemorySource = 'openmemory'): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const response = await axios.get<ApiMemoryItem>(
       `${serverUrl}/api/v1/memories/${memoryId}?user_id=${userId}`
     )
@@ -1010,10 +1111,10 @@ export const memoriesApi = {
     return response.data
   },
 
-  /** Check if OpenMemory server is available */
-  healthCheck: async (): Promise<boolean> => {
+  /** Check if memory server is available */
+  healthCheck: async (source: MemorySource = 'openmemory'): Promise<boolean> => {
     try {
-      const serverUrl = await memoriesApi.getServerUrl()
+      const serverUrl = await memoriesApi.getServerUrl(source)
       await axios.get(`${serverUrl}/docs`, { timeout: 5000 })
       return true
     } catch {
@@ -1023,14 +1124,14 @@ export const memoriesApi = {
 }
 
 // =============================================================================
-// Instances API (templates, instances, wiring)
+// ServiceConfigs API (templates, instances, wiring)
 // =============================================================================
 
 /** Template source - where the template was discovered from */
 export type TemplateSource = 'compose' | 'provider'
 
-/** Instance status */
-export type InstanceStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
+/** ServiceConfig status */
+export type ServiceConfigStatus = 'pending' | 'deploying' | 'running' | 'stopped' | 'error' | 'n/a'
 
 /** Template - discovered from compose or provider files */
 export interface Template {
@@ -1060,30 +1161,31 @@ export interface Template {
   tags: string[]
   configured: boolean  // Whether required config fields are set (for providers)
   available: boolean   // Whether local service is running (for local providers)
+  installed: boolean   // Whether service is installed (for compose services)
 }
 
-/** Instance config values */
-export interface InstanceConfig {
+/** ServiceConfig config values */
+export interface ConfigValues {
   values: Record<string, any>
 }
 
-/** Instance outputs after deployment */
-export interface InstanceOutputs {
+/** ServiceConfig outputs after deployment */
+export interface ServiceOutputs {
   access_url?: string
   env_vars: Record<string, string>
   capability_values: Record<string, any>
 }
 
-/** Instance - configured deployment of a template */
-export interface Instance {
+/** ServiceConfig - configured deployment of a template */
+export interface ServiceConfig {
   id: string
   template_id: string
   name: string
   description?: string
-  config: InstanceConfig
+  config: ConfigValues
   deployment_target?: string
-  status: InstanceStatus
-  outputs: InstanceOutputs
+  status: ServiceConfigStatus
+  outputs: ServiceOutputs
   container_id?: string
   container_name?: string
   deployment_id?: string
@@ -1102,12 +1204,12 @@ export interface Instance {
   next_sync_at?: string
 }
 
-/** Instance summary for list views */
-export interface InstanceSummary {
+/** ServiceConfig summary for list views */
+export interface ServiceConfigSummary {
   id: string
   template_id: string
   name: string
-  status: InstanceStatus
+  status: ServiceConfigStatus
   provides?: string
   deployment_target?: string
   access_url?: string
@@ -1116,15 +1218,33 @@ export interface InstanceSummary {
 /** Wiring connection between instances */
 export interface Wiring {
   id: string
-  source_instance_id: string
+  source_config_id: string
   source_capability: string
-  target_instance_id: string
+  target_config_id: string
   target_capability: string
   created_at?: string
 }
 
+/** Output wiring - connects service outputs to env vars of other services */
+export interface OutputWiring {
+  id: string
+  source_instance_id: string
+  source_output_key: string  // "access_url" | "env_vars.XXX" | "capability_values.XXX"
+  target_instance_id: string
+  target_env_var: string     // The env var key on the target service
+  created_at?: string
+}
+
+/** Request to create output wiring */
+export interface OutputWiringCreateRequest {
+  source_instance_id: string
+  source_output_key: string
+  target_instance_id: string
+  target_env_var: string
+}
+
 /** Request to create an instance */
-export interface InstanceCreateRequest {
+export interface ServiceConfigCreateRequest {
   id: string
   template_id: string
   name: string
@@ -1134,7 +1254,7 @@ export interface InstanceCreateRequest {
 }
 
 /** Request to update an instance */
-export interface InstanceUpdateRequest {
+export interface ServiceConfigUpdateRequest {
   name?: string
   description?: string
   config?: Record<string, any>
@@ -1143,84 +1263,101 @@ export interface InstanceUpdateRequest {
 
 /** Request to create wiring */
 export interface WiringCreateRequest {
-  source_instance_id: string
+  source_config_id: string
   source_capability: string
-  target_instance_id: string
+  target_config_id: string
   target_capability: string
 }
 
-export const instancesApi = {
+export const svcConfigsApi = {
   // Templates
   /** List all templates (compose services + providers) */
   getTemplates: (source?: TemplateSource) =>
-    api.get<Template[]>('/api/instances/templates', { params: source ? { source } : {} }),
+    api.get<Template[]>('/api/svc-configs/templates', { params: source ? { source } : {} }),
 
   /** Get a template by ID */
   getTemplate: (templateId: string) =>
-    api.get<Template>(`/api/instances/templates/${templateId}`),
+    api.get<Template>(`/api/svc-configs/templates/${templateId}`),
 
-  // Instances
+  /** Get env var config with suggestions for a template (same process as services) */
+  getTemplateEnvConfig: (templateId: string) =>
+    api.get<EnvVarInfo[]>(`/api/svc-configs/templates/${templateId}/env`),
+
+  // ServiceConfigs
   /** List all instances */
-  getInstances: () =>
-    api.get<InstanceSummary[]>('/api/instances'),
+  getServiceConfigs: () =>
+    api.get<ServiceConfigSummary[]>('/api/svc-configs'),
 
   /** Get an instance by ID */
-  getInstance: (instanceId: string) =>
-    api.get<Instance>(`/api/instances/${instanceId}`),
+  getServiceConfig: (instanceId: string) =>
+    api.get<ServiceConfig>(`/api/svc-configs/${instanceId}`),
 
   /** Create a new instance */
-  createInstance: (data: InstanceCreateRequest) =>
-    api.post<Instance>('/api/instances', data),
+  createServiceConfig: (data: ServiceConfigCreateRequest) =>
+    api.post<ServiceConfig>('/api/svc-configs', data),
 
   /** Update an instance */
-  updateInstance: (instanceId: string, data: InstanceUpdateRequest) =>
-    api.put<Instance>(`/api/instances/${instanceId}`, data),
+  updateServiceConfig: (instanceId: string, data: ServiceConfigUpdateRequest) =>
+    api.put<ServiceConfig>(`/api/svc-configs/${instanceId}`, data),
 
   /** Delete an instance */
-  deleteInstance: (instanceId: string) =>
-    api.delete(`/api/instances/${instanceId}`),
+  deleteServiceConfig: (instanceId: string) =>
+    api.delete(`/api/svc-configs/${instanceId}`),
 
   /** Deploy/start an instance */
-  deployInstance: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/deploy`),
+  deployServiceConfig: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/deploy`),
 
   /** Undeploy/stop an instance */
-  undeployInstance: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/undeploy`),
+  undeployServiceConfig: (instanceId: string) =>
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/undeploy`),
 
   // Wiring
   /** List all wiring connections */
   getWiring: () =>
-    api.get<Wiring[]>('/api/instances/wiring/all'),
+    api.get<Wiring[]>('/api/svc-configs/wiring/all'),
 
   /** Get default capability mappings */
   getDefaults: () =>
-    api.get<Record<string, string>>('/api/instances/wiring/defaults'),
+    api.get<Record<string, string>>('/api/svc-configs/wiring/defaults'),
 
   /** Set default instance for a capability */
   setDefault: (capability: string, instanceId: string) =>
-    api.put(`/api/instances/wiring/defaults/${capability}`, null, { params: { instance_id: instanceId } }),
+    api.put(`/api/svc-configs/wiring/defaults/${capability}`, null, { params: { config_id: instanceId } }),
 
   /** Create a wiring connection */
   createWiring: (data: WiringCreateRequest) =>
-    api.post<Wiring>('/api/instances/wiring', data),
+    api.post<Wiring>('/api/svc-configs/wiring', data),
 
   /** Delete a wiring connection */
   deleteWiring: (wiringId: string) =>
-    api.delete(`/api/instances/wiring/${wiringId}`),
+    api.delete(`/api/svc-configs/wiring/${wiringId}`),
 
   /** Get wiring for a specific instance */
-  getInstanceWiring: (instanceId: string) =>
-    api.get<Wiring[]>(`/api/instances/${instanceId}/wiring`),
+  getServiceConfigWiring: (instanceId: string) =>
+    api.get<Wiring[]>(`/api/svc-configs/${instanceId}/wiring`),
+  // Output Wiring - connects service outputs to env vars
+  /** List all output wiring connections */
+  getOutputWiring: () =>
+    api.get<OutputWiring[]>('/api/instances/output-wiring/all'),
+
+  /** Create an output wiring connection */
+  createOutputWiring: (data: OutputWiringCreateRequest) =>
+    api.post<OutputWiring>('/api/instances/output-wiring', data),
+
+  /** Delete an output wiring connection */
+  deleteOutputWiring: (wiringId: string) =>
+    api.delete(`/api/instances/output-wiring/${wiringId}`),
 }
 
 export const graphApi = {
   /** Fetch graph data for visualization */
   fetchGraphData: async (
     userId?: string,
-    limit: number = 100
+    limit: number = 100,
+    source: MemorySource = 'openmemory'
   ): Promise<GraphData> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string | number> = { limit }
     if (userId) params.user_id = userId
 
@@ -1232,8 +1369,8 @@ export const graphApi = {
   },
 
   /** Fetch graph statistics */
-  fetchGraphStats: async (userId?: string): Promise<GraphStats> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+  fetchGraphStats: async (userId?: string, source: MemorySource = 'openmemory'): Promise<GraphStats> => {
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string> = {}
     if (userId) params.user_id = userId
 
@@ -1248,9 +1385,10 @@ export const graphApi = {
   searchGraph: async (
     query: string,
     userId?: string,
-    limit: number = 50
+    limit: number = 50,
+    source: MemorySource = 'openmemory'
   ): Promise<GraphData> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string | number> = { query, limit }
     if (userId) params.user_id = userId
 
@@ -1300,11 +1438,8 @@ export const tailscaleApi = {
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
     api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
-  configureCaddyRouting: (hostname?: string) =>
-    api.post<{ status: string; message: string; cors_origin_added?: string }>(
-      '/api/tailscale/configure-caddy-routing',
-      hostname ? { hostname } : undefined
-    ),
+  getServeStatus: () =>
+    api.get<{ status: string; routes: string | null; error?: string }>('/api/tailscale/serve-status'),
   updateCorsOrigins: (hostname: string) =>
     api.post<{
       status: string
@@ -1426,21 +1561,303 @@ export interface IntegrationConnectionResult {
 export const integrationApi = {
   /** Test connection to an integration */
   testConnection: (instanceId: string) =>
-    api.post<IntegrationConnectionResult>(`/api/instances/${instanceId}/test-connection`),
+    api.post<IntegrationConnectionResult>(`/api/svc-configs/${instanceId}/test-connection`),
 
   /** Manually trigger sync for an integration */
   syncNow: (instanceId: string) =>
-    api.post<IntegrationSyncResult>(`/api/instances/${instanceId}/sync`),
+    api.post<IntegrationSyncResult>(`/api/svc-configs/${instanceId}/sync`),
 
   /** Get current sync status for an integration */
   getSyncStatus: (instanceId: string) =>
-    api.get<IntegrationSyncStatus>(`/api/instances/${instanceId}/sync-status`),
+    api.get<IntegrationSyncStatus>(`/api/svc-configs/${instanceId}/sync-status`),
 
   /** Enable automatic syncing for an integration */
   enableAutoSync: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/enable`),
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/sync/enable`),
 
   /** Disable automatic syncing for an integration */
   disableAutoSync: (instanceId: string) =>
-    api.post<{ success: boolean; message: string }>(`/api/instances/${instanceId}/sync/disable`),
+    api.post<{ success: boolean; message: string }>(`/api/svc-configs/${instanceId}/sync/disable`),
+}
+
+// =============================================================================
+// GitHub Import API - Import docker-compose from GitHub repositories
+// =============================================================================
+
+export interface GitHubUrlInfo {
+  owner: string
+  repo: string
+  branch: string
+  path: string
+}
+
+export interface DetectedComposeFile {
+  path: string
+  name: string
+  download_url: string
+  size: number
+}
+
+export interface GitHubScanResponse {
+  success: boolean
+  github_info?: GitHubUrlInfo
+  compose_files: DetectedComposeFile[]
+  message?: string
+  error?: string
+}
+
+export interface ComposeEnvVarInfo {
+  name: string
+  has_default: boolean
+  default_value?: string
+  is_required: boolean
+  description?: string
+}
+
+export interface ComposeServiceInfo {
+  name: string
+  image?: string
+  ports: Array<{ host?: string; container?: string }>
+  environment: ComposeEnvVarInfo[]
+  depends_on: string[]
+  volumes: string[]
+  networks: string[]
+  command?: string
+  healthcheck?: Record<string, any>
+}
+
+export interface ComposeParseResponse {
+  success: boolean
+  compose_path: string
+  services: ComposeServiceInfo[]
+  networks: string[]
+  volumes: string[]
+  message?: string
+  error?: string
+}
+
+export interface ShadowHeaderConfig {
+  enabled: boolean
+  header_name: string
+  header_value?: string
+  route_path?: string
+}
+
+export interface EnvVarConfigItem {
+  name: string
+  source: 'literal' | 'setting' | 'default'
+  value?: string
+  setting_path?: string
+  is_secret: boolean
+}
+
+export interface ImportedServiceConfig {
+  service_name: string
+  display_name?: string
+  description?: string
+  source_url: string  // GitHub URL or Docker Hub URL
+  compose_path?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides (e.g., ['llm', 'tts'])
+}
+
+export interface ImportServiceRequest {
+  github_url: string
+  compose_path: string
+  service_name: string
+  config: ImportedServiceConfig
+}
+
+export interface ImportServiceResponse {
+  success: boolean
+  service_id?: string
+  service_name?: string
+  message: string
+  compose_file_path?: string
+}
+
+export interface ImportedService {
+  id: string
+  source_type?: 'github' | 'dockerhub'
+  source_url?: string
+  github_url?: string
+  compose_path?: string
+  compose_file: string
+  docker_image?: string
+  service_name: string
+  display_name?: string
+  description?: string
+  shadow_header: ShadowHeaderConfig
+  env_vars: EnvVarConfigItem[]
+  ports?: PortConfig[]
+  volumes?: VolumeConfig[]
+  enabled: boolean
+  capabilities?: string[]  // Capabilities this service provides
+}
+
+export interface PortConfig {
+  host_port: number
+  container_port: number
+  protocol?: string
+}
+
+export interface VolumeConfig {
+  name: string
+  container_path: string
+  is_named_volume?: boolean
+}
+
+export interface DockerHubImageInfo {
+  namespace: string
+  repository: string
+  tag: string
+  full_image_name?: string
+}
+
+export interface DockerHubScanResponse {
+  success: boolean
+  image_info?: DockerHubImageInfo
+  description?: string
+  stars?: number
+  pulls?: number
+  available_tags: string[]
+  message?: string
+  error?: string
+}
+
+export interface UnifiedScanResponse {
+  success: boolean
+  source_type: 'github' | 'dockerhub'
+  // GitHub-specific
+  github_info?: GitHubUrlInfo
+  compose_files?: DetectedComposeFile[]
+  // Docker Hub-specific
+  dockerhub_info?: DockerHubImageInfo
+  available_tags?: string[]
+  image_description?: string
+  // Common
+  message?: string
+  error?: string
+}
+
+export interface DockerHubRegisterRequest {
+  service_name: string
+  dockerhub_url: string
+  tag?: string
+  display_name?: string
+  description?: string
+  ports?: PortConfig[]
+  volumes?: VolumeConfig[]
+  env_vars?: EnvVarConfigItem[]
+  shadow_header_enabled?: boolean
+  shadow_header_name?: string
+  shadow_header_value?: string
+  route_path?: string
+  capabilities?: string[]  // Capabilities this service provides
+}
+
+// =============================================================================
+// Audio Provider API - Wired audio destinations
+// =============================================================================
+
+export interface AudioDestination {
+  consumer_id: string
+  consumer_name: string
+  websocket_url: string
+  protocol: string
+  format: string
+}
+
+export interface WiredDestinationsResponse {
+  has_destinations: boolean
+  destinations: AudioDestination[]
+  // Relay mode: frontend connects to relay_url, backend fans out to destinations
+  use_relay: boolean
+  relay_url: string | null  // e.g., wss://hostname/ws/audio/relay
+}
+
+export const audioApi = {
+  /** Get wired audio destinations based on wiring configuration */
+  getWiredDestinations: () =>
+    api.get<WiredDestinationsResponse>('/api/providers/audio_consumer/wired-destinations'),
+
+  /** Get active audio consumer configuration */
+  getActiveConsumer: () =>
+    api.get('/api/providers/audio_consumer/active'),
+
+  /** Get available audio consumers */
+  getAvailableConsumers: () =>
+    api.get('/api/providers/audio_consumer/available'),
+}
+
+export const githubImportApi = {
+  /** Scan a GitHub repository for docker-compose files */
+  scan: (github_url: string, branch?: string, compose_path?: string) =>
+    api.post<GitHubScanResponse>('/api/github-import/scan', {
+      github_url,
+      branch,
+      compose_path
+    }),
+
+  /** Parse a docker-compose file and extract service/env information */
+  parse: (github_url: string, compose_path: string) =>
+    api.post<ComposeParseResponse>('/api/github-import/parse', null, {
+      params: { github_url, compose_path }
+    }),
+
+  /** Register an imported service */
+  register: (request: ImportServiceRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/register', request),
+
+  /** List all imported services */
+  listImported: () =>
+    api.get<ImportedService[]>('/api/github-import/imported'),
+
+  /** Delete an imported service */
+  deleteImported: (serviceId: string) =>
+    api.delete<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}`),
+
+  /** Update configuration for an imported service */
+  updateConfig: (serviceId: string, config: ImportedServiceConfig) =>
+    api.put<{ success: boolean; message: string }>(`/api/github-import/imported/${serviceId}/config`, config),
+
+  // Docker Hub endpoints
+  /** Scan a Docker Hub image for information */
+  scanDockerHub: (dockerhub_url: string, tag?: string) =>
+    api.post<DockerHubScanResponse>('/api/github-import/dockerhub/scan', {
+      dockerhub_url,
+      tag
+    }),
+
+  /** Register a service from Docker Hub */
+  registerDockerHub: (request: DockerHubRegisterRequest) =>
+    api.post<ImportServiceResponse>('/api/github-import/dockerhub/register', null, {
+      params: {
+        service_name: request.service_name,
+        dockerhub_url: request.dockerhub_url,
+        tag: request.tag,
+        display_name: request.display_name,
+        description: request.description,
+        shadow_header_enabled: request.shadow_header_enabled ?? true,
+        shadow_header_name: request.shadow_header_name ?? 'X-Shadow-Service',
+        shadow_header_value: request.shadow_header_value,
+        route_path: request.route_path,
+        ports: request.ports ? JSON.stringify(request.ports) : undefined,
+        volumes: request.volumes ? JSON.stringify(request.volumes) : undefined,
+        env_vars: request.env_vars ? JSON.stringify(request.env_vars) : undefined,
+        capabilities: request.capabilities ? JSON.stringify(request.capabilities) : undefined,
+      }
+    }),
+
+  // Unified endpoints (auto-detect source type)
+  /** Scan any supported source (GitHub or Docker Hub) */
+  unifiedScan: (url: string, branch?: string, tag?: string, compose_path?: string) =>
+    api.post<UnifiedScanResponse>('/api/github-import/unified/scan', {
+      url,
+      branch,
+      tag,
+      compose_path
+    }),
 }

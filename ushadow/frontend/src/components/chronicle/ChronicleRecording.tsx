@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { Mic, MicOff, Loader2, Zap, Archive, AlertCircle, Monitor } from 'lucide-react'
-import { ChronicleRecordingReturn, RecordingStep } from '../../hooks/useChronicleRecording'
+import { WebRecordingReturn, RecordingStep } from '../../hooks/useWebRecording'
 
 interface ChronicleRecordingProps {
   onAuthRequired?: () => void
-  recording: ChronicleRecordingReturn
+  recording: WebRecordingReturn
 }
 
 const getStepText = (step: RecordingStep): string => {
@@ -12,7 +12,7 @@ const getStepText = (step: RecordingStep): string => {
     case 'idle': return 'Ready to Record'
     case 'mic': return 'Getting Microphone Access...'
     case 'display': return 'Requesting Tab/Screen Audio...'
-    case 'websocket': return 'Connecting to Chronicle...'
+    case 'websocket': return 'Connecting to Audio Services...'
     case 'audio-start': return 'Initializing Audio Session...'
     case 'streaming': return 'Starting Audio Stream...'
     case 'stopping': return 'Stopping Recording...'

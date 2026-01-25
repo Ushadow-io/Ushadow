@@ -212,10 +212,10 @@ export function MemoryTable({ memories, isLoading }: MemoryTableProps) {
                 {actionMenuId === memory.id && (
                   <>
                     <div
-                      className="fixed inset-0 z-10"
+                      className="fixed inset-0 z-[9997]"
                       onClick={() => setActionMenuId(null)}
                     />
-                    <div className="absolute right-0 mt-1 w-40 bg-zinc-900 border border-zinc-700 rounded-lg shadow-lg z-20">
+                    <div className="absolute right-0 mt-1 w-40 bg-zinc-900 border border-zinc-700 rounded-lg shadow-lg z-[9998]">
                       <button
                         data-testid={`memory-toggle-state-${memory.id}`}
                         onClick={() =>

@@ -21,6 +21,7 @@ import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
 import { getErrorMessage } from './wizard-utils'
+import { StatusBadge } from '../components/StatusBadge'
 
 /**
  * LocalServicesWizard - Setup for completely local AI services.
@@ -412,6 +413,7 @@ export default function LocalServicesWizard() {
       title="Local Services Setup"
       subtitle="Configure completely local AI services"
       icon={Server}
+      titleBadge={<StatusBadge variant="beta" testId="badge-wizard-local" />}
       progress={wizard.progress}
       steps={STEPS}
       currentStepId={wizard.currentStep.id}
@@ -484,9 +486,12 @@ function LLMStep({
   return (
     <div id="local-services-step-llm" className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-          Configure Local LLM
-        </h2>
+        <div className="flex items-center gap-3 mb-2">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+            Configure Local LLM
+          </h2>
+          <StatusBadge variant="not-implemented" testId="badge-ollama" />
+        </div>
         <p className="text-sm text-gray-600 dark:text-gray-400">
           Choose how to connect to your local LLM. Ollama is recommended for easy setup.
         </p>
@@ -635,9 +640,12 @@ function TranscriptionStep({ parakeetStatus, onStartParakeet }: TranscriptionSte
   return (
     <div id="local-services-step-transcription" className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-          Configure Transcription
-        </h2>
+        <div className="flex items-center gap-3 mb-2">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+            Configure Transcription
+          </h2>
+          <StatusBadge variant="not-implemented" testId="badge-parakeet" />
+        </div>
         <p className="text-sm text-gray-600 dark:text-gray-400">
           Choose your speech-to-text provider for converting conversations.
         </p>

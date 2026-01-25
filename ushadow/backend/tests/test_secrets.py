@@ -250,7 +250,7 @@ class TestGetAuthSecretKey:
         mock_store = MagicMock()
         mock_store.get_sync.return_value = "test-secret-key-12345"
 
-        with patch("src.config.omegaconf_settings.get_settings_store", return_value=mock_store):
+        with patch("src.config.get_settings_store", return_value=mock_store):
             key = get_auth_secret_key()
             assert key == "test-secret-key-12345"
             mock_store.get_sync.assert_called_once_with("security.auth_secret_key")
@@ -262,7 +262,7 @@ class TestGetAuthSecretKey:
         mock_store = MagicMock()
         mock_store.get_sync.return_value = None
 
-        with patch("src.config.omegaconf_settings.get_settings_store", return_value=mock_store):
+        with patch("src.config.get_settings_store", return_value=mock_store):
             with pytest.raises(ValueError, match="AUTH_SECRET_KEY not found"):
                 get_auth_secret_key()
 
@@ -273,7 +273,7 @@ class TestGetAuthSecretKey:
         mock_store = MagicMock()
         mock_store.get_sync.return_value = ""
 
-        with patch("src.config.omegaconf_settings.get_settings_store", return_value=mock_store):
+        with patch("src.config.get_settings_store", return_value=mock_store):
             with pytest.raises(ValueError, match="AUTH_SECRET_KEY not found"):
                 get_auth_secret_key()
 

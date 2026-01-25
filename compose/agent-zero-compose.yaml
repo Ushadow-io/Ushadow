@@ -1,0 +1,77 @@
+# Agent Zero - Autonomous AI Agent Framework
+# https://github.com/agent0ai/agent-zero
+#
+# Agent Zero is an AI framework for personal assistants with features like:
+# - Multi-agent cooperation
+# - Computer tool usage
+# - Memory and knowledge retrieval
+# - Custom instruments (tools)
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  agent-zero:
+    display_name: "Agent Zero"
+    description: "Autonomous AI agent framework with memory, knowledge, and tool usage capabilities"
+    requires: [llm]
+    optional: []
+    route_path: /agent-zero
+
+services:
+  agent-zero:
+    image: agent0ai/agent-zero:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-agent-zero
+    ports:
+      - "${AGENT_ZERO_PORT:-50080}:80"
+    environment:
+      # LLM Configuration - Agent Zero supports multiple providers
+      # OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Anthropic
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+      # Google
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+
+      # Groq
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+
+      # OpenRouter
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+      # Ollama (for local models)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+
+      # Perplexity (for web search)
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY:-}
+
+    volumes:
+      # Main data directory - stores memory, knowledge, instruments, prompts, settings
+      - agent_zero_data:/a0
+
+    networks:
+      - ushadow-network
+
+    # Enable access to host network for Ollama and other local services
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    restart: unless-stopped
+
+volumes:
+  agent_zero_data:
+    name: ${COMPOSE_PROJECT_NAME:-ushadow}_agent_zero_data
+
+networks:
+  ushadow-network:
+    external: true
+    name: ushadow-network

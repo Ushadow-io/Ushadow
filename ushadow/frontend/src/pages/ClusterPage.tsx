@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle, QrCode, Smartphone } from 'lucide-react'
-import { clusterApi, deploymentsApi, servicesApi, tailscaleApi, Deployment } from '../services/api'
+import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle, QrCode, Smartphone, Info } from 'lucide-react'
+import { clusterApi, deploymentsApi, servicesApi, Deployment } from '../services/api'
+import { useMobileQrCode } from '../hooks/useQrCode'
 import Modal from '../components/Modal'
 
 // Service from the catalog API
@@ -107,21 +108,6 @@ interface LeaderInfo {
   }>
 }
 
-// QR code data for mobile app connection
-interface MobileConnectionQR {
-  qr_code_data: string
-  connection_data: {
-    type: string
-    v: number
-    hostname: string
-    ip: string
-    port: number
-  }
-  hostname: string
-  tailscale_ip: string
-  api_port: number
-}
-
 // Response structure from discover peers API
 interface DiscoveredPeersResponse {
   peers: {
@@ -174,10 +160,8 @@ export default function ClusterPage() {
   const [leaderInfo, setLeaderInfo] = useState<LeaderInfo | null>(null)
   const [loadingLeaderInfo, setLoadingLeaderInfo] = useState(false)
 
-  // QR code state
-  const [qrCodeData, setQrCodeData] = useState<MobileConnectionQR | null>(null)
-  const [loadingQrCode, setLoadingQrCode] = useState(false)
-  const [showQrCode, setShowQrCode] = useState(false)
+  // QR code hook
+  const { qrData, loading: loadingQrCode, showModal: showQrCode, fetchQrCode, closeModal: closeQrModal } = useMobileQrCode()
 
   useEffect(() => {
     loadUnodes()
@@ -352,8 +336,21 @@ export default function ClusterPage() {
     setShowLogsModal(true)
     setLoadingLogs(true)
     try {
+      // Get deployment details for error message
+      const deployment = deployments.find(d => d.id === deploymentId)
+
       const response = await deploymentsApi.getDeploymentLogs(deploymentId)
-      setLogs(response.data.logs)
+      let logsText = response.data.logs
+
+      // If deployment failed and no logs, show the error message
+      if (deployment?.status === 'failed' && (!logsText || logsText.trim() === 'No logs available')) {
+        logsText = `Deployment failed: ${deployment.error || 'Unknown error'}\n\nNo container logs available (container may not have started)`
+      } else if (deployment?.status === 'failed' && deployment.error) {
+        // Prepend error message to logs
+        logsText = `Deployment Error: ${deployment.error}\n\n--- Container Logs ---\n${logsText}`
+      }
+
+      setLogs(logsText)
     } catch (err: any) {
       setLogs(`Failed to load logs: ${err.response?.data?.detail || err.message}`)
     } finally {
@@ -430,21 +427,6 @@ export default function ClusterPage() {
       setShowLeaderInfoModal(false)
     } finally {
       setLoadingLeaderInfo(false)
-    }
-  }
-
-  // Fetch QR code for mobile app connection
-  const fetchMobileQrCode = async () => {
-    setLoadingQrCode(true)
-    try {
-      const response = await tailscaleApi.getMobileConnectionQR()
-      setQrCodeData(response.data)
-      setShowQrCode(true)
-    } catch (err: any) {
-      console.error('Error fetching QR code:', err)
-      alert(`Failed to generate QR code: ${err.response?.data?.detail || err.message}`)
-    } finally {
-      setLoadingQrCode(false)
     }
   }
 
@@ -619,10 +601,9 @@ export default function ClusterPage() {
           {unodes.map((node) => {
             const isNodeOffline = node.status !== 'online' && node.status !== 'connecting'
             return (
-            <div 
-              key={node.id} 
-              className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''} ${node.role === 'leader' ? 'cursor-pointer hover:ring-2 hover:ring-warning-400' : ''}`}
-              onClick={node.role === 'leader' ? fetchLeaderInfo : undefined}
+            <div
+              key={node.id}
+              className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''}`}
               data-testid={`node-card-${node.hostname}`}
             >
               {/* Node Header */}
@@ -643,7 +624,22 @@ export default function ClusterPage() {
                     </div>
                   </div>
                 </div>
-                {getStatusIcon(node.status)}
+                <div className="flex items-center space-x-2">
+                  {node.role === 'leader' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        fetchLeaderInfo()
+                      }}
+                      className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
+                      title="View leader details"
+                      data-testid={`node-info-${node.hostname}`}
+                    >
+                      <Info className="h-4 w-4" />
+                    </button>
+                  )}
+                  {getStatusIcon(node.status)}
+                </div>
               </div>
 
               {/* Node IP */}
@@ -710,7 +706,20 @@ export default function ClusterPage() {
                       return (
                       <div
                         key={deployment.id}
-                        className={`flex items-center justify-between rounded px-2 py-1.5 ${isNodeOffline ? 'bg-warning-50 dark:bg-warning-900/20' : 'bg-neutral-50 dark:bg-neutral-800/50'}`}
+                        className={`flex items-center justify-between rounded px-2 py-1.5 ${
+                          deployment.status === 'failed'
+                            ? 'bg-danger-50 dark:bg-danger-900/20 cursor-pointer hover:bg-danger-100 dark:hover:bg-danger-900/30'
+                            : isNodeOffline
+                              ? 'bg-warning-50 dark:bg-warning-900/20'
+                              : 'bg-neutral-50 dark:bg-neutral-800/50'
+                        }`}
+                        onClick={(e) => {
+                          if (deployment.status === 'failed') {
+                            e.stopPropagation()
+                            handleViewLogs(deployment.id)
+                          }
+                        }}
+                        title={deployment.status === 'failed' ? 'Click to view logs and error details' : ''}
                       >
                         <div className="flex items-center space-x-2">
                           {isNodeOffline && (
@@ -733,6 +742,7 @@ export default function ClusterPage() {
                               href={deployment.access_url}
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
                               className="p-1 text-neutral-500 hover:text-primary-600 rounded"
                               title={`Open ${deployment.access_url}`}
                             >
@@ -741,7 +751,10 @@ export default function ClusterPage() {
                           )}
                           {deployment.status === 'running' ? (
                             <button
-                              onClick={() => handleStopDeployment(deployment.id)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleStopDeployment(deployment.id)
+                              }}
                               className="p-1 text-neutral-500 hover:text-warning-600 rounded"
                               title="Stop"
                             >
@@ -749,7 +762,10 @@ export default function ClusterPage() {
                             </button>
                           ) : deployment.status === 'stopped' ? (
                             <button
-                              onClick={() => handleRestartDeployment(deployment.id)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleRestartDeployment(deployment.id)
+                              }}
                               className="p-1 text-neutral-500 hover:text-success-600 rounded"
                               title="Start"
                             >
@@ -757,21 +773,30 @@ export default function ClusterPage() {
                             </button>
                           ) : null}
                           <button
-                            onClick={() => handleRestartDeployment(deployment.id)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRestartDeployment(deployment.id)
+                            }}
                             className="p-1 text-neutral-500 hover:text-primary-600 rounded"
                             title="Restart"
                           >
                             <RotateCcw className="h-3 w-3" />
                           </button>
                           <button
-                            onClick={() => handleViewLogs(deployment.id)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleViewLogs(deployment.id)
+                            }}
                             className="p-1 text-neutral-500 hover:text-primary-600 rounded"
                             title="View Logs"
                           >
                             <FileText className="h-3 w-3" />
                           </button>
                           <button
-                            onClick={() => handleRemoveDeployment(deployment.id)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRemoveDeployment(deployment.id)
+                            }}
                             className="p-1 text-neutral-500 hover:text-danger-600 rounded"
                             title="Remove"
                           >
@@ -788,7 +813,10 @@ export default function ClusterPage() {
               <div className="flex justify-between items-center">
                 {node.role !== 'leader' && node.status === 'online' && (
                   <button
-                    onClick={() => openDeployModal(node.hostname)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      openDeployModal(node.hostname)
+                    }}
                     className="text-sm text-primary-600 dark:text-primary-400 hover:underline flex items-center"
                   >
                     <Plus className="h-4 w-4 mr-1" />
@@ -799,7 +827,10 @@ export default function ClusterPage() {
                 <div className="flex items-center space-x-1">
                   {node.role !== 'leader' && node.status === 'online' && (
                     <button
-                      onClick={() => openUpgradeModal(node.hostname)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openUpgradeModal(node.hostname)
+                      }}
                       className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
                       title="Upgrade manager"
                       data-testid={`upgrade-node-${node.hostname}`}
@@ -809,7 +840,10 @@ export default function ClusterPage() {
                   )}
                   {node.role !== 'leader' && (
                     <button
-                      onClick={() => handleReleaseNode(node.hostname)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleReleaseNode(node.hostname)
+                      }}
                       className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-warning-600 dark:hover:text-warning-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
                       title="Release for another leader"
                       data-testid={`release-node-${node.hostname}`}
@@ -819,7 +853,10 @@ export default function ClusterPage() {
                   )}
                   {node.role !== 'leader' && (
                     <button
-                      onClick={() => handleRemoveNode(node.hostname)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleRemoveNode(node.hostname)
+                      }}
                       className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-danger-600 dark:hover:text-danger-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
                       title="Remove from cluster"
                       data-testid={`remove-node-${node.hostname}`}
@@ -1479,11 +1516,11 @@ export default function ClusterPage() {
                 <Smartphone className="h-5 w-5" />
                 Mobile App Connection
               </h3>
-              {showQrCode && qrCodeData ? (
+              {showQrCode && qrData ? (
                 <div className="flex flex-col items-center space-y-4">
                   <div className="p-4 bg-white rounded-xl shadow-lg">
                     <img
-                      src={qrCodeData.qr_code_data}
+                      src={qrData.qr_code_data}
                       alt="Connection QR Code"
                       className="w-48 h-48"
                       data-testid="leader-qr-code"
@@ -1494,11 +1531,11 @@ export default function ClusterPage() {
                       Scan with the Ushadow mobile app
                     </p>
                     <p className="text-xs text-neutral-400 dark:text-neutral-500">
-                      {qrCodeData.tailscale_ip}:{qrCodeData.api_port}
+                      {qrData.tailscale_ip}:{qrData.api_port}
                     </p>
                   </div>
                   <button
-                    onClick={() => setShowQrCode(false)}
+                    onClick={closeQrModal}
                     className="text-sm text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
                   >
                     Hide QR Code
@@ -1506,7 +1543,7 @@ export default function ClusterPage() {
                 </div>
               ) : (
                 <button
-                  onClick={fetchMobileQrCode}
+                  onClick={fetchQrCode}
                   disabled={loadingQrCode}
                   className="w-full flex items-center justify-center gap-2 bg-neutral-100 dark:bg-neutral-700 hover:bg-neutral-200 dark:hover:bg-neutral-600 rounded-lg p-4 transition-colors"
                   data-testid="show-qr-button"

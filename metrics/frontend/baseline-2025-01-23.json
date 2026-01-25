@@ -1,0 +1,406 @@
+{
+  "timestamp": "2026-01-23T15:41:52.923893",
+  "metrics": {
+    "file_sizes": {
+      "violations": [
+        [
+          "ushadow/frontend/src/pages/KubernetesClustersPage.tsx",
+          722,
+          600
+        ],
+        [
+          "ushadow/frontend/src/pages/ClusterPage.tsx",
+          1578,
+          600
+        ],
+        [
+          "ushadow/frontend/src/pages/ServicesPage.tsx",
+          1647,
+          600
+        ],
+        [
+          "ushadow/frontend/src/pages/SpeakerRecognitionPage.tsx",
+          619,
+          600
+        ],
+        [
+          "ushadow/frontend/src/pages/ServiceConfigsPage.tsx",
+          1868,
+          600
+        ],
+        [
+          "ushadow/frontend/src/pages/TimelinePage.tsx",
+          890,
+          600
+        ],
+        [
+          "ushadow/frontend/src/components/DeployModal.tsx",
+          557,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/ColorSystemPreview.tsx",
+          1136,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/ImportFromGitHubModal.tsx",
+          1350,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/settings/UnifiedServiceSettings.tsx",
+          310,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/layout/FeatureFlagsDrawer.tsx",
+          352,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/layout/Layout.tsx",
+          681,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/ServiceInstanceCard.tsx",
+          347,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/WiringBoard.tsx",
+          1232,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/SystemOverview.tsx",
+          326,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/ProviderConfigDropdown.tsx",
+          877,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/ProviderConfigForm.tsx",
+          374,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/FlatServiceCard.tsx",
+          702,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/ServiceTemplateCard.tsx",
+          301,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/chronicle/ChronicleRecording.tsx",
+          301,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/chronicle/ChronicleQueue.tsx",
+          1230,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/chronicle/ChronicleConversations.tsx",
+          731,
+          300
+        ],
+        [
+          "ushadow/frontend/src/components/services/ServiceConfigForm.tsx",
+          599,
+          300
+        ]
+      ],
+      "total_files": 72,
+      "violation_count": 23,
+      "violation_rate": 0.3194444444444444,
+      "largest_file": [
+        "ushadow/frontend/src/pages/ServiceConfigsPage.tsx",
+        1868
+      ],
+      "top_5_largest": [
+        [
+          "ushadow/frontend/src/pages/ServiceConfigsPage.tsx",
+          1868
+        ],
+        [
+          "ushadow/frontend/src/pages/ServicesPage.tsx",
+          1647
+        ],
+        [
+          "ushadow/frontend/src/pages/ClusterPage.tsx",
+          1578
+        ],
+        [
+          "ushadow/frontend/src/components/ImportFromGitHubModal.tsx",
+          1350
+        ],
+        [
+          "ushadow/frontend/src/components/wiring/WiringBoard.tsx",
+          1232
+        ]
+      ]
+    },
+    "testid_coverage": {
+      "total_interactive_elements": 953,
+      "elements_with_testid": 345,
+      "coverage_rate": 0.3620146904512067,
+      "files_without_testids": [
+        "ushadow/frontend/src/components/SlideOutPanel.tsx",
+        "ushadow/frontend/src/components/JsonTreeViewer.tsx",
+        "ushadow/frontend/src/components/ImportFromGitHubModal.tsx",
+        "ushadow/frontend/src/components/EnvVarEditor.tsx",
+        "ushadow/frontend/src/components/Modal.tsx",
+        "ushadow/frontend/src/components/ErrorBoundary.tsx",
+        "ushadow/frontend/src/components/AddServiceModal.tsx",
+        "ushadow/frontend/src/pages/AgentZeroPage.tsx",
+        "ushadow/frontend/src/pages/N8NPage.tsx",
+        "ushadow/frontend/src/pages/MCPPage.tsx"
+      ],
+      "worst_coverage_files": [
+        [
+          "ushadow/frontend/src/components/SlideOutPanel.tsx",
+          0,
+          4,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/components/JsonTreeViewer.tsx",
+          0,
+          1,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/components/ImportFromGitHubModal.tsx",
+          0,
+          63,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/components/EnvVarEditor.tsx",
+          0,
+          6,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/components/Modal.tsx",
+          0,
+          4,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/components/ErrorBoundary.tsx",
+          0,
+          6,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/components/AddServiceModal.tsx",
+          0,
+          12,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/pages/AgentZeroPage.tsx",
+          0,
+          2,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/pages/N8NPage.tsx",
+          0,
+          2,
+          0.0
+        ],
+        [
+          "ushadow/frontend/src/pages/MCPPage.tsx",
+          0,
+          2,
+          0.0
+        ]
+      ]
+    },
+    "component_reuse": {
+      "component_usage": {
+        "Modal": 10,
+        "SecretInput": 11,
+        "SettingField": 7,
+        "ConfirmDialog": 2
+      },
+      "total_shared_component_usage": 30,
+      "forbidden_pattern_violations": {
+        "inline_state_management": [
+          {
+            "file": "ushadow/frontend/src/contexts/ServicesContext.tsx",
+            "count": 2
+          },
+          {
+            "file": "ushadow/frontend/src/contexts/WizardContext.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/ImportFromGitHubModal.tsx",
+            "count": 3
+          },
+          {
+            "file": "ushadow/frontend/src/wizards/SpeakerRecognitionWizard.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/wizards/TailscaleWizard.tsx",
+            "count": 2
+          },
+          {
+            "file": "ushadow/frontend/src/wizards/LocalServicesWizard.tsx",
+            "count": 2
+          },
+          {
+            "file": "ushadow/frontend/src/pages/KubernetesClustersPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/SettingsPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/ChroniclePage.tsx",
+            "count": 3
+          },
+          {
+            "file": "ushadow/frontend/src/pages/InterfacesPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/ClusterPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/SpeakerRecognitionPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/MemoriesPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/TimelinePage.tsx",
+            "count": 4
+          },
+          {
+            "file": "ushadow/frontend/src/components/wiring/ProviderConfigForm.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/chronicle/ChronicleQueue.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/services/ServiceConfigForm.tsx",
+            "count": 2
+          }
+        ],
+        "custom_modal": [
+          {
+            "file": "ushadow/frontend/src/components/SlideOutPanel.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/ImportFromGitHubModal.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/Modal.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/AddServiceModal.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/LoginPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/KubernetesClustersPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/SettingsPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/RegistrationPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/ClusterPage.tsx",
+            "count": 4
+          },
+          {
+            "file": "ushadow/frontend/src/pages/ServicesPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/ErrorPage.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/pages/MemoriesPage.tsx",
+            "count": 2
+          },
+          {
+            "file": "ushadow/frontend/src/components/layout/FeatureFlagsDrawer.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/wiring/WiringBoard.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/chronicle/ChronicleQueue.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/memories/MemoryTable.tsx",
+            "count": 1
+          },
+          {
+            "file": "ushadow/frontend/src/components/services/PortConflictDialog.tsx",
+            "count": 1
+          }
+        ]
+      },
+      "forbidden_pattern_count": 49
+    },
+    "hook_extraction": {
+      "total_components": 72,
+      "components_with_hooks": 7,
+      "local_hooks": 2,
+      "imported_hooks": 7,
+      "extraction_rate": 0.7777777777777778,
+      "components_needing_extraction": []
+    },
+    "import_quality": {
+      "total_files": 88,
+      "files_with_relative_imports": 61,
+      "files_with_unorganized_imports": 78,
+      "relative_import_rate": 0.6931818181818182
+    },
+    "code_reuse": {
+      "commits_analyzed": 20,
+      "new_components_created": 27,
+      "components_modified": -151,
+      "reuse_rate": 0
+    }
+  },
+  "health_score": 42.7,
+  "grade": "F"
+}

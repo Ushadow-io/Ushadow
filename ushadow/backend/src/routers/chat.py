@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.services.llm_client import get_llm_client
-from src.config.omegaconf_settings import get_settings_store
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -76,7 +76,7 @@ async def fetch_memory_context(
     Returns:
         List of relevant memory strings
     """
-    settings = get_settings_store()
+    settings = get_settings()
     memory_url = await settings.get(
         "infrastructure.openmemory_server_url",
         "http://localhost:8765"
@@ -111,7 +111,7 @@ async def fetch_memory_context(
 
 async def check_memory_available() -> bool:
     """Check if OpenMemory service is available."""
-    settings = get_settings_store()
+    settings = get_settings()
     memory_url = await settings.get(
         "infrastructure.openmemory_server_url",
         "http://localhost:8765"

@@ -338,6 +338,135 @@ def cmd_service_env_export(args):
     return 0
 
 
+def cmd_instance_list(args):
+    """List all service instances."""
+    result = api_request("/api/svc-configs", auth=True)
+
+    if isinstance(result, dict) and result.get("error"):
+        print(f"❌ Error: {result.get('detail')}")
+        return 1
+
+    instances = result if isinstance(result, list) else []
+    if not instances:
+        print("No instances found")
+        return 0
+
+    print(f"{'Name':<40} {'Template':<30} {'Target':<20} {'Status'}")
+    print("-" * 120)
+    for inst in instances:
+        name = inst.get("name", "unknown")[:39]
+        template = inst.get("template_id", "unknown")[:29]
+        target = inst.get("deployment_target", "unknown")[:19]
+        status = inst.get("status", "unknown")
+
+        # Status icon
+        if status == "running":
+            status_icon = "🟢"
+        elif status in ("stopped", "failed"):
+            status_icon = "🔴"
+        else:
+            status_icon = "🟡"
+
+        print(f"{name:<40} {template:<30} {target:<20} {status_icon} {status}")
+    return 0
+
+
+def cmd_instance_get(args):
+    """Get details of a specific instance."""
+    instance_id = args.instance_id
+    result = api_request(f"/api/svc-configs/{instance_id}", auth=True)
+
+    if result.get("error"):
+        print(f"❌ Error: {result.get('detail')}")
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_instance_create(args):
+    """Create a new service instance."""
+    data = {
+        "id": args.id,
+        "template_id": args.template_id,
+        "name": args.name,
+        "deployment_target": args.target,
+        "config": {}
+    }
+
+    if args.description:
+        data["description"] = args.description
+
+    if args.config:
+        try:
+            data["config"] = json.loads(args.config)
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid config JSON: {e}")
+            return 1
+
+    print(f"📦 Creating instance '{args.id}' ({args.name}) from template '{args.template_id}'...")
+    result = api_request("/api/svc-configs", method="POST", data=data, auth=True)
+
+    if result.get("error"):
+        print(f"❌ Error: {result.get('detail')}")
+        return 1
+
+    print(f"✅ Instance created: {result.get('id')}")
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_instance_delete(args):
+    """Delete a service instance."""
+    instance_id = args.instance_id
+
+    if not args.yes:
+        response = input(f"⚠️  Delete instance '{instance_id}'? [y/N] ")
+        if response.lower() not in ('y', 'yes'):
+            print("Cancelled")
+            return 0
+
+    print(f"🗑️  Deleting instance '{instance_id}'...")
+    result = api_request(f"/api/svc-configs/{instance_id}", method="DELETE", auth=True)
+
+    if result.get("error"):
+        print(f"❌ Error: {result.get('detail')}")
+        return 1
+
+    print(f"✅ Instance deleted")
+    return 0
+
+
+def cmd_instance_deploy(args):
+    """Deploy an instance."""
+    instance_id = args.instance_id
+    print(f"🚀 Deploying instance '{instance_id}'...")
+    result = api_request(f"/api/svc-configs/{instance_id}/deploy", method="POST", auth=True)
+
+    if result.get("error"):
+        print(f"❌ Error: {result.get('detail')}")
+        return 1
+
+    print(f"✅ Instance deployed")
+    if result.get("message"):
+        print(f"   {result['message']}")
+    return 0
+
+
+def cmd_instance_undeploy(args):
+    """Undeploy an instance."""
+    instance_id = args.instance_id
+    print(f"🛑 Undeploying instance '{instance_id}'...")
+    result = api_request(f"/api/svc-configs/{instance_id}/undeploy", method="POST", auth=True)
+
+    if result.get("error"):
+        print(f"❌ Error: {result.get('detail')}")
+        return 1
+
+    print(f"✅ Instance undeployed")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="ushadow API Client")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
@@ -381,6 +510,45 @@ def main():
     env_export_parser.add_argument("-o", "--output", help="Output file (default: .env.<service>)")
     env_export_parser.set_defaults(func=cmd_service_env_export)
 
+    # Instance command group
+    instance_parser = subparsers.add_parser("instance", help="Instance management")
+    instance_subparsers = instance_parser.add_subparsers(dest="instance_command")
+
+    # instance list
+    inst_list_parser = instance_subparsers.add_parser("list", help="List all instances")
+    inst_list_parser.set_defaults(func=cmd_instance_list)
+
+    # instance get <id>
+    inst_get_parser = instance_subparsers.add_parser("get", help="Get instance details")
+    inst_get_parser.add_argument("instance_id", help="Instance ID")
+    inst_get_parser.set_defaults(func=cmd_instance_get)
+
+    # instance create <id> <template_id> <name> <target> [options]
+    inst_create_parser = instance_subparsers.add_parser("create", help="Create new instance")
+    inst_create_parser.add_argument("id", help="Instance ID (lowercase, alphanumeric with hyphens)")
+    inst_create_parser.add_argument("template_id", help="Template ID (e.g., ushadow-compose:ushadow-backend)")
+    inst_create_parser.add_argument("name", help="Instance name (display name)")
+    inst_create_parser.add_argument("target", help="Deployment target (e.g., k8s://cluster-id/namespace or local)")
+    inst_create_parser.add_argument("-d", "--description", help="Instance description")
+    inst_create_parser.add_argument("-c", "--config", help="Config as JSON string")
+    inst_create_parser.set_defaults(func=cmd_instance_create)
+
+    # instance delete <id>
+    inst_delete_parser = instance_subparsers.add_parser("delete", help="Delete instance")
+    inst_delete_parser.add_argument("instance_id", help="Instance ID")
+    inst_delete_parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
+    inst_delete_parser.set_defaults(func=cmd_instance_delete)
+
+    # instance deploy <id>
+    inst_deploy_parser = instance_subparsers.add_parser("deploy", help="Deploy instance")
+    inst_deploy_parser.add_argument("instance_id", help="Instance ID")
+    inst_deploy_parser.set_defaults(func=cmd_instance_deploy)
+
+    # instance undeploy <id>
+    inst_undeploy_parser = instance_subparsers.add_parser("undeploy", help="Undeploy instance")
+    inst_undeploy_parser.add_argument("instance_id", help="Instance ID")
+    inst_undeploy_parser.set_defaults(func=cmd_instance_undeploy)
+
     args = parser.parse_args()
 
     if not args.command:
@@ -389,6 +557,10 @@ def main():
 
     if args.command == "service" and not args.service_command:
         service_parser.print_help()
+        return 1
+
+    if args.command == "instance" and not args.instance_command:
+        instance_parser.print_help()
         return 1
 
     # Set verbose mode

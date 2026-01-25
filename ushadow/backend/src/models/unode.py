@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class UNodeRole(str, Enum):
@@ -30,9 +30,16 @@ class UNodePlatform(str, Enum):
     UNKNOWN = "unknown"
 
 
+class UNodeType(str, Enum):
+    """Type of deployment target."""
+    DOCKER = "docker"        # Traditional Docker host (worker/leader)
+    KUBERNETES = "kubernetes"  # Kubernetes cluster
+
+
 class UNodeCapabilities(BaseModel):
     """Capabilities of a u-node."""
     can_run_docker: bool = True
+    can_run_kubernetes: bool = False
     can_run_gpu: bool = False
     can_become_leader: bool = False
     available_memory_mb: int = 0
@@ -42,8 +49,9 @@ class UNodeCapabilities(BaseModel):
 
 class UNodeBase(BaseModel):
     """Base u-node model."""
-    hostname: str = Field(..., description="Tailscale hostname")
+    hostname: str = Field(..., description="Tailscale hostname or K8s cluster ID")
     display_name: Optional[str] = None
+    type: UNodeType = Field(UNodeType.DOCKER, description="Deployment target type")
     role: UNodeRole = UNodeRole.WORKER
     platform: UNodePlatform = UNodePlatform.UNKNOWN
     tailscale_ip: Optional[str] = None
@@ -70,6 +78,18 @@ class UNode(UNodeBase):
     services: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def deployment_target_id(self) -> str:
+        """
+        Get unified deployment target ID.
+
+        Format: {hostname}.unode.{environment}
+        Example: "ushadow-purple.unode.purple"
+        """
+        from src.utils.deployment_targets import make_deployment_target_id
+        return make_deployment_target_id(self.hostname, "unode")
 
     class Config:
         from_attributes = True

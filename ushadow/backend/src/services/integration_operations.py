@@ -2,18 +2,18 @@
 Integration Operations Service
 
 Handles integration-specific operations like connection testing, syncing, and state management.
-This service works with the InstanceManager for CRUD operations and adds integration-specific logic.
+This service works with the ServiceConfigManager for CRUD operations and adds integration-specific logic.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Tuple, Optional
 
-from src.models.instance import Instance
+from src.models.service_config import ServiceConfig
 from src.models.integration import IntegrationConfig, ConnectionConfig, AuthConfig, AuthMethod
 from src.memory.adapters.base import MemoryAdapter
 from src.memory.adapters.factory import AdapterFactory
-from .instance_manager import InstanceManager, get_instance_manager
+from .service_config_manager import ServiceConfigManager, get_service_config_manager
 
 logger = logging.getLogger(__name__)
 
@@ -28,31 +28,31 @@ class IntegrationOperations:
     - State tracking
     """
 
-    def __init__(self, instance_manager: Optional[InstanceManager] = None):
+    def __init__(self, instance_manager: Optional[ServiceConfigManager] = None):
         """
         Initialize integration operations.
 
         Args:
-            instance_manager: Instance manager (defaults to singleton)
+            instance_manager: ServiceConfig manager (defaults to singleton)
         """
-        self.instance_manager = instance_manager or get_instance_manager()
+        self.instance_manager = instance_manager or get_service_config_manager()
 
-    async def test_connection(self, instance_id: str) -> Tuple[bool, str]:
+    async def test_connection(self, config_id: str) -> Tuple[bool, str]:
         """
         Test connection to an integration.
 
         Args:
-            instance_id: ID of the integration instance
+            config_id: ID of the integration instance
 
         Returns:
             Tuple of (success: bool, message: str)
         """
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_service_config(config_id)
         if not instance:
-            return False, f"Instance '{instance_id}' not found"
+            return False, f"ServiceConfig '{config_id}' not found"
 
         if not instance.integration_type:
-            return False, f"Instance '{instance_id}' is not an integration"
+            return False, f"ServiceConfig '{config_id}' is not an integration"
 
         try:
             # Create adapter for this integration
@@ -62,22 +62,22 @@ class IntegrationOperations:
             success = await adapter.test_connection()
 
             if success:
-                logger.info(f"Connection test successful for integration '{instance_id}'")
+                logger.info(f"Connection test successful for integration '{config_id}'")
                 return True, "Connection successful"
             else:
-                logger.warning(f"Connection test failed for integration '{instance_id}'")
+                logger.warning(f"Connection test failed for integration '{config_id}'")
                 return False, "Connection failed"
 
         except Exception as e:
-            logger.error(f"Connection test error for '{instance_id}': {e}")
+            logger.error(f"Connection test error for '{config_id}': {e}")
             return False, f"Connection error: {str(e)}"
 
-    async def sync_now(self, instance_id: str) -> Dict[str, Any]:
+    async def sync_now(self, config_id: str) -> Dict[str, Any]:
         """
         Trigger immediate sync for an integration.
 
         Args:
-            instance_id: ID of the integration instance
+            config_id: ID of the integration instance
 
         Returns:
             Dict with sync results: {
@@ -87,19 +87,19 @@ class IntegrationOperations:
                 "error": str (if failed)
             }
         """
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_service_config(config_id)
         if not instance:
-            return {"success": False, "error": f"Instance '{instance_id}' not found"}
+            return {"success": False, "error": f"ServiceConfig '{config_id}' not found"}
 
         if not instance.integration_type:
-            return {"success": False, "error": f"Instance '{instance_id}' is not an integration"}
+            return {"success": False, "error": f"ServiceConfig '{config_id}' is not an integration"}
 
         # Update status to syncing
         instance.last_sync_status = "in_progress"
-        self.instance_manager._save_instances()
+        self.instance_manager._save_service_configs()
 
         try:
-            logger.info(f"Starting sync for integration '{instance_id}'")
+            logger.info(f"Starting sync for integration '{config_id}'")
 
             # Create adapter and fetch items
             adapter = await self._create_adapter(instance)
@@ -125,9 +125,9 @@ class IntegrationOperations:
             if instance.sync_enabled and instance.sync_interval:
                 instance.next_sync_at = now + timedelta(seconds=instance.sync_interval)
 
-            self.instance_manager._save_instances()
+            self.instance_manager._save_service_configs()
 
-            logger.info(f"Sync completed for '{instance_id}': {saved_count} items")
+            logger.info(f"Sync completed for '{config_id}': {saved_count} items")
 
             return {
                 "success": True,
@@ -136,34 +136,34 @@ class IntegrationOperations:
             }
 
         except Exception as e:
-            logger.error(f"Sync failed for '{instance_id}': {e}")
+            logger.error(f"Sync failed for '{config_id}': {e}")
 
             # Update error status
             instance.last_sync_status = "error"
             instance.last_sync_error = str(e)
-            self.instance_manager._save_instances()
+            self.instance_manager._save_service_configs()
 
             return {
                 "success": False,
                 "error": str(e)
             }
 
-    async def enable_auto_sync(self, instance_id: str) -> Tuple[bool, str]:
+    async def enable_auto_sync(self, config_id: str) -> Tuple[bool, str]:
         """
         Enable automatic syncing for an integration.
 
         Args:
-            instance_id: ID of the integration instance
+            config_id: ID of the integration instance
 
         Returns:
             Tuple of (success: bool, message: str)
         """
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_service_config(config_id)
         if not instance:
-            return False, f"Instance '{instance_id}' not found"
+            return False, f"ServiceConfig '{config_id}' not found"
 
         if not instance.integration_type:
-            return False, f"Instance '{instance_id}' is not an integration"
+            return False, f"ServiceConfig '{config_id}' is not an integration"
 
         if not instance.sync_interval:
             return False, "Sync interval not configured. Set sync_interval first."
@@ -177,51 +177,51 @@ class IntegrationOperations:
             # Never synced, schedule for now + interval
             instance.next_sync_at = datetime.now(timezone.utc) + timedelta(seconds=instance.sync_interval)
 
-        self.instance_manager._save_instances()
+        self.instance_manager._save_service_configs()
 
-        logger.info(f"Auto-sync enabled for '{instance_id}', interval: {instance.sync_interval}s")
+        logger.info(f"Auto-sync enabled for '{config_id}', interval: {instance.sync_interval}s")
         return True, "Auto-sync enabled"
 
-    async def disable_auto_sync(self, instance_id: str) -> Tuple[bool, str]:
+    async def disable_auto_sync(self, config_id: str) -> Tuple[bool, str]:
         """
         Disable automatic syncing for an integration.
 
         Args:
-            instance_id: ID of the integration instance
+            config_id: ID of the integration instance
 
         Returns:
             Tuple of (success: bool, message: str)
         """
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_service_config(config_id)
         if not instance:
-            return False, f"Instance '{instance_id}' not found"
+            return False, f"ServiceConfig '{config_id}' not found"
 
         if not instance.integration_type:
-            return False, f"Instance '{instance_id}' is not an integration"
+            return False, f"ServiceConfig '{config_id}' is not an integration"
 
         instance.sync_enabled = False
         instance.next_sync_at = None
-        self.instance_manager._save_instances()
+        self.instance_manager._save_service_configs()
 
-        logger.info(f"Auto-sync disabled for '{instance_id}'")
+        logger.info(f"Auto-sync disabled for '{config_id}'")
         return True, "Auto-sync disabled"
 
-    def get_sync_status(self, instance_id: str) -> Dict[str, Any]:
+    def get_sync_status(self, config_id: str) -> Dict[str, Any]:
         """
         Get current sync status for an integration.
 
         Args:
-            instance_id: ID of the integration instance
+            config_id: ID of the integration instance
 
         Returns:
             Dict with sync status information
         """
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_service_config(config_id)
         if not instance:
-            return {"error": f"Instance '{instance_id}' not found"}
+            return {"error": f"ServiceConfig '{config_id}' not found"}
 
         if not instance.integration_type:
-            return {"error": f"Instance '{instance_id}' is not an integration"}
+            return {"error": f"ServiceConfig '{config_id}' is not an integration"}
 
         return {
             "integration_id": instance.id,
@@ -235,7 +235,7 @@ class IntegrationOperations:
             "next_sync_at": instance.next_sync_at.isoformat() if instance.next_sync_at else None,
         }
 
-    async def _create_adapter(self, instance: Instance) -> MemoryAdapter:
+    async def _create_adapter(self, instance: ServiceConfig) -> MemoryAdapter:
         """
         Create appropriate memory adapter for an integration instance.
 

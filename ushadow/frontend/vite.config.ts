@@ -10,12 +10,13 @@ export default defineConfig({
     // Disable host check - we're behind Tailscale auth
     allowedHosts: true,
     hmr: {
-      // Don't specify clientPort or host - Vite auto-detects from window.location
-      // This allows HMR to work on localhost:3100 AND via Tailscale (port 443)
-      // Tailscale proxies WebSocket through the same port as HTTPS
+      // Don't set clientPort - let Vite auto-detect from page URL
+      // This works for both localhost:3400 and Tailscale HTTPS (port 443)
+      // VITE_HMR_PORT env var is ignored to support both access methods
     },
     watch: {
       usePolling: true, // Required for Docker volume mounts
+      interval: 1000, // Poll every 1 second for faster detection
     },
   },
   preview: {

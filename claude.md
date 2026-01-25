@@ -2,6 +2,78 @@
 - There may be multiple environments running simultaneously using different worktrees. To determine the corren environment, you can get port numbers and env name from the root .env file.
 - When refactoring module names, run `grep -r "old_module_name" .` before committing to catch all remaining references (especially entry points like `main.py`). Use `__init__.py` re-exports for backward compatibility.
 
+## Backend Development Workflow
+
+**BEFORE writing ANY backend code, follow this workflow:**
+
+### Step 1: Read Backend Quick Reference
+Read `ushadow/backend/BACKEND_QUICK_REF.md` - it's ~1000 tokens and covers all available services, patterns, and architecture rules.
+
+### Step 2: Search for Existing Code
+```bash
+# Search for existing methods before creating new ones
+grep -rn "async def method_name" ushadow/backend/src/services/
+grep -rn "class ClassName" ushadow/backend/src/
+
+# Check available services
+cat ushadow/backend/src/services/__init__.py
+
+# Check backend index (method/class reference)
+cat ushadow/backend/src/backend_index.py
+```
+
+### Step 3: Check Architecture
+Read `ushadow/backend/src/ARCHITECTURE.md` for:
+- Layer definitions (router/service/store)
+- Naming conventions (Manager/Registry/Store)
+- Data flow patterns
+
+### Step 4: Follow Patterns
+- **Routers**: Thin HTTP adapters (max 30 lines per endpoint, max 500 lines per file)
+- **Services**: Business logic, return data not HTTP responses (max 800 lines per file)
+- **Stores**: Data persistence (YAML/DB access)
+- **Utils**: Pure functions, stateless (max 300 lines per file)
+
+### File Size Limits (Ruff enforced)
+- **Routers**: Max 500 lines → Split by resource domain
+- **Services**: Max 800 lines → Extract helper services
+- **Utils**: Max 300 lines → Split into focused modules
+- **Complexity**: Max 10 (McCabe), max 5 parameters per function
+
+### What NOT to Do
+- ❌ Business logic in routers → Move to services
+- ❌ `raise HTTPException` in services → Return data/None, let router handle HTTP
+- ❌ Direct DB/file access in routers → Use services/stores
+- ❌ Nested functions >50 lines → Extract to methods/utilities
+- ❌ Methods with >5 params → Use Pydantic models
+- ❌ Skip layer architecture → Follow router→service→store flow
+
+## CRITICAL Frontend Development Rules
+
+**MANDATORY: Every frontend change MUST include `data-testid` attributes for ALL interactive elements.**
+
+### Pre-Flight Checklist for Frontend Code
+
+Before completing ANY frontend development task, you MUST:
+
+1. ✅ **Add `data-testid` to ALL interactive elements** (buttons, inputs, links, tabs, forms, modals)
+2. ✅ **Update corresponding POM** if adding new pages/workflows (in `frontend/e2e/pom/`)
+3. ✅ **Follow naming conventions** (see table below - use kebab-case, not camelCase)
+4. ✅ **Verify test IDs are present** by running: `grep -r "data-testid" <your-new-file.tsx>`
+
+### Enforcement
+
+- **DO NOT** mark frontend tasks as complete without data-testid attributes
+- **DO NOT** use `id` attributes for testing - only `data-testid`
+- **DO NOT** skip this even for "quick fixes" or "simple changes"
+
+### Why This Matters
+
+Without `data-testid`:
+- E2E tests break when UI text changes
+- Tests become fragile and flaky
+- Debugging is harder (no semantic selectors)
+- Our automation agents can't write reliable tests
 ## Service Integration
 
 **CRITICAL**: Before adding any service integration endpoints, read `docs/SERVICE-INTEGRATION-CHECKLIST.md`.

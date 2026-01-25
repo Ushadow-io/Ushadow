@@ -1,7 +1,10 @@
-import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle } from 'lucide-react'
+import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { settingsApi } from '../services/api'
 import { JsonTreeViewer } from '../components/JsonTreeViewer'
+import { StatusBadge } from '../components/StatusBadge'
+import { RequiredFieldsSection, UnifiedServiceSettings } from '../components/settings'
+import { WizardFormProvider } from '../contexts/WizardFormContext'
 
 interface ApiKey {
   name: string
@@ -21,7 +24,7 @@ interface ServiceEnvConfig {
 }
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState('api-keys')
+  const [activeTab, setActiveTab] = useState('required-fields')
   const [config, setConfig] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -92,6 +95,8 @@ export default function SettingsPage() {
   }
 
   const tabs = [
+    { id: 'required-fields', label: 'Required Fields', icon: AlertCircle },
+    { id: 'all-services', label: 'All Services', icon: Settings },
     { id: 'api-keys', label: 'API Keys', icon: Key },
     { id: 'providers', label: 'Providers', icon: Server },
     { id: 'service-config', label: 'Service Config', icon: Database },
@@ -111,17 +116,21 @@ export default function SettingsPage() {
   // Extract selected providers
   const selectedProviders = config?.selected_providers || {}
 
-  // Extract service env configs
-  const serviceEnvConfigs: ServiceEnvConfig[] = config?.service_env_config
-    ? Object.entries(config.service_env_config).map(([serviceKey, envConfig]: [string, any]) => ({
-        serviceId: serviceKey.replace('_', ':'),
-        serviceName: serviceKey.split('_').pop() || serviceKey,
-        envVars: Object.entries(envConfig || {}).map(([name, conf]: [string, any]) => ({
-          name,
-          source: conf?.source || 'unknown',
-          settingPath: conf?.setting_path,
-          value: conf?.value,
-        })),
+  // Extract service env configs from new structure: services.{service_id}
+  const serviceEnvConfigs: ServiceEnvConfig[] = config?.services
+    ? Object.entries(config.services).map(([serviceId, envConfig]: [string, any]) => ({
+        serviceId: serviceId,
+        serviceName: serviceId.split(':').pop() || serviceId,
+        envVars: Object.entries(envConfig || {}).map(([name, value]: [string, any]) => {
+          // Parse new format: direct value or @settings.path mapping
+          const isMapping = typeof value === 'string' && value.startsWith('@settings.')
+          return {
+            name,
+            source: isMapping ? 'setting' : 'literal',
+            settingPath: isMapping ? value.substring(10) : undefined, // Remove '@settings.' prefix
+            value: isMapping ? undefined : value,
+          }
+        }),
       }))
     : []
 
@@ -141,6 +150,7 @@ export default function SettingsPage() {
           <div className="flex items-center space-x-2">
             <Settings className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
             <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Settings</h1>
+            <StatusBadge variant="needs-updating" testId="badge-settings-page" />
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             View saved configuration
@@ -227,6 +237,26 @@ export default function SettingsPage() {
           ))}
         </div>
       </div>
+
+      {/* Required Fields Tab */}
+      {activeTab === 'required-fields' && (
+        <div className="space-y-4" data-testid="required-fields-tab">
+          <div className="card p-6">
+            <WizardFormProvider>
+              <RequiredFieldsSection onSave={loadConfig} />
+            </WizardFormProvider>
+          </div>
+        </div>
+      )}
+
+      {/* All Services Tab */}
+      {activeTab === 'all-services' && (
+        <div className="space-y-4" data-testid="all-services-tab">
+          <div className="card p-6">
+            <UnifiedServiceSettings />
+          </div>
+        </div>
+      )}
 
       {/* API Keys Tab */}
       {activeTab === 'api-keys' && (

@@ -4,9 +4,8 @@
  * API client for fetching conversations and memories from the Chronicle backend.
  */
 
-import { getAuthToken, getApiUrl, getDefaultServerUrl } from '../utils/authStorage';
-import { getActiveUnode } from '../utils/unodeStorage';
-import AppConfig from '../config';
+import { getAuthToken, getApiUrl } from '../_utils/authStorage';
+import { getActiveUnode } from '../_utils/unodeStorage';
 
 // Types matching Chronicle backend responses
 export interface Conversation {
@@ -154,7 +153,7 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
       console.log('[ChronicleAPI] Token invalid or expired - clearing auth and prompting re-login');
 
       // Clear the invalid token from storage
-      const { clearAuthToken } = await import('../utils/authStorage');
+      const { clearAuthToken } = await import('../_utils/authStorage');
       await clearAuthToken();
 
       throw new Error('Authentication expired. Please scan QR code to reconnect.');

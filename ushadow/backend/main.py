@@ -11,6 +11,7 @@ load_dotenv(find_dotenv(usecwd=True))
 import asyncio
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from beanie import init_beanie
@@ -20,8 +21,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from src.models.user import User  # Beanie document model
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
-from src.routers import services, deployments, providers, instances, chat
-from src.routers import kubernetes, tailscale, unodes, docker
+from src.routers import services, deployments, providers, service_configs, chat
+from src.routers import kubernetes, tailscale, unodes, docker, sse
+from src.routers import github_import, audio_relay, audio_provider
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -29,9 +31,9 @@ from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
-from src.config.omegaconf_settings import get_settings_store
+from src.config import get_settings_store
 from src.utils.telemetry import TelemetryClient
-import threading
+from src.utils.version import VERSION as BACKEND_VERSION
 
 # Configure logging
 logging.basicConfig(
@@ -40,8 +42,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Version and telemetry configuration
-BACKEND_VERSION = "0.1.0"
+# Telemetry configuration
 TELEMETRY_ENDPOINT = os.environ.get(
     "TELEMETRY_ENDPOINT",
     "https://ushadow-telemetry.your-subdomain.workers.dev"
@@ -157,7 +158,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ushadow API",
     description="AI Orchestration Platform",
-    version="0.1.0",
+    version=BACKEND_VERSION or "0.1.0",
     lifespan=lifespan
 )
 
@@ -176,10 +177,14 @@ app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
-app.include_router(instances.router, tags=["instances"])
+app.include_router(service_configs.router, tags=["service-configs"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
+app.include_router(sse.router, prefix="/api/sse", tags=["sse"])
+app.include_router(github_import.router, prefix="/api/github-import", tags=["github-import"])
+app.include_router(audio_relay.router, tags=["audio"])
+app.include_router(audio_provider.router, tags=["providers"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)
@@ -190,6 +195,15 @@ async def root():
     """Root endpoint."""
     return {
         "name": "ushadow API",
-        "version": "0.1.0",
+        "version": BACKEND_VERSION or "0.1.0",
         "status": "running"
+    }
+
+
+@app.get("/api/version")
+async def get_version():
+    """Get application version information."""
+    return {
+        "version": BACKEND_VERSION or "0.1.0",
+        "api_version": "v1"
     }
