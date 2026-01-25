@@ -8,7 +8,6 @@ import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
 import { EnvironmentsPanel } from './components/EnvironmentsPanel'
-import { FoldersPanel } from './components/FoldersPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
@@ -1598,12 +1597,6 @@ function App() {
                 Install prerequisites and configure your single environment
               </p>
             </div>
-
-            <FoldersPanel
-              projectRoot={projectRoot}
-              worktreesDir={worktreesDir}
-              onEditFolders={() => setShowProjectDialog(true)}
-            />
 
             {/* Prerequisites and Infrastructure Side-by-Side */}
             <div className="grid grid-cols-2 gap-4">
