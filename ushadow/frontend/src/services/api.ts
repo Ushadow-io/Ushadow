@@ -699,6 +699,21 @@ export const deploymentsApi = {
   removeDeployment: (deploymentId: string) => api.delete(`/api/deployments/${deploymentId}`),
   getDeploymentLogs: (deploymentId: string, tail?: number) =>
     api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
+
+  // Exposed URLs for service discovery
+  getExposedUrls: (params?: { type?: string; name?: string }) =>
+    api.get<ExposedUrl[]>('/api/deployments/exposed-urls', { params }),
+}
+
+// Exposed URL types (for service discovery)
+export interface ExposedUrl {
+  instance_id: string
+  instance_name: string
+  url: string
+  type: string  // e.g., "audio", "http", etc.
+  name: string  // e.g., "audio_intake"
+  metadata: Record<string, any>
+  status: string  // e.g., "running"
 }
 
 // Tailscale Setup Wizard types
@@ -972,8 +987,9 @@ export const memoriesApi = {
       try {
         // Get connection info from mycelia service
         const response = await servicesApi.getConnectionInfo('mycelia')
-        if (response.data?.url) {
-          return response.data.url
+        // Use proxy_url for REST API access through backend (uses Docker service name internally)
+        if (response.data?.proxy_url) {
+          return response.data.proxy_url
         }
       } catch (err) {
         console.warn('Failed to get mycelia connection info:', err)
@@ -981,7 +997,20 @@ export const memoriesApi = {
       }
     }
 
-    // OpenMemory (mem0) - use settings or default
+    // OpenMemory (mem0) - check for mem0 service first, then fallback to settings
+    if (source === 'openmemory') {
+      try {
+        // Try to get connection info from mem0 service (uses Docker service name internally)
+        const response = await servicesApi.getConnectionInfo('mem0')
+        if (response.data?.proxy_url) {
+          return response.data.proxy_url
+        }
+      } catch (err) {
+        console.warn('mem0 service not found via connection-info, trying settings/localhost')
+      }
+    }
+
+    // Final fallback - use settings or default localhost
     try {
       const response = await settingsApi.getConfig()
       return response.data?.infrastructure?.openmemory_server_url || 'http://localhost:8765'

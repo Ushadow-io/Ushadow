@@ -32,7 +32,7 @@
  *   isOpen={isOpen}
  *   onClose={() => setIsOpen(false)}
  *   title="Confirm Action"
- *   maxWidth="sm"  // 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+ *   maxWidth="sm"  // 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl' | '6xl'
  *   testId="confirm-delete"
  * >
  *   <p>Are you sure?</p>

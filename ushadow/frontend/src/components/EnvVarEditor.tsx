@@ -174,12 +174,14 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
             <span className={`ml-auto px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
               config.source === 'env_file' ? 'bg-green-600/20 text-green-400' :
               config.source === 'capability' ? 'bg-blue-600/20 text-blue-400' :
+              config.source === 'infra' ? 'bg-cyan-600/20 text-cyan-400' :
               config.source === 'config_default' ? 'bg-purple-600/20 text-purple-400' :
               config.source === 'compose_default' ? 'bg-neutral-700 text-neutral-400' :
               'bg-neutral-700 text-neutral-400'
             }`}>
               {config.source === 'env_file' ? '.env' :
                config.source === 'capability' ? 'provider' :
+               config.source === 'infra' ? 'infra' :
                config.source === 'config_default' ? 'config' :
                config.source === 'compose_default' ? 'default' :
                config.source === 'default' ? 'default' :

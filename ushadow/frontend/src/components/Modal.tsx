@@ -8,16 +8,20 @@ interface ModalProps {
   title?: ReactNode
   titleIcon?: ReactNode
   children: ReactNode
-  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl' | '6xl'
   testId?: string
 }
 
 const maxWidthClasses = {
-  sm: 'max-w-sm',
-  md: 'max-w-md',
-  lg: 'max-w-lg',
-  xl: 'max-w-xl',
-  '2xl': 'max-w-2xl',
+  sm: 'max-w-sm',     // 24rem (384px)
+  md: 'max-w-md',     // 28rem (448px)
+  lg: 'max-w-lg',     // 32rem (512px)
+  xl: 'max-w-xl',     // 36rem (576px)
+  '2xl': 'max-w-2xl', // 42rem (672px)
+  '3xl': 'max-w-3xl', // 48rem (768px)
+  '4xl': 'max-w-4xl', // 56rem (896px)
+  '5xl': 'max-w-5xl', // 64rem (1024px)
+  '6xl': 'max-w-6xl', // 72rem (1152px)
 }
 
 /**

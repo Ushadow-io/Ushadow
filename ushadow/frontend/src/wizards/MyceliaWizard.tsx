@@ -89,8 +89,8 @@ export default function MyceliaWizard() {
       }
 
       // Check if already configured
-      const hasToken = settings.mycelia?.token
-      const hasClientId = settings.mycelia?.client_id
+      const hasToken = settings.api_keys?.mycelia_token
+      const hasClientId = settings.api_keys?.mycelia_client_id
 
       if (hasToken && hasClientId) {
         // Already configured - skip to complete step
@@ -156,10 +156,11 @@ export default function MyceliaWizard() {
       const response = await servicesApi.generateMyceliaToken()
       const { token, client_id } = response.data
 
-      // 5. Save token to settings
+      // 5. Save token and client_id to secrets.yml
+      // Use api_keys.* namespace to ensure both are saved to secrets.yml
       await settingsApi.update({
-        'mycelia.token': token,
-        'mycelia.client_id': client_id,
+        'api_keys.mycelia_token': token,
+        'api_keys.mycelia_client_id': client_id,
       })
 
       setTokenData({ token, clientId: client_id })

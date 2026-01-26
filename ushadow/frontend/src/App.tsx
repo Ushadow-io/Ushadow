@@ -31,6 +31,7 @@ import ErrorPage from './pages/ErrorPage'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import ChroniclePage from './pages/ChroniclePage'
+import RecordingPage from './pages/RecordingPage'
 import MCPPage from './pages/MCPPage'
 import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
@@ -103,6 +104,7 @@ function AppContent() {
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="wizard/mycelia" element={<MyceliaWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="recording" element={<RecordingPage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />

@@ -40,3 +40,13 @@ export type {
 
 export { useWiringActions } from './useWiringActions';
 export type { WiringConnection, UseWiringActionsResult } from './useWiringActions';
+
+// Service configuration page data hooks
+export { useServiceConfigData } from './useServiceConfigData';
+export type { ServiceConfigData, UseServiceConfigDataResult } from './useServiceConfigData';
+
+export { useServiceCatalog } from './useServiceCatalog';
+export type { UseServiceCatalogResult } from './useServiceCatalog';
+
+export { useDeploymentActions } from './useDeploymentActions';
+export type { UseDeploymentActionsResult } from './useDeploymentActions';

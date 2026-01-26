@@ -6,13 +6,13 @@
  * - 'batch': Microphone audio accumulated and sent when stopped
  * - 'dual-stream': Microphone + browser tab/screen audio mixed together
  *
- * Connects to wired audio consumers (Chronicle, Mycelia, etc.) based on
- * the wiring configuration in the Service Configs page.
+ * Discovers and connects to running audio consumer services (Chronicle, Mycelia, etc.)
+ * by querying /api/deployments/exposed-urls for services exposing audio intake endpoints.
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { getChronicleWebSocketUrl, getChronicleDirectUrl } from '../services/chronicleApi'
-import { audioApi, AudioDestination } from '../services/api'
+import { deploymentsApi, ExposedUrl, BACKEND_URL } from '../services/api'
 import { getStorageKey } from '../utils/storage'
 import { useDualStreamRecording } from '../modules/dual-stream-audio/hooks/useDualStreamRecording'
 import { ChronicleWebSocketAdapter } from '../modules/dual-stream-audio/adapters/chronicleAdapter'
@@ -37,6 +37,17 @@ export interface WebRecordingReturn {
   recordingDuration: number
   error: string | null
   mode: RecordingMode
+
+  // Destination selection
+  availableDestinations: ExposedUrl[]
+  selectedDestinationIds: string[]
+  toggleDestination: (id: string) => void
+
+  // Audio source detection
+  availableAudioDevices: MediaDeviceInfo[]
+  selectedAudioDeviceId: string | null
+  setSelectedAudioDevice: (deviceId: string) => void
+  isOmiDevice: boolean
 
   // Actions
   startRecording: () => Promise<void>
@@ -66,6 +77,86 @@ export const useWebRecording = (): WebRecordingReturn => {
     currentModeRef.current = mode
   }, [mode])
 
+  // Destination selection state
+  const [availableDestinations, setAvailableDestinations] = useState<ExposedUrl[]>([])
+  const [selectedDestinationIds, setSelectedDestinationIds] = useState<string[]>([])
+
+  // Audio device selection state
+  const [availableAudioDevices, setAvailableAudioDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState<string | null>(null)
+
+  // Toggle destination selection
+  const toggleDestination = useCallback((id: string) => {
+    setSelectedDestinationIds(prev =>
+      prev.includes(id) ? prev.filter(destId => destId !== id) : [...prev, id]
+    )
+  }, [])
+
+  // Detect if selected device is an OMI device
+  const isOmiDevice = availableAudioDevices
+    .find(d => d.deviceId === selectedAudioDeviceId)
+    ?.label.toLowerCase().includes('omi') || false
+
+  // Check browser capabilities (needed before device enumeration)
+  const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  const canAccessMicrophone = isLocalhost || isHttps
+  const capabilities = typeof window !== 'undefined' ? getBrowserCapabilities() : { hasGetDisplayMedia: false }
+  const canAccessDualStream = canAccessMicrophone && capabilities.hasGetDisplayMedia
+
+  // Fetch available destinations on mount
+  useEffect(() => {
+    const fetchDestinations = async () => {
+      try {
+        // Filter for audio_intake endpoints on the backend
+        const response = await deploymentsApi.getExposedUrls({ name: 'audio_intake' })
+        setAvailableDestinations(response.data)
+        // Select all destinations by default
+        setSelectedDestinationIds(response.data.map(d => d.instance_id))
+      } catch (err) {
+        console.warn('Failed to fetch exposed audio URLs:', err)
+      }
+    }
+    fetchDestinations()
+  }, [])
+
+  // Enumerate audio input devices on mount
+  useEffect(() => {
+    const enumerateDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const audioInputs = devices.filter(d => d.kind === 'audioinput')
+        setAvailableAudioDevices(audioInputs)
+
+        // Auto-select default device if available
+        const defaultDevice = audioInputs.find(d => d.deviceId === 'default') || audioInputs[0]
+        if (defaultDevice) {
+          setSelectedAudioDeviceId(defaultDevice.deviceId)
+        }
+      } catch (err) {
+        console.warn('Failed to enumerate audio devices:', err)
+      }
+    }
+
+    if (canAccessMicrophone) {
+      enumerateDevices()
+
+      // Listen for device changes
+      navigator.mediaDevices.addEventListener('devicechange', enumerateDevices)
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', enumerateDevices)
+      }
+    }
+  }, [canAccessMicrophone])
+
+  // Helper to get correct WebSocket path based on device type
+  const getAudioPath = useCallback((baseUrl: string) => {
+    // OMI devices use Opus format → /ws_omi
+    // Phone mic uses PCM format → /ws_pcm
+    const targetPath = isOmiDevice ? '/ws_omi' : '/ws_pcm'
+    return baseUrl.replace(/\/ws_pcm$/, targetPath)
+  }, [isOmiDevice])
+
   // Debug stats
   const [debugStats, setDebugStats] = useState<DebugStats>({
     chunksSent: 0,
@@ -81,7 +172,7 @@ export const useWebRecording = (): WebRecordingReturn => {
   const legacyWsRef = useRef<WebSocket | null>(null)
   // Multi-destination WebSocket connections
   const destinationWsRefs = useRef<Map<string, WebSocket>>(new Map())
-  const activeDestinationsRef = useRef<AudioDestination[]>([])
+  const activeDestinationsRef = useRef<ExposedUrl[]>([])
   const legacyStreamRef = useRef<MediaStream | null>(null)
   const legacyContextRef = useRef<AudioContext | null>(null)
   const legacyProcessorRef = useRef<ScriptProcessorNode | null>(null)
@@ -99,13 +190,6 @@ export const useWebRecording = (): WebRecordingReturn => {
   const [legacyDuration, setLegacyDuration] = useState(0)
   const [legacyError, setLegacyError] = useState<string | null>(null)
   const [legacyAnalyser, setLegacyAnalyser] = useState<AnalyserNode | null>(null)
-
-  // Check browser capabilities
-  const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:'
-  const canAccessMicrophone = isLocalhost || isHttps
-  const capabilities = typeof window !== 'undefined' ? getBrowserCapabilities() : { hasGetDisplayMedia: false }
-  const canAccessDualStream = canAccessMicrophone && capabilities.hasGetDisplayMedia
 
   // Format duration helper
   const formatDuration = useCallback((seconds: number) => {
@@ -266,6 +350,7 @@ export const useWebRecording = (): WebRecordingReturn => {
 
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
+            deviceId: selectedAudioDeviceId ? { exact: selectedAudioDeviceId } : undefined,
             sampleRate: 16000,
             channelCount: 1,
             echoCancellation: true,
@@ -275,154 +360,74 @@ export const useWebRecording = (): WebRecordingReturn => {
         })
         legacyStreamRef.current = stream
 
-        // Fetch wired destinations from the audio provider API
+        // Use selected destinations from state
         setLegacyStep('websocket')
-        let destinations: AudioDestination[] = []
-        let useRelay = false
-        let relayUrl: string | null = null
-        try {
-          const destResponse = await audioApi.getWiredDestinations()
-          destinations = destResponse.data.destinations || []
-          useRelay = destResponse.data.use_relay || false
-          relayUrl = destResponse.data.relay_url || null
-          console.log('Wired audio destinations:', { destinations, useRelay, relayUrl })
-        } catch (err) {
-          console.warn('Failed to fetch wired destinations, falling back to Chronicle:', err)
-        }
+        const destinations: ExposedUrl[] = availableDestinations.filter(d =>
+          selectedDestinationIds.includes(d.instance_id)
+        )
 
-        // If no wired destinations, fall back to Chronicle (legacy behavior)
         if (destinations.length === 0) {
-          try {
-            const baseWsUrl = await getChronicleWebSocketUrl('/ws_pcm')
-            destinations = [{
-              consumer_id: 'chronicle',
-              consumer_name: 'Chronicle',
-              websocket_url: baseWsUrl,
-              protocol: 'wyoming',
-              format: 'pcm_s16le_16khz_mono'
-            }]
-            console.log('No wired destinations found, using Chronicle fallback')
-          } catch (err) {
-            throw new Error('No audio destinations wired. Please wire desktop-mic to a service like Chronicle or Mycelia in the Service Configs page.')
-          }
+          throw new Error('No audio destinations selected. Please select at least one destination to record.')
         }
 
+        console.log('Using selected audio destinations:', destinations.map(d => d.instance_name))
         activeDestinationsRef.current = destinations
 
-        // Connect to destinations - either via relay or directly
-        const connectedSockets: Map<string, WebSocket> = new Map()
+        // Build relay WebSocket URL with destinations and token
+        // The relay expects: /ws/audio/relay?destinations=[...]&token=...
+        // Swap path based on audio source (OMI device → /ws_omi, phone mic → /ws_pcm)
+        const relayDestinations = destinations.map(dest => ({
+          name: dest.instance_name,
+          url: getAudioPath(dest.url)
+        }))
 
-        if (useRelay && relayUrl) {
-          // RELAY MODE: Connect to single relay endpoint, backend handles fan-out
-          // Format destinations for relay: [{name: "Chronicle", url: "ws://..."}]
-          const relayDestinations = destinations.map(d => ({
-            name: d.consumer_name,
-            url: d.websocket_url  // Internal URLs from backend
-          }))
+        // Build WebSocket URL for relay
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const relayBaseUrl = BACKEND_URL ? BACKEND_URL.replace(/^https?:/, wsProtocol) : `${wsProtocol}//${window.location.host}`
+        const destinationsParam = encodeURIComponent(JSON.stringify(relayDestinations))
+        const tokenParam = encodeURIComponent(token)
+        const relayUrl = `${relayBaseUrl}/ws/audio/relay?destinations=${destinationsParam}&token=${tokenParam}`
 
-          const wsUrl = `${relayUrl}?destinations=${encodeURIComponent(JSON.stringify(relayDestinations))}&token=${token}`
-          console.log('Connecting via relay:', relayUrl)
-          console.log('Relay destinations:', relayDestinations)
+        console.log('Connecting to audio relay:', relayUrl.replace(token, 'REDACTED'))
 
-          await new Promise<void>((resolve, reject) => {
-            const socket = new WebSocket(wsUrl)
+        // Connect to relay (single WebSocket connection)
+        const ws = await new Promise<WebSocket>((resolve, reject) => {
+          const socket = new WebSocket(relayUrl)
 
-            socket.onopen = () => {
-              setTimeout(() => {
-                // In relay mode, use 'relay' as the socket ID
-                connectedSockets.set('relay', socket)
-                console.log('Connected to audio relay')
-                resolve()
-              }, 100)
-            }
-
-            socket.onerror = (e) => {
-              console.error('Relay connection error:', e)
-              reject(new Error('Failed to connect to audio relay'))
-            }
-
-            socket.onmessage = (event) => {
-              setDebugStats(prev => ({ ...prev, messagesReceived: prev.messagesReceived + 1 }))
-              // Log relay status messages
-              try {
-                const msg = JSON.parse(event.data)
-                if (msg.type === 'relay_status') {
-                  console.log('Relay status:', msg.data)
-                } else if (msg.type === 'error') {
-                  console.error('Relay error:', msg.message)
-                }
-              } catch {
-                // Binary data, ignore
-              }
-            }
-          })
-
-          console.log('Connected via relay to destinations:', destinations.map(d => d.consumer_name).join(', '))
-
-        } else {
-          // DIRECT MODE: Connect to each destination individually
-          const connectionPromises = destinations.map(async (dest) => {
-            const wsUrl = `${dest.websocket_url}?token=${token}&device_name=ushadow-recorder`
-            console.log(`Connecting to ${dest.consumer_name}:`, wsUrl)
-
-            return new Promise<void>((resolve, reject) => {
-              const socket = new WebSocket(wsUrl)
-
-              socket.onopen = () => {
-                setTimeout(() => {
-                  connectedSockets.set(dest.consumer_id, socket)
-                  console.log(`Connected to ${dest.consumer_name}`)
-                  resolve()
-                }, 100)
-              }
-
-              socket.onerror = () => {
-                console.warn(`Failed to connect to ${dest.consumer_name}`)
-                reject(new Error(`Failed to connect to ${dest.consumer_name}`))
-              }
-
-              socket.onmessage = () => {
-                setDebugStats(prev => ({ ...prev, messagesReceived: prev.messagesReceived + 1 }))
-              }
-            })
-          })
-
-          // Wait for at least one connection to succeed
-          const results = await Promise.allSettled(connectionPromises)
-          const successfulConnections = results.filter(r => r.status === 'fulfilled').length
-          const failedConnections = results
-            .map((r, i) => r.status === 'rejected' ? destinations[i].consumer_name : null)
-            .filter(Boolean)
-
-          if (successfulConnections === 0) {
-            const failedNames = failedConnections.join(', ')
-            throw new Error(`Failed to connect to audio destinations: ${failedNames}. Make sure the services are running.`)
+          socket.onopen = () => {
+            setTimeout(() => {
+              console.log('✅ Connected to audio relay')
+              resolve(socket)
+            }, 100)
           }
 
-          if (failedConnections.length > 0) {
-            console.warn(`Some audio destinations unavailable: ${failedConnections.join(', ')}`)
+          socket.onerror = (err) => {
+            console.error('❌ WebSocket error for audio relay:', err)
+            reject(new Error('Failed to connect to audio relay. Make sure the backend is running.'))
           }
-          console.log(`Connected to ${successfulConnections}/${destinations.length} audio destinations`)
-        }
 
-        destinationWsRefs.current = connectedSockets
+          socket.onclose = () => {
+            console.log('WebSocket closed for audio relay')
+          }
 
-        // Use first connected socket for legacy compatibility
-        const firstSocket = connectedSockets.values().next().value
-        legacyWsRef.current = firstSocket
+          socket.onmessage = (event) => {
+            setDebugStats(prev => ({ ...prev, messagesReceived: prev.messagesReceived + 1 }))
+            console.log('Message from audio relay:', event.data)
+          }
+        })
 
-        // Start keepalive for all sockets
+        legacyWsRef.current = ws
+        // Store relay socket in destinations map for compatibility with cleanup
+        destinationWsRefs.current.set('relay', ws)
+
+        // Start keepalive for relay socket
         keepAliveIntervalRef.current = setInterval(() => {
-          destinationWsRefs.current.forEach((socket, id) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: 'ping', payload_length: null }) + '\n')
-            }
-          })
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping', payload_length: null }) + '\n')
+          }
         }, 30000)
 
-        const ws = firstSocket!
-
-        // Send audio-start to all connected destinations
+        // Send audio-start to relay
         setLegacyStep('audio-start')
         const audioStartMsg = JSON.stringify({
           type: 'audio-start',
@@ -430,12 +435,10 @@ export const useWebRecording = (): WebRecordingReturn => {
           payload_length: null
         }) + '\n'
 
-        destinationWsRefs.current.forEach((socket, id) => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(audioStartMsg)
-            console.log(`Sent audio-start to ${id}`)
-          }
-        })
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(audioStartMsg)
+          console.log('Sent audio-start to audio relay')
+        }
 
         // Set up audio processing
         setLegacyStep('streaming')
@@ -462,7 +465,7 @@ export const useWebRecording = (): WebRecordingReturn => {
 
         processor.onaudioprocess = (event) => {
           if (!audioProcessingStartedRef.current) return
-          if (destinationWsRefs.current.size === 0) return
+          if (!legacyWsRef.current || legacyWsRef.current.readyState !== WebSocket.OPEN) return
 
           const inputData = event.inputBuffer.getChannelData(0)
           const pcmBuffer = new Int16Array(inputData.length)
@@ -480,7 +483,7 @@ export const useWebRecording = (): WebRecordingReturn => {
             return
           }
 
-          // STREAMING MODE: Send immediately
+          // STREAMING MODE: Send immediately to relay
           const headerMsg = JSON.stringify({
             type: 'audio-chunk',
             data: { rate: 16000, width: 2, channels: 1 },
@@ -488,26 +491,20 @@ export const useWebRecording = (): WebRecordingReturn => {
           }) + '\n'
           const audioData = new Uint8Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength)
 
-          // Send to all connected destinations
-          let sentToAny = false
-          destinationWsRefs.current.forEach((socket) => {
+          // Send to relay socket
+          const relaySocket = legacyWsRef.current
+          if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
             try {
-              if (socket.readyState === WebSocket.OPEN) {
-                if (socket.binaryType !== 'arraybuffer') {
-                  socket.binaryType = 'arraybuffer'
-                }
-                socket.send(headerMsg)
-                socket.send(audioData)
-                sentToAny = true
+              if (relaySocket.binaryType !== 'arraybuffer') {
+                relaySocket.binaryType = 'arraybuffer'
               }
+              relaySocket.send(headerMsg)
+              relaySocket.send(audioData)
+              chunkCountRef.current++
+              setDebugStats(prev => ({ ...prev, chunksSent: chunkCountRef.current }))
             } catch (error) {
-              console.error('Failed to send audio chunk to destination:', error)
+              console.error('Failed to send audio chunk to relay:', error)
             }
-          })
-
-          if (sentToAny) {
-            chunkCountRef.current++
-            setDebugStats(prev => ({ ...prev, chunksSent: chunkCountRef.current }))
           }
         }
 
@@ -573,48 +570,46 @@ export const useWebRecording = (): WebRecordingReturn => {
       if (currentModeRef.current === 'batch' && batchAudioChunksRef.current.length > 0) {
         console.log(`Sending ${batchAudioChunksRef.current.length} accumulated batch chunks`)
 
-        // Send each accumulated chunk to all destinations
-        for (const pcmBuffer of batchAudioChunksRef.current) {
-          const headerMsg = JSON.stringify({
-            type: 'audio-chunk',
-            data: { rate: 16000, width: 2, channels: 1 },
-            payload_length: pcmBuffer.byteLength
-          }) + '\n'
-          const audioData = new Uint8Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength)
+        const relaySocket = legacyWsRef.current
+        if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+          // Send each accumulated chunk to relay
+          for (const pcmBuffer of batchAudioChunksRef.current) {
+            const headerMsg = JSON.stringify({
+              type: 'audio-chunk',
+              data: { rate: 16000, width: 2, channels: 1 },
+              payload_length: pcmBuffer.byteLength
+            }) + '\n'
+            const audioData = new Uint8Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength)
 
-          destinationWsRefs.current.forEach((socket) => {
             try {
-              if (socket.readyState === WebSocket.OPEN) {
-                if (socket.binaryType !== 'arraybuffer') {
-                  socket.binaryType = 'arraybuffer'
-                }
-                socket.send(headerMsg)
-                socket.send(audioData)
+              if (relaySocket.binaryType !== 'arraybuffer') {
+                relaySocket.binaryType = 'arraybuffer'
               }
+              relaySocket.send(headerMsg)
+              relaySocket.send(audioData)
             } catch (error) {
-              console.error('Failed to send batch audio chunk:', error)
+              console.error('Failed to send batch audio chunk to relay:', error)
             }
-          })
-        }
+          }
 
-        console.log('Finished sending batch audio')
+          console.log('Finished sending batch audio')
+        }
         // Clear the batch buffer
         batchAudioChunksRef.current = []
       }
 
-      // Send audio-stop to all connected destinations
+      // Send audio-stop to relay
       const audioStopMsg = JSON.stringify({
         type: 'audio-stop',
         data: { timestamp: Date.now() },
         payload_length: null
       }) + '\n'
 
-      destinationWsRefs.current.forEach((socket, id) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(audioStopMsg)
-          console.log(`Sent audio-stop to ${id}`)
-        }
-      })
+      const relaySocket = legacyWsRef.current
+      if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+        relaySocket.send(audioStopMsg)
+        console.log('Sent audio-stop to relay')
+      }
 
       legacyCleanup()
 
@@ -655,6 +650,13 @@ export const useWebRecording = (): WebRecordingReturn => {
     recordingDuration,
     error,
     mode,
+    availableDestinations,
+    selectedDestinationIds,
+    toggleDestination,
+    availableAudioDevices,
+    selectedAudioDeviceId,
+    setSelectedAudioDevice: setSelectedAudioDeviceId,
+    isOmiDevice,
     startRecording,
     stopRecording,
     setMode,

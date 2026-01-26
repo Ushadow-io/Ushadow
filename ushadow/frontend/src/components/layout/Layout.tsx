@@ -1,7 +1,7 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home } from 'lucide-react'
-import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
+import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
@@ -84,6 +84,7 @@ export default function Layout() {
     // Separator after wizard section
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
+    { path: '/recording', label: 'Recording', icon: Radio },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
