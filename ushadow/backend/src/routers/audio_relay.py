@@ -40,7 +40,10 @@ class AudioRelayConnection:
 
             # Add token to URL
             url_with_token = f"{self.url}?token={self.token}"
-            logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url}")
+
+            # Detect endpoint type for logging
+            endpoint_type = "OMI (Opus)" if "/ws_omi" in self.url else "PCM"
+            logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [{endpoint_type}]")
 
             self.ws = await websockets.connect(url_with_token)
             self.connected = True
@@ -204,6 +207,10 @@ async def audio_relay_websocket(
             return
 
         logger.info(f"[AudioRelay] Destinations: {[d['name'] for d in destinations]}")
+        # Log exact URLs received from client for debugging
+        for dest in destinations:
+            endpoint_type = "OMI (Opus)" if any(x in dest['url'] for x in ["/ws_omi", "ws/audio"]) else "PCM"      
+            logger.info(f"[AudioRelay] Client requested: {dest['name']} -> {dest['url']} [{endpoint_type}]")
 
     except json.JSONDecodeError as e:
         await websocket.close(code=1008, reason=f"Invalid destinations JSON: {e}")

@@ -44,7 +44,9 @@ help:
 	@echo "  make chronicle-down-local   - Stop local Chronicle"
 	@echo "  make chronicle-dev          - Build + run (full dev cycle)"
 	@echo ""
-	@echo "Service management (via ushadow API):"
+	@echo "Service management:"
+	@echo "  make rebuild <service>  - Rebuild service from compose/<service>-compose.yml"
+	@echo "                            (e.g., make rebuild mycelia, make rebuild chronicle)"
 	@echo "  make svc-list           - List all services and their status"
 	@echo "  make restart-<service>  - Restart a service (e.g., make restart-chronicle)"
 	@echo "  make svc-start SVC=x    - Start a service"
@@ -221,6 +223,40 @@ svc-status:
 # e.g., make restart-chronicle, make restart-speaker
 restart-%:
 	@python3 scripts/ushadow_client.py service restart $*
+
+# =============================================================================
+# Service Rebuild Command
+# =============================================================================
+# Rebuild service image: make rebuild <service>
+# Usage: make rebuild mycelia, make rebuild chronicle
+# Only builds the image, does not stop or start containers
+# Assumes compose file exists at: compose/<service>-compose.yml or .yaml
+
+rebuild:
+	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
+		echo "Usage: make rebuild <service>"; \
+		echo "Example: make rebuild mycelia"; \
+		exit 1; \
+	fi
+	@SERVICE=$(filter-out $@,$(MAKECMDGOALS)); \
+	if [ -f compose/$$SERVICE-compose.yml ]; then \
+		echo "🔨 Building $$SERVICE..."; \
+		docker compose -f compose/$$SERVICE-compose.yml build && \
+		echo "✅ $$SERVICE image built (use 'docker compose -f compose/$$SERVICE-compose.yml up -d' to start)"; \
+	elif [ -f compose/$$SERVICE-compose.yaml ]; then \
+		echo "🔨 Building $$SERVICE..."; \
+		docker compose -f compose/$$SERVICE-compose.yaml build && \
+		echo "✅ $$SERVICE image built (use 'docker compose -f compose/$$SERVICE-compose.yaml up -d' to start)"; \
+	else \
+		echo "❌ Compose file not found: compose/$$SERVICE-compose.yml or compose/$$SERVICE-compose.yaml"; \
+		echo "Available services:"; \
+		ls compose/*-compose.y*l 2>/dev/null | xargs -n1 basename | sed 's/-compose\.y.*$$//' | sed 's/^/  - /'; \
+		exit 1; \
+	fi
+
+# Allow service name to be passed as argument without error
+%:
+	@:
 
 # Status and health
 status:
