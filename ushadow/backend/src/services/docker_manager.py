@@ -253,6 +253,7 @@ class ServiceInfo:
 
     name: str
     container_id: Optional[str]
+    container_name: Optional[str]  # Actual Docker container name
     status: ServiceStatus
     service_type: ServiceType
     image: Optional[str]
@@ -549,6 +550,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.UNKNOWN,
                 service_type=ServiceType.APPLICATION,
                 image=None,
@@ -565,6 +567,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.UNKNOWN,
                 service_type=service_config["service_type"],
                 image=None,
@@ -659,6 +662,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=container.id[:12],
+                container_name=container.name,
                 status=ServiceStatus(container.status.lower()) if container.status.lower() in [s.value for s in ServiceStatus] else ServiceStatus.UNKNOWN,
                 service_type=service_config["service_type"],
                 image=container.image.tags[0] if container.image.tags else container.image.short_id,
@@ -674,6 +678,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.NOT_FOUND,
                 service_type=service_config["service_type"],
                 image=None,
@@ -690,6 +695,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.UNKNOWN,
                 service_type=service_config["service_type"],
                 image=None,

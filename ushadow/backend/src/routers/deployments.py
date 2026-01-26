@@ -72,10 +72,33 @@ async def list_deployment_targets(
     k8s_manager = await get_kubernetes_manager()
     clusters = await k8s_manager.list_clusters()
 
+    logger.info(f"📍 Found {len(clusters)} K8s clusters for deployment targets")
+
     for cluster in clusters:
+        logger.info(f"  → Adding K8s cluster: {cluster.name} (status: {cluster.status})")
         parsed = parse_deployment_target_id(cluster.deployment_target_id)
-        # Get infrastructure from default namespace if available
-        infra = cluster.infra_scans.get(cluster.namespace, {}) if cluster.infra_scans else {}
+
+        # Get infrastructure - try cluster's namespace first, then any available namespace
+        infra = {}
+        if cluster.infra_scans:
+            # Try cluster's configured namespace first
+            if cluster.namespace in cluster.infra_scans:
+                infra = cluster.infra_scans[cluster.namespace]
+                logger.info(f"    ✓ Using infrastructure from namespace '{cluster.namespace}'")
+            else:
+                # Use first available namespace with infrastructure
+                for ns, ns_infra in cluster.infra_scans.items():
+                    if ns_infra:  # Non-empty infrastructure
+                        infra = ns_infra
+                        logger.info(f"    ✓ Using infrastructure from namespace '{ns}' (cluster namespace '{cluster.namespace}' not found)")
+                        break
+
+            if infra:
+                logger.info(f"    Infrastructure services: {list(infra.keys())}")
+            else:
+                logger.info(f"    ⚠️ No infrastructure found in any namespace")
+        else:
+            logger.info(f"    ⚠️ No infra_scans available for cluster")
 
         # Try to infer provider from labels or use default
         provider = cluster.labels.get("provider", "kubernetes")
@@ -97,6 +120,7 @@ async def list_deployment_targets(
         )
         targets.append(target.model_dump())
 
+    logger.info(f"✅ Returning {len(targets)} total deployment targets ({len(unodes)} Docker, {len(clusters)} K8s)")
     return targets
 
 
@@ -223,6 +247,7 @@ async def list_deployments(
 @router.get("/exposed-urls")
 async def get_exposed_urls(
     url_type: Optional[str] = Query(None, alias="type", description="Filter by URL type (e.g., 'audio', 'http')"),
+    url_name: Optional[str] = Query(None, alias="name", description="Filter by URL name (e.g., 'audio_intake')"),
     status: Optional[str] = Query(None, description="Filter by instance status (e.g., 'running')"),
     current_user: dict = Depends(get_current_user)
 ):
@@ -232,65 +257,18 @@ async def get_exposed_urls(
     This enables deployment-based discovery where clients query actual running services
     instead of using static provider registries.
 
-    Example: GET /api/deployments/exposed-urls?type=audio&status=running
+    Example: GET /api/deployments/exposed-urls?type=audio&name=audio_intake&status=running
     Returns: List of audio intake endpoints from Chronicle, Mycelia, etc.
     """
     from src.services.service_config_manager import get_service_config_manager
 
-    manager = get_service_config_manager()
-    instances = manager.list_service_configs()
-
-    logger.info(f"[exposed-urls] Found {len(instances)} total instances")
-    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}")
+    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}, url_name={url_name}")
 
     result = []
-    for instance in instances:
-        logger.info(f"[exposed-urls] Checking instance {instance.id}")
+    seen_containers = set()  # Track container names to avoid duplicates
 
-        # Get full instance details with exposed_urls
-        full_instance = manager.get_service_config(instance.id)
-        if not full_instance:
-            logger.info(f"[exposed-urls] Could not load full instance for {instance.id}")
-            continue
-
-        if not hasattr(full_instance, 'exposed_urls'):
-            logger.info(f"[exposed-urls] Instance {instance.id} has no exposed_urls attribute")
-            continue
-
-        exposed_urls = getattr(full_instance, 'exposed_urls', None)
-        if not exposed_urls:
-            logger.info(f"[exposed-urls] Instance {instance.id} exposed_urls is empty")
-            continue
-
-        logger.info(f"[exposed-urls] Instance {instance.id} has {len(exposed_urls)} exposed URLs")
-
-        # Process each exposed URL
-        for exposed in exposed_urls:
-            # Handle both dict and object formats
-            if isinstance(exposed, dict):
-                exp_type = exposed.get('type')
-                exp_name = exposed.get('name')
-                exp_url = exposed.get('url')
-                exp_metadata = exposed.get('metadata', {})
-            else:
-                exp_type = getattr(exposed, 'type', None)
-                exp_name = getattr(exposed, 'name', None)
-                exp_url = getattr(exposed, 'url', None)
-                exp_metadata = getattr(exposed, 'metadata', {})
-
-            # Filter by type if requested
-            if url_type and exp_type != url_type:
-                continue
-
-            result.append({
-                "instance_id": instance.id,
-                "instance_name": instance.name,
-                "url": exp_url,
-                "type": exp_type,
-                "name": exp_name,
-                "metadata": exp_metadata,
-                "status": instance.status,
-            })
+    # Note: ServiceConfig objects don't have exposed_urls - that's only in compose metadata
+    # So we skip the service_configs loop and go straight to runtime discovery
 
     # Also check running docker containers from MANAGEABLE_SERVICES
     # This handles services started via docker compose that don't have service_config entries
@@ -320,11 +298,10 @@ async def get_exposed_urls(
         if not compose_service or not hasattr(compose_service, 'exposes') or not compose_service.exposes:
             continue
 
-        # Get actual container name
-        try:
-            container = docker_mgr._client.containers.get(service_info.container_id)
-            container_name = container.name
-        except:
+        # Get container name from service_info
+        container_name = service_info.container_name
+        if not container_name:
+            logger.warning(f"[exposed-urls] Service {service_name} is running but has no container_name")
             continue
 
         logger.info(f"[exposed-urls] Found MANAGEABLE_SERVICE {service_name} with {len(compose_service.exposes)} exposed URLs")
@@ -341,11 +318,21 @@ async def get_exposed_urls(
             if url_type and exp_type != url_type:
                 continue
 
-            # Build URL using actual container name
+            # Filter by name if requested
+            if url_name and exp_name != url_name:
+                continue
+
+            # Build internal URL (for relay to connect to)
+            # Audio endpoints use WebSocket protocol
             protocol = 'ws' if exp_type == 'audio' else 'http'
             exp_url = f"{protocol}://{container_name}:{port}{path}"
 
-            result.append({
+            # Skip if this container was already added (avoid duplicates with deployments)
+            if container_name in seen_containers:
+                logger.info(f"[exposed-urls] Skipping already-added container {container_name}")
+                continue
+
+            entry = {
                 "instance_id": service_name,
                 "instance_name": compose_service.display_name or service_name,
                 "url": exp_url,
@@ -353,7 +340,112 @@ async def get_exposed_urls(
                 "name": exp_name,
                 "metadata": exp_metadata,
                 "status": "running",
-            })
+            }
+            result.append(entry)
+            seen_containers.add(container_name)
+            logger.info(f"[exposed-urls] Added MANAGEABLE_SERVICE URL: {exp_name} -> {exp_url} (service {service_name}, container {container_name})")
+
+    # Also check running deployments on the local leader
+    # This handles services started via deployment manager (not docker compose)
+    logger.info(f"[exposed-urls] Checking deployments for additional exposed URLs")
+
+    # Get local hostname to filter for only local deployments
+    # Use COMPOSE_PROJECT_NAME first as that's what unodes are registered with
+    current_hostname = (
+        os.getenv("COMPOSE_PROJECT_NAME") or
+        os.getenv("UNODE_HOSTNAME") or
+        os.getenv("ENV_NAME") or
+        "local"
+    )
+
+    deployment_manager = get_deployment_manager()
+    logger.info(f"[exposed-urls] Querying deployments for hostname: {current_hostname}")
+    deployments = await deployment_manager.list_deployments(unode_hostname=current_hostname)
+    logger.info(f"[exposed-urls] Found {len(deployments)} deployments")
+
+    for deployment in deployments:
+        logger.info(f"[exposed-urls] Checking deployment {deployment.id}: service_id={deployment.service_id}, status={deployment.status}")
+
+        # Filter by status if requested
+        if status and deployment.status != status:
+            logger.info(f"[exposed-urls] Skipping deployment {deployment.id} - status filter mismatch")
+            continue
+
+        if deployment.status != "running":
+            logger.info(f"[exposed-urls] Skipping deployment {deployment.id} - not running")
+            continue
+
+        # Get compose metadata for the service definition
+        compose_service = compose_registry.get_service_by_name(deployment.service_id)
+
+        if not compose_service:
+            logger.info(f"[exposed-urls] No compose service found for {deployment.service_id}")
+            continue
+
+        if not hasattr(compose_service, 'exposes'):
+            logger.info(f"[exposed-urls] Compose service {deployment.service_id} has no 'exposes' attribute")
+            continue
+
+        if not compose_service.exposes:
+            logger.info(f"[exposed-urls] Compose service {deployment.service_id} has empty exposes")
+            continue
+
+        logger.info(f"[exposed-urls] Found deployment {deployment.id} for service {deployment.service_id} with {len(compose_service.exposes)} exposed URLs")
+
+        # Build exposed URLs from compose metadata
+        for expose in compose_service.exposes:
+            exp_type = expose.get('type')
+            exp_name = expose.get('name')
+            path = expose.get('path', '')
+            port = expose.get('port')
+            exp_metadata = expose.get('metadata', {})
+
+            # Filter by type if requested
+            if url_type and exp_type != url_type:
+                continue
+
+            # Filter by name if requested
+            if url_name and exp_name != url_name:
+                continue
+
+            # Build internal URL (for relay to connect to)
+            # Audio endpoints use WebSocket protocol
+            protocol = 'ws' if exp_type == 'audio' else 'http'
+            exp_url = f"{protocol}://{deployment.container_name}:{port}{path}"
+
+            # Skip if this container was already added (avoid duplicates with MANAGEABLE_SERVICES)
+            if deployment.container_name in seen_containers:
+                logger.info(f"[exposed-urls] Skipping already-added container {deployment.container_name}")
+                continue
+
+            entry = {
+                "instance_id": deployment.id,
+                "instance_name": compose_service.display_name or deployment.service_id,
+                "url": exp_url,
+                "type": exp_type,
+                "name": exp_name,
+                "metadata": exp_metadata,
+                "status": deployment.status,
+            }
+            result.append(entry)
+            seen_containers.add(deployment.container_name)
+            logger.info(f"[exposed-urls] Added deployment URL: {exp_name} -> {exp_url} (deployment {deployment.id}, container {deployment.container_name})")
+
+    logger.info("=" * 80)
+    logger.info(f"[exposed-urls] RETURNING {len(result)} TOTAL EXPOSED URLs")
+    logger.info(f"[exposed-urls] PARAMS: status={status}, url_type={url_type}, url_name={url_name}")
+    logger.info(f"[exposed-urls] Unique containers collected: {len(seen_containers)}")
+    logger.info("=" * 80)
+
+    for i, entry in enumerate(result):
+        logger.info(
+            f"[exposed-urls] [{i}] {entry['type']}/{entry['name']}: {entry['url']}\n"
+            f"              instance_id={entry['instance_id']}, "
+            f"instance_name={entry['instance_name']}, "
+            f"status={entry['status']}"
+        )
+
+    logger.info("=" * 80)
 
     return result
 

@@ -213,21 +213,40 @@ class DockerDeployPlatform(DeployPlatform):
             logger.info(f"Environment variables ({len(resolved_service.environment or {})} total): {env_preview}")
 
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
-            container = docker_client.containers.run(
+
+            # Add service name as network alias so Docker DNS works
+            # This allows containers to reach each other by service name (e.g., "mycelia-python-worker")
+            # We use the low-level API to properly set network aliases
+            networking_config = docker_client.api.create_networking_config({
+                network: docker_client.api.create_endpoint_config(
+                    aliases=[resolved_service.service_id]
+                )
+            })
+
+            # Build host config for ports and restart policy
+            host_config = docker_client.api.create_host_config(
+                port_bindings=port_bindings,
+                restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
+                binds=resolved_service.volumes if resolved_service.volumes else None,
+            )
+
+            # Create container using low-level API (properly supports networking_config)
+            container_data = docker_client.api.create_container(
                 image=resolved_service.image,
                 name=container_name,
                 labels=labels,
                 environment=resolved_service.environment,
-                ports=port_bindings,
-                volumes=resolved_service.volumes if resolved_service.volumes else None,
+                host_config=host_config,
                 command=resolved_service.command,
-                restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
-                network=network,
+                networking_config=networking_config,
                 detach=True,
-                remove=False,
             )
 
-            logger.info(f"Container {container_name} created: {container.id[:12]}")
+            # Get container object and start it
+            container = docker_client.containers.get(container_data['Id'])
+            container.start()
+
+            logger.info(f"Container {container_name} created and started: {container.id[:12]}")
 
             # Extract exposed port
             exposed_port = None
@@ -494,7 +513,10 @@ class DockerDeployPlatform(DeployPlatform):
             if self._is_local_deployment(target.identifier):
                 # Query local Docker
                 docker_client = docker.from_env()
-                filters = {"label": "ushadow.deployment_id"}
+                filters = {"label": [
+                    "ushadow.deployment_id",
+                    f"ushadow.unode_hostname={target.identifier}"
+                ]}
 
                 if service_id:
                     filters["label"].append(f"ushadow.service_id={service_id}")

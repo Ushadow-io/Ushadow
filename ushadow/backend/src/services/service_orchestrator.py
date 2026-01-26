@@ -806,6 +806,14 @@ class ServiceOrchestrator:
         if compose_base in installed_names:
             return True
 
+        # If ANY service from the same compose file is installed, show all services from that file
+        # This handles multi-service compose files like mycelia (backend, frontend, worker)
+        all_services = self.compose_registry.get_services()
+        same_file_services = [s for s in all_services if s.compose_file == service.compose_file]
+        for sibling in same_file_services:
+            if sibling.service_name in installed_names:
+                return True
+
         return False
 
     async def _build_service_summary(self, service: DiscoveredService, installed: bool) -> ServiceSummary:

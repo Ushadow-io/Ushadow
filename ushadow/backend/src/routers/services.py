@@ -1041,6 +1041,7 @@ async def uninstall_service(
 
 @router.post("/mycelia/generate-token")
 async def generate_mycelia_token(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
     current_user: User = Depends(get_current_user)
 ) -> Dict[str, str]:
     """
@@ -1052,12 +1053,66 @@ async def generate_mycelia_token(
     """
     import subprocess
     import re
-    import os
+    from src.services.docker_manager import get_docker_manager
+    from src.services.compose_registry import get_compose_registry
+
+    service_name = "mycelia-backend"
 
     try:
-        # Get the environment name and container name
-        env_name = os.getenv("ENV_NAME", "ushadow")
-        container_name = f"ushadow-{env_name}-mycelia-backend-1"
+        # Find the actual running container
+        docker_mgr = get_docker_manager()
+        compose_registry = get_compose_registry()
+
+        # Try to get service info - check if it's in MANAGEABLE_SERVICES or discovered
+        container_name = None
+
+        # First check if service is in MANAGEABLE_SERVICES
+        if service_name in docker_mgr.MANAGEABLE_SERVICES:
+            service_info = docker_mgr.get_service_info(service_name)
+
+            if service_info.status != "running":
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Mycelia service is not running. Please start it first using the Services page."
+                )
+
+            if service_info.container_id:
+                container = docker_mgr._client.containers.get(service_info.container_id)
+                container_name = container.name
+
+        # If not in MANAGEABLE_SERVICES, search via compose registry
+        if not container_name:
+            discovered_service = compose_registry.get_service_by_name(service_name)
+
+            if not discovered_service:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Mycelia service not found. Please ensure mycelia-compose.yml is loaded."
+                )
+
+            # Search for running container by compose label
+            containers = docker_mgr._client.containers.list(
+                all=False,  # Only running
+                filters={"label": f"com.docker.compose.service={service_name}"}
+            )
+
+            if not containers:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Mycelia service is not running. Please start it first using the Services page."
+                )
+
+            # Use first running container
+            container_name = containers[0].name
+            logger.info(f"[MYCELIA-TOKEN] Found container via compose label: {container_name}")
+
+        if not container_name:
+            raise HTTPException(
+                status_code=503,
+                detail="Could not find running Mycelia container"
+            )
+
+        logger.info(f"[MYCELIA-TOKEN] Using container: {container_name}")
 
         # Execute token-create command inside the running container
         result = subprocess.run(
