@@ -14,6 +14,37 @@ const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("qdrant", "Qdrant"),
 ];
 
+/// Read ports from environment's .env file
+/// Returns (backend_port, webui_port)
+fn read_env_ports(worktree_path: &str) -> (Option<u16>, Option<u16>) {
+    use std::fs;
+    use std::path::Path;
+
+    let env_path = Path::new(worktree_path).join(".env");
+
+    if let Ok(contents) = fs::read_to_string(env_path) {
+        let mut backend_port = None;
+        let mut webui_port = None;
+
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.starts_with("BACKEND_PORT=") {
+                if let Some(port_str) = line.strip_prefix("BACKEND_PORT=") {
+                    backend_port = port_str.parse().ok();
+                }
+            } else if line.starts_with("WEBUI_PORT=") {
+                if let Some(port_str) = line.strip_prefix("WEBUI_PORT=") {
+                    webui_port = port_str.parse().ok();
+                }
+            }
+        }
+
+        (backend_port, webui_port)
+    } else {
+        (None, None)
+    }
+}
+
 /// Determine base branch using git merge-base
 /// Finds which branch (main or dev) is the closest ancestor
 fn determine_base_branch(repo_path: &str, branch: &str) -> Option<String> {
@@ -215,8 +246,10 @@ pub async fn discover_environments_with_config(
                     }
                 }
 
-                // Check Ushadow environment containers (backend, webui, etc.)
-                if name.starts_with("ushadow") && !name.contains("chronicle") {
+                // Check Ushadow environment containers (backend, webui, frontend)
+                // Only environment containers have the "ushadow-" prefix
+                // Service containers (mycelia, chronicle, mem0) do NOT have this prefix
+                if name.starts_with("ushadow-") {
                     let env_name = extract_env_name(name);
 
                     let entry = env_map.entry(env_name.clone()).or_insert(EnvContainerInfo {
@@ -269,11 +302,15 @@ pub async fn discover_environments_with_config(
         // Get creation time from worktree directory
         let created_at = get_directory_created_at(&wt.path);
 
+        // Read ports from .env file (source of truth)
+        let (env_backend_port, env_webui_port) = read_env_ports(&wt.path);
+
         // Check if this environment has Docker containers
         let (status, backend_port, webui_port, localhost_url, tailscale_url, tailscale_active, containers, docker_created_at) =
             if let Some(info) = env_map.remove(name) {
-                let port = info.backend_port.unwrap_or(8000);
-                let wp = if port >= 8000 { Some(port - 5000) } else { None };
+                // Use ports from .env file, fall back to Docker detection
+                let port = env_backend_port.or(info.backend_port).unwrap_or(8000);
+                let wp = env_webui_port.or_else(|| if port >= 8000 { Some(port - 5000) } else { None });
 
                 let (url, ts_url, ts_active) = if info.has_running {
                     let localhost = wp.map(|p| format!("http://localhost:{}", p))
@@ -291,9 +328,10 @@ pub async fn discover_environments_with_config(
                     EnvironmentStatus::Stopped
                 };
 
-                (env_status, info.backend_port, wp, url, ts_url, ts_active, info.containers, info.created_at)
+                (env_status, Some(port), wp, url, ts_url, ts_active, info.containers, info.created_at)
             } else {
-                (EnvironmentStatus::Available, None, None, None, None, false, Vec::new(), None)
+                // No Docker containers yet, but we have .env ports
+                (EnvironmentStatus::Available, env_backend_port, env_webui_port, None, None, false, Vec::new(), None)
             };
 
         let running = status == EnvironmentStatus::Running || status == EnvironmentStatus::Partial;

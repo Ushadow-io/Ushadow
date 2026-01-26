@@ -487,6 +487,7 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         let setup_command = Platform::build_env_command(&working_dir, env_vars, &command);
 
         let output = shell_command(&setup_command)
+            .current_dir(&working_dir)  // Run from working_dir so setup script finds correct PROJECT_ROOT
             .output()
             .map_err(|e| {
                 let full_log = format!("{}\n\n=== Debug Log ===\n{}",
