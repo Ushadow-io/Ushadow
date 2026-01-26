@@ -130,6 +130,14 @@ export default function HomeScreen() {
             resizeMode="contain"
             testID="home-logo"
           />
+          <LinearGradient
+            colors={gradients.brand as [string, string]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.titleGradientContainer}
+          >
+            <Text style={styles.title}>Ushadow</Text>
+          </LinearGradient>
           <View style={styles.headerActions}>
             <TouchableOpacity
               style={styles.iconButton}
@@ -140,14 +148,6 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        <LinearGradient
-          colors={gradients.brand as [string, string]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.titleGradientContainer}
-        >
-          <Text style={styles.title}>Ushadow</Text>
-        </LinearGradient>
         <Text style={styles.subtitle}>Mobile Control</Text>
       </View>
 
@@ -224,7 +224,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.xs,
   },
   logo: {
     width: 48,
@@ -240,20 +240,23 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
   },
   titleGradientContainer: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.md,
-    marginBottom: spacing.xs,
+    flex: 1,
+    marginHorizontal: spacing.md,
   },
   title: {
-    fontSize: fontSize['3xl'],
+    fontSize: fontSize.xl,
     fontWeight: 'bold',
     color: theme.background,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: fontSize.base,
+    fontSize: fontSize.sm,
     color: theme.textSecondary,
     marginBottom: spacing.md,
+    textAlign: 'center',
   },
   authStatus: {
     paddingHorizontal: spacing.lg,

@@ -187,6 +187,9 @@ export async function getAvailableAudioDestinations(
 /**
  * Build relay WebSocket URL with multiple destinations.
  * Connects to relay endpoint which fans out to all selected destinations.
+ *
+ * Note: Services should use unified /ws/audio endpoint that auto-detects format.
+ * No need to swap paths based on source type - the server detects Opus/PCM/float32.
  */
 export function buildRelayUrl(
   baseUrl: string,
@@ -196,7 +199,8 @@ export function buildRelayUrl(
   // Convert http(s) to ws(s)
   const wsBaseUrl = baseUrl.replace(/^http/, 'ws');
 
-  // Build destinations array for relay
+  // Build destinations array for relay - use URLs as-is
+  // Services should expose /ws/audio unified endpoint that auto-detects format
   const destinations = selectedDestinations.map(dest => ({
     name: dest.instance_name,
     url: dest.url,
@@ -212,12 +216,18 @@ export function buildRelayUrl(
 
 /**
  * Build direct WebSocket URL for single destination.
+ *
+ * DEPRECATED: Use buildRelayUrl instead, even for single destinations.
+ * Mobile apps cannot connect directly to internal Docker container names.
+ * The relay at /ws/audio/relay handles forwarding to internal services.
  */
 export function buildDirectUrl(
   destination: AudioDestination,
   token: string
 ): string {
-  const url = new URL(destination.url);
+  // Convert http(s) to ws(s) for WebSocket connection
+  const wsUrl = destination.url.replace(/^http/, 'ws');
+  const url = new URL(wsUrl);
   url.searchParams.set('token', token);
   return url.toString();
 }

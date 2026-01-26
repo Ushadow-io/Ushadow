@@ -22,7 +22,7 @@ export interface UseAudioStreamer {
   retryCount: number;
   maxRetries: number;
   error: string | null;
-  startStreaming: (url: string, mode?: 'batch' | 'streaming') => Promise<void>;
+  startStreaming: (url: string, mode?: 'batch' | 'streaming', codec?: 'pcm' | 'opus') => Promise<void>;
   stopStreaming: () => void;
   cancelRetry: () => void;
   sendAudio: (audioBytes: Uint8Array) => void;
@@ -38,19 +38,31 @@ interface WyomingEvent {
 }
 
 // Audio format constants (matching backend expectations)
-const AUDIO_FORMAT = {
+// Note: For Opus, width=0 indicates compressed format (not PCM)
+const AUDIO_FORMAT_PCM = {
   rate: 16000,
-  width: 2,
+  width: 2,  // 16-bit PCM
   channels: 1,
 };
 
-// Create audio start format with specified mode
-const createAudioStartFormat = (mode: 'batch' | 'streaming' = 'streaming') => ({
+const AUDIO_FORMAT_OPUS = {
   rate: 16000,
-  width: 2,
+  width: 0,  // 0 indicates Opus (compressed, not PCM)
   channels: 1,
-  mode, // batch: process after recording completes, streaming: real-time transcription
-});
+  codec: 'opus',
+};
+
+// Create audio start format with specified mode and codec
+const createAudioStartFormat = (
+  mode: 'batch' | 'streaming' = 'streaming',
+  codec: 'pcm' | 'opus' = 'pcm'
+) => {
+  const baseFormat = codec === 'opus' ? AUDIO_FORMAT_OPUS : AUDIO_FORMAT_PCM;
+  return {
+    ...baseFormat,
+    mode, // batch: process after recording completes, streaming: real-time transcription
+  };
+};
 
 // Reconnection constants
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -72,6 +84,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentUrlRef = useRef<string>('');
   const currentModeRef = useRef<'batch' | 'streaming'>('streaming');
+  const currentCodecRef = useRef<'pcm' | 'opus'>('pcm');
   const reconnectAttemptsRef = useRef<number>(0);
   const serverErrorCountRef = useRef<number>(0);
   const audioChunkCountRef = useRef<number>(0);
@@ -209,7 +222,11 @@ export const useAudioStreamer = (): UseAudioStreamer => {
   }, [setStateSafe]);
 
   // Start streaming
-  const startStreaming = useCallback(async (url: string, mode: 'batch' | 'streaming' = 'streaming'): Promise<void> => {
+  const startStreaming = useCallback(async (
+    url: string,
+    mode: 'batch' | 'streaming' = 'streaming',
+    codec: 'pcm' | 'opus' = 'pcm'
+  ): Promise<void> => {
     const trimmed = (url || '').trim();
     if (!trimmed) {
       const errorMsg = 'WebSocket URL is required.';
@@ -219,6 +236,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     currentUrlRef.current = trimmed;
     currentModeRef.current = mode;
+    currentCodecRef.current = codec;
     manuallyStoppedRef.current = false;
 
     // Network gate
@@ -271,9 +289,9 @@ export const useAudioStreamer = (): UseAudioStreamer => {
           try {
             const audioStartEvent: WyomingEvent = {
               type: 'audio-start',
-              data: createAudioStartFormat(currentModeRef.current)
+              data: createAudioStartFormat(currentModeRef.current, currentCodecRef.current)
             };
-            console.log(`[AudioStreamer] Sending audio-start event with mode: ${currentModeRef.current}`);
+            console.log(`[AudioStreamer] Sending audio-start event - mode: ${currentModeRef.current}, codec: ${currentCodecRef.current}`);
             await sendWyomingEvent(audioStartEvent);
             console.log('[AudioStreamer] audio-start sent successfully');
           } catch (e) {
@@ -356,9 +374,11 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         // Log first and every 50th chunk
         audioChunkCountRef.current++;
         if (audioChunkCountRef.current === 1 || audioChunkCountRef.current % 50 === 0) {
-          console.log(`[AudioStreamer] Sending audio chunk #${audioChunkCountRef.current}: ${audioBytes.length} bytes`);
+          console.log(`[AudioStreamer] Sending audio chunk #${audioChunkCountRef.current}: ${audioBytes.length} bytes (codec: ${currentCodecRef.current})`);
         }
-        const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: AUDIO_FORMAT };
+        // Use format based on current codec
+        const audioFormat = currentCodecRef.current === 'opus' ? AUDIO_FORMAT_OPUS : AUDIO_FORMAT_PCM;
+        const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: audioFormat };
         await sendWyomingEvent(audioChunkEvent, audioBytes);
       } catch (e) {
         const msg = (e as Error).message || 'Error sending audio data.';
