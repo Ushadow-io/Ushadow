@@ -14,7 +14,6 @@ import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { BranchToggle } from './components/BranchToggle'
 import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
 import { getColors } from './utils/colors'
 
@@ -34,16 +33,6 @@ function App() {
     setProjectRoot,
     worktreesDir,
     setWorktreesDir,
-    activeBranch,
-    setActiveBranch,
-    mainBranchPath,
-    setMainBranchPath,
-    devBranchPath,
-    setDevBranchPath,
-    mainWorktreesPath,
-    setMainWorktreesPath,
-    devWorktreesPath,
-    setDevWorktreesPath,
   } = useAppStore()
 
   // State
@@ -58,7 +47,6 @@ function App() {
   const [loadingInfra, setLoadingInfra] = useState(false)
   const [loadingEnv, setLoadingEnv] = useState<string | null>(null)
   const [showProjectDialog, setShowProjectDialog] = useState(false)
-  const [dialogBranchContext, setDialogBranchContext] = useState<BranchType | undefined>(undefined)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -324,31 +312,19 @@ function App() {
         const defaultDir = await tauri.getDefaultProjectDir()
         console.log('[Init] Default dir:', defaultDir)
 
-        // Migration: if old projectRoot exists but new fields are empty, migrate to branch-aware storage
-        if (projectRoot && !mainBranchPath) {
-          log('Migrating to branch-aware storage...', 'info')
-          setMainBranchPath(projectRoot)
-          setMainWorktreesPath(worktreesDir || `${projectRoot}/../worktrees/ushadow`)
-          setActiveBranch('main')
-          log('Migration complete', 'success')
-        }
-
         // Track if this is first time setup (showing project dialog)
         let isFirstTimeSetup = false
 
         // Show project setup dialog on first launch if no project root is configured
-        if (!projectRoot && !mainBranchPath) {
+        if (!projectRoot) {
           setProjectRoot(defaultDir)
           setShowProjectDialog(true)
           isFirstTimeSetup = true
           log('Please configure your repository location', 'step')
         } else {
           // Sync existing project root to Rust backend
-          const currentRoot = mainBranchPath || projectRoot
-          if (currentRoot) {
-            console.log('[Init] Setting project root:', currentRoot)
-            await tauri.setProjectRoot(currentRoot)
-          }
+          console.log('[Init] Setting project root:', projectRoot)
+          await tauri.setProjectRoot(projectRoot)
         }
 
         // Check prerequisites immediately (system-wide, no project needed)
@@ -1044,50 +1020,31 @@ function App() {
     setShowProjectDialog(false)
 
     try {
-      // Save to branch-specific paths
-      const targetBranch = dialogBranchContext || activeBranch
-      if (targetBranch === 'dev') {
-        setDevBranchPath(path)
-        setDevWorktreesPath(worktreesPath)
-        log(`Dev branch path set to ${path}`, 'success')
-      } else {
-        setMainBranchPath(path)
-        setMainWorktreesPath(worktreesPath)
-        log(`Main branch path set to ${path}`, 'success')
-      }
+      log(`Project path set to ${path}`, 'success')
       log(`Worktrees directory set to ${worktreesPath}`, 'info')
 
-      // If this matches the active branch, update current paths too
-      if (targetBranch === activeBranch) {
-        await tauri.setProjectRoot(path)
-        setProjectRoot(path)
-        setWorktreesDir(worktreesPath)
+      await tauri.setProjectRoot(path)
+      setProjectRoot(path)
+      setWorktreesDir(worktreesPath)
 
-        // Check if repo already exists
-        const status = await tauri.checkProjectDir(path)
+      // Check if repo already exists
+      const status = await tauri.checkProjectDir(path)
 
-        if (status.exists && status.is_valid_repo) {
-          // Existing repo found - run discovery
-          log('Found existing Ushadow repository', 'info')
-          const disc = await refreshDiscovery()
+      if (status.exists && status.is_valid_repo) {
+        // Existing repo found - run discovery
+        log('Found existing Ushadow repository', 'info')
+        const disc = await refreshDiscovery()
 
-          // Auto-switch to quick mode if no environments exist
-          if (disc && disc.environments.length === 0) {
-            setAppMode('install')
-            log('Ready for quick launch', 'step')
-          }
-        } else {
-          // Repo doesn't exist - will be cloned when user presses Launch
+        // Auto-switch to quick mode if no environments exist
+        if (disc && disc.environments.length === 0) {
           setAppMode('install')
-          log('Press Launch to install Ushadow', 'step')
+          log('Ready for quick launch', 'step')
         }
       } else {
-        // Different branch than active - just saved the path
-        log(`${targetBranch} branch configured (currently on ${activeBranch})`, 'info')
+        // Repo doesn't exist - will be cloned when user presses Launch
+        setAppMode('install')
+        log('Press Launch to install Ushadow', 'step')
       }
-
-      // Reset dialog context
-      setDialogBranchContext(undefined)
     } catch (err) {
       log(`Failed to set installation path`, 'error')
       log(String(err), 'error')
@@ -1158,63 +1115,6 @@ function App() {
       }
     } catch (err) {
       log(`Failed to link: ${err}`, 'error')
-    }
-  }
-
-  const handleSwitchBranch = async (newBranch: BranchType) => {
-    if (activeBranch === newBranch) return
-
-    // Note: Running environments will continue running in the background.
-    // They're Docker containers that are independent of branch switching.
-    log(`Switching to ${newBranch} branch...`, 'step')
-
-    // Get target path
-    const targetPath = newBranch === 'main' ? mainBranchPath : devBranchPath
-    const targetWorktreesPath = newBranch === 'main' ? mainWorktreesPath : devWorktreesPath
-
-    // If not configured, show setup dialog
-    if (!targetPath) {
-      setDialogBranchContext(newBranch)
-      setShowProjectDialog(true)
-      log(`Please configure ${newBranch} branch location`, 'step')
-      return
-    }
-
-    try {
-      // Check if repo exists at path
-      const status = await tauri.checkProjectDir(targetPath)
-
-      if (!status.is_valid_repo) {
-        if (status.exists) {
-          log(`Directory exists at ${targetPath} but is not a valid repo`, 'warning')
-        }
-        log(`Cloning ${newBranch} branch...`, 'step')
-        await handleClone(targetPath, newBranch)
-      } else {
-        // Verify and checkout correct branch
-        try {
-          const currentBranch = await tauri.getCurrentBranch(targetPath)
-          if (currentBranch !== newBranch) {
-            log(`Checking out ${newBranch} branch...`, 'step')
-            await tauri.checkoutBranch(targetPath, newBranch)
-          }
-          await tauri.updateUshadowRepo(targetPath)
-        } catch (err) {
-          log(`Branch verification failed: ${err}`, 'warning')
-        }
-      }
-
-      // Switch active branch
-      setActiveBranch(newBranch)
-      await tauri.setProjectRoot(targetPath)
-      setProjectRoot(targetPath)
-      setWorktreesDir(targetWorktreesPath)
-
-      // Refresh discovery
-      log(`Switched to ${newBranch} branch`, 'success')
-      await refreshDiscovery()
-    } catch (err) {
-      log(`Failed to switch branch: ${err}`, 'error')
     }
   }
 
@@ -1356,25 +1256,6 @@ function App() {
         log('✓ Project directory ready', 'success')
       }
 
-      // Step 5b: If dev branch selected, ensure dev worktree exists
-      let devWorktreePath: string | undefined = undefined
-      if (activeBranch === 'dev') {
-        log('Setting up dev environment...', 'step')
-
-        // Check if dev worktree already exists
-        let devWorktree = await tauri.checkWorktreeExists(projectRoot, 'dev')
-
-        if (!devWorktree) {
-          log('Creating dev worktree from dev branch...', 'step')
-          const created = await handleCreateWorktree('ushadow-dev', 'dev')
-          devWorktreePath = created.path
-          log(`✓ Dev worktree created at ${created.path}`, 'success')
-        } else {
-          devWorktreePath = devWorktree.path
-          log(`✓ Dev worktree ready at ${devWorktree.path}`, 'success')
-        }
-      }
-
       // Step 6: Start infrastructure (postgres, redis, etc.) - only if needed
       log('Checking infrastructure...', 'step')
       // Use cached discovery first (fast), only refresh if needed
@@ -1405,11 +1286,9 @@ function App() {
       }
       await refreshDiscovery()
 
-      // Step 7: Start the appropriate environment based on selected branch
-      const envName = activeBranch === 'dev' ? 'ushadow-dev' : 'ushadow'
-      log(`Starting ${envName} environment...`, 'step')
-      // Pass the explicit path for dev worktree to ensure correct location
-      await handleStartEnv(envName, devWorktreePath)
+      // Step 7: Start the ushadow environment
+      log(`Starting ushadow environment...`, 'step')
+      await handleStartEnv('ushadow', undefined)
 
       // Switch to environments page after setup is complete
       setAppMode('environments')
@@ -1541,13 +1420,6 @@ function App() {
                 Automatically install prerequisites and start Ushadow
               </p>
             </div>
-
-            {/* Branch Selector */}
-            <BranchToggle
-              activeBranch={activeBranch}
-              onSwitch={handleSwitchBranch}
-              disabled={isLaunching}
-            />
 
             {/* Project Folder Display */}
             <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
@@ -1722,15 +1594,8 @@ function App() {
         defaultWorktreesPath={worktreesDir}
         onClose={() => {
           setShowProjectDialog(false)
-          setDialogBranchContext(undefined)
         }}
         onSetup={handleProjectSetup}
-        branchContext={dialogBranchContext}
-        suggestedParentPath={
-          dialogBranchContext === 'dev' && mainBranchPath
-            ? mainBranchPath.split('/').slice(0, -1).join('/')
-            : undefined
-        }
       />
 
       {/* New Environment Dialog */}

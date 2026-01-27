@@ -32,9 +32,12 @@ export function NewEnvironmentDialog({
 
   const handleSubmit = () => {
     if (!name.trim()) return
-    // Use specified branch name, or fall back to base branch (main/dev)
-    const branchName = branch.trim() || baseBranch
-    onWorktree(name.trim(), branchName)
+    // Branch name format: envname/branchname-basebranch
+    // Example: rouge/myfeature-dev or staging/hotfix-main
+    const envName = name.trim()
+    const branchSuffix = branch.trim() || 'base'
+    const branchName = `${envName}/${branchSuffix}-${baseBranch}`
+    onWorktree(envName, branchName)
   }
 
   const isValid = name.trim()
@@ -96,11 +99,15 @@ export function NewEnvironmentDialog({
             onChange={(e) => setBranch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && isValid && handleSubmit()}
             className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-            placeholder="e.g., feature/auth, bugfix/login"
+            placeholder="e.g., myfeature, auth, bugfix-123"
             data-testid="branch-name-input"
           />
           <p className="text-xs text-text-muted mt-1">
-            Leave empty to use base branch ({baseBranch})
+            {branch.trim() && name.trim()
+              ? `Will create: ${name.trim()}/${branch.trim()}-${baseBranch}`
+              : name.trim()
+                ? `Will create: ${name.trim()}/base-${baseBranch}`
+                : `Enter environment name first`}
           </p>
         </div>
 
@@ -136,13 +143,13 @@ export function NewEnvironmentDialog({
             </button>
           </div>
           <p className="text-xs text-text-muted mt-1">
-            Base branch to create worktree from if no branch name specified
+            Creates worktree from origin/{baseBranch}
           </p>
         </div>
 
         {/* Helper text */}
         <p className="text-xs text-text-muted mb-4">
-          Creates a git worktree for parallel development. Specify a branch name or use the base branch.
+          Creates a git worktree with branch name: envname/branchname-{baseBranch} from origin/{baseBranch}
         </p>
 
         {/* Actions */}

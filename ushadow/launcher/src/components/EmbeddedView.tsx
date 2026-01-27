@@ -128,6 +128,7 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
           className="absolute inset-0 w-full h-full border-0"
           title={`${envName} environment`}
           data-testid="embedded-iframe"
+          allow="microphone; camera; autoplay; clipboard-write"
         />
       </div>
     </div>

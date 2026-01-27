@@ -45,85 +45,21 @@ fn read_env_ports(worktree_path: &str) -> (Option<u16>, Option<u16>) {
     }
 }
 
-/// Determine base branch using git merge-base
-/// Finds which branch (main or dev) is the closest ancestor
-fn determine_base_branch(repo_path: &str, branch: &str) -> Option<String> {
-    // Special case: if branch is exactly main or dev
-    if branch == "main" || branch == "master" {
-        return Some("main".to_string());
-    }
-    if branch == "dev" {
-        return Some("dev".to_string());
-    }
-
-    // Get merge-base with dev
-    let dev_merge_base = silent_command("git")
-        .args(["-C", repo_path, "merge-base", branch, "dev"])
-        .output();
-
-    // Get merge-base with main
-    let main_merge_base = silent_command("git")
-        .args(["-C", repo_path, "merge-base", branch, "main"])
-        .output();
-
-    if let (Ok(dev_out), Ok(main_out)) = (dev_merge_base, main_merge_base) {
-        if dev_out.status.success() && main_out.status.success() {
-            let dev_base = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
-            let main_base = String::from_utf8_lossy(&main_out.stdout).trim().to_string();
-
-            // If the merge-bases are different, the branch is based on whichever is more recent
-            if dev_base != main_base {
-                // Check if dev_base is an ancestor of main_base (meaning main is more recent)
-                let check = silent_command("git")
-                    .args(["-C", repo_path, "merge-base", "--is-ancestor", &dev_base, &main_base])
-                    .output();
-
-                if let Ok(output) = check {
-                    if output.status.success() {
-                        // dev_base is ancestor of main_base, so main is the closer base
-                        return Some("main".to_string());
-                    } else {
-                        // dev_base is NOT an ancestor of main_base, so dev is the closer base
-                        return Some("dev".to_string());
-                    }
-                }
-            } else {
-                // Merge bases are the same - check which branch tip is closer
-                // Count commits from branch to dev
-                let dev_count = silent_command("git")
-                    .args(["-C", repo_path, "rev-list", "--count", &format!("{}..{}", "dev", branch)])
-                    .output();
-
-                let main_count = silent_command("git")
-                    .args(["-C", repo_path, "rev-list", "--count", &format!("{}..{}", "main", branch)])
-                    .output();
-
-                if let (Ok(dev_c), Ok(main_c)) = (dev_count, main_count) {
-                    if dev_c.status.success() && main_c.status.success() {
-                        let dev_commits = String::from_utf8_lossy(&dev_c.stdout).trim().parse::<i32>().unwrap_or(999);
-                        let main_commits = String::from_utf8_lossy(&main_c.stdout).trim().parse::<i32>().unwrap_or(999);
-
-                        // Fewer commits = closer base
-                        if dev_commits < main_commits {
-                            return Some("dev".to_string());
-                        } else {
-                            return Some("main".to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback to path-based detection
-    if repo_path.contains("/ushadow-dev/") || repo_path.contains("/worktrees-dev/") ||
-       repo_path.contains("\\ushadow-dev\\") || repo_path.contains("\\worktrees-dev\\") {
+/// Determine base branch from branch name suffix
+/// Branch names follow pattern: envname/branchname-basebranch (e.g., rouge/myfeature-dev)
+fn determine_base_branch(_repo_path: &str, branch: &str) -> Option<String> {
+    // Parse suffix from branch name
+    if branch.ends_with("-dev") {
         Some("dev".to_string())
-    } else if repo_path.contains("/ushadow/") || repo_path.contains("/worktrees/") ||
-              repo_path.contains("\\ushadow\\") || repo_path.contains("\\worktrees\\") {
+    } else if branch.ends_with("-main") {
+        Some("main".to_string())
+    } else if branch == "dev" {
+        Some("dev".to_string())
+    } else if branch == "main" || branch == "master" {
         Some("main".to_string())
     } else {
-        None
+        // Default to main if no suffix
+        Some("main".to_string())
     }
 }
 
@@ -247,9 +183,15 @@ pub async fn discover_environments_with_config(
                 }
 
                 // Check Ushadow environment containers (backend, webui, frontend)
-                // Only environment containers have the "ushadow-" prefix
-                // Service containers (mycelia, chronicle, mem0) do NOT have this prefix
-                if name.starts_with("ushadow-") {
+                // Environment containers: ushadow-{env}-backend (3 parts)
+                // Service containers: ushadow-{env}-servicename-backend-hash (5+ parts)
+                // So filter by checking exact part count
+                let parts: Vec<&str> = name.split('-').collect();
+                let is_environment_container = parts.len() == 3
+                    && parts[0] == "ushadow"
+                    && matches!(parts[2], "backend" | "frontend" | "webui" | "tailscale");
+
+                if is_environment_container {
                     let env_name = extract_env_name(name);
 
                     let entry = env_map.entry(env_name.clone()).or_insert(EnvContainerInfo {
@@ -399,21 +341,12 @@ pub async fn discover_environments_with_config(
             if let Ok(output) = branch_output {
                 if output.status.success() {
                     let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    // Use determine_base_branch for accurate detection
                     return determine_base_branch(wd, &current_branch);
                 }
             }
 
-            // Fallback to path-based detection if git command fails
-            if wd.contains("/ushadow-dev/") || wd.contains("/worktrees-dev/") ||
-               wd.contains("\\ushadow-dev\\") || wd.contains("\\worktrees-dev\\") {
-                Some("dev".to_string())
-            } else if wd.contains("/ushadow/") || wd.contains("/worktrees/") ||
-                      wd.contains("\\ushadow\\") || wd.contains("\\worktrees\\") {
-                Some("main".to_string())
-            } else {
-                None
-            }
+            // Fallback to main if git command fails
+            Some("main".to_string())
         });
 
         environments.push(UshadowEnvironment {

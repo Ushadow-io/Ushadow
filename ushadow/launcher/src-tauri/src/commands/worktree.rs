@@ -357,13 +357,21 @@ pub async fn create_worktree(
             .map_err(|e| format!("Failed to create worktree: {}", e))?;
         (output, desired_branch)
     } else {
-        // Branch doesn't exist - create new branch from main
-        // If the desired branch has slashes, use it as-is for the branch name
-        // Git supports slashes in branch names (e.g., feature/my-feature)
-        let new_branch_name = desired_branch;
+        // Branch doesn't exist - create new branch from remote base branch
+        // Parse branch name to determine base branch (e.g., rouge/myfeature-dev -> origin/dev)
+        let new_branch_name = desired_branch.clone();
 
-        // Create from main (or master if main doesn't exist)
-        let base = "main";
+        // Determine base from branch suffix (-dev or -main)
+        let base = if new_branch_name.ends_with("-dev") {
+            "origin/dev"
+        } else if new_branch_name.ends_with("-main") {
+            "origin/main"
+        } else {
+            // Default to origin/main if no suffix
+            "origin/main"
+        };
+
+        eprintln!("[create_worktree] Creating new branch '{}' from '{}'", new_branch_name, base);
 
         let output = silent_command("git")
             .args(["worktree", "add", "-b", &new_branch_name, worktree_path.to_str().unwrap(), base])

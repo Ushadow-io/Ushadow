@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { Folder, X, CheckCircle } from 'lucide-react'
 import { dialog, invoke } from '@tauri-apps/api'
 import { join } from '@tauri-apps/api/path'
-import type { BranchType } from '../store/appStore'
 
 interface ProjectSetupDialogProps {
   isOpen: boolean
@@ -10,8 +9,6 @@ interface ProjectSetupDialogProps {
   defaultWorktreesPath?: string
   onClose: () => void
   onSetup: (path: string, worktreesPath: string) => void
-  branchContext?: BranchType
-  suggestedParentPath?: string  // For dev branch, suggest same parent as main
 }
 
 interface ProjectStatus {
@@ -25,39 +22,28 @@ export function ProjectSetupDialog({
   defaultWorktreesPath,
   onClose,
   onSetup,
-  branchContext,
-  suggestedParentPath,
 }: ProjectSetupDialogProps) {
   const [parentPath, setParentPath] = useState<string | null>(null)
   const [fullInstallPath, setFullInstallPath] = useState<string | null>(null)
   const [worktreesPath, setWorktreesPath] = useState<string | null>(null)
   const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
 
-  // Get suffix based on branch context
-  const branchSuffix = branchContext === 'dev' ? '-dev' : ''
-  const title = branchContext === 'dev' ? 'Configure Dev Branch Folder' : 'Configure Folders'
-  const description = branchContext === 'dev'
-    ? suggestedParentPath
-      ? 'Dev branch will be installed in the same parent folder as main, with "-dev" suffix.'
-      : 'Select where to clone the dev branch (separate from main).'
-    : 'Select a parent folder. The Ushadow project will be in ushadow/, and worktrees in worktrees/ushadow/.'
+  const title = 'Configure Folders'
+  const description = 'Select a parent folder. The Ushadow project will be in ushadow/, and worktrees in worktrees/ushadow/.'
 
-  // Auto-populate parent path for dev branch when dialog opens
+  // Reset when dialog closes
   useEffect(() => {
-    if (isOpen && branchContext === 'dev' && suggestedParentPath) {
-      setParentPath(suggestedParentPath)
-    } else if (!isOpen) {
-      // Reset when dialog closes
+    if (!isOpen) {
       setParentPath(null)
     }
-  }, [isOpen, branchContext, suggestedParentPath])
+  }, [isOpen])
 
   // Calculate the full install path and worktrees path using cross-platform path joining
   useEffect(() => {
     if (parentPath) {
       Promise.all([
-        join(parentPath, `ushadow${branchSuffix}`),
-        join(parentPath, `worktrees${branchSuffix}`, 'ushadow')
+        join(parentPath, 'ushadow'),
+        join(parentPath, 'worktrees', 'ushadow')
       ]).then(async ([installPath, defaultWorktreesPath]) => {
         setFullInstallPath(installPath)
         setWorktreesPath(defaultWorktreesPath)
@@ -76,7 +62,7 @@ export function ProjectSetupDialog({
       setWorktreesPath(null)
       setProjectStatus(null)
     }
-  }, [parentPath, branchSuffix])
+  }, [parentPath])
 
   if (!isOpen) return null
 
