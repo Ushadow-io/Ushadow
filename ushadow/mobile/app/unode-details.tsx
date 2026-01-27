@@ -358,7 +358,7 @@ export default function UNodeDetailsPage() {
 
     // Update the existing node with new connection info
     const existingNode = unodes.find(n => n.id === rescanNodeId);
-    const savedNode = await saveUnode({
+    await saveUnode({
       id: rescanNodeId!, // Keep same ID
       name: existingNode?.name || result.leader.hostname.split('.')[0] || 'UNode',
       apiUrl: result.leader.apiUrl,
@@ -368,17 +368,17 @@ export default function UNodeDetailsPage() {
       authToken: data.auth_token,
     });
 
-    // Reload and refresh status
-    const updatedUnodes = await getUnodes();
-    setUnodes(updatedUnodes);
+    // Reload unodes
+    await getUnodes();
     setRescanNodeId(null);
 
     if (data.auth_token) {
       // Save token globally so other pages can use it
       await saveAuthToken(data.auth_token);
-      setAuthToken(data.auth_token);
-      checkNodeStatus(savedNode, data.auth_token);
     }
+
+    // Navigate back to the main page so user can start streaming
+    router.replace('/');
   };
 
   // Handle UNode found from discovery (for adding new nodes)
@@ -523,7 +523,26 @@ export default function UNodeDetailsPage() {
           />
         </TouchableOpacity>
 
-        {/* Expanded Content */}
+        {/* Actions - Always visible below header */}
+        <View style={styles.actionsSection}>
+          <TouchableOpacity
+            style={styles.removeButton}
+            onPress={() => handleRemoveNode(selectedNode)}
+          >
+            <Ionicons name="trash-outline" size={18} color="#fff" />
+            <Text style={styles.removeButtonText}>Remove</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.rescanButton}
+            onPress={() => handleRescanNode(selectedNode)}
+            testID="rescan-qr-button"
+          >
+            <Ionicons name="qr-code-outline" size={18} color="#fff" />
+            <Text style={styles.rescanButtonText}>Rescan</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Expanded Content - Advanced details */}
         {cardExpanded && (
           <>
             {/* URL Configuration - Hidden behind edit button */}
@@ -712,25 +731,6 @@ export default function UNodeDetailsPage() {
                   <Text style={styles.detailValue}>{selectedNode.tailscaleIp}</Text>
                 </View>
               )}
-            </View>
-
-            {/* Actions */}
-            <View style={styles.actionsSection}>
-              <TouchableOpacity
-                style={styles.removeButton}
-                onPress={() => handleRemoveNode(selectedNode)}
-              >
-                <Ionicons name="trash-outline" size={18} color="#fff" />
-                <Text style={styles.removeButtonText}>Remove</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.rescanButton}
-                onPress={() => handleRescanNode(selectedNode)}
-                testID="rescan-qr-button"
-              >
-                <Ionicons name="qr-code-outline" size={18} color="#fff" />
-                <Text style={styles.rescanButtonText}>Rescan</Text>
-              </TouchableOpacity>
             </View>
           </>
         )}
@@ -1202,7 +1202,9 @@ const styles = StyleSheet.create({
   actionsSection: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: spacing.lg,
+    padding: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
   },
   removeButton: {
     flexDirection: 'row',
