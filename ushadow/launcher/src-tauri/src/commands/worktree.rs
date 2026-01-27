@@ -2,7 +2,7 @@ use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus}
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use super::utils::shell_command;
+use super::utils::{shell_command, silent_command};
 
 /// Get color name for an environment name
 /// Returns the color name that the frontend will use to look up hex codes
@@ -16,6 +16,12 @@ pub fn get_colors_for_name(name: &str) -> (String, String) {
     ];
 
     let name_lower = name.to_lowercase();
+
+    // Special case: default "ushadow" environment uses purple
+    if name_lower == "ushadow" {
+        return ("purple".to_string(), "purple".to_string());
+    }
+
     for color in &color_names {
         if name_lower.contains(color) {
             return (color.to_string(), color.to_string());
@@ -31,7 +37,7 @@ pub fn get_colors_for_name(name: &str) -> (String, String) {
 pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<Option<WorktreeInfo>, String> {
     let branch = branch.to_lowercase();
 
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&main_repo)
         .output()
@@ -102,7 +108,7 @@ pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<
 /// List all git worktrees in a repository
 #[tauri::command]
 pub async fn list_worktrees(main_repo: String) -> Result<Vec<WorktreeInfo>, String> {
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&main_repo)
         .output()
@@ -174,7 +180,7 @@ pub async fn list_worktrees(main_repo: String) -> Result<Vec<WorktreeInfo>, Stri
 /// List all git branches in a repository
 #[tauri::command]
 pub async fn list_git_branches(main_repo: String) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["branch", "-a", "--format=%(refname:short)"])
         .current_dir(&main_repo)
         .output()
@@ -239,7 +245,7 @@ pub async fn create_worktree(
     let desired_branch = base_branch.map(|b| b.to_lowercase()).unwrap_or_else(|| name.clone());
 
     // Check if git has this worktree registered or if the branch is in use
-    let list_output = Command::new("git")
+    let list_output = silent_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&main_repo)
         .output()
@@ -302,7 +308,7 @@ pub async fn create_worktree(
         eprintln!("[create_worktree] Using path for removal: {}", path_to_remove);
 
         // Try to remove the worktree from git's tracking (handles both directory and registration)
-        let remove_output = Command::new("git")
+        let remove_output = silent_command("git")
             .args(["worktree", "remove", "--force", &path_to_remove])
             .current_dir(&main_repo)
             .output()
@@ -314,7 +320,7 @@ pub async fn create_worktree(
             // If remove fails, try prune + manual directory removal
             eprintln!("[create_worktree] git worktree remove failed, trying prune + manual cleanup");
 
-            let prune_output = Command::new("git")
+            let prune_output = silent_command("git")
                 .args(["worktree", "prune"])
                 .current_dir(&main_repo)
                 .output()
@@ -334,7 +340,7 @@ pub async fn create_worktree(
     }
 
     // Check if the desired branch exists
-    let check_output = Command::new("git")
+    let check_output = silent_command("git")
         .args(["rev-parse", "--verify", &format!("refs/heads/{}", desired_branch)])
         .current_dir(&main_repo)
         .output()
@@ -344,22 +350,30 @@ pub async fn create_worktree(
 
     let (output, final_branch) = if branch_exists {
         // Branch exists - checkout directly into worktree
-        let output = Command::new("git")
+        let output = silent_command("git")
             .args(["worktree", "add", worktree_path.to_str().unwrap(), &desired_branch])
             .current_dir(&main_repo)
             .output()
             .map_err(|e| format!("Failed to create worktree: {}", e))?;
         (output, desired_branch)
     } else {
-        // Branch doesn't exist - create new branch from main
-        // If the desired branch has slashes, use it as-is for the branch name
-        // Git supports slashes in branch names (e.g., feature/my-feature)
-        let new_branch_name = desired_branch;
+        // Branch doesn't exist - create new branch from remote base branch
+        // Parse branch name to determine base branch (e.g., rouge/myfeature-dev -> origin/dev)
+        let new_branch_name = desired_branch.clone();
 
-        // Create from main (or master if main doesn't exist)
-        let base = "main";
+        // Determine base from branch suffix (-dev or -main)
+        let base = if new_branch_name.ends_with("-dev") {
+            "origin/dev"
+        } else if new_branch_name.ends_with("-main") {
+            "origin/main"
+        } else {
+            // Default to origin/main if no suffix
+            "origin/main"
+        };
 
-        let output = Command::new("git")
+        eprintln!("[create_worktree] Creating new branch '{}' from '{}'", new_branch_name, base);
+
+        let output = silent_command("git")
             .args(["worktree", "add", "-b", &new_branch_name, worktree_path.to_str().unwrap(), base])
             .current_dir(&main_repo)
             .output()
@@ -419,7 +433,7 @@ async fn open_in_vscode_impl(path: String, env_name: Option<String>, with_tmux: 
     }
 
     // Open VS Code (don't wait for it to finish)
-    Command::new("code")
+    silent_command("code")
         .arg(&path)
         .spawn()
         .map_err(|e| format!("Failed to open VS Code: {}", e))?;
@@ -631,7 +645,7 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
         .ok_or_else(|| format!("Worktree '{}' not found", name))?;
 
     // Remove the worktree
-    let output = Command::new("git")
+    let output = silent_command("git")
         .args(["worktree", "remove", &worktree.path])
         .current_dir(&main_repo)
         .output()
@@ -655,7 +669,15 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
 
     // Step 1: Stop containers (best effort - don't fail if they're already stopped)
     eprintln!("[delete_environment] Stopping containers for '{}'...", env_name);
-    let stop_result = shell_command(&format!("docker compose -p ushadow-{} down", env_name))
+
+    // Use correct compose project name (matches run.py logic)
+    let compose_project_name = if env_name == "ushadow" {
+        "ushadow".to_string()
+    } else {
+        format!("ushadow-{}", env_name)
+    };
+
+    let stop_result = shell_command(&format!("docker compose -p {} down", compose_project_name))
         .output();
 
     match stop_result {
@@ -728,7 +750,7 @@ pub async fn create_worktree_with_workmux(
     main_repo: String,
     name: String,
     base_branch: Option<String>,
-    background: Option<bool>,
+    _background: Option<bool>,
 ) -> Result<WorktreeInfo, String> {
     // Force lowercase to avoid Docker Compose naming issues
     let name = name.to_lowercase();
@@ -1317,7 +1339,7 @@ end tell"#,
     {
         // For Linux/Windows - create dedicated tmux session per environment
         // Try common terminal emulators in order of preference
-        let env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
+        let _env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
 
         // Create the tmux session if it doesn't exist
         let _ = shell_command(&format!(
@@ -1325,12 +1347,16 @@ end tell"#,
             window_name, window_name, worktree_path
         )).output();
 
+        // Create tmux commands before the array to extend their lifetime
+        let xfce_cmd = format!("tmux attach-session -t {}", window_name);
+        let xterm_cmd = format!("tmux attach-session -t {}", window_name);
+
         // Try different terminal emulators
         let terminals = vec![
             ("gnome-terminal", vec!["--", "tmux", "attach-session", "-t", &window_name]),
             ("konsole", vec!["-e", "tmux", "attach-session", "-t", &window_name]),
-            ("xfce4-terminal", vec!["-e", &format!("tmux attach-session -t {}", window_name)]),
-            ("xterm", vec!["-e", &format!("tmux attach-session -t {}", window_name)]),
+            ("xfce4-terminal", vec!["-e", xfce_cmd.as_str()]),
+            ("xterm", vec!["-e", xterm_cmd.as_str()]),
         ];
 
         for (terminal, args) in terminals {

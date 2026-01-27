@@ -28,6 +28,16 @@ export function ProjectSetupDialog({
   const [worktreesPath, setWorktreesPath] = useState<string | null>(null)
   const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
 
+  const title = 'Configure Folders'
+  const description = 'Select a parent folder. The Ushadow project will be in ushadow/, and worktrees in worktrees/ushadow/.'
+
+  // Reset when dialog closes
+  useEffect(() => {
+    if (!isOpen) {
+      setParentPath(null)
+    }
+  }, [isOpen])
+
   // Calculate the full install path and worktrees path using cross-platform path joining
   useEffect(() => {
     if (parentPath) {
@@ -91,7 +101,7 @@ export function ProjectSetupDialog({
       <div className="bg-surface-800 rounded-xl p-6 w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Configure Folders</h2>
+          <h2 className="text-lg font-semibold">{title}</h2>
           <button
             onClick={onClose}
             className="p-1 rounded hover:bg-surface-700 transition-colors"
@@ -102,7 +112,7 @@ export function ProjectSetupDialog({
 
         {/* Description */}
         <p className="text-sm text-text-secondary mb-4">
-          Select a parent folder. The Ushadow project will be in <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">ushadow/</code>, and worktrees in <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">worktrees/ushadow/</code>.
+          {description}
         </p>
 
         {/* Folder Picker */}

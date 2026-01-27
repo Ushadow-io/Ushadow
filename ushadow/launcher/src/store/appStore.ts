@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type AppMode = 'dev' | 'quick'
+export type AppMode = 'install' | 'infra' | 'environments'
 
 export interface SpoofedPrerequisites {
   git_installed: boolean | null  // null = use real value
@@ -17,6 +17,9 @@ interface AppState {
   dryRunMode: boolean
   showDevTools: boolean
 
+  // UI state
+  logExpanded: boolean
+
   // App mode
   appMode: AppMode
 
@@ -30,6 +33,7 @@ interface AppState {
   // Actions
   setDryRunMode: (enabled: boolean) => void
   setShowDevTools: (enabled: boolean) => void
+  setLogExpanded: (expanded: boolean) => void
   setAppMode: (mode: AppMode) => void
   setSpoofedPrereq: (key: keyof SpoofedPrerequisites, value: boolean | null) => void
   resetSpoofedPrereqs: () => void
@@ -52,7 +56,8 @@ export const useAppStore = create<AppState>()(
       // Defaults
       dryRunMode: false,
       showDevTools: false,
-      appMode: 'quick',
+      logExpanded: true,
+      appMode: 'install',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
       worktreesDir: '',
@@ -60,6 +65,7 @@ export const useAppStore = create<AppState>()(
       // Actions
       setDryRunMode: (enabled) => set({ dryRunMode: enabled }),
       setShowDevTools: (enabled) => set({ showDevTools: enabled }),
+      setLogExpanded: (expanded) => set({ logExpanded: expanded }),
       setAppMode: (mode) => set({ appMode: mode }),
       setSpoofedPrereq: (key, value) => set((state) => ({
         spoofedPrereqs: { ...state.spoofedPrereqs, [key]: value }

@@ -1,13 +1,68 @@
 # Ushadow Desktop Launcher
 
-A Tauri-based desktop application that manages Ushadow's Docker containers and provides a native app experience.
+A Tauri-based desktop application for orchestrating parallel development environments with git worktrees, tmux sessions, and Docker containers.
 
 ## Features
 
-- **Prerequisite Checking**: Verifies Docker and Tailscale are installed
-- **Container Management**: Start/stop Docker containers with one click
+### Core Functionality
+- **Git Worktree Management**: Create, manage, and delete git worktrees for parallel development
+- **Tmux Integration**: Persistent terminal sessions with automatic window management
+- **Container Orchestration**: Start/stop Docker containers per environment
+- **Environment Discovery**: Auto-detect and manage multiple environments
+- **Fast Status Checks**: Cached Tailscale/Docker polling for instant feedback
+
+### Developer Experience
+- **One-Click Terminal Access**: Open Terminal.app directly into environment's tmux session
+- **VS Code Integration**: Launch VS Code with environment-specific colors
+- **Real-time Status Badges**: Visual indicators for tmux activity (Working/Waiting/Done/Error)
+- **Quick Environment Switching**: Manage multiple parallel tasks/features simultaneously
+- **Merge & Cleanup**: Rebase and merge worktrees back to main with one click
+
+### Infrastructure
+- **Prerequisite Checking**: Verifies Docker, Tailscale, Git, and Tmux
 - **System Tray**: Runs in background with quick access menu
 - **Cross-Platform**: Builds for macOS (DMG), Windows (EXE), and Linux (DEB/AppImage)
+
+## Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Start development mode
+npm run tauri:dev
+
+# The launcher will:
+# 1. Auto-detect existing environments/worktrees
+# 2. Start tmux server if worktrees exist
+# 3. Show all environments with real-time status
+```
+
+### First-Time Usage
+
+1. **Set Project Root**: Click the folder icon to point to your Ushadow repo
+2. **Check Prerequisites**: Verify Docker, Tailscale, Git, Tmux are installed
+3. **Start Infrastructure**: Start required containers (postgres, redis, etc.)
+4. **Create Environment**: Click "New Environment" and choose:
+   - **Clone** - Create new git clone (traditional)
+   - **Worktree** - Create git worktree (recommended for parallel dev)
+
+### Using Tmux Sessions
+
+- **Purple Terminal Icon** on environment cards - Click to open Terminal and attach to tmux
+- **Global "Tmux" Button** in header - View all sessions/windows
+- **Status Badges** next to branch names - See what's running in each tmux window
+
+**Note**: Terminal opening currently works on **macOS only** (via Terminal.app). Linux/Windows support is planned. See [CROSS_PLATFORM_TERMINAL.md](./CROSS_PLATFORM_TERMINAL.md) for details.
+
+## Documentation
+
+- **[TMUX_INTEGRATION.md](./TMUX_INTEGRATION.md)** - Complete guide to tmux integration features (Phase 1)
+- **[ROADMAP.md](./ROADMAP.md)** - Full vision including Vibe Kanban and remote management (Phases 2-4)
+- **[CROSS_PLATFORM_TERMINAL.md](./CROSS_PLATFORM_TERMINAL.md)** - Cross-platform terminal opening strategy
+- **[TESTING.md](./TESTING.md)** - Testing guidelines
+- **[RELEASING.md](./RELEASING.md)** - Release process
+- **[CHANGELOG.md](./CHANGELOG.md)** - Version history
 
 ## Prerequisites
 

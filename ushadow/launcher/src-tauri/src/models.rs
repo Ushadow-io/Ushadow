@@ -81,6 +81,7 @@ pub struct UshadowEnvironment {
     pub containers: Vec<String>,
     pub is_worktree: bool,  // True if this environment is a git worktree
     pub created_at: Option<i64>,  // Unix timestamp (seconds since epoch)
+    pub base_branch: Option<String>,  // "main" or "dev" - which base branch this worktree was created from
 }
 
 /// Infrastructure service status

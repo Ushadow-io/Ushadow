@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Ushadow",
-    "version": "0.5.1"
+    "version": "0.7.15"
   },
   "tauri": {
     "allowlist": {
@@ -72,6 +72,10 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
+      "resources": [
+        "prerequisites.yaml",
+        "bundled/**/*"
+      ],
       "macOS": {
         "minimumSystemVersion": "10.15",
         "exceptionDomain": "localhost",
@@ -91,7 +95,7 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* ws://localhost:*; img-src 'self' data: http://localhost:*; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* https://localhost:* ws://localhost:* wss://localhost:*; img-src 'self' data: http://localhost:* https://localhost:*; style-src 'self' 'unsafe-inline'; frame-src http://localhost:* https://localhost:*"
     },
     "systemTray": {
       "iconPath": "icons/icon.png",

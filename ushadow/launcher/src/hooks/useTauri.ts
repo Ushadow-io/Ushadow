@@ -9,6 +9,7 @@ export interface Prerequisites {
   tailscale_connected: boolean
   git_installed: boolean
   python_installed: boolean
+  uv_installed: boolean
   workmux_installed: boolean
   tmux_installed: boolean
   homebrew_version: string | null
@@ -16,6 +17,7 @@ export interface Prerequisites {
   tailscale_version: string | null
   git_version: string | null
   python_version: string | null
+  uv_version: string | null
   workmux_version: string | null
   tmux_version: string | null
 }
@@ -34,6 +36,7 @@ export interface UshadowEnvironment {
   path: string | null
   branch: string | null
   is_worktree: boolean
+  base_branch: string | null  // "main" or "dev" - which base branch this worktree was created from
 }
 
 // Legacy alias for backward compatibility
@@ -67,19 +70,63 @@ export interface LauncherSettings {
   default_admin_name: string | null
 }
 
+// Prerequisites configuration types
+export interface Prerequisite {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  platforms: string[]
+  check_command?: string
+  check_commands?: string[]
+  check_running_command?: string
+  check_connected_command?: string
+  fallback_paths?: string[]  // Already platform-specific when from PlatformPrerequisitesConfig
+  version_filter?: string
+  optional: boolean
+  has_service?: boolean
+  category: string
+  connection_validation?: {
+    starts_with?: string
+  }
+}
+
+export interface InstallationMethod {
+  method: string
+  package?: string
+  url?: string
+  packages?: Record<string, string>
+}
+
+export interface PrerequisitesConfig {
+  prerequisites: Prerequisite[]
+  installation_methods?: Record<string, Record<string, InstallationMethod>>
+}
+
+export interface PlatformPrerequisitesConfig {
+  prerequisites: Prerequisite[]
+  installation_methods?: Record<string, InstallationMethod>
+}
+
 // Tauri command wrappers with proper typing
 export const tauri = {
   // System checks
   checkPrerequisites: () => invoke<Prerequisites>('check_prerequisites'),
   getOsType: () => invoke<string>('get_os_type'),
-  checkBrew: () => invoke<boolean>('check_brew'),
+
+  // Prerequisites configuration
+  getPrerequisitesConfig: () => invoke<PrerequisitesConfig>('get_prerequisites_config'),
+  getPlatformPrerequisitesConfig: (platform: string) => invoke<PlatformPrerequisitesConfig>('get_platform_prerequisites_config', { platform }),
 
   // Project management
   getDefaultProjectDir: () => invoke<string>('get_default_project_dir'),
   setProjectRoot: (path: string) => invoke<void>('set_project_root', { path }),
   checkProjectDir: (path: string) => invoke<{ path: string | null; exists: boolean; is_valid_repo: boolean }>('check_project_dir', { path }),
-  cloneUshadowRepo: (targetDir: string) => invoke<string>('clone_ushadow_repo', { targetDir }),
+  cloneUshadowRepo: (targetDir: string, branch?: string) => invoke<string>('clone_ushadow_repo', { targetDir, branch }),
   updateUshadowRepo: (projectDir: string) => invoke<string>('update_ushadow_repo', { projectDir }),
+  getCurrentBranch: (path: string) => invoke<string>('get_current_branch', { path }),
+  checkoutBranch: (path: string, branch: string) => invoke<string>('checkout_branch', { path, branch }),
+  getBaseBranch: (repoPath: string, branch: string) => invoke<string | null>('get_base_branch', { repoPath, branch }),
 
   // Infrastructure management
   startInfrastructure: () => invoke<string>('start_infrastructure'),
@@ -102,21 +149,22 @@ export const tauri = {
   checkBackendHealth: () => invoke<boolean>('check_backend_health'),
   checkWebuiHealth: () => invoke<boolean>('check_webui_health'),
 
-  // Installers - macOS
-  installHomebrew: () => invoke<string>('install_homebrew'),
-  installDockerViaBrew: () => invoke<string>('install_docker_via_brew'),
-  installTailscaleMacos: () => invoke<string>('install_tailscale_macos'),
-  installGitMacos: () => invoke<string>('install_git_macos'),
-  startDockerDesktopMacos: () => invoke<string>('start_docker_desktop_macos'),
+  // Generic installer (cross-platform, YAML-driven)
+  installPrerequisite: (prerequisiteId: string) => invoke<string>('install_prerequisite', { prerequisiteId }),
+  startPrerequisite: (prerequisiteId: string) => invoke<string>('start_prerequisite', { prerequisiteId }),
 
-  // Installers - Windows
-  installDockerWindows: () => invoke<string>('install_docker_windows'),
-  installTailscaleWindows: () => invoke<string>('install_tailscale_windows'),
-  installGitWindows: () => invoke<string>('install_git_windows'),
-  startDockerDesktopWindows: () => invoke<string>('start_docker_desktop_windows'),
-
-  // Installers - Linux
-  startDockerServiceLinux: () => invoke<string>('start_docker_service_linux'),
+  // Deprecated: Old platform-specific installers (kept for backward compatibility)
+  // Use installPrerequisite() instead
+  installHomebrew: () => invoke<string>('install_prerequisite', { prerequisiteId: 'homebrew' }),
+  installDockerViaBrew: () => invoke<string>('install_prerequisite', { prerequisiteId: 'docker' }),
+  installTailscaleMacos: () => invoke<string>('install_prerequisite', { prerequisiteId: 'tailscale' }),
+  installGitMacos: () => invoke<string>('install_prerequisite', { prerequisiteId: 'git' }),
+  startDockerDesktopMacos: () => invoke<string>('start_prerequisite', { prerequisiteId: 'docker' }),
+  installDockerWindows: () => invoke<string>('install_prerequisite', { prerequisiteId: 'docker' }),
+  installTailscaleWindows: () => invoke<string>('install_prerequisite', { prerequisiteId: 'tailscale' }),
+  installGitWindows: () => invoke<string>('install_prerequisite', { prerequisiteId: 'git' }),
+  startDockerDesktopWindows: () => invoke<string>('start_prerequisite', { prerequisiteId: 'docker' }),
+  startDockerServiceLinux: () => invoke<string>('start_prerequisite', { prerequisiteId: 'docker' }),
 
   // Utilities
   openBrowser: (url: string) => invoke<void>('open_browser', { url }),

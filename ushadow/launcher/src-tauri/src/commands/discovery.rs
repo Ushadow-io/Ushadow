@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use crate::models::{DiscoveryResult, EnvironmentStatus, InfraService, UshadowEnvironment, WorktreeInfo};
 use super::prerequisites::{check_docker, check_tailscale};
 use super::utils::silent_command;
@@ -13,6 +13,55 @@ const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("neo4j", "Neo4j"),
     ("qdrant", "Qdrant"),
 ];
+
+/// Read ports from environment's .env file
+/// Returns (backend_port, webui_port)
+fn read_env_ports(worktree_path: &str) -> (Option<u16>, Option<u16>) {
+    use std::fs;
+    use std::path::Path;
+
+    let env_path = Path::new(worktree_path).join(".env");
+
+    if let Ok(contents) = fs::read_to_string(env_path) {
+        let mut backend_port = None;
+        let mut webui_port = None;
+
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.starts_with("BACKEND_PORT=") {
+                if let Some(port_str) = line.strip_prefix("BACKEND_PORT=") {
+                    backend_port = port_str.parse().ok();
+                }
+            } else if line.starts_with("WEBUI_PORT=") {
+                if let Some(port_str) = line.strip_prefix("WEBUI_PORT=") {
+                    webui_port = port_str.parse().ok();
+                }
+            }
+        }
+
+        (backend_port, webui_port)
+    } else {
+        (None, None)
+    }
+}
+
+/// Determine base branch from branch name suffix
+/// Branch names follow pattern: envname/branchname-basebranch (e.g., rouge/myfeature-dev)
+fn determine_base_branch(_repo_path: &str, branch: &str) -> Option<String> {
+    // Parse suffix from branch name
+    if branch.ends_with("-dev") {
+        Some("dev".to_string())
+    } else if branch.ends_with("-main") {
+        Some("main".to_string())
+    } else if branch == "dev" {
+        Some("dev".to_string())
+    } else if branch == "main" || branch == "master" {
+        Some("main".to_string())
+    } else {
+        // Default to main if no suffix
+        Some("main".to_string())
+    }
+}
 
 /// Environment container info
 struct EnvContainerInfo {
@@ -28,8 +77,14 @@ static TAILSCALE_CACHE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
 
 /// Discover Ushadow environments and infrastructure (running and stopped)
 #[tauri::command]
-pub async fn discover_environments() -> Result<DiscoveryResult, String> {
-    discover_environments_with_config(None, None).await
+pub async fn discover_environments(state: tauri::State<'_, crate::AppState>) -> Result<DiscoveryResult, String> {
+    // Get project_root from app state (extract and drop guard immediately)
+    let project_root = {
+        let root = state.project_root.lock().map_err(|e| e.to_string())?;
+        root.clone()
+    }; // MutexGuard is dropped here
+
+    discover_environments_with_config(project_root, None).await
 }
 
 /// Discover environments with configurable paths
@@ -127,8 +182,16 @@ pub async fn discover_environments_with_config(
                     }
                 }
 
-                // Check Ushadow environment containers (backend, webui, etc.)
-                if name.starts_with("ushadow") && !name.contains("chronicle") {
+                // Check Ushadow environment containers (backend, webui, frontend)
+                // Environment containers: ushadow-{env}-backend (3 parts)
+                // Service containers: ushadow-{env}-servicename-backend-hash (5+ parts)
+                // So filter by checking exact part count
+                let parts: Vec<&str> = name.split('-').collect();
+                let is_environment_container = parts.len() == 3
+                    && parts[0] == "ushadow"
+                    && matches!(parts[2], "backend" | "frontend" | "webui" | "tailscale");
+
+                if is_environment_container {
                     let env_name = extract_env_name(name);
 
                     let entry = env_map.entry(env_name.clone()).or_insert(EnvContainerInfo {
@@ -181,11 +244,15 @@ pub async fn discover_environments_with_config(
         // Get creation time from worktree directory
         let created_at = get_directory_created_at(&wt.path);
 
+        // Read ports from .env file (source of truth)
+        let (env_backend_port, env_webui_port) = read_env_ports(&wt.path);
+
         // Check if this environment has Docker containers
         let (status, backend_port, webui_port, localhost_url, tailscale_url, tailscale_active, containers, docker_created_at) =
             if let Some(info) = env_map.remove(name) {
-                let port = info.backend_port.unwrap_or(8000);
-                let wp = if port >= 8000 { Some(port - 5000) } else { None };
+                // Use ports from .env file, fall back to Docker detection
+                let port = env_backend_port.or(info.backend_port).unwrap_or(8000);
+                let wp = env_webui_port.or_else(|| if port >= 8000 { Some(port - 5000) } else { None });
 
                 let (url, ts_url, ts_active) = if info.has_running {
                     let localhost = wp.map(|p| format!("http://localhost:{}", p))
@@ -203,9 +270,10 @@ pub async fn discover_environments_with_config(
                     EnvironmentStatus::Stopped
                 };
 
-                (env_status, info.backend_port, wp, url, ts_url, ts_active, info.containers, info.created_at)
+                (env_status, Some(port), wp, url, ts_url, ts_active, info.containers, info.created_at)
             } else {
-                (EnvironmentStatus::Available, None, None, None, None, false, Vec::new(), None)
+                // No Docker containers yet, but we have .env ports
+                (EnvironmentStatus::Available, env_backend_port, env_webui_port, None, None, false, Vec::new(), None)
             };
 
         let running = status == EnvironmentStatus::Running || status == EnvironmentStatus::Partial;
@@ -217,6 +285,8 @@ pub async fn discover_environments_with_config(
             (None, Some(docker_time)) => Some(docker_time),
             (None, None) => None,
         };
+
+        let base_branch = determine_base_branch(&wt.path, &wt.branch);
 
         environments.push(UshadowEnvironment {
             name: name.clone(),
@@ -233,6 +303,7 @@ pub async fn discover_environments_with_config(
             containers,
             is_worktree: true,
             created_at: final_created_at,
+            base_branch,
         });
     }
 
@@ -259,6 +330,25 @@ pub async fn discover_environments_with_config(
         };
 
         let running = status == EnvironmentStatus::Running;
+
+        // For non-worktree environments, detect base_branch by checking actual git branch
+        let base_branch = info.working_dir.as_ref().and_then(|wd| {
+            // First try to get the actual current branch from git
+            let branch_output = silent_command("git")
+                .args(["-C", wd, "branch", "--show-current"])
+                .output();
+
+            if let Ok(output) = branch_output {
+                if output.status.success() {
+                    let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    return determine_base_branch(wd, &current_branch);
+                }
+            }
+
+            // Fallback to main if git command fails
+            Some("main".to_string())
+        });
+
         environments.push(UshadowEnvironment {
             name: name.clone(),
             color: primary,
@@ -274,6 +364,7 @@ pub async fn discover_environments_with_config(
             containers: info.containers,
             is_worktree: false,
             created_at: info.created_at,
+            base_branch,
         });
     }
 
@@ -376,7 +467,7 @@ fn get_container_working_dir(container_name: &str) -> Option<String> {
         return None;
     }
 
-    let working_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let _working_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     // Docker returns the working dir inside the container (e.g., "/app")
     // We need to map this to the host path using volume mounts

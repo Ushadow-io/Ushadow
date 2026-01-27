@@ -1,5 +1,5 @@
 import { useAppStore } from '../store/appStore'
-import { Bug, RotateCcw } from 'lucide-react'
+import { Bug, RotateCcw, Trash2 } from 'lucide-react'
 
 export function DevToolsPanel() {
   const {
@@ -10,6 +10,29 @@ export function DevToolsPanel() {
     resetSpoofedPrereqs,
   } = useAppStore()
 
+  const handleClearCache = () => {
+    // Clear localStorage
+    localStorage.clear()
+
+    // Clear sessionStorage
+    sessionStorage.clear()
+
+    // Reload all iframes to clear their cache
+    const iframes = document.querySelectorAll('iframe')
+    iframes.forEach(iframe => {
+      if (iframe.src) {
+        const originalSrc = iframe.src
+        iframe.src = 'about:blank'
+        setTimeout(() => {
+          iframe.src = originalSrc
+        }, 100)
+      }
+    })
+
+    console.log('[DEV-TOOLS] Cache cleared: localStorage, sessionStorage, and iframe cache')
+    alert('Cache cleared! Embedded views will reload.')
+  }
+
   return (
     <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4" data-testid="dev-tools-panel">
       <div className="flex items-center justify-between mb-3">
@@ -17,15 +40,26 @@ export function DevToolsPanel() {
           <Bug className="w-4 h-4 text-yellow-400" />
           <span className="text-sm font-medium text-yellow-400">Dev Tools</span>
         </div>
-        <button
-          onClick={resetSpoofedPrereqs}
-          className="text-xs px-2 py-1 rounded bg-surface-700 hover:bg-surface-600 transition-colors flex items-center gap-1"
-          title="Reset to real values"
-          data-testid="reset-spoof-button"
-        >
-          <RotateCcw className="w-3 h-3" />
-          Reset
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleClearCache}
+            className="text-xs px-2 py-1 rounded bg-surface-700 hover:bg-surface-600 transition-colors flex items-center gap-1"
+            title="Clear all cache and reload iframes"
+            data-testid="clear-cache-button"
+          >
+            <Trash2 className="w-3 h-3" />
+            Clear Cache
+          </button>
+          <button
+            onClick={resetSpoofedPrereqs}
+            className="text-xs px-2 py-1 rounded bg-surface-700 hover:bg-surface-600 transition-colors flex items-center gap-1"
+            title="Reset to real values"
+            data-testid="reset-spoof-button"
+          >
+            <RotateCcw className="w-3 h-3" />
+            Reset
+          </button>
+        </div>
       </div>
 
       {/* Dry Run Toggle */}

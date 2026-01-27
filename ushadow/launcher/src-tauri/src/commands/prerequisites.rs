@@ -1,5 +1,11 @@
 use crate::models::PrerequisiteStatus;
 use super::utils::{silent_command, shell_command};
+use std::env;
+
+/// Check if we're in mock mode (for testing)
+fn is_mock_mode() -> bool {
+    env::var("MOCK_PREREQUISITES").is_ok()
+}
 
 /// Check if Docker is installed and running
 /// Tries login shell first, then falls back to known paths

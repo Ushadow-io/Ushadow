@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment } from './hooks/useTauri'
-import { useAppStore } from './store/appStore'
+import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, type PlatformPrerequisitesConfig } from './hooks/useTauri'
+import { useAppStore, type BranchType } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
 import { writeText, readText } from '@tauri-apps/api/clipboard'
@@ -8,14 +8,13 @@ import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
 import { EnvironmentsPanel } from './components/EnvironmentsPanel'
-import { FoldersPanel } from './components/FoldersPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
 import { getColors } from './utils/colors'
 
 function App() {
@@ -24,6 +23,8 @@ function App() {
     dryRunMode,
     showDevTools,
     setShowDevTools,
+    logExpanded,
+    setLogExpanded,
     appMode,
     setAppMode,
     spoofedPrereqs,
@@ -37,6 +38,7 @@ function App() {
   // State
   const [platform, setPlatform] = useState<string>('')
   const [prerequisites, setPrerequisites] = useState<Prerequisites | null>(null)
+  const [prerequisitesConfig, setPrerequisitesConfig] = useState<PlatformPrerequisitesConfig | null>(null)
   const [discovery, setDiscovery] = useState<Discovery | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [isInstalling, setIsInstalling] = useState(false)
@@ -48,7 +50,6 @@ function App() {
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
-  const [logExpanded, setLogExpanded] = useState(true)
   const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string; envPath: string | null } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
@@ -209,6 +210,7 @@ function App() {
       tailscale_installed: spoofedPrereqs.tailscale_installed ?? real.tailscale_installed,
       tailscale_connected: real.tailscale_connected,
       python_installed: spoofedPrereqs.python_installed ?? real.python_installed,
+      uv_installed: real.uv_installed,
       workmux_installed: real.workmux_installed,
       tmux_installed: real.tmux_installed,
       homebrew_version: real.homebrew_version,
@@ -216,6 +218,7 @@ function App() {
       tailscale_version: real.tailscale_version,
       git_version: real.git_version,
       python_version: real.python_version,
+      uv_version: real.uv_version,
       workmux_version: real.workmux_version,
       tmux_version: real.tmux_version,
     }
@@ -249,6 +252,16 @@ function App() {
       const disc = await tauri.discoverEnvironments()
       setDiscovery(disc)
 
+      // Remove creating environments that are now in discovery
+      // This merges the "creating" card with the actual discovered environment
+      setCreatingEnvs(prev => {
+        return prev.filter(creatingEnv => {
+          // Keep environments that haven't been discovered yet
+          const foundInDiscovery = disc.environments.some(e => e.name === creatingEnv.name)
+          return !foundInDiscovery
+        })
+      })
+
       // Auto-start tmux if worktrees exist but tmux isn't running
       const worktrees = disc.environments.filter(e => e.is_worktree)
       if (worktrees.length > 0) {
@@ -280,38 +293,58 @@ function App() {
   // Initialize
   useEffect(() => {
     const init = async () => {
-      log('Initializing...', 'step')
+      try {
+        log('Initializing...', 'step')
+        console.log('[Init] Starting initialization...')
 
-      const os = await tauri.getOsType()
-      setPlatform(os)
-      log(`Platform: ${os}`)
+        const os = await tauri.getOsType()
+        console.log('[Init] OS:', os)
+        setPlatform(os)
+        log(`Platform: ${os}`)
 
-      const defaultDir = await tauri.getDefaultProjectDir()
+        // Load prerequisites configuration for this platform
+        console.log('[Init] Loading prerequisites config...')
+        const config = await tauri.getPlatformPrerequisitesConfig(os)
+        console.log('[Init] Prerequisites config:', config)
+        setPrerequisitesConfig(config)
 
-      // Track if this is first time setup (showing project dialog)
-      let isFirstTimeSetup = false
+        console.log('[Init] Getting default project dir...')
+        const defaultDir = await tauri.getDefaultProjectDir()
+        console.log('[Init] Default dir:', defaultDir)
 
-      // Show project setup dialog on first launch if no project root is configured
-      if (!projectRoot) {
-        setProjectRoot(defaultDir)
-        setShowProjectDialog(true)
-        isFirstTimeSetup = true
-        log('Please configure your repository location', 'step')
-      } else {
-        // Sync existing project root to Rust backend
-        await tauri.setProjectRoot(projectRoot)
+        // Track if this is first time setup (showing project dialog)
+        let isFirstTimeSetup = false
+
+        // Show project setup dialog on first launch if no project root is configured
+        if (!projectRoot) {
+          setProjectRoot(defaultDir)
+          setShowProjectDialog(true)
+          isFirstTimeSetup = true
+          log('Please configure your repository location', 'step')
+        } else {
+          // Sync existing project root to Rust backend
+          console.log('[Init] Setting project root:', projectRoot)
+          await tauri.setProjectRoot(projectRoot)
+        }
+
+        // Check prerequisites immediately (system-wide, no project needed)
+        console.log('[Init] Checking prerequisites...')
+        await refreshPrerequisites()
+
+        // Only run discovery if we have a valid project root
+        if (!isFirstTimeSetup) {
+          console.log('[Init] Running discovery...')
+          await refreshDiscovery()
+        }
+
+        log('Ready', 'success')
+        console.log('[Init] Initialization complete')
+      } catch (err) {
+        console.error('[Init] Initialization error:', err)
+        log(`Initialization failed: ${err}`, 'error')
       }
-
-      // Check prerequisites immediately (system-wide, no project needed)
-      await refreshPrerequisites()
-
-      // Only run discovery if we have a valid project root
-      if (!isFirstTimeSetup) {
-        await refreshDiscovery()
-      }
-
-      log('Ready', 'success')
     }
+
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -346,7 +379,7 @@ function App() {
   }, [refreshPrerequisites, refreshDiscovery, isWindowFocused, projectRoot])
 
   // Install handlers
-  const handleInstall = async (item: 'git' | 'docker' | 'tailscale' | 'homebrew' | 'python') => {
+  const handleInstall = async (item: string) => {
     setIsInstalling(true)
     setInstallingItem(item)
     log(`Installing ${item}...`, 'step')
@@ -405,50 +438,9 @@ function App() {
         }
         log(`[DRY RUN] ${item} installation simulated successfully`, 'success')
       } else {
-        let result: string
-        switch (item) {
-          case 'homebrew':
-            result = await tauri.installHomebrew()
-            break
-          case 'git':
-            result = platform === 'macos'
-              ? await tauri.installGitMacos()
-              : await tauri.installGitWindows()
-            break
-          case 'python':
-            if (platform === 'macos') {
-              if (!prerequisites?.homebrew_installed) {
-                log('Homebrew required first', 'warning')
-                return
-              }
-              log('Installing Python 3 via Homebrew...', 'step')
-              result = 'Python 3 can be installed via: brew install python3\nPlease run this command in your terminal.'
-            } else if (platform === 'windows') {
-              result = 'Please download Python 3 from https://www.python.org/downloads/'
-            } else {
-              result = 'Please install Python 3 using your system package manager (e.g., apt, yum)'
-            }
-            log(result, 'warning')
-            return
-          case 'docker':
-            if (platform === 'macos') {
-              if (!prerequisites?.homebrew_installed) {
-                log('Homebrew required first', 'warning')
-                return
-              }
-              result = await tauri.installDockerViaBrew()
-            } else {
-              result = await tauri.installDockerWindows()
-            }
-            break
-          case 'tailscale':
-            result = platform === 'macos'
-              ? await tauri.installTailscaleMacos()
-              : await tauri.installTailscaleWindows()
-            break
-          default:
-            throw new Error(`Unknown item: ${item}`)
-        }
+        // Use generic installer - works on all platforms via YAML config
+        log(`Installing ${item}...`, 'step')
+        const result = await tauri.installPrerequisite(item)
         log(result, 'success')
       }
 
@@ -485,19 +477,14 @@ function App() {
         setSpoofedPrereq('docker_running', true)
         log(`[DRY RUN] Docker start simulated successfully`, 'success')
       } else {
-        if (platform === 'macos') {
-          await tauri.startDockerDesktopMacos()
-        } else if (platform === 'windows') {
-          await tauri.startDockerDesktopWindows()
-        } else {
-          await tauri.startDockerServiceLinux()
-        }
-        log('Docker started', 'success')
+        // Use generic start function - works on all platforms
+        const result = await tauri.startPrerequisite('docker')
+        log(result, 'success')
       }
       await refreshPrerequisites()
     } catch (err) {
-      log(`Failed to start Docker`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to start Docker`, 'error')
+      log(String(err), 'error')
     } finally {
       setIsInstalling(false)
       setInstallingItem(null)
@@ -520,8 +507,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to start infrastructure`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to start infrastructure`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingInfra(false)
     }
@@ -542,8 +529,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to stop infrastructure`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to stop infrastructure`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingInfra(false)
     }
@@ -564,8 +551,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to restart infrastructure`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to restart infrastructure`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingInfra(false)
     }
@@ -580,7 +567,13 @@ function App() {
     // Use explicit path if provided, otherwise look up the environment
     const envPath = explicitPath || discovery?.environments.find(e => e.name === envName)?.path || undefined
 
-    // Add to creating list to show starting feedback (only if not already in list)
+    // Log the folder path if available
+    if (envPath) {
+      log(`Creating in: ${envPath}`, 'info')
+    }
+
+    // Always add to creating list when starting an environment to show immediate feedback
+    // This ensures users see a loading card even if discovery already found stopped containers
     setCreatingEnvs(prev => {
       const alreadyExists = prev.some(e => e.name === envName)
       if (alreadyExists) {
@@ -634,6 +627,7 @@ function App() {
               path: projectRoot,
               branch: null,
               is_worktree: false,
+              base_branch: null,
             }
             return {
               ...prev,
@@ -663,9 +657,9 @@ function App() {
     } catch (err) {
       console.error(`DEBUG: handleStartEnv caught error:`, err)
       // Log simple error for State view
-      log(`Failed to start ${envName}`, 'error', false)
+      log(`Failed to start ${envName}`, 'error')
       // Log detailed error for Detail view
-      log(String(err), 'error', true)
+      log(String(err), 'error')
       // Update creating env to error state
       setCreatingEnvs(prev => prev.map(e => e.name === envName ? { ...e, status: 'error', error: String(err) } : e))
     } finally {
@@ -705,15 +699,16 @@ function App() {
         await refreshDiscovery()
       }
     } catch (err) {
-      log(`Failed to stop ${envName}`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to stop ${envName}`, 'error')
+      log(String(err), 'error')
     } finally {
       setLoadingEnv(null)
     }
   }
 
-  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; webui_port: number | null; backend_port: number | null; path: string | null }) => {
-    const url = env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
+  const handleOpenInApp = (env: { name: string; color?: string; localhost_url: string | null; tailscale_url?: string | null; webui_port: number | null; backend_port: number | null; path: string | null }) => {
+    // Prefer Tailscale URL if available, otherwise use localhost
+    const url = env.tailscale_url || env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
     setEmbeddedView({ url, envName: env.name, envColor: colors.primary, envPath: env.path })
@@ -768,6 +763,13 @@ function App() {
     // Find the environment to check if it's a worktree
     const env = discovery?.environments.find(e => e.name === envName)
     const isWorktree = env?.is_worktree || false
+
+    // Prevent deleting the root ushadow environment (main repo)
+    if (envName === 'ushadow' && !isWorktree) {
+      log('Cannot delete the root ushadow environment. Stop containers instead.', 'warning')
+      window.alert('The main "ushadow" environment is your root repository and cannot be deleted.\n\nYou can stop its containers if needed.')
+      return
+    }
 
     // Confirm with user before deleting
     const message = isWorktree
@@ -876,9 +878,35 @@ function App() {
       setCreatingEnvs(prev => prev.filter(e => e.name !== name))
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to create environment`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to create environment`, 'error')
+      log(String(err), 'error')
       setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
+    }
+  }
+
+  const handleCreateWorktree = async (name: string, branch: string) => {
+    // Force lowercase to avoid Docker Compose naming issues
+    name = name.toLowerCase()
+    branch = branch.toLowerCase()
+
+    if (!worktreesDir) {
+      log('Worktrees directory not configured', 'error')
+      throw new Error('Worktrees directory not configured')
+    }
+
+    log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
+    log(`Project root: ${projectRoot}`, 'info')
+    log(`Worktrees dir: ${worktreesDir}`, 'info')
+
+    try {
+      const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch, true)
+      log(`✓ Worktree created successfully`, 'success')
+      log(`Path: ${worktree.path}`, 'info')
+      log(`Branch: ${worktree.branch}`, 'info')
+      return worktree
+    } catch (err) {
+      log(`Failed to create worktree: ${err}`, 'error')
+      throw err
     }
   }
 
@@ -897,8 +925,8 @@ function App() {
       }
       await refreshDiscovery()
     } catch (err) {
-      log(`Failed to link environment`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to link environment`, 'error')
+      log(String(err), 'error')
     }
   }
 
@@ -992,12 +1020,12 @@ function App() {
     setShowProjectDialog(false)
 
     try {
-      // Save the project root and worktrees directory
+      log(`Project path set to ${path}`, 'success')
+      log(`Worktrees directory set to ${worktreesPath}`, 'info')
+
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
       setWorktreesDir(worktreesPath)
-      log(`Installation path set to ${path}`, 'success')
-      log(`Worktrees directory set to ${worktreesPath}`, 'info')
 
       // Check if repo already exists
       const status = await tauri.checkProjectDir(path)
@@ -1009,49 +1037,54 @@ function App() {
 
         // Auto-switch to quick mode if no environments exist
         if (disc && disc.environments.length === 0) {
-          setAppMode('quick')
+          setAppMode('install')
           log('Ready for quick launch', 'step')
         }
       } else {
         // Repo doesn't exist - will be cloned when user presses Launch
-        setAppMode('quick')
+        setAppMode('install')
         log('Press Launch to install Ushadow', 'step')
       }
     } catch (err) {
-      log(`Failed to set installation path`, 'error', false)
-      log(String(err), 'error', true)
+      log(`Failed to set installation path`, 'error')
+      log(String(err), 'error')
     }
   }
 
-  const handleClone = async (path: string) => {
+  const handleClone = async (path: string, branch?: string) => {
     try {
-      console.log('DEBUG handleClone: Starting clone for path:', path)
+      console.log('DEBUG handleClone: Starting clone for path:', path, 'branch:', branch)
       console.log('DEBUG handleClone: dryRunMode =', dryRunMode)
-      
+
       // Check if repo already exists at this location
       const status = await tauri.checkProjectDir(path)
       console.log('DEBUG handleClone: checkProjectDir status =', status)
 
       if (status.exists && status.is_valid_repo) {
         // Repo exists - pull latest instead of cloning
-        log(`Repository found at ${path}, pulling latest...`, 'step')
+        const branchMsg = branch ? ` (on ${branch} branch)` : ''
+        log(`Repository found at ${path}${branchMsg}, pulling latest...`, 'step')
         if (dryRunMode) {
-          log('[DRY RUN] Would pull latest changes', 'warning')
+          log(`[DRY RUN] Would pull latest changes${branchMsg}`, 'warning')
           await new Promise(r => setTimeout(r, 1000))
         } else {
           const result = await tauri.updateUshadowRepo(path)
           log(result, 'success')
+          if (branch) {
+            log(`✓ Using ${branch} branch`, 'info')
+          }
         }
       } else {
         // No repo - clone fresh
-        log(`Cloning Ushadow to ${path}...`, 'step')
+        const branchMsg = branch ? ` on ${branch} branch` : ''
+        log(`Cloning Ushadow to ${path}${branchMsg}...`, 'step')
         if (dryRunMode) {
-          log('[DRY RUN] Would clone repository', 'warning')
+          log(`[DRY RUN] Would clone repository${branchMsg}`, 'warning')
           await new Promise(r => setTimeout(r, 2000))
           log('[DRY RUN] Clone simulated', 'success')
         } else {
-          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path)
-          const result = await tauri.cloneUshadowRepo(path)
+          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path, 'branch:', branch)
+          const result = await tauri.cloneUshadowRepo(path, branch)
           console.log('DEBUG handleClone: Clone result from Rust:', result)
           log(result, 'success')
         }
@@ -1077,7 +1110,7 @@ function App() {
 
       // Auto-switch to quick mode if no environments exist after link
       if (disc && disc.environments.length === 0) {
-        setAppMode('quick')
+        setAppMode('install')
         log('No environments found - ready for quick launch', 'step')
       }
     } catch (err) {
@@ -1089,11 +1122,22 @@ function App() {
   const handleQuickLaunch = async () => {
     console.log('DEBUG: handleQuickLaunch started')
     setIsLaunching(true)
-
-    // Switch to dev mode immediately to show progress
-    setAppMode('dev')
     setLogExpanded(true)
     log('🚀 Starting Ushadow quick launch...', 'step')
+
+    // Check if we need to install prereqs or start infra
+    const prereqs = getEffectivePrereqs(prerequisites)
+    const needsPrereqs = !prereqs?.git_installed || !prereqs?.python_installed || !prereqs?.docker_installed || !prereqs?.docker_running
+    const needsInfra = !discovery || !discovery.docker_ok || discovery.infrastructure.some(svc => !svc.running)
+
+    // If prereqs or infra need setup, switch to infra page first
+    if (needsPrereqs || needsInfra) {
+      setAppMode('infra')
+      log('Installing prerequisites and starting infrastructure...', 'step')
+    } else {
+      // Everything ready, go straight to environments
+      setAppMode('environments')
+    }
 
     // Give UI a brief moment to render
     await new Promise(r => setTimeout(r, 50))
@@ -1146,7 +1190,7 @@ function App() {
         }
       }
 
-      if (!prereqs.python_installed) {
+      if (!prereqs?.python_installed) {
         await handleInstall('python')
         await new Promise(r => setTimeout(r, 100))
         prereqs = getEffectivePrereqs(await refreshPrerequisites())
@@ -1158,7 +1202,7 @@ function App() {
         }
       }
 
-      if (!prereqs.docker_installed) {
+      if (!prereqs?.docker_installed) {
         await handleInstall('docker')
         await new Promise(r => setTimeout(r, 100))
         prereqs = getEffectivePrereqs(await refreshPrerequisites())
@@ -1171,7 +1215,7 @@ function App() {
       }
 
       // Step 4: Start Docker if needed
-      if (prereqs.docker_installed && !prereqs.docker_running) {
+      if (prereqs?.docker_installed && !prereqs.docker_running) {
         await handleStartDocker()
         if (dryRunMode) {
           // In dry run, just wait for state to propagate
@@ -1202,11 +1246,12 @@ function App() {
         log('You can manually install these and refresh, or continue if not critical', 'info')
       }
 
-      // Step 5: Clone if needed
+      // Step 5: Ensure main repo exists (always clone main branch, never dev)
       log('Checking project directory...', 'step')
       const status = await tauri.checkProjectDir(projectRoot)
       if (!status.is_valid_repo) {
-        await handleClone(projectRoot)
+        log('Cloning main branch to project root...', 'step')
+        await handleClone(projectRoot, 'main')  // Always clone main
       } else {
         log('✓ Project directory ready', 'success')
       }
@@ -1215,7 +1260,7 @@ function App() {
       log('Checking infrastructure...', 'step')
       // Use cached discovery first (fast), only refresh if needed
       let infraRunning = (discovery?.infrastructure.length ?? 0) > 0 &&
-                         discovery.infrastructure.every(svc => svc.running)
+                         discovery?.infrastructure.every(svc => svc.running)
 
       if (infraRunning) {
         log('✓ Infrastructure already running', 'success')
@@ -1241,9 +1286,12 @@ function App() {
       }
       await refreshDiscovery()
 
-      // Step 7: Start ushadow environment
-      log('Starting Ushadow environment...', 'step')
-      await handleStartEnv('ushadow')
+      // Step 7: Start the ushadow environment
+      log(`Starting ushadow environment...`, 'step')
+      await handleStartEnv('ushadow', undefined)
+
+      // Switch to environments page after setup is complete
+      setAppMode('environments')
 
       if (failedInstalls.length > 0) {
         log('Quick launch completed with warnings', 'warning')
@@ -1253,6 +1301,8 @@ function App() {
     } catch (err) {
       console.error('DEBUG: handleQuickLaunch caught error:', err)
       log(`Quick launch failed: ${err}`, 'error')
+      // On error, also switch to environments page to show the error
+      setAppMode('environments')
     } finally {
       setIsLaunching(false)
     }
@@ -1292,25 +1342,37 @@ function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Mode Toggle */}
+          {/* Page Navigation */}
           <div className="flex rounded-lg bg-surface-700 p-0.5" data-testid="mode-toggle">
             <button
-              onClick={() => setAppMode('dev')}
+              onClick={() => setAppMode('install')}
               className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'dev' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                appMode === 'infra' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
               }`}
-            >
-              <Settings className="w-3 h-3 inline mr-1" />
-              Dev
-            </button>
-            <button
-              onClick={() => setAppMode('quick')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'quick' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
+              data-testid="nav-install"
             >
               <Zap className="w-3 h-3 inline mr-1" />
-              Quick
+              Install
+            </button>
+            <button
+              onClick={() => setAppMode('infra')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                appMode === 'infra' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-infra"
+            >
+              <Package className="w-3 h-3 inline mr-1" />
+              Infra
+            </button>
+            <button
+              onClick={() => setAppMode('environments')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                appMode === 'environments' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-environments"
+            >
+              <FolderGit2 className="w-3 h-3 inline mr-1" />
+              Environments
             </button>
           </div>
 
@@ -1349,8 +1411,8 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
-        {appMode === 'quick' ? (
-          /* Quick Mode - Single button */
+        {appMode === 'install' ? (
+          /* Install Page - One-Click Launch (Landing Page) */
           <div className="h-full flex flex-col items-center justify-center">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
@@ -1379,8 +1441,8 @@ function App() {
               onClick={handleQuickLaunch}
               disabled={isLaunching}
               className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
-                isLaunching 
-                  ? 'bg-surface-600 cursor-not-allowed' 
+                isLaunching
+                  ? 'bg-surface-600 cursor-not-allowed'
                   : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
               }`}
               data-testid="quick-launch-button"
@@ -1398,23 +1460,22 @@ function App() {
               )}
             </button>
           </div>
-        ) : (
-          /* Dev Mode - Two column layout */
-          <div className="h-full flex flex-col gap-4">
-            <div className="flex-1 flex gap-0 overflow-hidden">
-              {/* Left Column - Folders, Prerequisites & Infrastructure */}
-              <div
-                className="flex flex-col gap-4 overflow-y-auto"
-                style={{ width: `${leftColumnWidth}px`, flexShrink: 0 }}
-              >
-                <FoldersPanel
-                  projectRoot={projectRoot}
-                  worktreesDir={worktreesDir}
-                  onEditFolders={() => setShowProjectDialog(true)}
-                />
+        ) : appMode === 'infra' ? (
+          /* Infra Page - Prerequisites & Infrastructure Setup */
+          <div className="h-full flex flex-col gap-4 overflow-y-auto">
+            <div className="text-center mb-4">
+              <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
+              <p className="text-text-secondary">
+                Install prerequisites and configure your single environment
+              </p>
+            </div>
+
+            {/* Prerequisites and Infrastructure Side-by-Side */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-4">
                 <PrerequisitesPanel
                   prerequisites={effectivePrereqs}
-                  platform={platform}
+                  prerequisitesConfig={prerequisitesConfig}
                   isInstalling={isInstalling}
                   installingItem={installingItem}
                   onInstall={handleInstall}
@@ -1424,40 +1485,94 @@ function App() {
                 />
                 {/* Dev Tools Panel - appears below Prerequisites */}
                 {showDevTools && <DevToolsPanel />}
-                <InfrastructurePanel
-                  services={discovery?.infrastructure ?? []}
-                  onStart={handleStartInfra}
-                  onStop={handleStopInfra}
-                  onRestart={handleRestartInfra}
-                  isLoading={loadingInfra}
-                />
               </div>
 
-            {/* Resize handle */}
-            <div
-              className={`w-1 bg-surface-700 hover:bg-primary-500 cursor-col-resize transition-colors ${isResizing ? 'bg-primary-500' : ''}`}
-              onMouseDown={handleMouseDown}
-              style={{ userSelect: 'none' }}
-            />
-
-            {/* Right Column - Environments */}
-              <div className="flex-1 overflow-y-auto pl-4">
-                <EnvironmentsPanel
-                  environments={discovery?.environments ?? []}
-                  creatingEnvs={creatingEnvs}
-                  onStart={handleStartEnv}
-                  onStop={handleStopEnv}
-                  onCreate={() => setShowNewEnvDialog(true)}
-                  onOpenInApp={handleOpenInApp}
-                  onMerge={handleMerge}
-                  onDelete={handleDelete}
-                  onAttachTmux={handleAttachTmux}
-                  onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
-                  loadingEnv={loadingEnv}
-                  tmuxStatuses={tmuxStatuses}
-                />
-              </div>
+              <InfrastructurePanel
+                services={discovery?.infrastructure ?? []}
+                onStart={handleStartInfra}
+                onStop={handleStopInfra}
+                onRestart={handleRestartInfra}
+                isLoading={loadingInfra}
+              />
             </div>
+
+            {/* Single Environment Section for Consumers */}
+            <div className="bg-surface-800 rounded-lg p-6 border border-surface-700">
+              <h3 className="text-lg font-semibold mb-4">Your Environment</h3>
+              {!discovery || discovery.environments.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-text-muted mb-4">No environment created yet</p>
+                  <button
+                    onClick={() => handleNewEnvClone('main', 'dev')}
+                    className="px-6 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors font-medium"
+                  >
+                    Create Main Environment
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {discovery.environments.map(env => (
+                    <div key={env.name} className="flex items-center justify-between p-4 bg-surface-700 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: getColors(env.color || env.name).primary }}
+                        />
+                        <span className="font-medium">{env.name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          env.running ? 'bg-success-500/20 text-success-400' : 'bg-surface-600 text-text-muted'
+                        }`}>
+                          {env.status}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        {env.running ? (
+                          <>
+                            <button
+                              onClick={() => handleOpenInApp(env)}
+                              className="px-3 py-1 rounded bg-primary-500 hover:bg-primary-600 transition-colors text-sm"
+                            >
+                              Open
+                            </button>
+                            <button
+                              onClick={() => handleStopEnv(env.name)}
+                              className="px-3 py-1 rounded bg-surface-600 hover:bg-surface-500 transition-colors text-sm"
+                            >
+                              Stop
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => handleStartEnv(env.name, env.path || undefined)}
+                            className="px-3 py-1 rounded bg-success-500 hover:bg-success-600 transition-colors text-sm"
+                          >
+                            Start
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* Environments Page - Worktree Management */
+          <div className="h-full flex flex-col overflow-hidden p-4">
+            <EnvironmentsPanel
+              environments={discovery?.environments ?? []}
+              creatingEnvs={creatingEnvs}
+              onStart={handleStartEnv}
+              onStop={handleStopEnv}
+              onCreate={() => setShowNewEnvDialog(true)}
+              onOpenInApp={handleOpenInApp}
+              onMerge={handleMerge}
+              onDelete={handleDelete}
+              onAttachTmux={handleAttachTmux}
+              onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
+              loadingEnv={loadingEnv}
+              tmuxStatuses={tmuxStatuses}
+            />
           </div>
         )}
       </main>
@@ -1477,7 +1592,9 @@ function App() {
         isOpen={showProjectDialog}
         defaultPath={projectRoot}
         defaultWorktreesPath={worktreesDir}
-        onClose={() => setShowProjectDialog(false)}
+        onClose={() => {
+          setShowProjectDialog(false)
+        }}
         onSetup={handleProjectSetup}
       />
 
