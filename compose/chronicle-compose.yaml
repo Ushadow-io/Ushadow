@@ -13,6 +13,29 @@ x-ushadow:
     requires: [llm, transcription, audio_input]
     optional: [memory]  # Uses memory if available, works without it
     route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
+    exposes:
+      - name: audio_intake
+        type: audio
+        path: /ws_pcm
+        port: 8000  # Internal container port
+        metadata:
+          protocol: wyoming
+          formats: [pcm]
+      - name: audio_intake_opus
+        type: audio
+        path: /ws_omi
+        port: 8000  # Internal container port
+        metadata:
+          protocol: wyoming
+          formats: [opus]
+      - name: http_api
+        type: http
+        path: /
+        port: 8000
+      - name: health
+        type: health
+        path: /health
+        port: 8000
   chronicle-webui:
     display_name: "Chronicle Web UI"
     description: "Web interface for Chronicle voice journal"
@@ -20,6 +43,7 @@ x-ushadow:
 
 services:
   chronicle-backend:
+  
     image: ghcr.io/ushadow-io/chronicle/backend:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
     # Sidecar mode: Run both workers and backend in same container
@@ -41,6 +65,7 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
       - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}
+
 
       # LLM capability (from selected provider) - REQUIRED
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -101,7 +126,7 @@ services:
       - "${CHRONICLE_WEBUI_PORT:-3080}:80"
     environment:
       - VITE_BACKEND_URL=http://localhost:${CHRONICLE_PORT:-8080}
-      - BACKEND_URL=http://chronicle-backend:8000
+      - BACKEND_URL=${CHRONICLE_BACKEND_URL:-http://chronicle-backend:8080}
     networks:
       - ushadow-network
     depends_on:

@@ -42,7 +42,15 @@ class AudioRelayConnection:
             url_with_token = f"{self.url}?token={self.token}"
 
             # Detect endpoint type for logging
-            endpoint_type = "OMI (Opus)" if "/ws_omi" in self.url else "PCM"
+            # Note: /ws/audio is unified endpoint that accepts both PCM and Opus
+            if "/ws_omi" in self.url:
+                endpoint_type = "Opus"
+            elif "/ws_pcm" in self.url:
+                endpoint_type = "PCM"
+            elif "/ws/audio" in self.url:
+                endpoint_type = "Unified (PCM/Opus)"
+            else:
+                endpoint_type = "Unknown"
             logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [{endpoint_type}]")
 
             self.ws = await websockets.connect(url_with_token)
@@ -209,7 +217,15 @@ async def audio_relay_websocket(
         logger.info(f"[AudioRelay] Destinations: {[d['name'] for d in destinations]}")
         # Log exact URLs received from client for debugging
         for dest in destinations:
-            endpoint_type = "OMI (Opus)" if any(x in dest['url'] for x in ["/ws_omi", "ws/audio"]) else "PCM"      
+            # Note: /ws/audio is unified endpoint that accepts both PCM and Opus
+            if "/ws_omi" in dest['url']:
+                endpoint_type = "Opus"
+            elif "/ws_pcm" in dest['url']:
+                endpoint_type = "PCM"
+            elif "/ws/audio" in dest['url']:
+                endpoint_type = "Unified (PCM/Opus)"
+            else:
+                endpoint_type = "Unknown"
             logger.info(f"[AudioRelay] Client requested: {dest['name']} -> {dest['url']} [{endpoint_type}]")
 
     except json.JSONDecodeError as e:

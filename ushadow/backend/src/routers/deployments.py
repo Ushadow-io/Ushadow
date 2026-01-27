@@ -248,6 +248,7 @@ async def list_deployments(
 async def get_exposed_urls(
     url_type: Optional[str] = Query(None, alias="type", description="Filter by URL type (e.g., 'audio', 'http')"),
     url_name: Optional[str] = Query(None, alias="name", description="Filter by URL name (e.g., 'audio_intake')"),
+    format: Optional[str] = Query(None, description="Filter by audio format (e.g., 'opus', 'pcm')"),
     status: Optional[str] = Query(None, description="Filter by instance status (e.g., 'running')"),
     current_user: dict = Depends(get_current_user)
 ):
@@ -257,12 +258,12 @@ async def get_exposed_urls(
     This enables deployment-based discovery where clients query actual running services
     instead of using static provider registries.
 
-    Example: GET /api/deployments/exposed-urls?type=audio&name=audio_intake&status=running
-    Returns: List of audio intake endpoints from Chronicle, Mycelia, etc.
+    Example: GET /api/deployments/exposed-urls?type=audio&name=audio_intake&format=opus&status=running
+    Returns: List of audio intake endpoints that support Opus format from Chronicle, Mycelia, etc.
     """
     from src.services.service_config_manager import get_service_config_manager
 
-    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}, url_name={url_name}")
+    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}, url_name={url_name}, format={format}")
 
     result = []
     seen_containers = set()  # Track container names to avoid duplicates
@@ -321,6 +322,12 @@ async def get_exposed_urls(
             # Filter by name if requested
             if url_name and exp_name != url_name:
                 continue
+
+            # Filter by format if requested (check metadata.formats array)
+            if format:
+                supported_formats = exp_metadata.get('formats', [])
+                if format not in supported_formats:
+                    continue
 
             # Build internal URL (for relay to connect to)
             # Audio endpoints use WebSocket protocol
@@ -408,6 +415,12 @@ async def get_exposed_urls(
             if url_name and exp_name != url_name:
                 continue
 
+            # Filter by format if requested (check metadata.formats array)
+            if format:
+                supported_formats = exp_metadata.get('formats', [])
+                if format not in supported_formats:
+                    continue
+
             # Build internal URL (for relay to connect to)
             # Audio endpoints use WebSocket protocol
             protocol = 'ws' if exp_type == 'audio' else 'http'
@@ -433,7 +446,7 @@ async def get_exposed_urls(
 
     logger.info("=" * 80)
     logger.info(f"[exposed-urls] RETURNING {len(result)} TOTAL EXPOSED URLs")
-    logger.info(f"[exposed-urls] PARAMS: status={status}, url_type={url_type}, url_name={url_name}")
+    logger.info(f"[exposed-urls] PARAMS: status={status}, url_type={url_type}, url_name={url_name}, format={format}")
     logger.info(f"[exposed-urls] Unique containers collected: {len(seen_containers)}")
     logger.info("=" * 80)
 

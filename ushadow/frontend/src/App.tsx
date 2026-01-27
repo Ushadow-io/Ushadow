@@ -63,12 +63,21 @@ function AppContent() {
   // Set dynamic favicon based on environment
   useEnvironmentFavicon()
 
-  const { backendError, checkSetupStatus } = useAuth()
+  const { backendError, checkSetupStatus, isLoading, token } = useAuth()
 
   // Show error page if backend has configuration errors
   if (backendError) {
     return <ErrorPage error={backendError} onRetry={checkSetupStatus} />
   }
+
+  // Check if on public route (login/register)
+  const isPublicRoute = window.location.pathname === '/login' ||
+                        window.location.pathname === '/register' ||
+                        window.location.pathname === '/design-system'
+
+  // Check if running in launcher mode (embedded iframe)
+  const searchParams = new URLSearchParams(window.location.search)
+  const isLauncherMode = searchParams.get('launcher') === 'true'
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -85,7 +94,11 @@ function AppContent() {
                 path="/*"
                 element={
                   <ProtectedRoute>
-                    <Layout />
+                    <WizardProvider>
+                      <ChronicleProvider>
+                        <Layout />
+                      </ChronicleProvider>
+                    </WizardProvider>
                   </ProtectedRoute>
                 }
               >
@@ -125,7 +138,8 @@ function AppContent() {
         </Routes>
       </div>
       <BugReportButton />
-      <EnvironmentFooter />
+      {/* Only show footer on protected routes and when not in launcher mode */}
+      {!isPublicRoute && !isLauncherMode && <EnvironmentFooter />}
     </div>
   )
 }
@@ -138,13 +152,9 @@ function App() {
           <VibeKanbanWebCompanion />
           <AuthProvider>
             <FeatureFlagsProvider>
-              <WizardProvider>
-                <ChronicleProvider>
-                  <BrowserRouter basename={getBasename()}>
-                    <AppContent />
-                  </BrowserRouter>
-                </ChronicleProvider>
-              </WizardProvider>
+              <BrowserRouter basename={getBasename()}>
+                <AppContent />
+              </BrowserRouter>
             </FeatureFlagsProvider>
           </AuthProvider>
         </ToastProvider>

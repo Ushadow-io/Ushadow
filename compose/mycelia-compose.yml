@@ -5,8 +5,8 @@
 #   docker compose -f compose/mycelia-compose.yml up -d
 #
 # Access:
-#   - Web UI: http://localhost:${MYCELIA_FRONTEND_PORT:-18080}
-#   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-15173}
+#   - Web UI: http://localhost:${MYCELIA_FRONTEND_PORT:-8080}
+#   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-8888}
 
 # =============================================================================
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
@@ -25,19 +25,19 @@ x-ushadow:
     exposes:
       - name: audio_intake
         type: audio
-        path: /ws_pcm
-        port: 5173
+        path: /ws/audio
+        port: 8888
         metadata:
           protocol: wyoming
-          data: pcm
+          formats: [pcm, opus]  # Unified endpoint auto-detects format
       - name: http_api
         type: http
         path: /
-        port: 5173
+        port: 8888
       - name: health
         type: health
         path: /health
-        port: 5173
+        port: 8888
   mycelia-frontend:
     display_name: "Mycelia Frontend"
     description: "Mycelia web interface"
@@ -53,7 +53,7 @@ services:
     image: mycelia-frontend:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-frontend
     ports:
-      - "${MYCELIA_FRONTEND_PORT:-18080}:8080"
+      - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
     volumes:
       - ${PROJECT_ROOT:-..}/mycelia/frontend:/app
       - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/app/myceliasdk
@@ -76,13 +76,13 @@ services:
     image: mycelia-backend:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
     ports:
-      - "${MYCELIA_BACKEND_PORT:-15173}:5173"
+      - "${MYCELIA_BACKEND_PORT:-8888}:8888"
     command: deno task dev
     environment:
       # Application URLs
-      - MYCELIA_URL=http://localhost:${MYCELIA_BACKEND_PORT:-15173}
-      - MYCELIA_BACKEND_INTERNAL_URL=http://mycelia-backend:5173
-      - MYCELIA_FRONTEND_HOST=http://localhost:${MYCELIA_FRONTEND_PORT:-18080}
+      - MYCELIA_URL=${MYCELIA_URL:-http://localhost:8888}
+      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://mycelia-backend:8888}
+      - MYCELIA_FRONTEND_HOST=${MYCELIA_FRONTEND_HOST:-http://mycelia-frontend:8080}
 
       # Authentication (optional - configured via wizard on first start)
       - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
@@ -99,17 +99,18 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
 
       # Python Worker
-      - PYTHON_WORKER_URL=http://mycelia-python-worker:8000
+      - PYTHON_WORKER_URL=${PYTHON_WORKER_URL:-http://mycelia-python-worker:8000}
 
-      # LLM Provider Configuration
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL}
+      # LLM Provider Configuration (optional - uses inference.mycelia.tech if not set)
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - BASE_MODEL=${BASE_MODEL:-gpt-4o-mini}
 
-      # Transcription Provider Configuration
-      - TRANSCRIPTION_BASE_URL=${TRANSCRIPTION_BASE_URL}
-      - TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
-      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL}
+      # Transcription Provider Configuration (optional - uses inference.mycelia.tech if not set)
+      - TRANSCRIPTION_BASE_URL=${TRANSCRIPTION_BASE_URL:-}
+      - TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY:-}
+      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
 
       # OpenTelemetry
       - OTEL_DENO=${MYCELIA_OTEL_DENO:-false}
@@ -127,7 +128,7 @@ services:
     networks:
       - ushadow-network
     healthcheck:
-      test: ["CMD", "deno", "eval", "const res = await fetch('http://localhost:5173/health'); Deno.exit(res.ok ? 0 : 1);"]
+      test: ["CMD", "deno", "eval", "const res = await fetch('http://localhost:8888/health'); Deno.exit(res.ok ? 0 : 1);"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -149,8 +150,8 @@ services:
     image: mycelia-python:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-python-worker
     environment:
-      - MYCELIA_URL=http://mycelia-backend:5173
-      - SECRET_KEY=${AUTH_SECRET_KEY}
+      - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:8888}
+      - SECRET_KEY=${AUTH_SECRET_KEY:-}
     volumes:
       - ${PROJECT_ROOT:-..}/mycelia/python:/app
       - mycelia_worker_data:/root/.cache

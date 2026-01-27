@@ -36,6 +36,7 @@ import {
   useDeploymentActions,
   useWiringActions,
 } from '../hooks'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import Modal from '../components/Modal'
 import { SystemOverview, FlatServiceCard } from '../components/wiring'
@@ -76,6 +77,10 @@ function getErrorMessage(error: any, fallback: string): string {
 
 export default function ServiceConfigsPage() {
   const navigate = useNavigate()
+  const { isEnabled } = useFeatureFlags()
+
+  // Feature flag: hide service configs (custom instances)
+  const showServiceConfigs = isEnabled('service_configs')
 
   // Data hooks (React Query)
   const {
@@ -1386,18 +1391,18 @@ export default function ServiceConfigsPage() {
       {activeTab === 'services' ? (
         <ServicesTab
           composeTemplates={composeTemplates}
-          instances={instances}
+          instances={showServiceConfigs ? instances : []}
           wiring={wiring}
           providerTemplates={providerTemplates}
           serviceStatuses={serviceStatuses}
           deployments={filteredDeployments}
-          onAddConfig={handleAddConfig}
+          onAddConfig={showServiceConfigs ? handleAddConfig : () => {}}
           onWiringChange={handleWiringChange}
           onWiringClear={handleWiringClear}
-          onConfigCreate={handleConfigCreate}
-          onEditConfig={handleEditSavedConfig}
-          onDeleteConfig={handleDeleteSavedConfig}
-          onUpdateConfig={handleUpdateSavedConfig}
+          onConfigCreate={showServiceConfigs ? handleConfigCreate : async () => ''}
+          onEditConfig={showServiceConfigs ? handleEditSavedConfig : () => {}}
+          onDeleteConfig={showServiceConfigs ? handleDeleteSavedConfig : () => {}}
+          onUpdateConfig={showServiceConfigs ? handleUpdateSavedConfig : () => {}}
           onStart={handleStartService}
           onStop={handleStopService}
           onEdit={handleEditService}
@@ -1454,7 +1459,7 @@ export default function ServiceConfigsPage() {
         onClose={() => setEditingProvider(null)}
         title={editingProvider?.isTemplate ? 'Edit Provider' : 'Edit ServiceConfig'}
         titleIcon={<Settings className="h-5 w-5 text-primary-600" />}
-        maxWidth="lg"
+        maxWidth="4xl"
         testId="edit-provider-modal"
       >
         {editingProvider && editingProvider.template && (
@@ -1563,7 +1568,7 @@ export default function ServiceConfigsPage() {
         }}
         title="Edit Deployment"
         titleIcon={<Settings className="h-5 w-5 text-primary-600" />}
-        maxWidth="lg"
+        maxWidth="4xl"
         testId="edit-deployment-modal"
       >
         {editingDeployment && (

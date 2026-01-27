@@ -1,4 +1,4 @@
-import { Link, useLocation, Outlet } from 'react-router-dom'
+import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
@@ -27,10 +27,11 @@ interface NavigationItem {
 
 export default function Layout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
-  const { getSetupLabel } = useWizard()
+  const { getSetupLabel, isFirstTimeUser } = useWizard()
   const { isConnected: isChronicleConnected, isCheckingConnection: isChronicleChecking, connectionError: chronicleError, recording } = useChronicle()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -45,6 +46,25 @@ export default function Layout() {
   const wizardLabel = getSetupLabel()
   // Helper to check if recording is in a processing state
   const isRecordingProcessing = ['mic', 'websocket', 'audio-start', 'streaming', 'stopping'].includes(recording.currentStep)
+
+  // Redirect first-time users to wizard ONLY if they just came from login/register
+  // This prevents redirect loops when accessing the app directly
+  useEffect(() => {
+    // Check sessionStorage for registration hard-reload case (cleared after reading)
+    const sessionFromAuth = sessionStorage.getItem('fromAuth') === 'true'
+    if (sessionFromAuth) {
+      sessionStorage.removeItem('fromAuth')
+    }
+    const fromAuth = location.state?.from === '/login' ||
+                     location.state?.from === '/register' ||
+                     location.state?.fromAuth === true ||
+                     sessionFromAuth
+
+    if (isFirstTimeUser() && fromAuth && !location.pathname.startsWith('/wizard')) {
+      const { path } = getSetupLabel()
+      navigate(path, { replace: true })
+    }
+  }, [location, isFirstTimeUser, getSetupLabel, navigate])
 
   // Close dropdown when clicking outside
   useEffect(() => {

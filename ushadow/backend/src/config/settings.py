@@ -674,6 +674,42 @@ class Settings:
                     value=mask_secret_value(str_value, path) if has_value else None,
                 ))
 
+        # Add service URLs if env var is URL type
+        if expected_type == 'url':
+            try:
+                from src.services.docker_manager import get_docker_manager
+                from src.utils.service_urls import get_internal_proxy_url
+
+                docker_mgr = get_docker_manager()
+
+                # Get all manageable services
+                for service_name, service_config in docker_mgr.MANAGEABLE_SERVICES.items():
+                    # Create a dynamic suggestion path for this service URL
+                    suggestion_path = f"service_urls.{service_name}"
+
+                    if suggestion_path in seen_paths:
+                        continue
+
+                    seen_paths.add(suggestion_path)
+
+                    # Get service display name
+                    display_name = service_config.get('description', service_name.replace('-', ' ').title())
+
+                    # Get internal proxy URL using shared utility
+                    internal_url = get_internal_proxy_url(service_name)
+
+                    suggestions.append(SettingSuggestion(
+                        path=suggestion_path,
+                        label=f"Service: {display_name}",
+                        has_value=True,
+                        value=internal_url,
+                    ))
+            except Exception as e:
+                # Don't fail the entire suggestion building if service discovery fails
+                from src.utils.logging import get_logger
+                logger = get_logger(__name__)
+                logger.warning(f"Failed to add service URL suggestions: {e}")
+
         # Add provider-specific mappings if provided
         if provider_registry and capabilities:
             for capability in capabilities:

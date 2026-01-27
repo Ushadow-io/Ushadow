@@ -60,6 +60,7 @@ async def list_templates(
     try:
         from src.services.compose_registry import get_compose_registry
         registry = get_compose_registry()
+        registry.reload()  # Force reload from compose files to bust cache
         settings = get_settings()
 
         # Get installed service names (same logic as ServiceOrchestrator)
@@ -126,6 +127,7 @@ async def list_templates(
         from src.services.provider_registry import get_provider_registry
         from src.routers.providers import check_local_provider_available
         provider_registry = get_provider_registry()
+        provider_registry.reload()  # Force reload from provider files to bust cache
         settings = get_settings()
         for provider in provider_registry.get_providers():
             if source and source != "provider":
@@ -273,12 +275,34 @@ async def get_template_env_config(
 # =============================================================================
 
 @router.get("", response_model=List[ServiceConfigSummary])
-async def list_service_configs(
+async def list_service_configs_endpoint(
     current_user: dict = Depends(get_current_user),
 ) -> List[ServiceConfigSummary]:
-    """List all instances."""
+    """List all actual service config instances (not template placeholders)."""
+    from src.services.provider_registry import get_provider_registry
+
     manager = get_service_config_manager()
-    return manager.list_service_configs()
+    manager.reload()  # Force reload from disk to bust cache
+    provider_registry = get_provider_registry()
+
+    result = []
+    # Return only actual service configs, not placeholders
+    for config in manager._service_configs.values():
+        # Look up what capability this config provides
+        provides = None
+        provider = provider_registry.get_provider(config.template_id)
+        if provider:
+            provides = provider.capability
+
+        result.append(ServiceConfigSummary(
+            id=config.id,
+            template_id=config.template_id,
+            name=config.name,
+            provides=provides,
+            description=config.description,
+        ))
+
+    return result
 
 
 @router.get("/{config_id}", response_model=ServiceConfig)
@@ -494,6 +518,7 @@ async def list_wiring(
 ) -> List[Wiring]:
     """List all wiring connections."""
     manager = get_service_config_manager()
+    manager.reload()  # Force reload from disk to bust cache
     return manager.list_wiring()
 
 

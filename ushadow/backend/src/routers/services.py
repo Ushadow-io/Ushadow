@@ -450,9 +450,18 @@ async def get_service_connection_info(
     else:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
 
-    # Internal URL (for backend-to-service communication only)
-    # Backend uses Docker network with actual container name
-    internal_url = f"http://{container_name}:{internal_port}"
+    # Import URL utilities
+    from src.utils.service_urls import get_internal_proxy_url, get_relative_proxy_url
+
+    # Proxy URL (for frontend REST API access through ushadow)
+    proxy_url = get_relative_proxy_url(name)
+
+    # Direct container URL (for health checks only - not exposed in API)
+    direct_container_url = f"http://{container_name}:{internal_port}"
+
+    # Internal URL (for backend-to-service communication)
+    # Use proxy with full backend hostname for stable service discovery
+    internal_url = get_internal_proxy_url(name)
 
     # Direct URL (for frontend WebSocket/streaming access)
     # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
@@ -469,18 +478,15 @@ async def get_service_connection_info(
         # Fallback to localhost (for development)
         direct_url = f"http://localhost:{port}" if port else None
 
-    # Proxy URL (for frontend REST API access through ushadow)
-    # Relative URL that goes through this backend
-    proxy_url = f"/api/services/{name}/proxy"
-
     # Check if service is available via health endpoint
+    # Use direct container URL to avoid circular proxy calls
     available = False
-    if internal_url:
-        # Backend checks health using internal Docker network URL
+    if direct_container_url:
+        # Backend checks health using direct container URL (not proxy)
         for health_path in ["/health", "/readiness", "/api/health", "/"]:
             try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
-                    response = await client.get(f"{internal_url}{health_path}")
+                    response = await client.get(f"{direct_container_url}{health_path}")
                     if response.status_code == 200:
                         available = True
                         break
@@ -634,7 +640,16 @@ async def proxy_service_request(
         ports = docker_mgr.get_service_ports(name)
         if ports:
             primary_port = ports[0]
-            internal_port = primary_port.get("container_port", 8000)
+            container_port = primary_port.get("container_port", 8000)
+            # Convert to int if it's a string
+            if isinstance(container_port, str):
+                try:
+                    internal_port = int(container_port)
+                except ValueError:
+                    logger.warning(f"[PROXY] Invalid container_port '{container_port}' for {name}, using default 8000")
+                    internal_port = 8000
+            else:
+                internal_port = container_port or 8000
 
         # Use the actual container name found by get_service_info
         # This will be something like "ushadow-orange-chronicle-backend"
