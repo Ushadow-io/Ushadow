@@ -23,7 +23,7 @@ from src.models.user import User  # Beanie document model
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
 from src.routers import kubernetes, tailscale, unodes, docker, sse
-from src.routers import github_import, audio_relay, audio_provider
+from src.routers import github_import, audio_relay
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -184,7 +184,6 @@ app.include_router(tailscale.router, tags=["tailscale"])
 app.include_router(sse.router, prefix="/api/sse", tags=["sse"])
 app.include_router(github_import.router, prefix="/api/github-import", tags=["github-import"])
 app.include_router(audio_relay.router, tags=["audio"])
-app.include_router(audio_provider.router, tags=["providers"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)
