@@ -161,12 +161,27 @@ export interface AudioDestination {
  * Get available audio destinations from running service instances.
  * Uses deployment-based discovery instead of provider registry.
  * This supports multi-destination streaming via relay.
+ *
+ * @param baseUrl - The base URL of the ushadow backend
+ * @param token - JWT authentication token
+ * @param format - Optional audio format filter ('pcm', 'opus', etc.)
  */
 export async function getAvailableAudioDestinations(
   baseUrl: string,
-  token: string
+  token: string,
+  format?: string
 ): Promise<AudioDestination[]> {
-  const url = `${baseUrl}/api/deployments/exposed-urls?type=audio&status=running`;
+  // Build query parameters
+  const params = new URLSearchParams({
+    type: 'audio',
+    status: 'running',
+  });
+
+  if (format) {
+    params.append('format', format);
+  }
+
+  const url = `${baseUrl}/api/deployments/exposed-urls?${params.toString()}`;
 
   const response = await fetch(url, {
     method: 'GET',

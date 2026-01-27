@@ -109,7 +109,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     disconnectFromDevice: disconnectOmiDevice,
     batteryLevel,
     getBatteryLevel,
-    currentCodec,
+    currentCodec, // BROKEN: codec detection unreliable, so we hardcode Opus for all OMI devices
   } = useDeviceConnection(omiConnection);
 
   // Derive OMI connection status for SourceSelector
@@ -317,16 +317,27 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     setIsDiscoveringDestinations(true);
     try {
       const { getAvailableAudioDestinations } = await import('../../services/audioProviderApi');
-      console.log('[UnifiedStreaming] Querying audio destinations...');
 
-      const destinations = await getAvailableAudioDestinations(selectedUNode.apiUrl, authToken);
+      // Determine audio format based on source type
+      // Phone microphone sends PCM (16-bit), OMI device sends Opus frames
+      const audioFormat = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
+      console.log(`[UnifiedStreaming] Querying audio destinations for format: ${audioFormat}...`);
+
+      const destinations = await getAvailableAudioDestinations(
+        selectedUNode.apiUrl,
+        authToken,
+        audioFormat
+      );
       setAvailableDestinations(destinations);
 
-      console.log(`[UnifiedStreaming] Found ${destinations.length} destination(s):`,
+      console.log(`[UnifiedStreaming] Found ${destinations.length} destination(s) supporting ${audioFormat}:`,
         destinations.map(d => d.instance_name));
 
       if (destinations.length === 0) {
-        Alert.alert('No Audio Destinations', 'No running audio services found. Please start Chronicle or Mycelia.');
+        Alert.alert(
+          'No Compatible Destinations',
+          `No running audio services found that support ${audioFormat} format. Please check service configuration.`
+        );
       }
     } catch (err) {
       console.error('[UnifiedStreaming] Failed to discover destinations:', err);
@@ -335,9 +346,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     } finally {
       setIsDiscoveringDestinations(false);
     }
-  }, [selectedUNode, authToken]);
+  }, [selectedUNode, authToken, selectedSource.type]);
 
-  // Discover destinations when UNode or auth changes
+  // Discover destinations when UNode, auth, or source type changes
   useEffect(() => {
     discoverDestinations();
   }, [discoverDestinations]);
@@ -441,10 +452,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           await connectOmiDevice(selectedSource.deviceId);
         }
 
-        // Map BleAudioCodec to format
-        // Codec 21 = Opus, others = PCM
-        const codec = currentCodec === 21 ? 'opus' : 'pcm';
-        console.log('[UnifiedStreaming] OMI device codec:', currentCodec, '→', codec);
+        // OMI devices always use Opus codec 21
+        const codec = 'opus';
+        console.log('[UnifiedStreaming] OMI device - using Opus codec');
 
         // Start WebSocket with codec
         await omiStreamer.startStreaming(streamUrl, 'streaming', codec);
