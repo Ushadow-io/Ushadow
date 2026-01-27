@@ -62,7 +62,7 @@ services:
     restart: unless-stopped
 
   mem0-ui:
-    image: ghcr.io/ushadow-io/u-mem0-ui:latest
+    image: ghcr.io/ushadow-io/mem0-ui:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0-ui
     ports:
       - "3002:3000"

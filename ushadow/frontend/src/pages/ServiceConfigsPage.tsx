@@ -611,9 +611,9 @@ export default function ServiceConfigsPage() {
     .filter((t) => t.source === 'provider' && t.provides)
 
   const wiringProviders = [
-    // Templates (defaults) - show configured ones OR client/upload/remote mode (no config needed)
+    // Templates (defaults) - show installed providers (configured or needing setup) OR client/upload/remote mode (no config needed)
     ...providerTemplates
-      .filter((t) => t.configured || ['client', 'upload', 'remote', 'relay'].includes(t.mode)) // Client-mode providers don't need setup
+      .filter((t) => t.installed || ['client', 'upload', 'remote', 'relay'].includes(t.mode)) // Show all installed providers
       .map((t) => {
         // Extract config vars from schema - include all fields with required indicator
         const configVars: Array<{ key: string; label: string; value: string; isSecret: boolean; required?: boolean }> =
@@ -648,8 +648,8 @@ export default function ServiceConfigsPage() {
           // Cloud services are either configured or need setup
           status = t.configured ? 'configured' : 'needs_setup'
         } else {
-          // Local services use availability (from Docker)
-          status = t.available ? 'running' : 'stopped'
+          // Local services use running status (from Docker)
+          status = t.running ? 'running' : 'stopped'
         }
 
         // For LLM providers, append model to name for clarity
@@ -1149,9 +1149,9 @@ export default function ServiceConfigsPage() {
     return filtered
   }, [deployments, filterCurrentEnvOnly, currentEnv, currentComposeProject])
 
-  // Providers in "Add" menu: not configured and not yet added
+  // Providers in "Add" menu: not installed yet
   const availableToAdd = allProviderTemplates.filter(
-    (t) => (!t.configured || !t.available) && !addedProviderIds.has(t.id)
+    (t) => !t.installed && !addedProviderIds.has(t.id)
   )
 
   const handleAddProvider = (templateId: string) => {

@@ -81,7 +81,7 @@ services:
     environment:
       # Application URLs
       - MYCELIA_URL=${MYCELIA_URL:-http://localhost:8888}
-      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://mycelia-backend:8888}
+      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://localhost:8888}
       - MYCELIA_FRONTEND_HOST=${MYCELIA_FRONTEND_HOST:-http://mycelia-frontend:8080}
 
       # Authentication (optional - configured via wizard on first start)

@@ -72,11 +72,11 @@ class Template(BaseModel):
     # Configuration status (for providers - whether required keys are set)
     configured: bool = Field(default=True, description="Whether required config is present")
 
-    # Availability status (for local providers - whether service is running)
-    available: bool = Field(default=True, description="Whether local service is running/reachable")
+    # Runtime status (for local services - whether Docker container is up)
+    running: bool = Field(default=True, description="Whether local service is running/reachable")
 
-    # Installation status (for compose services - whether service is installed)
-    installed: bool = Field(default=True, description="Whether service is installed (default or user-added)")
+    # Installation status (whether user has added from registry)
+    installed: bool = Field(default=False, description="Whether user has added this from the registry")
 
 
 class ConfigValues(BaseModel):

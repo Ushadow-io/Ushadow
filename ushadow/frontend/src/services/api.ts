@@ -1189,8 +1189,8 @@ export interface Template {
   icon?: string
   tags: string[]
   configured: boolean  // Whether required config fields are set (for providers)
-  available: boolean   // Whether local service is running (for local providers)
-  installed: boolean   // Whether service is installed (for compose services)
+  running: boolean     // Whether local service is running (Docker container up)
+  installed: boolean   // Whether user has added this from the registry
 }
 
 /** ServiceConfig config values */

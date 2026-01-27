@@ -563,6 +563,40 @@ class DockerDeployPlatform(DeployPlatform):
                     # Extract config_id from labels (or fallback to service_id for backwards compatibility)
                     config_id = labels.get("ushadow.config_id") or labels.get("ushadow.service_id", "unknown")
 
+                    # Reconstruct deployed_config from container's current configuration
+                    # This allows the proxy to determine the correct internal port
+                    deployed_config = {}
+
+                    # Reconstruct ports list in the format expected by proxy: ["host:container", ...]
+                    ports_list = []
+                    logger.debug(f"[list_deployments] Container {container.name} ports: {container.ports}")
+                    if container.ports:
+                        for container_port, host_bindings in container.ports.items():
+                            if host_bindings:
+                                # container_port format: "8765/tcp"
+                                port_num = container_port.split('/')[0]
+                                host_port = host_bindings[0]["HostPort"]
+                                ports_list.append(f"{host_port}:{port_num}")
+                                logger.debug(f"[list_deployments] Added port mapping: {host_port}:{port_num}")
+                    if ports_list:
+                        deployed_config["ports"] = ports_list
+                        logger.info(f"[list_deployments] Reconstructed ports for {container.name}: {ports_list}")
+
+                    # Add image and environment if available
+                    if hasattr(container, 'image') and container.image:
+                        deployed_config["image"] = container.image.tags[0] if container.image.tags else "unknown"
+
+                    # Environment from container config
+                    if hasattr(container, 'attrs') and 'Config' in container.attrs:
+                        env_list = container.attrs['Config'].get('Env', [])
+                        env_dict = {}
+                        for env_pair in env_list:
+                            if '=' in env_pair:
+                                key, value = env_pair.split('=', 1)
+                                env_dict[key] = value
+                        if env_dict:
+                            deployed_config["environment"] = env_dict
+
                     deployment = Deployment(
                         id=deployment_id,
                         service_id=labels.get("ushadow.service_id", "unknown"),
@@ -573,6 +607,7 @@ class DockerDeployPlatform(DeployPlatform):
                         container_name=container.name,
                         deployed_at=deployed_at,
                         exposed_port=exposed_port,
+                        deployed_config=deployed_config if deployed_config else None,
                         backend_type="docker",
                         backend_metadata={
                             "container_id": container.id,

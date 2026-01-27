@@ -150,7 +150,7 @@ class Deployment(BaseModel):
     Represents an instance running on a target: ServiceConfig + Target + Runtime State.
     """
     id: str = Field(..., description="Unique deployment ID")
-    config_id: str = Field(..., description="ServiceConfig ID or Template ID (required)")
+    config_id: Optional[str] = Field(None, description="ServiceConfig ID or Template ID (optional for legacy deployments)")
     service_id: str = Field(..., description="DEPRECATED: Use config_id instead. Reference to ServiceDefinition")
     unode_hostname: str = Field(..., description="Target u-node hostname")
 

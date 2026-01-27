@@ -86,6 +86,12 @@ flags:
       resolution"
     type: release
 
+  # Service Configs - Show custom service instance configurations
+  service_configs:
+    enabled: false
+    description: "Show custom service config instances in the Services tab (multi-instance per template)"
+    type: release
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false

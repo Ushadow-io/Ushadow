@@ -24,28 +24,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/svc-configs", tags=["instances"])
 
 
-async def _check_provider_configured(provider) -> bool:
-    """Check if a provider has all required fields configured."""
-    settings = get_settings()
-    for em in provider.env_maps:
-        if not em.required:
-            continue
-        # Check if value exists in settings or has default
-        has_value = bool(em.default)
-        if em.settings_path:
-            value = await settings.get(em.settings_path)
-            has_value = value is not None and str(value).strip() != ""
-        if not has_value:
-            return False
-    return True
-
-
 # =============================================================================
 # Template Endpoints
 # =============================================================================
 
 @router.get("/templates", response_model=List[Template])
-async def list_templates(
+async def list_templates_endpoint(
     source: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ) -> List[Template]:
@@ -54,135 +38,8 @@ async def list_templates(
 
     Templates are discovered from compose/*.yaml and providers/*.yaml.
     """
-    templates = []
-
-    # Get compose services as templates
-    try:
-        from src.services.compose_registry import get_compose_registry
-        registry = get_compose_registry()
-        registry.reload()  # Force reload from compose files to bust cache
-        settings = get_settings()
-
-        # Get installed service names (same logic as ServiceOrchestrator)
-        default_services = await settings.get("default_services") or []
-        installed_names = set(default_services)
-        removed_names = set()
-
-        logger.info(f"Loading templates - default_services from settings: {default_services}")
-        logger.info(f"Loading templates - installed_names: {installed_names}")
-
-        user_installed = await settings.get("installed_services") or {}
-        for service_name, state in user_installed.items():
-            if hasattr(state, 'items'):
-                state_dict = dict(state)
-            else:
-                state_dict = state if isinstance(state, dict) else {}
-
-            is_removed = state_dict.get("removed") == True
-            is_added = state_dict.get("added") == True
-
-            if is_removed:
-                installed_names.discard(service_name)
-                removed_names.add(service_name)
-            elif is_added:
-                installed_names.add(service_name)
-
-        for service in registry.get_services():
-            if source and source != "compose":
-                continue
-
-            # Check if service is installed
-            is_installed = False
-            if service.service_name in removed_names:
-                is_installed = False
-            elif service.service_name in installed_names:
-                is_installed = True
-            else:
-                compose_base = service.compose_file.stem.replace('-compose', '')
-                if compose_base in installed_names:
-                    is_installed = True
-
-            # Debug logging
-            logger.info(f"Service: {service.service_name}, installed: {is_installed}, installed_names: {installed_names}")
-
-            templates.append(Template(
-                id=service.service_id,
-                source=TemplateSource.COMPOSE,
-                name=service.display_name or service.service_name,
-                description=service.description,
-                requires=service.requires,
-                optional=service.optional,
-                provides=service.provides,
-                config_schema=[],  # TODO: extract from env vars
-                compose_file=str(service.namespace) if service.namespace else None,
-                service_name=service.service_name,
-                mode="local",
-                installed=is_installed,
-            ))
-    except Exception as e:
-        logger.warning(f"Failed to load compose templates: {e}")
-
-    # Get providers as templates
-    try:
-        from src.services.provider_registry import get_provider_registry
-        from src.routers.providers import check_local_provider_available
-        provider_registry = get_provider_registry()
-        provider_registry.reload()  # Force reload from provider files to bust cache
-        settings = get_settings()
-        for provider in provider_registry.get_providers():
-            if source and source != "provider":
-                continue
-            # Check if provider is configured (has all required keys)
-            is_configured = await _check_provider_configured(provider)
-
-            # Check if local provider is available (service running)
-            is_available = True
-            if provider.mode == 'local':
-                is_available = await check_local_provider_available(provider, settings)
-
-            # Build config_schema with current values from settings
-            config_schema = []
-            for em in provider.env_maps:
-                value = None
-                has_value = bool(em.default)
-                if em.settings_path:
-                    stored_value = await settings.get(em.settings_path)
-                    has_value = stored_value is not None and str(stored_value).strip() != ""
-                    # Only return actual value for non-secrets
-                    if has_value and em.type != "secret":
-                        value = str(stored_value)
-                config_schema.append({
-                    "key": em.key,
-                    "type": em.type,
-                    "label": em.label,
-                    "required": em.required,
-                    "default": em.default,
-                    "env_var": em.env_var,
-                    "settings_path": em.settings_path,
-                    "has_value": has_value,
-                    "value": value,  # Non-secret values for pre-population
-                })
-
-            templates.append(Template(
-                id=provider.id,
-                source=TemplateSource.PROVIDER,
-                name=provider.name,
-                description=provider.description,
-                requires=[u.capability for u in provider.uses] if provider.uses else [],
-                provides=provider.capability,
-                config_schema=config_schema,
-                provider_file=f"providers/{provider.capability}.yaml",
-                mode=provider.mode,
-                icon=provider.icon,
-                tags=provider.tags,
-                configured=is_configured,
-                available=is_available,
-                installed=True,  # Providers are always "installed" (discoverable)
-            ))
-    except Exception as e:
-        logger.warning(f"Failed to load provider templates: {e}")
-
-    return templates
+    from src.services.template_service import list_templates
+    return await list_templates(source)
 
 
 @router.get("/templates/{template_id}", response_model=Template)
@@ -191,7 +48,8 @@ async def get_template(
     current_user: dict = Depends(get_current_user),
 ) -> Template:
     """Get a template by ID."""
-    templates = await list_templates(current_user=current_user)
+    from src.services.template_service import list_templates
+    templates = await list_templates()
     for template in templates:
         if template.id == template_id:
             return template
@@ -278,31 +136,17 @@ async def get_template_env_config(
 async def list_service_configs_endpoint(
     current_user: dict = Depends(get_current_user),
 ) -> List[ServiceConfigSummary]:
-    """List all actual service config instances (not template placeholders)."""
-    from src.services.provider_registry import get_provider_registry
+    """
+    List all service configurations.
 
+    Returns both actual ServiceConfig entries AND placeholder entries
+    for installed templates that don't have configs yet.
+
+    This helps users see: "You installed OpenAI but haven't configured it yet"
+    """
     manager = get_service_config_manager()
     manager.reload()  # Force reload from disk to bust cache
-    provider_registry = get_provider_registry()
-
-    result = []
-    # Return only actual service configs, not placeholders
-    for config in manager._service_configs.values():
-        # Look up what capability this config provides
-        provides = None
-        provider = provider_registry.get_provider(config.template_id)
-        if provider:
-            provides = provider.capability
-
-        result.append(ServiceConfigSummary(
-            id=config.id,
-            template_id=config.template_id,
-            name=config.name,
-            provides=provides,
-            description=config.description,
-        ))
-
-    return result
+    return await manager.list_service_configs_async()
 
 
 @router.get("/{config_id}", response_model=ServiceConfig)

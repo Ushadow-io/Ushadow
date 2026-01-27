@@ -652,15 +652,15 @@ export default function KubernetesClustersPage() {
 
               {/* Kubeconfig Upload */}
               <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">
                   Kubeconfig
                 </label>
 
-                {/* File Upload Button */}
-                <div className="mb-3">
-                  <label className="btn-secondary inline-flex items-center space-x-2 cursor-pointer">
+                {/* File Upload or Paste Buttons */}
+                <div className="flex gap-3 mb-4">
+                  <label className="flex-1 btn-secondary inline-flex items-center justify-center space-x-2 cursor-pointer">
                     <Upload className="h-4 w-4" />
-                    <span>Upload kubeconfig file</span>
+                    <span>Upload File</span>
                     <input
                       type="file"
                       accept=".yaml,.yml,.config"
@@ -668,20 +668,51 @@ export default function KubernetesClustersPage() {
                       className="hidden"
                     />
                   </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const text = await navigator.clipboard.readText()
+                        if (text && (text.includes('apiVersion') || text.includes('kind: Config'))) {
+                          setKubeconfig(text)
+                        } else {
+                          alert('Clipboard does not contain valid kubeconfig content')
+                        }
+                      } catch (err) {
+                        // Fallback - just focus the textarea
+                        document.querySelector('[data-testid="kubeconfig-input"]')?.focus()
+                      }
+                    }}
+                    className="flex-1 btn-primary inline-flex items-center justify-center space-x-2"
+                    data-testid="paste-kubeconfig-btn"
+                  >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    <span>Paste from Clipboard</span>
+                  </button>
                 </div>
 
-                {/* Or Paste */}
-                <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-2">Or paste your kubeconfig:</p>
-                <textarea
-                  value={kubeconfig}
-                  onChange={(e) => setKubeconfig(e.target.value)}
-                  placeholder="apiVersion: v1&#10;kind: Config&#10;clusters:&#10;  - cluster:&#10;      server: https://..."
-                  rows={12}
-                  className="w-full px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 font-mono text-sm resize-none"
-                  data-testid="kubeconfig-input"
-                />
+                {/* Textarea for manual paste/edit */}
+                <div className="relative">
+                  <textarea
+                    value={kubeconfig}
+                    onChange={(e) => setKubeconfig(e.target.value)}
+                    placeholder="Paste your kubeconfig here, or use the buttons above...&#10;&#10;apiVersion: v1&#10;kind: Config&#10;clusters:&#10;  - cluster:&#10;      server: https://..."
+                    rows={12}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 font-mono text-sm resize-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+                    data-testid="kubeconfig-input"
+                  />
+                  {kubeconfig && (
+                    <div className="absolute top-2 right-2">
+                      <span className="px-2 py-1 bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-400 text-xs rounded">
+                        ✓ Config loaded ({kubeconfig.split('\n').length} lines)
+                      </span>
+                    </div>
+                  )}
+                </div>
                 <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-                  Usually found at <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">~/.kube/config</code>
+                  Usually found at <code className="px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded font-mono">~/.kube/config</code>
                 </p>
               </div>
             </div>

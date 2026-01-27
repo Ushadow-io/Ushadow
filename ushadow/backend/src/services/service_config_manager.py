@@ -251,8 +251,12 @@ class ServiceConfigManager:
     # ServiceConfig Operations
     # =========================================================================
 
-    def list_service_configs(self) -> List[ServiceConfigSummary]:
-        """List all service configurations."""
+    async def list_service_configs_async(self) -> List[ServiceConfigSummary]:
+        """List all service configurations (async version).
+
+        Returns both actual ServiceConfig entries AND placeholder entries
+        for installed templates that don't have configs yet.
+        """
         self._ensure_loaded()
 
         # Get provider registry to look up 'provides' capability
@@ -260,6 +264,9 @@ class ServiceConfigManager:
         provider_registry = get_provider_registry()
 
         result = []
+        config_template_ids = set()
+
+        # Add actual service configs
         for config in self._service_configs.values():
             # Look up what capability this config provides
             provides = None
@@ -274,8 +281,51 @@ class ServiceConfigManager:
                 provides=provides,
                 description=config.description,
             ))
+            config_template_ids.add(config.template_id)
+
+        # Get all templates and add placeholders for installed ones without configs
+        from src.services.template_service import list_templates
+
+        try:
+            templates = await list_templates()
+
+            for template in templates:
+                # Skip if not installed
+                if not template.installed:
+                    continue
+
+                # Skip if already has a config
+                if template.id in config_template_ids:
+                    continue
+
+                # Create placeholder entry
+                result.append(ServiceConfigSummary(
+                    id=template.id,
+                    template_id=template.id,
+                    name=template.name,
+                    provides=template.provides,
+                    description=template.description,
+                ))
+        except Exception as e:
+            logger.warning(f"Failed to load installed templates: {e}")
 
         return result
+
+    def list_service_configs(self) -> List[ServiceConfigSummary]:
+        """List all service configurations (sync wrapper)."""
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Already in async context - this shouldn't happen but handle it
+                return asyncio.run_coroutine_threadsafe(
+                    self.list_service_configs_async(), loop
+                ).result()
+            else:
+                return loop.run_until_complete(self.list_service_configs_async())
+        except RuntimeError:
+            # No event loop - create one
+            return asyncio.run(self.list_service_configs_async())
 
     def get_service_config(self, config_id: str) -> Optional[ServiceConfig]:
         """Get a service config by ID."""

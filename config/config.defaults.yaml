@@ -80,7 +80,7 @@ security:
 # Infrastructure Services
 infrastructure:
   mongodb_uri: mongodb://mongo:27017
-  # mongodb_database set by MONGODB_DATABASE env var
+  mongodb_database: ushadow  # Default database name (NOT a URI!)
   redis_url: redis://redis:6379/0
   
   qdrant_base_url: qdrant

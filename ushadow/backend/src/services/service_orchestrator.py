@@ -168,10 +168,11 @@ class ServiceOrchestrator:
     └── not_found   → No compose file defines this service
 
     INSTALLATION STATE (from config files)
-    ├── installed   → In default_services (config.defaults.yaml)
-    │                 OR installed_services.{name}.added=true (config.overrides.yaml)
-    ├── uninstalled → In installed_services.{name}.removed=true
-    └── enabled     → installed_services.{name}.enabled (default: true)
+    ├── installed   → (default_services + installed_services) - removed_services
+    │                 default_services: from config.defaults.yaml (list)
+    │                 installed_services: user-added services (list)
+    │                 removed_services: removed from defaults (list)
+    └── enabled     → NOT in disabled_services list (default: enabled)
 
     CONFIGURATION STATE (computed at runtime)
     ├── needs_setup → Has required env vars without values or defaults
@@ -401,11 +402,13 @@ class ServiceOrchestrator:
         if not service:
             return None
 
-        enabled = await self.settings.get(f"installed_services.{service.service_name}.enabled")
+        disabled_services = await self.settings.get("disabled_services") or []
+        enabled = service.service_name not in disabled_services
+
         return {
             "service_id": service.service_id,
             "service_name": service.service_name,
-            "enabled": enabled if enabled is not None else True,
+            "enabled": enabled,
         }
 
     async def set_enabled_state(self, name: str, enabled: bool) -> Optional[Dict[str, Any]]:
@@ -414,8 +417,19 @@ class ServiceOrchestrator:
         if not service:
             return None
 
+        disabled_services = await self.settings.get("disabled_services") or []
+
+        if enabled:
+            # Remove from disabled list if present
+            if service.service_name in disabled_services:
+                disabled_services.remove(service.service_name)
+        else:
+            # Add to disabled list if not present
+            if service.service_name not in disabled_services:
+                disabled_services.append(service.service_name)
+
         await self.settings.update({
-            f"installed_services.{service.service_name}.enabled": enabled
+            "disabled_services": disabled_services
         })
 
         action = "enabled" if enabled else "disabled"
@@ -681,13 +695,23 @@ class ServiceOrchestrator:
             return None
 
         service_name = service.service_name
+
+        # Get current lists
+        installed_services = await self.settings.get("installed_services") or []
+        removed_services = await self.settings.get("removed_services") or []
+
+        # Add to installed if not already there
+        if service_name not in installed_services:
+            installed_services.append(service_name)
+
+        # Remove from removed list if present
+        if service_name in removed_services:
+            removed_services.remove(service_name)
+
+        # Update settings
         await self.settings.update({
-            "installed_services": {
-                service_name: {
-                    "added": True,
-                    "removed": False,
-                }
-            }
+            "installed_services": installed_services,
+            "removed_services": removed_services,
         })
 
         logger.info(f"Installed service: {service_name}")
@@ -706,13 +730,25 @@ class ServiceOrchestrator:
             return None
 
         service_name = service.service_name
+
+        # Get current lists
+        default_services = await self.settings.get("default_services") or []
+        installed_services = await self.settings.get("installed_services") or []
+        removed_services = await self.settings.get("removed_services") or []
+
+        # If it's a default service, add to removed list
+        if service_name in default_services:
+            if service_name not in removed_services:
+                removed_services.append(service_name)
+
+        # Remove from user-installed list if present
+        if service_name in installed_services:
+            installed_services.remove(service_name)
+
+        # Update settings
         await self.settings.update({
-            "installed_services": {
-                service_name: {
-                    "added": False,
-                    "removed": True,
-                }
-            }
+            "installed_services": installed_services,
+            "removed_services": removed_services,
         })
 
         logger.info(f"Uninstalled service: {service_name}")
@@ -770,27 +806,18 @@ class ServiceOrchestrator:
         return service
 
     async def _get_installed_service_names(self) -> tuple[set, set]:
-        """Get sets of installed and removed service names."""
+        """Get sets of installed and removed service names.
+
+        Final = (default_services + installed_services) - removed_services
+        """
         default_services = await self.settings.get("default_services") or []
-        installed = set(default_services)
-        removed = set()
+        user_installed = await self.settings.get("installed_services") or []
+        removed_services = await self.settings.get("removed_services") or []
 
-        user_installed = await self.settings.get("installed_services") or {}
-
-        for service_name, state in user_installed.items():
-            if hasattr(state, 'items'):
-                state_dict = dict(state)
-            else:
-                state_dict = state if isinstance(state, dict) else {}
-
-            is_removed = state_dict.get("removed") == True
-            is_added = state_dict.get("added") == True
-
-            if is_removed:
-                installed.discard(service_name)
-                removed.add(service_name)
-            elif is_added:
-                installed.add(service_name)
+        # Build final installed set
+        installed = set(default_services) | set(user_installed)
+        removed = set(removed_services)
+        installed -= removed
 
         return installed, removed
 
@@ -819,9 +846,8 @@ class ServiceOrchestrator:
     async def _build_service_summary(self, service: DiscoveredService, installed: bool) -> ServiceSummary:
         """Build a ServiceSummary from a DiscoveredService."""
         # Get enabled state
-        enabled = await self.settings.get(f"installed_services.{service.service_name}.enabled")
-        if enabled is None:
-            enabled = True
+        disabled_services = await self.settings.get("disabled_services") or []
+        enabled = service.service_name not in disabled_services
 
         # Get docker status
         docker_info = self.docker_manager.get_service_info(service.service_name)
