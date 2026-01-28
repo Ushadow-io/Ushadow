@@ -44,6 +44,38 @@ eas build --profile preview --platform ios      # Requires Apple Developer accou
 
 ---
 
+## Build Configuration
+
+### Setting a Default Server URL (Optional)
+
+You can pre-configure a default server URL that will be filled in automatically when users first open the app. This is useful when distributing the app to your team.
+
+**Option 1: Environment Variable (Recommended)**
+
+Create a `.env` file in the `ushadow/mobile/` directory:
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit with your server URL
+echo 'EXPO_PUBLIC_DEFAULT_SERVER_URL=https://your-server.ts.net' > .env
+```
+
+Then build the app normally. The URL will be embedded at build time.
+
+**Option 2: EAS Build Secrets**
+
+For EAS builds, set the environment variable in your EAS secrets:
+
+```bash
+eas secret:create --name EXPO_PUBLIC_DEFAULT_SERVER_URL --value "https://your-server.ts.net"
+```
+
+**Note:** Users can always change the server URL during login, even if a default is set. The URL they use is saved for future logins.
+
+---
+
 ## Detailed Setup Instructions
 
 ### Prerequisites

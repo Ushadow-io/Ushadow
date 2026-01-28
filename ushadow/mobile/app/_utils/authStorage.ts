@@ -143,7 +143,10 @@ export function appendTokenToUrl(wsUrl: string, token: string): string {
 
 /**
  * Get the default server URL.
- * Returns user-configured default if set, otherwise returns app config default.
+ * Priority:
+ * 1. User-saved default (from "Save as default" checkbox)
+ * 2. Build-time default from EXPO_PUBLIC_DEFAULT_SERVER_URL env var
+ * 3. Empty string (user must enter URL manually)
  */
 export async function getDefaultServerUrl(): Promise<string> {
   try {
@@ -154,6 +157,7 @@ export async function getDefaultServerUrl(): Promise<string> {
   } catch (error) {
     console.error('[AuthStorage] Failed to get default server URL:', error);
   }
+  // Fall back to build-time default from env var (or empty string)
   return AppConfig.DEFAULT_SERVER_URL;
 }
 
@@ -172,7 +176,8 @@ export async function setDefaultServerUrl(url: string): Promise<void> {
 }
 
 /**
- * Clear the custom default server URL (revert to app config default).
+ * Clear the custom default server URL.
+ * After clearing, users will need to enter the URL manually on next login.
  */
 export async function clearDefaultServerUrl(): Promise<void> {
   try {
@@ -186,7 +191,7 @@ export async function clearDefaultServerUrl(): Promise<void> {
 
 /**
  * Get the effective server URL to use.
- * Priority: stored API URL > custom default > app config default
+ * Priority: stored API URL from login > saved default server URL > empty string
  */
 export async function getEffectiveServerUrl(): Promise<string> {
   // First check if there's a stored API URL from login
