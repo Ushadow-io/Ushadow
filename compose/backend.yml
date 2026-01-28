@@ -28,6 +28,8 @@ services:
       - CONFIG_DIR=/config
       - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:${WEBUI_PORT}}
+      # Rich console width for logging (prevents log wrapping)
+      - COLUMNS=200
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config  # Mount config directory (read-write for feature flags)
