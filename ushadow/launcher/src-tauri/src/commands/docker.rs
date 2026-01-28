@@ -1,9 +1,43 @@
 use std::net::TcpListener;
-use std::process::Command;
 use std::sync::Mutex;
+use std::collections::HashMap;
+use std::path::Path;
 use tauri::State;
 use crate::models::{ContainerStatus, ServiceInfo};
-use super::utils::{silent_command, shell_command};
+use super::utils::{silent_command, shell_command, quote_path_buf};
+use super::platform::{Platform, PlatformOps};
+use super::bundled;
+
+/// Recursively copy a directory and all its contents
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest_path = dst.join(entry.file_name());
+
+        if path.is_dir() {
+            // Skip __pycache__ directories
+            if entry.file_name() == "__pycache__" {
+                continue;
+            }
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            // Skip .pyc files
+            if let Some(ext) = path.extension() {
+                if ext == "pyc" {
+                    continue;
+                }
+            }
+            std::fs::copy(&path, &dest_path)?;
+        }
+    }
+
+    Ok(())
+}
 
 /// Find uv executable, checking common install locations on Windows
 /// Returns the path/command to use for running uv
@@ -88,14 +122,12 @@ fn find_available_ports(default_backend: u16, default_webui: u16) -> (u16, u16) 
 /// Application state
 pub struct AppState {
     pub project_root: Mutex<Option<String>>,
-    pub containers_running: Mutex<bool>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             project_root: Mutex::new(None),
-            containers_running: Mutex::new(false),
         }
     }
 }
@@ -162,9 +194,35 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     }
 
     log_messages.push("Starting infrastructure containers...".to_string());
-    log_messages.push("Running: docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d".to_string());
 
-    let infra_output = shell_command("docker compose -f compose/docker-compose.infra.yml -p infra --profile infra up -d")
+    // Get bundled compose file if available
+    let bundled_compose_file = bundled::get_compose_file(&project_root, "docker-compose.infra.yml");
+
+    // Copy bundled compose to working directory if it's from the bundled location
+    // This avoids permission issues on Windows where Program Files requires admin
+    let working_compose_dir = std::path::Path::new(&project_root).join("compose");
+    let working_compose_file = working_compose_dir.join("docker-compose.infra.yml");
+
+    if bundled_compose_file != working_compose_file {
+        log_messages.push(format!("Copying bundled compose file to working directory..."));
+
+        // Create compose directory if needed
+        if !working_compose_dir.exists() {
+            std::fs::create_dir_all(&working_compose_dir)
+                .map_err(|e| format!("Failed to create compose directory: {}", e))?;
+        }
+
+        // Copy the compose file
+        std::fs::copy(&bundled_compose_file, &working_compose_file)
+            .map_err(|e| format!("Failed to copy compose file: {}", e))?;
+    }
+
+    let compose_path_quoted = quote_path_buf(&working_compose_file);
+
+    log_messages.push(format!("Running: docker compose -f {} -p infra --profile infra up -d", compose_path_quoted));
+
+    let compose_command = format!("docker compose -f {} -p infra --profile infra up -d", compose_path_quoted);
+    let infra_output = shell_command(&compose_command)
         .current_dir(&project_root)
         .output()
         .map_err(|e| {
@@ -355,100 +413,97 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
             ((hash % 50) * 10) as u16  // Gives offsets: 0, 10, 20, ... 490
         };
 
-        let mut log_messages = Vec::new();
+        let mut status_log = Vec::new();  // User-visible status messages
+        let mut debug_log = Vec::new();   // Detailed debug info (only shown on error)
 
-        log_messages.push(format!("========== INITIALIZING ENVIRONMENT =========="));
-        log_messages.push(format!("Working directory: {}", working_dir));
-        log_messages.push(format!("ENV_NAME={}", env_name));
-        log_messages.push(format!("PORT_OFFSET={} (calculated from env name hash)", port_offset));
+        // Log to both status and debug
+        status_log.push(format!("Initializing environment '{}'...", env_name));
+        debug_log.push(format!("========== INITIALIZING ENVIRONMENT =========="));
+        debug_log.push(format!("Working directory: {}", working_dir));
+        debug_log.push(format!("ENV_NAME={}", env_name));
+        debug_log.push(format!("PORT_OFFSET={} (calculated from env name hash)", port_offset));
 
-        // Install uv if needed
-        let install_script = if cfg!(target_os = "windows") {
-            std::path::Path::new(&working_dir).join("scripts/install-uv.ps1")
+        // Find uv executable (assumes uv is installed via prerequisites)
+        let uv_cmd = find_uv_executable();
+        debug_log.push(format!("Using uv at: {}", uv_cmd));
+
+        // Verify uv is accessible
+        let uv_check = if uv_cmd == "uv" {
+            // If using PATH, verify with --version
+            shell_command("uv --version").output().is_ok()
         } else {
-            std::path::Path::new(&working_dir).join("scripts/install-uv.sh")
+            // If using specific path, verify file exists
+            std::path::Path::new(&uv_cmd).exists()
         };
 
-        log_messages.push(format!("Checking for uv install script at: {}", install_script.display()));
-
-        if install_script.exists() {
-            log_messages.push(format!("✓ Found install script, running: {}", install_script.display()));
-
-            let install_output = if cfg!(target_os = "windows") {
-                log_messages.push(format!("Executing: powershell -ExecutionPolicy Bypass -File \"{}\"", install_script.display()));
-                shell_command("powershell")
-                    .args(["-ExecutionPolicy", "Bypass", "-File", install_script.to_str().unwrap()])
-                    .current_dir(&working_dir)
-                    .output()
-            } else {
-                log_messages.push(format!("Executing: bash \"{}\"", install_script.display()));
-                shell_command("bash")
-                    .arg(install_script.to_str().unwrap())
-                    .current_dir(&working_dir)
-                    .output()
-            };
-
-            match install_output {
-                Ok(out) => {
-                    let install_stdout = String::from_utf8_lossy(&out.stdout);
-                    let install_stderr = String::from_utf8_lossy(&out.stderr);
-
-                    if !install_stdout.is_empty() {
-                        log_messages.push(format!("uv installer stdout:\n{}", install_stdout));
-                    }
-                    if !install_stderr.is_empty() {
-                        log_messages.push(format!("uv installer stderr:\n{}", install_stderr));
-                    }
-
-                    if !out.status.success() {
-                        log_messages.push(format!("⚠ uv installer exited with status: {}", out.status));
-                    } else {
-                        log_messages.push(format!("✓ uv installer completed successfully"));
-                    }
-                }
-                Err(e) => {
-                    log_messages.push(format!("⚠ Failed to run uv installer: {}", e));
-                }
-            }
-        } else {
-            log_messages.push(format!("✗ Install script NOT found at: {}", install_script.display()));
-        }
-
-        // Find uv executable (handle Windows PATH not being updated)
-        let uv_cmd = find_uv_executable();
-        log_messages.push(format!("Looking for uv executable..."));
-        log_messages.push(format!("Using uv at: {}", uv_cmd));
-
-        // Check if uv actually exists
-        if uv_cmd != "uv" && !std::path::Path::new(&uv_cmd).exists() {
-            log_messages.push(format!("⚠ uv not found at: {}", uv_cmd));
+        if !uv_check {
+            let error_msg = format!(
+                "uv not found or not accessible (tried: {})\n\nPlease install uv via the Prerequisites panel before starting an environment.",
+                uv_cmd
+            );
+            status_log.push(error_msg.clone());
+            debug_log.push(error_msg);
+            return Err(format!("{}\n\n=== Debug Log ===\n{}",
+                status_log.join("\n"),
+                debug_log.join("\n")));
         }
 
         // Run setup with uv in dev mode with calculated port offset
-        log_messages.push(format!("Running: {} run --with pyyaml setup/run.py --dev --quick --skip-admin", uv_cmd));
+        // Note: Removed --skip-admin flag so admin user can be auto-created from secrets.yaml
+        status_log.push(format!("Running setup script..."));
 
-        // Build the full command string for shell execution
+        // Get bundled setup scripts if available
+        let bundled_setup_dir = bundled::get_setup_dir(&working_dir);
+
+        // Copy bundled setup to working directory if it's from the bundled location
+        // This avoids permission issues on Windows where Program Files requires admin
+        let working_setup_dir = std::path::Path::new(&working_dir).join("setup");
+
+        if bundled_setup_dir != working_setup_dir {
+            debug_log.push(format!("Copying bundled setup from {:?} to {:?}", bundled_setup_dir, working_setup_dir));
+
+            // Recursively copy the entire setup directory
+            if let Err(e) = copy_dir_recursive(&bundled_setup_dir, &working_setup_dir) {
+                debug_log.push(format!("Warning: Failed to copy setup directory: {}", e));
+                // Continue anyway - might be a partial copy that still works
+            } else {
+                debug_log.push(format!("✓ Bundled setup copied successfully"));
+            }
+        }
+
+        let run_py_path = working_setup_dir.join("run.py");
+        let run_py_quoted = quote_path_buf(&run_py_path);
+
+        debug_log.push(format!("Using setup script: {:?}", run_py_path));
+        debug_log.push(format!("Running: {} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted));
+
+        // Build the full command string using platform abstraction
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
-        let setup_command = format!(
-            "cd '{}' && ENV_NAME={} PORT_OFFSET={} {} run --with pyyaml setup/run.py --dev --quick --skip-admin",
-            working_dir, env_name, port_offset, uv_cmd
-        );
+        let mut env_vars = HashMap::new();
+        env_vars.insert("ENV_NAME".to_string(), env_name.clone());
+        env_vars.insert("PORT_OFFSET".to_string(), port_offset.to_string());
+
+        let command = format!("{} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted);
+        let setup_command = Platform::build_env_command(&working_dir, env_vars, &command);
 
         let output = shell_command(&setup_command)
+            .current_dir(&working_dir)  // Run from working_dir so setup script finds correct PROJECT_ROOT
             .output()
             .map_err(|e| {
-                let error_log = log_messages.join("\n");
-                format!("{}\n\nFailed to run setup (uv not found at '{}'. Try installing manually: https://docs.astral.sh/uv/getting-started/installation/): {}", error_log, uv_cmd, e)
+                let full_log = format!("{}\n\n=== Debug Log ===\n{}",
+                    status_log.join("\n"),
+                    debug_log.join("\n"));
+                format!("{}\n\nFailed to run setup (uv not found at '{}'. Try installing manually: https://docs.astral.sh/uv/getting-started/installation/): {}", full_log, uv_cmd, e)
             })?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         if !stdout.is_empty() {
-            log_messages.push(format!("Setup stdout:\n{}", stdout));
+            debug_log.push(format!("Setup stdout:\n{}", stdout));
         }
         if !stderr.is_empty() {
-            log_messages.push(format!("Setup stderr:\n{}", stderr));
+            debug_log.push(format!("Setup stderr:\n{}", stderr));
         }
 
         if !output.status.success() {
@@ -467,17 +522,22 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
                 &error_lines[..]
             };
 
-            let error_log = log_messages.join("\n");
+            // On error, show both status and debug logs
+            let full_log = format!("{}\n\n=== Debug Log ===\n{}",
+                status_log.join("\n"),
+                debug_log.join("\n"));
+
             return Err(format!(
-                "{}\n\nFailed to initialize environment '{}'\n\nError output:\n{}",
-                error_log,
+                "{}\n\n❌ Failed to initialize environment '{}'\n\nError output:\n{}",
+                full_log,
                 env_name,
                 context_lines.join("\n")
             ));
         }
 
-        log_messages.push(format!("✓ Environment '{}' initialized and started", env_name));
-        return Ok(log_messages.join("\n"));
+        // On success, only show status log
+        status_log.push(format!("✓ Environment '{}' initialized and started", env_name));
+        return Ok(status_log.join("\n"));
     }
 
     // Containers exist and are stopped - just start them
@@ -684,7 +744,7 @@ pub fn focus_window(window: tauri::Window) -> Result<(), String> {
     // On macOS, also activate the app to ensure it comes to front
     #[cfg(target_os = "macos")]
     {
-        let _ = Command::new("osascript")
+        let _ = silent_command("osascript")
             .args(["-e", "tell application \"Ushadow Launcher\" to activate"])
             .spawn();
     }
@@ -697,7 +757,7 @@ pub fn focus_window(window: tauri::Window) -> Result<(), String> {
 pub fn open_browser(url: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        silent_command("open")
             .arg(&url)
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -714,7 +774,7 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
+        silent_command("xdg-open")
             .arg(&url)
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -725,7 +785,7 @@ pub fn open_browser(url: String) -> Result<(), String> {
 
 
 
-/// Create a new environment using start-dev.sh
+/// Create a new environment using dev.sh
 /// mode: "dev" for hot-reload, "prod" for production build
 #[tauri::command]
 pub async fn create_environment(state: State<'_, AppState>, name: String, mode: Option<String>) -> Result<String, String> {
@@ -733,10 +793,10 @@ pub async fn create_environment(state: State<'_, AppState>, name: String, mode: 
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
 
-    // Check if start-dev.sh exists
-    let script_path = std::path::Path::new(&project_root).join("start-dev.sh");
+    // Check if dev.sh exists
+    let script_path = std::path::Path::new(&project_root).join("dev.sh");
     if !script_path.exists() {
-        return Err(format!("start-dev.sh not found in {}. Make sure you're pointing to a valid Ushadow repository.", project_root));
+        return Err(format!("dev.sh not found in {}. Make sure you're pointing to a valid Ushadow repository.", project_root));
     }
 
     // Find available ports (default: 8000 for backend, 3000 for webui)
@@ -751,15 +811,15 @@ pub async fn create_environment(state: State<'_, AppState>, name: String, mode: 
         _ => "--dev", // Default to dev mode (hot-reload)
     };
 
-    // Run start-dev.sh in quick mode with environment name and port offset
+    // Run dev.sh in quick mode with environment name and port offset
     let output = silent_command("bash")
-        .args(["start-dev.sh", "--quick", mode_flag])
+        .args(["dev.sh", "--quick", mode_flag])
         .current_dir(&project_root)
         .env("ENV_NAME", &name)
         .env("PORT_OFFSET", port_offset.to_string())
         .env("USHADOW_NO_BROWSER", "1")  // Custom env var we can check in script
         .output()
-        .map_err(|e| format!("Failed to run start-dev.sh: {}", e))?;
+        .map_err(|e| format!("Failed to run dev.sh: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

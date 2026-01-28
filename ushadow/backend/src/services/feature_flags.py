@@ -30,9 +30,19 @@ class YAMLFeatureFlagService:
         Initialize the YAML feature flag service.
 
         Args:
-            config_path: Path to the YAML config file
+            config_path: Path to the YAML config file (relative or absolute)
         """
-        self.config_path = Path(config_path)
+        import os
+
+        # If relative path and CONFIG_DIR is set, use it as base
+        if not Path(config_path).is_absolute():
+            config_dir = os.environ.get("CONFIG_DIR")
+            if config_dir:
+                self.config_path = Path(config_dir) / "feature_flags.yaml"
+            else:
+                self.config_path = Path(config_path)
+        else:
+            self.config_path = Path(config_path)
         self._flags: Dict[str, Any] = {}
 
     async def startup(self):

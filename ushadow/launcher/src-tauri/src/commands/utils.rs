@@ -32,10 +32,13 @@ pub fn shell_command(command: &str) -> Command {
         use std::os::windows::process::CommandExt;
         // Use PowerShell for better environment variable handling
         // -NoProfile: Skip loading profile for speed (environment vars are still loaded)
+        // -WindowStyle Hidden: Don't show the PowerShell window
+        // -NonInteractive: Don't wait for user input
         // -Command: Execute the command
         let mut cmd = Command::new("powershell");
-        cmd.args(["-NoProfile", "-Command", command]);
+        cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", command]);
         // CREATE_NO_WINDOW = 0x08000000
+        // This prevents the console window from being created in the first place
         cmd.creation_flags(0x08000000);
         return cmd;
     }
@@ -92,4 +95,23 @@ pub fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Quote a path for safe use in shell commands
+/// Handles paths with spaces, special characters, etc.
+///
+/// On Windows (PowerShell): Uses single quotes and escapes internal single quotes
+/// On Unix: Uses single quotes and escapes internal single quotes
+///
+/// Example: C:/Program Files/App -> 'C:/Program Files/App'
+pub fn quote_path(path: &str) -> String {
+    // Escape single quotes by replacing ' with ''  (PowerShell and bash compatible)
+    let escaped = path.replace('\'', "''");
+    format!("'{}'", escaped)
+}
+
+/// Quote a path from a PathBuf for safe use in shell commands
+/// Convenience wrapper around quote_path()
+pub fn quote_path_buf(path: &std::path::Path) -> String {
+    quote_path(&path.to_string_lossy())
 }

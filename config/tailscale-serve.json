@@ -1,0 +1,23 @@
+{
+  "version": "alpha0",
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "gold.spangled-kettle.ts.net:443": {
+      "Handlers": {
+        "/auth": {
+          "Proxy": "http://ushadow-gold-backend:8000/auth"
+        },
+        "/api": {
+          "Proxy": "http://ushadow-gold-backend:8000/api"
+        },
+        "/": {
+          "Proxy": "http://ushadow-gold-webui:5173"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,226 @@
+name: Build Mobile Apps (Android & iOS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ushadow/mobile/**'
+      - '.github/workflows/mobile-builds.yml'
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: 'Build Android APK'
+        required: false
+        default: true
+        type: boolean
+      build_ios:
+        description: 'Build iOS IPA'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_android }}
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_created: ${{ steps.create_release.conclusion == 'success' }}
+
+    defaults:
+      run:
+        working-directory: ushadow/mobile
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: ushadow/mobile/package-lock.json
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Expo and EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize EAS (if not already)
+        run: eas init --force --non-interactive || true
+
+      - name: Build Android APK
+        run: |
+          eas build \
+            --platform android \
+            --profile local \
+            --local \
+            --output ${{ github.workspace }}/ushadow-mobile-android.apk \
+            --non-interactive
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          echo "RELEASE_TAG=mobile-v1.0.0-${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=Ushadow Mobile $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.RELEASE_TAG }}
+          release_name: ${{ steps.tag.outputs.RELEASE_NAME }}
+          body: |
+            ## 🚀 Ushadow Mobile Build
+
+            **Built from commit:** ${{ github.sha }}
+            **Branch:** ${{ github.ref_name }}
+            **Build time:** ${{ steps.tag.outputs.BUILD_TIME }}
+
+            ### 📱 Downloads
+            - **Android APK**: Ready for installation on Android devices
+
+            ### 🔧 Build Info
+            - Built with GitHub Actions + EAS Build
+            - Local build profile (development)
+            - Safe for testing and development
+
+            ### 📖 Installation
+            **Android:**
+            1. Download the APK file
+            2. Enable "Install from unknown sources" on your device
+            3. Open the APK file to install
+
+            **iOS:**
+            1. Download the IPA file (if available)
+            2. Install via AltStore, Sideloadly, or Xcode
+          draft: false
+          prerelease: true
+
+      - name: Upload Android APK to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/ushadow-mobile-android.apk
+          asset_name: ushadow-mobile-android.apk
+          asset_content_type: application/vnd.android.package-archive
+
+  build-ios:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_ios }}
+    needs: build-android
+    runs-on: macos-14
+
+    defaults:
+      run:
+        working-directory: ushadow/mobile
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: ushadow/mobile/package-lock.json
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+
+      - name: Setup Expo and EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize EAS (if not already)
+        run: eas init --force --non-interactive || true
+
+      - name: Build iOS IPA (Simulator)
+        run: |
+          eas build \
+            --platform ios \
+            --profile local \
+            --local \
+            --non-interactive \
+            --output ${{ github.workspace }}/ushadow-mobile-ios.ipa
+
+      - name: Upload iOS IPA to Existing Release
+        if: needs.build-android.outputs.release_created == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.build-android.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/ushadow-mobile-ios.ipa
+          asset_name: ushadow-mobile-ios.ipa
+          asset_content_type: application/octet-stream
+
+      - name: Generate iOS-only release info
+        if: needs.build-android.outputs.release_created != 'true'
+        id: ios_tag
+        run: |
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          echo "IOS_RELEASE_TAG=mobile-ios-v1.0.0-${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "IOS_RELEASE_NAME=Ushadow Mobile iOS $(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "IOS_BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create iOS-only Release
+        if: needs.build-android.outputs.release_created != 'true'
+        id: create_ios_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.ios_tag.outputs.IOS_RELEASE_TAG }}
+          release_name: ${{ steps.ios_tag.outputs.IOS_RELEASE_NAME }}
+          body: |
+            ## 🍎 Ushadow Mobile iOS Build
+
+            **Built from commit:** ${{ github.sha }}
+            **Branch:** ${{ github.ref_name }}
+            **Build time:** ${{ steps.ios_tag.outputs.IOS_BUILD_TIME }}
+
+            For iOS Simulator testing!
+          draft: false
+          prerelease: true
+
+      - name: Upload iOS IPA to New Release
+        if: needs.build-android.outputs.release_created != 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_ios_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/ushadow-mobile-ios.ipa
+          asset_name: ushadow-mobile-ios.ipa
+          asset_content_type: application/octet-stream

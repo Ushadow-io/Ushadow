@@ -57,6 +57,7 @@ const NAMED_COLORS: Record<string, ColorPair> = {
   charcoal: { primary: '#36454f', dark: '#2b373f' },
 
   // Semantic environment names
+  ushadow: { primary: '#8b3a8b', dark: '#5c2a5c' }, // Default ushadow environment in purple
   main: { primary: '#2ea043', dark: '#1f7a34' },
   master: { primary: '#2ea043', dark: '#1f7a34' },
   dev: { primary: '#0066cc', dark: '#003366' },

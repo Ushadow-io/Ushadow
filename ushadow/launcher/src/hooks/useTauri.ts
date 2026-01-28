@@ -9,11 +9,17 @@ export interface Prerequisites {
   tailscale_connected: boolean
   git_installed: boolean
   python_installed: boolean
+  uv_installed: boolean
+  workmux_installed: boolean
+  tmux_installed: boolean
   homebrew_version: string | null
   docker_version: string | null
   tailscale_version: string | null
   git_version: string | null
   python_version: string | null
+  uv_version: string | null
+  workmux_version: string | null
+  tmux_version: string | null
 }
 
 export interface UshadowEnvironment {
@@ -30,6 +36,7 @@ export interface UshadowEnvironment {
   path: string | null
   branch: string | null
   is_worktree: boolean
+  base_branch: string | null  // "main" or "dev" - which base branch this worktree was created from
 }
 
 // Legacy alias for backward compatibility
@@ -56,19 +63,70 @@ export interface Discovery {
   tailscale_ok: boolean
 }
 
+// Launcher settings
+export interface LauncherSettings {
+  default_admin_email: string | null
+  default_admin_password: string | null
+  default_admin_name: string | null
+}
+
+// Prerequisites configuration types
+export interface Prerequisite {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  platforms: string[]
+  check_command?: string
+  check_commands?: string[]
+  check_running_command?: string
+  check_connected_command?: string
+  fallback_paths?: string[]  // Already platform-specific when from PlatformPrerequisitesConfig
+  version_filter?: string
+  optional: boolean
+  has_service?: boolean
+  category: string
+  connection_validation?: {
+    starts_with?: string
+  }
+}
+
+export interface InstallationMethod {
+  method: string
+  package?: string
+  url?: string
+  packages?: Record<string, string>
+}
+
+export interface PrerequisitesConfig {
+  prerequisites: Prerequisite[]
+  installation_methods?: Record<string, Record<string, InstallationMethod>>
+}
+
+export interface PlatformPrerequisitesConfig {
+  prerequisites: Prerequisite[]
+  installation_methods?: Record<string, InstallationMethod>
+}
+
 // Tauri command wrappers with proper typing
 export const tauri = {
   // System checks
   checkPrerequisites: () => invoke<Prerequisites>('check_prerequisites'),
   getOsType: () => invoke<string>('get_os_type'),
-  checkBrew: () => invoke<boolean>('check_brew'),
+
+  // Prerequisites configuration
+  getPrerequisitesConfig: () => invoke<PrerequisitesConfig>('get_prerequisites_config'),
+  getPlatformPrerequisitesConfig: (platform: string) => invoke<PlatformPrerequisitesConfig>('get_platform_prerequisites_config', { platform }),
 
   // Project management
   getDefaultProjectDir: () => invoke<string>('get_default_project_dir'),
   setProjectRoot: (path: string) => invoke<void>('set_project_root', { path }),
   checkProjectDir: (path: string) => invoke<{ path: string | null; exists: boolean; is_valid_repo: boolean }>('check_project_dir', { path }),
-  cloneUshadowRepo: (targetDir: string) => invoke<string>('clone_ushadow_repo', { targetDir }),
+  cloneUshadowRepo: (targetDir: string, branch?: string) => invoke<string>('clone_ushadow_repo', { targetDir, branch }),
   updateUshadowRepo: (projectDir: string) => invoke<string>('update_ushadow_repo', { projectDir }),
+  getCurrentBranch: (path: string) => invoke<string>('get_current_branch', { path }),
+  checkoutBranch: (path: string, branch: string) => invoke<string>('checkout_branch', { path, branch }),
+  getBaseBranch: (repoPath: string, branch: string) => invoke<string | null>('get_base_branch', { repoPath, branch }),
 
   // Infrastructure management
   startInfrastructure: () => invoke<string>('start_infrastructure'),
@@ -91,31 +149,60 @@ export const tauri = {
   checkBackendHealth: () => invoke<boolean>('check_backend_health'),
   checkWebuiHealth: () => invoke<boolean>('check_webui_health'),
 
-  // Installers - macOS
-  installHomebrew: () => invoke<string>('install_homebrew'),
-  installDockerViaBrew: () => invoke<string>('install_docker_via_brew'),
-  installTailscaleMacos: () => invoke<string>('install_tailscale_macos'),
-  installGitMacos: () => invoke<string>('install_git_macos'),
-  startDockerDesktopMacos: () => invoke<string>('start_docker_desktop_macos'),
+  // Generic installer (cross-platform, YAML-driven)
+  installPrerequisite: (prerequisiteId: string) => invoke<string>('install_prerequisite', { prerequisiteId }),
+  startPrerequisite: (prerequisiteId: string) => invoke<string>('start_prerequisite', { prerequisiteId }),
 
-  // Installers - Windows
-  installDockerWindows: () => invoke<string>('install_docker_windows'),
-  installTailscaleWindows: () => invoke<string>('install_tailscale_windows'),
-  installGitWindows: () => invoke<string>('install_git_windows'),
-  startDockerDesktopWindows: () => invoke<string>('start_docker_desktop_windows'),
-
-  // Installers - Linux
-  startDockerServiceLinux: () => invoke<string>('start_docker_service_linux'),
+  // Deprecated: Old platform-specific installers (kept for backward compatibility)
+  // Use installPrerequisite() instead
+  installHomebrew: () => invoke<string>('install_prerequisite', { prerequisiteId: 'homebrew' }),
+  installDockerViaBrew: () => invoke<string>('install_prerequisite', { prerequisiteId: 'docker' }),
+  installTailscaleMacos: () => invoke<string>('install_prerequisite', { prerequisiteId: 'tailscale' }),
+  installGitMacos: () => invoke<string>('install_prerequisite', { prerequisiteId: 'git' }),
+  startDockerDesktopMacos: () => invoke<string>('start_prerequisite', { prerequisiteId: 'docker' }),
+  installDockerWindows: () => invoke<string>('install_prerequisite', { prerequisiteId: 'docker' }),
+  installTailscaleWindows: () => invoke<string>('install_prerequisite', { prerequisiteId: 'tailscale' }),
+  installGitWindows: () => invoke<string>('install_prerequisite', { prerequisiteId: 'git' }),
+  startDockerDesktopWindows: () => invoke<string>('start_prerequisite', { prerequisiteId: 'docker' }),
+  startDockerServiceLinux: () => invoke<string>('start_prerequisite', { prerequisiteId: 'docker' }),
 
   // Utilities
   openBrowser: (url: string) => invoke<void>('open_browser', { url }),
 
   // Worktree management
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
+  listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),
+  checkWorktreeExists: (mainRepo: string, branch: string) => invoke<WorktreeInfo | null>('check_worktree_exists', { mainRepo, branch }),
   createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
     invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
+  createWorktreeWithWorkmux: (mainRepo: string, name: string, baseBranch?: string, background?: boolean) =>
+    invoke<WorktreeInfo>('create_worktree_with_workmux', { mainRepo, name, baseBranch, background }),
+  mergeWorktreeWithRebase: (mainRepo: string, name: string, useRebase: boolean, keepWorktree: boolean) =>
+    invoke<string>('merge_worktree_with_rebase', { mainRepo, name, useRebase, keepWorktree }),
+  listTmuxSessions: () => invoke<string[]>('list_tmux_sessions'),
+  getTmuxWindowStatus: (windowName: string) => invoke<string | null>('get_tmux_window_status', { windowName }),
+  getEnvironmentTmuxStatus: (envName: string) => invoke<TmuxStatus>('get_environment_tmux_status', { envName }),
+  getTmuxInfo: () => invoke<string>('get_tmux_info'),
+  ensureTmuxRunning: () => invoke<string>('ensure_tmux_running'),
+  attachTmuxToWorktree: (worktreePath: string, envName: string) => invoke<string>('attach_tmux_to_worktree', { worktreePath, envName }),
   openInVscode: (path: string, envName?: string) => invoke<void>('open_in_vscode', { path, envName }),
+  openInVscodeWithTmux: (path: string, envName: string) => invoke<void>('open_in_vscode_with_tmux', { path, envName }),
   removeWorktree: (mainRepo: string, name: string) => invoke<void>('remove_worktree', { mainRepo, name }),
+  deleteEnvironment: (mainRepo: string, envName: string) => invoke<string>('delete_environment', { mainRepo, envName }),
+
+  // Tmux management
+  getTmuxSessions: () => invoke<TmuxSessionInfo[]>('get_tmux_sessions'),
+  killTmuxWindow: (windowName: string) => invoke<string>('kill_tmux_window', { windowName }),
+  killTmuxServer: () => invoke<string>('kill_tmux_server'),
+  openTmuxInTerminal: (windowName: string, worktreePath: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath }),
+  captureTmuxPane: (windowName: string) => invoke<string>('capture_tmux_pane', { windowName }),
+  getClaudeStatus: (windowName: string) => invoke<ClaudeStatus>('get_claude_status', { windowName }),
+
+  // Settings
+  loadLauncherSettings: () => invoke<LauncherSettings>('load_launcher_settings'),
+  saveLauncherSettings: (settings: LauncherSettings) => invoke<void>('save_launcher_settings', { settings }),
+  writeCredentialsToWorktree: (worktreePath: string, adminEmail: string, adminPassword: string, adminName?: string) =>
+    invoke<void>('write_credentials_to_worktree', { worktreePath, adminEmail, adminPassword, adminName }),
 }
 
 // WorktreeInfo type
@@ -123,6 +210,37 @@ export interface WorktreeInfo {
   path: string
   branch: string
   name: string
+}
+
+// Tmux status types
+export type TmuxActivityStatus = 'Working' | 'Waiting' | 'Done' | 'Error' | 'Unknown'
+
+export interface TmuxStatus {
+  exists: boolean
+  window_name: string | null
+  current_command: string | null
+  activity_status: TmuxActivityStatus
+}
+
+// Tmux session management types
+export interface TmuxWindowInfo {
+  name: string
+  index: string
+  active: boolean
+  panes: number
+}
+
+export interface TmuxSessionInfo {
+  name: string
+  window_count: number
+  windows: TmuxWindowInfo[]
+}
+
+// Claude Code status types
+export interface ClaudeStatus {
+  is_running: boolean
+  current_task: string | null
+  last_output: string | null
 }
 
 export default tauri

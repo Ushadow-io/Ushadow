@@ -292,6 +292,7 @@ def generate_compose_from_dockerhub(
     display_name: Optional[str] = None,
     description: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
+    requires: Optional[List[str]] = None,
 ) -> str:
     """Generate a docker-compose.yaml from Docker Hub image info."""
     yaml = YAML()
@@ -301,7 +302,7 @@ def generate_compose_from_dockerhub(
     service_metadata = {
         'display_name': display_name or service_name.replace('-', ' ').title(),
         'description': description or f"Imported from Docker Hub: {image_info.full_image_name}",
-        'requires': [],
+        'requires': requires or [],
         'optional': [],
         'dockerhub_source': {
             'namespace': image_info.namespace,
@@ -331,7 +332,7 @@ def generate_compose_from_dockerhub(
         'networks': {
             'infra-network': {
                 'external': True,
-                'name': '${COMPOSE_PROJECT_NAME:-ushadow}_infra-network'
+                'name': 'infra-network'
             }
         }
     }
@@ -888,6 +889,7 @@ async def register_dockerhub_service(
     shadow_header_value: Optional[str] = None,
     route_path: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
+    requires: Optional[List[str]] = None,
     current_user: User = Depends(get_current_user)
 ) -> ImportServiceResponse:
     """
@@ -953,7 +955,8 @@ async def register_dockerhub_service(
             shadow_header=shadow_header,
             display_name=display_name,
             description=description,
-            capabilities=capabilities
+            capabilities=capabilities,
+            requires=requires
         )
 
         # Ensure compose directory exists

@@ -1,0 +1,75 @@
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  vibe-kanban:
+    description: "AI agent task management - orchestrate Claude Code, Gemini CLI, and other coding agents in parallel"
+    requires: []  # No Ushadow capabilities needed
+    tags: ["ai", "agents", "tasks", "worktrees"]
+
+# =============================================================================
+# Vibe Kanban Service
+# =============================================================================
+# Open source task orchestration for AI coding agents
+# Repository: https://github.com/BloopAI/vibe-kanban
+#
+# Prerequisites:
+#   Clone vibe-kanban into project root:
+#     cd /Users/stu/repos/worktrees/ushadow/gold
+#     git clone https://github.com/BloopAI/vibe-kanban.git
+#
+# Integration:
+#   - Ushadow Launcher polls the API on http://localhost:3001
+#   - Auto-creates tmux windows for each workspace
+#   - Monitors Claude Code agent execution
+#   - Routes tasks to team-specific agents
+
+services:
+  vibe-kanban:
+    build:
+      context: ../vibe-kanban
+      dockerfile: Dockerfile.ushadow  # Custom build with git support
+      args:
+        # Analytics (optional, disabled by default)
+        POSTHOG_API_KEY: ${VIBE_KANBAN_POSTHOG_KEY:-}
+        POSTHOG_API_ENDPOINT: ${VIBE_KANBAN_POSTHOG_ENDPOINT:-}
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-vibe-kanban
+    ports:
+      - "${VIBE_KANBAN_PORT:-3001}:3000"
+    volumes:
+      # Mount host repos directory so Vibe Kanban can work with actual repos
+      # This allows integration with Ushadow Launcher's worktree monitoring
+      - /Users/stu/repos:/repos
+      # Persist Vibe Kanban database and configuration across container rebuilds
+      - vibe-kanban-data:/home/appuser/.local/share/vibe-kanban
+      # Share git config and SSH keys for git operations (mounted to /config to avoid permission conflicts)
+      - /Users/stu/.gitconfig:/config/gitconfig:ro
+      - /Users/stu/.ssh:/config/ssh:ro
+      # Mount Claude Code config for agent authentication
+      - /Users/stu/.claude:/home/appuser/.claude:ro
+    environment:
+      - HOST=${VIBE_KANBAN_HOST:-0.0.0.0}
+      - PORT=3000
+      # Point git to the mounted config files
+      - GIT_CONFIG_GLOBAL=/config/gitconfig
+      - HOME=/home/appuser
+      # CRITICAL: Disable orphan cleanup to prevent deletion of existing worktrees
+      - DISABLE_WORKTREE_ORPHAN_CLEANUP=1
+    networks:
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true
+
+volumes:
+  vibe-kanban-data:
+    driver: local

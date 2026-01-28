@@ -889,6 +889,76 @@ async def get_service_logs(
     return LogsResponse(success=result.success, logs=result.logs)
 
 
+@router.get("/{name}/container-env")
+async def get_container_environment(
+    name: str,
+    unmask: bool = False,
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get actual environment variables from the running container.
+
+    Unlike /resolve which shows configured values, this endpoint inspects
+    the actual container to verify what was deployed. Useful for:
+    - Testing that configured env vars are actually passed to containers
+    - Debugging deployment issues
+    - Verifying the configuration hierarchy works correctly
+
+    Args:
+        name: Service name
+        unmask: If True, return actual values without masking (for testing)
+
+    Returns:
+        success: Whether the container was found and inspected
+        env_vars: Dict of env var name -> value (sensitive values masked unless unmask=True)
+        container_found: Whether a container exists for this service
+    """
+    from src.services.docker_manager import get_docker_manager
+
+    docker_mgr = get_docker_manager()
+
+    # Validate service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    success, result = docker_mgr.get_container_environment(name)
+
+    if not success:
+        return {
+            "success": False,
+            "env_vars": {},
+            "container_found": False,
+            "message": result  # Error message
+        }
+
+    # Return unmasked if requested (for testing)
+    if unmask:
+        return {
+            "success": True,
+            "env_vars": result,
+            "container_found": True,
+            "total_vars": len(result)
+        }
+
+    # Mask sensitive values
+    masked_env = {}
+    for key, value in result.items():
+        if any(kw in key.upper() for kw in ["KEY", "SECRET", "PASSWORD", "TOKEN", "CREDENTIAL"]):
+            if len(value) > 4:
+                masked_env[key] = f"***{value[-4:]}"
+            else:
+                masked_env[key] = "****"
+        else:
+            masked_env[key] = value
+
+    return {
+        "success": True,
+        "env_vars": masked_env,
+        "container_found": True,
+        "total_vars": len(result)
+    }
+
+
 # =============================================================================
 # Configuration Endpoints
 # =============================================================================

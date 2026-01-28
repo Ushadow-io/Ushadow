@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def config_dir():
-    """Configuration directory path."""
-    return Path(__file__).parent.parent.parent.parent.parent.parent / "config"
+    """Configuration directory path (from pytest-env CONFIG_DIR)."""
+    return Path(os.environ.get("CONFIG_DIR", "/tmp/pytest_config"))
 
 
 @pytest.fixture
@@ -39,19 +39,25 @@ def overrides_file(config_dir):
 @pytest.fixture
 def secrets_file(config_dir):
     """Path to secrets file."""
-    return config_dir / "secrets.yaml"
+    return config_dir / "SECRETS" / "secrets.yaml"
 
 
 @pytest.fixture
-def compose_file(config_dir):
-    """Path to docker-compose file."""
-    return config_dir.parent / "docker-compose.yml"
+def compose_file():
+    """Path to docker-compose file (in actual project root)."""
+    # This needs to point to the actual compose file for reading
+    backend_root = Path(__file__).parent.parent.parent
+    project_root = backend_root.parent.parent
+    return project_root / "compose" / "backend.yml"
 
 
 @pytest.fixture
-def env_file(config_dir):
-    """Path to .env file."""
-    return config_dir.parent / ".env"
+def env_file():
+    """Path to .env file (in actual project root)."""
+    # This needs to point to the actual .env file for reading/writing
+    backend_root = Path(__file__).parent.parent.parent
+    project_root = backend_root.parent.parent
+    return project_root / ".env"
 
 
 @pytest.fixture
@@ -136,15 +142,20 @@ class TestServiceConfigViaMethods:
         with open(compose_file) as f:
             compose_content = f.read()
 
+        # Verify compose file uses environment variable (which can be overridden)
+        assert "MONGODB_DATABASE=${MONGODB_DATABASE" in compose_content, \
+            "Compose file should use MONGODB_DATABASE environment variable"
+
         # Create modified version (don't modify original)
+        # Replace the default value in the environment variable syntax
         modified_compose = compose_content.replace(
-            f"MONGODB_DATABASE: {self.DEFAULT_DATABASE}",
-            f"MONGODB_DATABASE: {self.TEST_DATABASE}"
+            f"MONGODB_DATABASE=${{MONGODB_DATABASE:-{self.DEFAULT_DATABASE}}}",
+            f"MONGODB_DATABASE=${{MONGODB_DATABASE:-{self.TEST_DATABASE}}}"
         )
 
         # Step 4: Verify modification would work
-        assert f"MONGODB_DATABASE: {self.TEST_DATABASE}" in modified_compose, \
-            "Compose file should contain new database name after modification"
+        assert f"MONGODB_DATABASE=${{MONGODB_DATABASE:-{self.TEST_DATABASE}}}" in modified_compose, \
+            "Compose file should contain new database default after modification"
 
         # Note: In real test with running services, you would:
         # - Write modified_compose to file

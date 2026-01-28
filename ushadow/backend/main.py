@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Telemetry configuration
 TELEMETRY_ENDPOINT = os.environ.get(
     "TELEMETRY_ENDPOINT",
-    "https://ushadow-telemetry.your-subdomain.workers.dev"
+    "https://ushadow-telemetry.stu-6b7.workers.dev"
 )
 
 
@@ -117,7 +117,10 @@ async def lifespan(app: FastAPI):
     # Initialize MongoDB connection
     client = AsyncIOMotorClient(mongodb_uri)
     db = client[mongodb_database]
-    
+
+    # Store db in app.state for health checks
+    app.state.db = db
+
     # Initialize Beanie ODM with document models
     await init_beanie(database=db, document_models=[User])
     logger.info("✓ Beanie ODM initialized")

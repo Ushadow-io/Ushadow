@@ -4,11 +4,11 @@ Multi-agent test automation workflow for UShadow - from specification to executa
 
 ## Overview
 
-This plugin provides a complete test automation workflow using three specialized agents:
+This plugin provides a complete test automation workflow using three specialized skills:
 
-1. **spec-agent** - Creates feature specifications from discussions
-2. **qa-agent** - Generates comprehensive test case specifications
-3. **automation-agent** - Produces executable test code in appropriate frameworks
+1. **/test-automation:spec** - Creates feature specifications from discussions
+2. **/test-automation:qa-test-cases** - Generates comprehensive test case specifications
+3. **/test-automation:automate-tests** - Produces executable test code in appropriate frameworks
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ This plugin provides a complete test automation workflow using three specialized
 When discussing a new feature, run:
 
 ```
-/spec
+/test-automation:spec
 ```
 
 This will:
@@ -30,7 +30,7 @@ This will:
 Once the spec is approved, run:
 
 ```
-/qa-test-cases
+/test-automation:qa-test-cases
 ```
 
 This will:
@@ -45,7 +45,7 @@ This will:
 After reviewing test cases, run:
 
 ```
-/automate-tests
+/test-automation:automate-tests
 ```
 
 This will:
@@ -109,7 +109,7 @@ This separation allows:
 ```bash
 # 1. During feature discussion
 User: "I want users to be able to upload profile images"
-> /spec user-profile-images
+> /test-automation:spec user-profile-images
 
 # Output: specs/features/user-profile-images.md created
 # - 5 functional requirements
@@ -117,7 +117,7 @@ User: "I want users to be able to upload profile images"
 # - Integration with S3 identified
 
 # 2. Generate test cases
-> /qa-test-cases user-profile-images
+> /test-automation:qa-test-cases user-profile-images
 
 # Output: specs/features/user-profile-images.testcases.md created
 # - 12 test cases total
@@ -129,7 +129,7 @@ User: "I want users to be able to upload profile images"
 # (Manual review step)
 
 # 4. Generate executable tests
-> /automate-tests user-profile-images
+> /test-automation:automate-tests user-profile-images
 
 # Output:
 # - ushadow/backend/tests/test_image_validation.py (5 unit tests)
@@ -176,9 +176,9 @@ export class ProfilePage extends BasePage {
 ### Verifies Test IDs
 Runs `./scripts/verify-frontend-testids.sh` to ensure all interactive elements are properly marked.
 
-## Agent Descriptions
+## Skill Descriptions
 
-### spec-agent (Green)
+### /test-automation:spec
 **Purpose**: Extract requirements from discussions and create structured specifications
 
 **Output**: `specs/features/{feature}.md`
@@ -190,7 +190,7 @@ Runs `./scripts/verify-frontend-testids.sh` to ensure all interactive elements a
 - Identifies integration points and dependencies
 - Notes security considerations
 
-### qa-agent (Purple)
+### /test-automation:qa-test-cases
 **Purpose**: Generate comprehensive test case specifications
 
 **Output**: `specs/features/{feature}.testcases.md`
@@ -202,7 +202,7 @@ Runs `./scripts/verify-frontend-testids.sh` to ensure all interactive elements a
 - Creates test coverage matrix
 - Provides realistic test data
 
-### automation-agent (Blue)
+### /test-automation:automate-tests
 **Purpose**: Generate executable test code in appropriate frameworks
 
 **Output**: Test files in `ushadow/backend/tests/`, `robot_tests/api/`, `frontend/e2e/`
@@ -315,21 +315,21 @@ pytest -m "requires_secrets or integration"
 
 ## Best Practices
 
-### When to Use Each Agent
+### When to Use Each Skill
 
-**spec-agent**:
+**/test-automation:spec**:
 - During feature planning discussions
 - When requirements are unclear or informal
 - Before starting development
 - When you need stakeholder alignment
 
-**qa-agent**:
+**/test-automation:qa-test-cases**:
 - After spec is approved
 - Before writing any code
 - When you need comprehensive test coverage
 - To identify edge cases early
 
-**automation-agent**:
+**/test-automation:automate-tests**:
 - After test cases are reviewed
 - When implementing the feature
 - To ensure consistent test patterns
@@ -337,7 +337,7 @@ pytest -m "requires_secrets or integration"
 
 ### Tips for Success
 
-1. **Start with spec-agent** - Good specs lead to good tests
+1. **Start with /test-automation:spec** - Good specs lead to good tests
 2. **Review test cases** - Don't automate bad test designs
 3. **Follow the pyramid** - 70% unit, 20% integration/API, 10% E2E
 4. **Mark secrets correctly** - Enables fast PR feedback

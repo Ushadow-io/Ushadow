@@ -281,15 +281,11 @@ health:
 # Development commands
 install:
 	@echo "📦 Installing dependencies..."
-	@if command -v uv > /dev/null 2>&1; then \
-		cd ushadow/backend && uv pip install -r requirements.txt; \
-		uv pip install -r ../../robot_tests/requirements.txt --python .venv/bin/python; \
-	else \
-		echo "⚠️  uv not found, using pip (slower). Run: ./scripts/install-uv.sh"; \
-		cd ushadow/backend && pip install -r requirements.txt; \
-		pip install -r ../../robot_tests/requirements.txt; \
-	fi
-	cd frontend && npm install
+	@cd ushadow/backend && \
+		if [ ! -d .venv ]; then uv venv --python 3.12; fi && \
+		uv pip install -e ".[dev]" --python .venv/bin/python && \
+		uv pip install -r ../../robot_tests/requirements.txt --python .venv/bin/python
+	cd ushadow/frontend && npm install
 	@echo "✅ Dependencies installed"
 
 # =============================================================================
@@ -368,11 +364,11 @@ test-report:
 
 lint:
 	cd ushadow/backend && ruff check .
-	cd frontend && npm run lint
+	cd ushadow/frontend && npm run lint
 
 format:
 	cd ushadow/backend && ruff format .
-	cd frontend && npm run format
+	cd ushadow/frontend && npm run format
 
 # Cleanup commands
 clean:
