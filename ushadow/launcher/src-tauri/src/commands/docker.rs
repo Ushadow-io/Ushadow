@@ -154,7 +154,7 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     log_messages.push("Creating Docker networks...".to_string());
 
     // Create Docker networks directly (don't require uv/Python)
-    let networks = vec!["ushadow-network", "infra-network"];
+    let networks = vec!["ushadow-network""];
     for network in networks {
         log_messages.push(format!("Checking network: {}", network));
 

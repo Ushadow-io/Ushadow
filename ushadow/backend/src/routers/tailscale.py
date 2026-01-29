@@ -989,23 +989,15 @@ async def start_tailscale_container(
             # Container doesn't exist - create it using Docker SDK
             logger.info(f"Creating Tailscale container '{container_name}' for environment '{env_name}'...")
 
-            # Ensure infra network exists
+            # Ensure ushadow-network exists
             try:
-                infra_network = _get_docker_client().networks.get("infra-network")
+                ushadow_network = _get_docker_client().networks.get("ushadow-network")
+                logger.info(f"Found ushadow-network")
             except docker.errors.NotFound:
                 raise HTTPException(
                     status_code=400,
-                    detail="infra-network not found. Please start infrastructure first."
+                    detail="ushadow-network not found. Please start infrastructure first."
                 )
-
-            # Get environment's compose network if it exists
-            env_network_name = f"{env_name}_default"
-            env_network = None
-            try:
-                env_network = _get_docker_client().networks.get(env_network_name)
-                logger.info(f"Connecting to environment network: {env_network_name}")
-            except docker.errors.NotFound:
-                logger.debug(f"Environment network '{env_network_name}' not found - using infra-network only")
 
             # Create volume if it doesn't exist (per-environment)
             try:
@@ -1044,18 +1036,10 @@ async def start_tailscale_container(
                     f"{PROJECT_ROOT}/config": {"bind": "/config", "mode": "ro"},
                 },
                 cap_add=["NET_ADMIN", "NET_RAW"],
-                network="infra-network",
+                network="ushadow-network",  # All app containers and infrastructure on this network
                 restart_policy={"Name": "unless-stopped"},
                 command="sh -c 'tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity'"
             )
-
-            # Connect to environment's compose network for routing to backend/frontend
-            if env_network:
-                try:
-                    env_network.connect(container)
-                    logger.info(f"Connected Tailscale container to environment network '{env_network_name}'")
-                except Exception as e:
-                    logger.warning(f"Failed to connect to environment network: {e}")
 
             logger.info(f"Tailscale container '{container_name}' created with hostname '{ts_hostname}': {container.id}")
 

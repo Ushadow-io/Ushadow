@@ -330,9 +330,9 @@ def generate_compose_from_dockerhub(
             }
         },
         'networks': {
-            'infra-network': {
+            'ushadow-network': {
                 'external': True,
-                'name': 'infra-network'
+                'name': 'ushadow-network'
             }
         }
     }
@@ -385,7 +385,7 @@ def generate_compose_from_dockerhub(
             compose_data['volumes'] = volume_definitions
 
     # Add network
-    service_config['networks'] = ['infra-network']
+    service_config['networks'] = ['ushadow-network']
 
     # Add extra_hosts for host.docker.internal
     service_config['extra_hosts'] = ['host.docker.internal:host-gateway']
