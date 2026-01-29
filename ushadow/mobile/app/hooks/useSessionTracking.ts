@@ -116,27 +116,31 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
   /**
    * End a streaming session
    *
-   * TODO: Implement session completion logic
-   *
-   * This function is called when streaming stops. You need to decide:
-   * 1. Should we calculate final duration here, or let the UI compute it on-demand?
-   * 2. Should we mark sessions with errors differently (e.g., special status field)?
-   * 3. Should we auto-clean up very short sessions (< 5 seconds) as test sessions?
-   *
-   * Parameters:
-   * - sessionId: The session to end
-   * - error: Optional error message if session failed
-   *
-   * Consider:
-   * - Duration calculation: endTime - startTime or pre-computed?
-   * - Error handling: Should errors be logged separately or just stored in session?
-   * - Session validity: Filter out sessions with 0 bytes transferred?
+   * Called when WebSocket connection drops and doesn't reconnect.
+   * Keeps ALL sessions (including failed ones) for debugging conversation drops.
    */
   const endSession = useCallback((sessionId: string, error?: string) => {
-    // TODO: Your implementation here
-    // Hint: Update the session with endTime, calculate duration, handle errors
-    console.log('[SessionTracking] Ending session:', sessionId, error);
-  }, []);
+    const endTime = new Date();
+
+    setSessions(prev => prev.map(session => {
+      if (session.id === sessionId) {
+        const durationSeconds = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
+        return {
+          ...session,
+          endTime,
+          durationSeconds,
+          error,
+        };
+      }
+      return session;
+    }));
+
+    if (activeSession?.id === sessionId) {
+      setActiveSession(null);
+    }
+
+    console.log('[SessionTracking] Ended session:', sessionId, error ? `Error: ${error}` : 'Clean stop');
+  }, [activeSession]);
 
   /**
    * Link session to a Chronicle conversation

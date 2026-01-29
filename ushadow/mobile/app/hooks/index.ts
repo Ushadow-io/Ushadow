@@ -23,6 +23,7 @@ export { useTailscaleDiscovery } from './useTailscaleDiscovery';
 // Bluetooth and connection hooks
 export { useBluetoothManager } from './useBluetoothManager';
 export { useConnectionLog } from './useConnectionLog';
+export { useSessionTracking } from './useSessionTracking';
 
 // OMI Device hooks (from chronicle)
 export { useDeviceConnection } from './useDeviceConnection';
