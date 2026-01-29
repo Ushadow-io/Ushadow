@@ -4,6 +4,7 @@
 )]
 
 mod commands;
+mod config;
 mod models;
 
 use commands::{AppState, check_prerequisites, discover_environments, get_os_type,
@@ -22,6 +23,8 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     update_ushadow_repo, install_git_windows, install_git_macos,
     // Worktree commands
     list_worktrees, create_worktree, open_in_vscode, remove_worktree,
+    // Config commands
+    load_project_config, get_current_config, check_launcher_config_exists, validate_config_file,
     // Permissions
     check_install_path};
 use tauri::{
@@ -145,6 +148,11 @@ fn main() {
             create_worktree,
             open_in_vscode,
             remove_worktree,
+            // Config management
+            load_project_config,
+            get_current_config,
+            check_launcher_config_exists,
+            validate_config_file,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

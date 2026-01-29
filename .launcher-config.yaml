@@ -1,0 +1,179 @@
+# Ushadow Launcher Configuration
+# This file defines how the launcher manages environments for this project
+
+project:
+  name: "ushadow"
+  display_name: "Ushadow"
+
+# Prerequisites required for this project
+prerequisites:
+  required:
+    - docker
+    - git
+    - python3
+  optional:
+    - tailscale
+    - uv
+  install_scripts:
+    uv:
+      unix: "scripts/install-uv.sh"
+      windows: "scripts/install-uv.ps1"
+
+# Environment setup configuration
+setup:
+  # Command to run when creating a new environment
+  # Available variables: {ENV_NAME}, {PORT_OFFSET}, {WORKING_DIR}
+  create_command: "uv run --with pyyaml setup/run.py --dev --quick --skip-admin"
+
+  # Environment variables passed during setup
+  env_vars:
+    - ENV_NAME
+    - PORT_OFFSET
+    - USHADOW_NO_BROWSER=1
+
+  # Pre-setup hooks (run before main setup command)
+  pre_hooks:
+    - name: "Install uv"
+      command: "scripts/install-uv.sh"
+      platforms: ["unix", "macos", "linux"]
+    - name: "Install uv"
+      command: "scripts/install-uv.ps1"
+      platforms: ["windows"]
+
+# Docker infrastructure configuration (shared services)
+infrastructure:
+  networks:
+    - ushadow-network
+    - infra-network
+
+  compose_file: "compose/docker-compose.infra.yml"
+  project_name: "infra"
+  profile: "infra"
+
+  services:
+    - name: "mongo"
+      display_name: "MongoDB"
+      ports: ["27017"]
+    - name: "redis"
+      display_name: "Redis"
+      ports: ["6379"]
+    - name: "qdrant"
+      display_name: "Qdrant"
+      ports: ["6333", "6334"]
+    - name: "postgres"
+      display_name: "PostgreSQL"
+      ports: ["5432"]
+
+# Service definitions for each environment
+services:
+  # Container naming pattern
+  # Variables: {project_name}, {env_name}, {service_name}
+  # Note: {env_name} will be empty for "default" environment
+  naming_pattern: "{project_name}{env_name}-{service_name}"
+
+  definitions:
+    - name: "backend"
+      display_name: "Backend API"
+      default_port: 8000
+      health_check:
+        endpoint: "/api/unodes/leader/info"
+        timeout: 30
+
+    - name: "webui"
+      display_name: "Web UI"
+      default_port: 3000
+      # Webui port is calculated as backend - 5000
+      port_calculation:
+        from: "backend"
+        offset: -5000
+
+    - name: "frontend"
+      display_name: "Frontend"
+      default_port: 3001
+      optional: true
+
+    - name: "worker"
+      display_name: "Background Worker"
+      optional: true
+
+    - name: "tailscale"
+      display_name: "Tailscale Mesh"
+      optional: true
+
+# Port management
+ports:
+  # Strategy: "hash" (deterministic from env name) | "sequential" | "random"
+  allocation_strategy: "hash"
+
+  # Base ports for primary services
+  base_backend_port: 8000
+  base_webui_port: 3000
+
+  # Port offset configuration (for hash-based allocation)
+  offset:
+    min: 0
+    max: 500
+    step: 10  # Offsets are multiples of 10: 0, 10, 20, 30...
+
+  # System ports to exclude from allocation
+  exclude:
+    - 22    # SSH
+    - 80    # HTTP
+    - 443   # HTTPS
+    - 3306  # MySQL
+    - 5432  # PostgreSQL
+    - 6379  # Redis
+    - 27017 # MongoDB
+
+# Worktree configuration
+worktrees:
+  # Default parent directory for worktrees (expandable via ~)
+  default_parent: "~/repos/worktrees/{project_name}"
+
+  # Optional prefix for branch names (e.g., "env/" creates "env/staging")
+  branch_prefix: ""
+
+# UI customization (optional)
+ui:
+  # Color palette for environment visualization
+  colors:
+    - blue
+    - gold
+    - pink
+    - purple
+    - red
+    - green
+    - indigo
+    - orange
+    - cyan
+    - teal
+    - lime
+    - brown
+    - silver
+    - coral
+    - salmon
+    - navy
+    - magenta
+    - violet
+    - maroon
+    - olive
+    - aqua
+    - turquoise
+    - crimson
+    - lavender
+    - mint
+    - peach
+    - rose
+    - ruby
+    - emerald
+    - sapphire
+    - amber
+    - bronze
+    - copper
+    - platinum
+    - slate
+    - charcoal
+
+  # Default window dimensions (can be overridden in tauri.conf.json)
+  default_width: 1200
+  default_height: 1000
