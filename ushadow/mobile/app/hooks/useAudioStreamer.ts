@@ -29,6 +29,10 @@ export interface UseAudioStreamer {
   getWebSocketReadyState: () => number | undefined;
 }
 
+export interface UseAudioStreamerOptions {
+  onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+}
+
 // Wyoming Protocol Types
 interface WyomingEvent {
   type: string;
@@ -71,7 +75,8 @@ const BASE_RECONNECT_MS = 3000;
 const MAX_RECONNECT_MS = 30000;
 const HEARTBEAT_MS = 25000;
 
-export const useAudioStreamer = (): UseAudioStreamer => {
+export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
+  const { onLog } = options || {};
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
@@ -153,12 +158,14 @@ export const useAudioStreamer = (): UseAudioStreamer => {
       websocketRef.current = null;
     }
 
+    onLog?.('disconnected', 'Manually stopped streaming');
+
     setStateSafe(setIsStreaming, false);
     setStateSafe(setIsConnecting, false);
     setStateSafe(setIsRetrying, false);
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
-  }, [sendWyomingEvent, setStateSafe]);
+  }, [sendWyomingEvent, setStateSafe, onLog]);
 
   // Cancel retry attempts
   const cancelRetry = useCallback(() => {
@@ -186,6 +193,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
       console.log('[AudioStreamer] Reconnect attempts exhausted');
       manuallyStoppedRef.current = true;
+      onLog?.('error', 'Failed to reconnect after multiple attempts', `Max attempts: ${MAX_RECONNECT_ATTEMPTS}`);
       setStateSafe(setIsStreaming, false);
       setStateSafe(setIsConnecting, false);
       setStateSafe(setIsRetrying, false);
@@ -199,6 +207,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
     reconnectAttemptsRef.current = attempt;
 
     console.log(`[AudioStreamer] Reconnect attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
+    onLog?.('connecting', `Reconnecting (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})`, `Delay: ${delay}ms`);
 
     if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     setStateSafe(setIsConnecting, true);
@@ -219,7 +228,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
           });
       }
     }, delay);
-  }, [setStateSafe]);
+  }, [setStateSafe, onLog]);
 
   // Start streaming
   const startStreaming = useCallback(async (
@@ -249,6 +258,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
     console.log(`[AudioStreamer] Initializing WebSocket: ${trimmed}`);
     console.log(`[AudioStreamer] Network state:`, netState);
+    onLog?.('connecting', 'Initializing WebSocket connection', trimmed);
     if (websocketRef.current) await stopStreaming();
 
     setStateSafe(setIsConnecting, true);
@@ -262,6 +272,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
 
         ws.onopen = async () => {
           console.log('[AudioStreamer] WebSocket open');
+          onLog?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
 
           // Set binary type to arraybuffer (matches web implementation)
           if (ws.binaryType !== 'arraybuffer') {
@@ -313,11 +324,13 @@ export const useAudioStreamer = (): UseAudioStreamer => {
                 serverErrorCountRef.current += 1;
                 const errorMsg = data.message || data.error || 'Server error';
                 console.error(`[AudioStreamer] Server error ${serverErrorCountRef.current}/${MAX_SERVER_ERRORS}: ${errorMsg}`);
+                onLog?.('error', `Server error (${serverErrorCountRef.current}/${MAX_SERVER_ERRORS})`, errorMsg);
                 setStateSafe(setError, errorMsg);
 
                 // Auto-stop after too many consecutive server errors
                 if (serverErrorCountRef.current >= MAX_SERVER_ERRORS) {
                   console.log('[AudioStreamer] Too many server errors, stopping stream');
+                  onLog?.('error', 'Too many server errors, stopped stream', `${MAX_SERVER_ERRORS} consecutive errors`);
                   manuallyStoppedRef.current = true;
                   ws.close(1000, 'too-many-errors');
                   setStateSafe(setError, `Stopped: ${errorMsg} (${MAX_SERVER_ERRORS} errors)`);
@@ -335,6 +348,7 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         ws.onerror = (e) => {
           const msg = (e as ErrorEvent).message || 'WebSocket connection error.';
           console.error('[AudioStreamer] Error:', msg);
+          onLog?.('error', 'WebSocket connection error', msg);
           setStateSafe(setError, msg);
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, false);
@@ -345,6 +359,10 @@ export const useAudioStreamer = (): UseAudioStreamer => {
         ws.onclose = (event) => {
           console.log('[AudioStreamer] Closed. Code:', event.code, 'Reason:', event.reason);
           const isManual = event.code === 1000 && (event.reason === 'manual-stop' || event.reason === 'too-many-errors');
+
+          if (!isManual) {
+            onLog?.('disconnected', 'WebSocket connection closed', `Code: ${event.code}, Reason: ${event.reason || 'none'}`);
+          }
 
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, false);

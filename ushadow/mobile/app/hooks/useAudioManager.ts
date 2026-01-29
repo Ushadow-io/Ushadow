@@ -26,6 +26,7 @@ interface PhoneAudioRecorder {
 interface ConnectionEventHandlers {
   onWebSocketDisconnect?: (sessionId: string, conversationId: string | null) => void;
   onWebSocketReconnect?: () => void;
+  onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
 }
 
 // Optional offline mode integration interface
@@ -153,6 +154,7 @@ export const useAudioManager = ({
       sessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
 
+      connectionHandlers?.onWebSocketLog?.('disconnected', 'Audio streaming disconnected, entering offline mode', `Session: ${sessionId}`);
       offlineMode.enterOfflineMode(sessionId, conversationIdRef.current);
       setIsOfflineBuffering(true);
 
@@ -162,6 +164,7 @@ export const useAudioManager = ({
     // Detect reconnect transition
     if (!wasConnected && isConnected && offlineMode?.isOffline) {
       console.log('[useAudioManager] WebSocket reconnected, exiting offline mode');
+      connectionHandlers?.onWebSocketLog?.('connected', 'Audio streaming reconnected, exiting offline mode');
       await offlineMode.exitOfflineMode();
       setIsOfflineBuffering(false);
 

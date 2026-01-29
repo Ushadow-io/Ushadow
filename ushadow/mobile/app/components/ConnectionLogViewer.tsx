@@ -30,6 +30,7 @@ interface ConnectionLogViewerProps {
   entries: ConnectionLogEntry[];
   connectionState: ConnectionState;
   onClearLogs: () => void;
+  onClearLogsByType: (type: ConnectionType) => void;
 }
 
 type FilterType = 'all' | ConnectionType;
@@ -79,6 +80,7 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
   entries,
   connectionState,
   onClearLogs,
+  onClearLogsByType,
 }) => {
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
 
@@ -256,15 +258,26 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
           <Text style={styles.countText}>
             {filteredEntries.length} {filteredEntries.length === 1 ? 'entry' : 'entries'}
           </Text>
-          {entries.length > 0 && (
-            <TouchableOpacity
-              style={styles.clearButton}
-              onPress={onClearLogs}
-              testID="clear-logs-button"
-            >
-              <Text style={styles.clearButtonText}>Clear All</Text>
-            </TouchableOpacity>
-          )}
+          <View style={styles.clearButtonsContainer}>
+            {activeFilter !== 'all' && filteredEntries.length > 0 && (
+              <TouchableOpacity
+                style={styles.clearButton}
+                onPress={() => onClearLogsByType(activeFilter as ConnectionType)}
+                testID={`clear-${activeFilter}-logs-button`}
+              >
+                <Text style={styles.clearButtonText}>Clear {CONNECTION_TYPE_LABELS[activeFilter as ConnectionType]}</Text>
+              </TouchableOpacity>
+            )}
+            {entries.length > 0 && (
+              <TouchableOpacity
+                style={styles.clearButton}
+                onPress={onClearLogs}
+                testID="clear-all-logs-button"
+              >
+                <Text style={styles.clearButtonText}>Clear All</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* Log List */}
@@ -382,6 +395,10 @@ const styles = StyleSheet.create({
   countText: {
     fontSize: fontSize.sm,
     color: theme.textMuted,
+  },
+  clearButtonsContainer: {
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
   clearButton: {
     paddingHorizontal: spacing.sm,

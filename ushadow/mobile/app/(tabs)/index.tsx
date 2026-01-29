@@ -49,7 +49,7 @@ export default function HomeScreen() {
   );
 
   // Connection logging hook
-  const { entries: logEntries, logEvent, clearLogs } = useConnectionLog();
+  const { entries: logEntries, connectionState: logConnectionState, logEvent, clearLogs, clearLogsByType } = useConnectionLog();
 
   // Load auth state on mount
   useEffect(() => {
@@ -186,6 +186,7 @@ export default function HomeScreen() {
         <UnifiedStreamingPage
           authToken={authToken}
           onAuthRequired={() => setShowLoginScreen(true)}
+          onWebSocketLog={(status, message, details) => logEvent('websocket', status, message, details)}
           testID="unified-streaming"
         />
       </View>
@@ -202,8 +203,9 @@ export default function HomeScreen() {
         visible={showLogViewer}
         onClose={() => setShowLogViewer(false)}
         entries={logEntries}
-        connectionState={connectionState}
+        connectionState={logConnectionState}
         onClearLogs={clearLogs}
+        onClearLogsByType={clearLogsByType}
       />
     </SafeAreaView>
   );

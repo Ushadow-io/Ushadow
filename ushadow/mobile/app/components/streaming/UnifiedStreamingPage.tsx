@@ -62,12 +62,14 @@ import { AudioDestination } from '../../services/audioProviderApi';
 interface UnifiedStreamingPageProps {
   authToken: string | null;
   onAuthRequired?: () => void;
+  onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
   testID?: string;
 }
 
 export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   authToken,
   onAuthRequired,
+  onWebSocketLog,
   testID = 'unified-streaming',
 }) => {
   // Source state
@@ -131,7 +133,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   } = useAudioListener(omiConnection, isOmiConnected);
 
   // WebSocket streamer for OMI
-  const omiStreamer = useAudioStreamer();
+  const omiStreamer = useAudioStreamer({
+    onLog: onWebSocketLog,
+  });
 
   // Combined state
   const isStreaming = selectedSource.type === 'microphone'
