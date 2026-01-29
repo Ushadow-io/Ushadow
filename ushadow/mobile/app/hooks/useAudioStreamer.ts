@@ -29,8 +29,19 @@ export interface UseAudioStreamer {
   getWebSocketReadyState: () => number | undefined;
 }
 
+export interface RelayStatus {
+  destinations: Array<{
+    name: string;
+    connected: boolean;
+    errors: number;
+  }>;
+  bytes_relayed: number;
+  chunks_relayed: number;
+}
+
 export interface UseAudioStreamerOptions {
   onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onRelayStatus?: (status: RelayStatus) => void;
 }
 
 // Wyoming Protocol Types
@@ -76,7 +87,7 @@ const MAX_RECONNECT_MS = 30000;
 const HEARTBEAT_MS = 25000;
 
 export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
-  const { onLog } = options || {};
+  const { onLog, onRelayStatus } = options || {};
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
@@ -315,12 +326,17 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         ws.onmessage = (event) => {
           console.log('[AudioStreamer] Message:', event.data);
 
-          // Parse message to check for errors
+          // Parse message to check for errors and status updates
           try {
             const data = typeof event.data === 'string' ? JSON.parse(event.data) : null;
             if (data) {
+              // Handle relay_status message
+              if (data.type === 'relay_status' && data.data) {
+                console.log('[AudioStreamer] Relay status:', data.data);
+                onRelayStatus?.(data.data as RelayStatus);
+              }
               // Check for error responses from server
-              if (data.type === 'error' || data.error || data.status === 'error') {
+              else if (data.type === 'error' || data.error || data.status === 'error') {
                 serverErrorCountRef.current += 1;
                 const errorMsg = data.message || data.error || 'Server error';
                 console.error(`[AudioStreamer] Server error ${serverErrorCountRef.current}/${MAX_SERVER_ERRORS}: ${errorMsg}`);
