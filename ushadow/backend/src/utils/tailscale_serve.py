@@ -313,9 +313,10 @@ def configure_base_routes(
     Sets up:
     - /api/* -> backend/api (path preserved)
     - /auth/* -> backend/auth (path preserved)
-    - /ws_pcm -> chronicle-backend/ws_pcm (websocket - direct to Chronicle)
-    - /ws_omi -> chronicle-backend/ws_omi (websocket - direct to Chronicle)
     - /* -> frontend
+
+    Note: Audio WebSockets use /ws/audio/relay (part of /api/* routing)
+    The relay handles forwarding to Chronicle/Mycelia internally
 
     Note: Tailscale serve strips the path prefix, so we include it in the
     target URL to preserve the full path at the service.
@@ -361,22 +362,12 @@ def configure_base_routes(
         if not add_serve_route(route, target):
             success = False
 
-    # Configure Chronicle WebSocket routes - these go directly to Chronicle for low latency
-    # (REST APIs use /api/services/chronicle-backend/proxy/* through ushadow backend)
-    chronicle_container = f"{env_name}-chronicle-backend"
-    chronicle_port = 8000  # Chronicle's internal port
-    chronicle_base = f"http://{chronicle_container}:{chronicle_port}"
+    # NOTE: Audio WebSockets are handled by the audio relay at /ws/audio/relay
+    # The relay forwards to Chronicle/Mycelia/other services via internal Docker networking
+    # No direct Chronicle WebSocket routing needed at Layer 1
 
-    websocket_routes = ["/ws_pcm", "/ws_omi"]
-    for route in websocket_routes:
-        target = f"{chronicle_base}{route}"
-        if not add_serve_route(route, target):
-            success = False
-
-    # NOTE: Chronicle REST APIs are now accessed via generic proxy pattern:
-    # /api/services/chronicle-backend/proxy/* instead of direct /chronicle routing
-    # This provides unified auth and centralized routing through ushadow backend
-    # WebSockets go directly to Chronicle for low latency
+    # NOTE: Chronicle REST APIs are accessed via generic proxy pattern:
+    # /api/services/chronicle-backend/proxy/* - unified auth through ushadow backend
 
     # Frontend catches everything else
     if not add_serve_route("/", frontend_target):

@@ -29,9 +29,10 @@ services:
     ports:
       - "${OPENMEMORY_PORT:-8765}:8765"
     environment:
-      # SQLite for persistent storage (default, stored in mem0_data volume)
-      # To use PostgreSQL instead, uncomment:
-      # - DATABASE_URL=postgresql://ushadow:ushadow@postgres:5432/openmemory
+      # Database configuration
+      # SQLite (default, persisted in mem0_data volume): sqlite:////app/data/openmemory.db
+      # PostgreSQL (when supported): postgresql://user:password@host:port/database
+      - DATABASE_URL=${OPENMEMORY_DATABASE_URL:-sqlite:////app/data/openmemory.db}
 
       # Qdrant connection (from CapabilityResolver or defaults)
       - QDRANT_HOST=${QDRANT_HOST:-qdrant}
@@ -54,7 +55,7 @@ services:
     networks:
       - ushadow-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/v1/config/'); exit(0)"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -62,7 +63,7 @@ services:
     restart: unless-stopped
 
   mem0-ui:
-    image: ghcr.io/ushadow-io/u-mem0-ui:latest
+    image: ghcr.io/ushadow-io/mem0-ui:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0-ui
     ports:
       - "3002:3000"

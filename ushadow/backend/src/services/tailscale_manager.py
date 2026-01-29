@@ -9,9 +9,8 @@ This service consolidates all Tailscale operations:
 
 Architecture:
 - Layer 1 (Tailscale Serve): External HTTPS → Internal containers
-  - /api/* → backend (REST APIs)
+  - /api/* → backend (REST APIs, includes /ws/audio/relay for WebSockets)
   - /auth/* → backend (authentication)
-  - /ws_pcm, /ws_omi → chronicle (WebSockets, direct for low latency)
   - /* → frontend (SPA catch-all)
 
 - Layer 2 (Generic Proxy): Backend routes REST to services via /api/services/{name}/proxy/*
@@ -188,22 +187,57 @@ class TailscaleManager:
 
             except docker.errors.NotFound:
                 # Container doesn't exist - create it
-                # TODO: Get image, network, ports from settings/config
-                # For now, use defaults
+                # Match configuration from compose/tailscale-compose.yml
+
+                # First, ensure networks exist
+                try:
+                    ushadow_net = self.docker_client.networks.get("ushadow-network")
+                    logger.info("Found ushadow-network")
+                except docker.errors.NotFound:
+                    logger.error("ushadow-network not found! Container will use default network.")
+                    ushadow_net = None
+
+                try:
+                    infra_net = self.docker_client.networks.get("infra-network")
+                    logger.info("Found infra-network")
+                except docker.errors.NotFound:
+                    logger.warning("infra-network not found")
+                    infra_net = None
+
+                # Create networking_config for multiple networks
+                from docker.types import EndpointConfig, NetworkingConfig
+
+                networking_config = NetworkingConfig(
+                    endpoints_config={
+                        "ushadow-network": EndpointConfig() if ushadow_net else None,
+                        "infra-network": EndpointConfig() if infra_net else None,
+                    }
+                )
+
                 container = self.docker_client.containers.run(
                     image="tailscale/tailscale:latest",
                     name=container_name,
+                    hostname=container_name,
                     detach=True,
-                    network_mode="host",
                     environment={
                         "TS_STATE_DIR": "/var/lib/tailscale",
-                        "TS_SOCKET": "/var/run/tailscale/tailscaled.sock",
+                        "TS_USERSPACE": "true",
+                        "TS_ACCEPT_DNS": "true",
+                        "TS_EXTRA_ARGS": "--advertise-tags=tag:container",
                     },
                     volumes={
                         volume_name: {"bind": "/var/lib/tailscale", "mode": "rw"}
                     },
                     cap_add=["NET_ADMIN", "NET_RAW"],
+                    networking_config=networking_config,
+                    command=[
+                        "sh", "-c",
+                        f"tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & "
+                        f"sleep 2 && tailscale up --hostname={self.env_name} && sleep infinity"
+                    ],
                 )
+
+                logger.info(f"Created {container_name} on ushadow-network and infra-network")
 
                 return {
                     "status": "created",
@@ -634,7 +668,6 @@ class TailscaleManager:
     def configure_base_routes(self,
                              backend_container: Optional[str] = None,
                              frontend_container: Optional[str] = None,
-                             chronicle_container: Optional[str] = None,
                              backend_port: int = 8000,
                              frontend_port: Optional[int] = None) -> bool:
         """Configure base infrastructure routes (Layer 1).
@@ -642,14 +675,14 @@ class TailscaleManager:
         Sets up:
         - /api/* → backend (REST APIs through generic proxy)
         - /auth/* → backend (authentication)
-        - /ws_pcm → chronicle (WebSocket, direct for low latency)
-        - /ws_omi → chronicle (WebSocket, direct for low latency)
         - /* → frontend (SPA catch-all)
+
+        Note: Chronicle and other deployed services are accessed via their own ports,
+        not through Tailscale routing.
 
         Args:
             backend_container: Backend container name (default: {env}-backend)
             frontend_container: Frontend container name (default: {env}-webui)
-            chronicle_container: Chronicle container name (default: {env}-chronicle-backend)
             backend_port: Backend internal port (default: 8000)
             frontend_port: Frontend internal port (auto-detect if None)
 
@@ -661,8 +694,6 @@ class TailscaleManager:
             backend_container = f"{self.env_name}-backend"
         if not frontend_container:
             frontend_container = f"{self.env_name}-webui"
-        if not chronicle_container:
-            chronicle_container = f"{self.env_name}-chronicle-backend"
 
         # Auto-detect frontend port based on dev/prod mode
         if frontend_port is None:
@@ -671,7 +702,6 @@ class TailscaleManager:
 
         backend_base = f"http://{backend_container}:{backend_port}"
         frontend_target = f"http://{frontend_container}:{frontend_port}"
-        chronicle_base = f"http://{chronicle_container}:{backend_port}"
 
         success = True
 
@@ -683,12 +713,8 @@ class TailscaleManager:
             if not self.add_serve_route(route, target):
                 success = False
 
-        # WebSocket routes - direct to Chronicle for low latency (legacy/mobile)
-        ws_routes = ["/ws_pcm", "/ws_omi"]
-        for route in ws_routes:
-            target = f"{chronicle_base}{route}"
-            if not self.add_serve_route(route, target):
-                success = False
+        # Chronicle WebSocket routes removed - Chronicle is now a deployed service
+        # accessed via its own port (e.g., http://localhost:8090)
 
         # Frontend catches everything else
         if not self.add_serve_route("/", frontend_target):

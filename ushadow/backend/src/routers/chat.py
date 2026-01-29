@@ -13,6 +13,7 @@ import json
 import logging
 import uuid
 from typing import List, Optional, Dict, Any
+import os
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -21,6 +22,7 @@ from pydantic import BaseModel
 
 from src.services.llm_client import get_llm_client
 from src.config import get_settings
+from src.services.docker_manager import get_docker_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -76,28 +78,26 @@ async def fetch_memory_context(
     Returns:
         List of relevant memory strings
     """
-    settings = get_settings()
-    memory_url = await settings.get(
-        "infrastructure.openmemory_server_url",
-        "http://localhost:8765"
-    )
+    backend_port = os.getenv("BACKEND_PORT", "8360")
 
     try:
+        # Use the service proxy to access mem0
         async with httpx.AsyncClient(timeout=5.0) as client:
-            # Search for relevant memories
-            response = await client.post(
-                f"{memory_url}/api/v1/memories/search",
-                json={
-                    "query": query,
+            # Mem0 uses GET /api/v1/memories/ with query parameters
+            response = await client.get(
+                f"http://localhost:{backend_port}/api/services/mem0/proxy/api/v1/memories/",
+                params={
                     "user_id": user_id,
+                    "search": query,
                     "limit": limit
                 }
             )
 
             if response.status_code == 200:
                 data = response.json()
-                memories = data.get("results", [])
-                return [m.get("memory", m.get("content", "")) for m in memories if m]
+                # Mem0 returns paginated items
+                items = data.get("items", [])
+                return [item.get("memory", item.get("content", "")) for item in items if item]
 
     except httpx.TimeoutException:
         logger.warning("OpenMemory timeout - continuing without context")
@@ -110,18 +110,14 @@ async def fetch_memory_context(
 
 
 async def check_memory_available() -> bool:
-    """Check if OpenMemory service is available."""
-    settings = get_settings()
-    memory_url = await settings.get(
-        "infrastructure.openmemory_server_url",
-        "http://localhost:8765"
-    )
-
+    """Check if OpenMemory service is available by testing the proxy endpoint."""
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get(f"{memory_url}/health")
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            # Use the DNS alias to check mem0 directly (same as proxy does internally)
+            response = await client.get("http://mem0:8765/api/v1/config/")
             return response.status_code == 200
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Could not check mem0 availability: {e}")
         return False
 
 
