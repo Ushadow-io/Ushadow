@@ -59,10 +59,17 @@ import { appendTokenToUrl, saveAuthToken } from '../../_utils/authStorage';
 import { verifyUnodeAuth } from '../../services/chronicleApi';
 import { AudioDestination } from '../../services/audioProviderApi';
 
+// Types
+import { SessionSource as SessionSourceType } from '../../types/streamingSession';
+import { RelayStatus } from '../../hooks/useAudioStreamer';
+
 interface UnifiedStreamingPageProps {
   authToken: string | null;
   onAuthRequired?: () => void;
   onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onSessionStart?: (source: SessionSourceType, codec: 'pcm' | 'opus') => Promise<string>;
+  onSessionUpdate?: (sessionId: string, relayStatus: RelayStatus) => void;
+  onSessionEnd?: (sessionId: string, error?: string) => void;
   testID?: string;
 }
 
@@ -70,6 +77,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   authToken,
   onAuthRequired,
   onWebSocketLog,
+  onSessionStart,
+  onSessionUpdate,
+  onSessionEnd,
   testID = 'unified-streaming',
 }) => {
   // Source state
@@ -96,6 +106,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Streaming timing
   const streamingStartTime = useRef<Date | null>(null);
   const [startTime, setStartTime] = useState<Date | undefined>(undefined);
+
+  // Session tracking
+  const currentSessionIdRef = useRef<string | null>(null);
 
   // OMI connection context
   const omiConnection = useOmiConnection();
@@ -135,6 +148,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // WebSocket streamer for OMI
   const omiStreamer = useAudioStreamer({
     onLog: onWebSocketLog,
+    onRelayStatus: (status) => {
+      if (currentSessionIdRef.current && onSessionUpdate) {
+        onSessionUpdate(currentSessionIdRef.current, status);
+      }
+    },
   });
 
   // Combined state
@@ -153,6 +171,29 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       isListeningAudio,
     });
   }, [selectedSource.type, isStreaming, phoneStreaming.isStreaming, phoneStreaming.isRecording, omiStreamer.isStreaming, isListeningAudio]);
+
+  // Monitor for permanent connection failures (when reconnection attempts exhausted)
+  useEffect(() => {
+    const currentError = selectedSource.type === 'microphone' ? phoneStreaming.error : omiStreamer.error;
+    const currentRetrying = selectedSource.type === 'microphone' ? phoneStreaming.isRetrying : omiStreamer.isRetrying;
+    const wasStreaming = selectedSource.type === 'microphone' ? phoneStreaming.isStreaming : omiStreamer.isStreaming;
+
+    // If there's an error, not retrying anymore, and we have an active session, it means connection failed permanently
+    if (currentError && !currentRetrying && !wasStreaming && currentSessionIdRef.current && onSessionEnd) {
+      console.log('[UnifiedStreaming] Connection failed permanently, ending session');
+      onSessionEnd(currentSessionIdRef.current, currentError);
+      currentSessionIdRef.current = null;
+    }
+  }, [
+    selectedSource.type,
+    phoneStreaming.error,
+    phoneStreaming.isRetrying,
+    phoneStreaming.isStreaming,
+    omiStreamer.error,
+    omiStreamer.isRetrying,
+    omiStreamer.isStreaming,
+    onSessionEnd,
+  ]);
 
   const isConnecting = selectedSource.type === 'microphone'
     ? phoneStreaming.isConnecting
@@ -445,6 +486,19 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
 
     console.log('[UnifiedStreaming] Starting stream to:', streamUrl);
+
+    // Start session tracking
+    if (onSessionStart) {
+      const sessionSource: SessionSourceType = selectedSource.type === 'omi' && selectedSource.deviceId
+        ? { type: 'omi', deviceId: selectedSource.deviceId, deviceName: selectedSource.deviceName }
+        : { type: 'microphone' };
+
+      const codec = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
+      const sessionId = await onSessionStart(sessionSource, codec);
+      currentSessionIdRef.current = sessionId;
+      console.log('[UnifiedStreaming] Session started:', sessionId);
+    }
+
     try {
       if (selectedSource.type === 'microphone') {
         // Phone microphone uses PCM
@@ -471,8 +525,15 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         });
       }
     } catch (err) {
+      const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[UnifiedStreaming] Failed to start streaming:', err);
-      Alert.alert('Streaming Error', (err as Error).message || 'Failed to start streaming');
+      Alert.alert('Streaming Error', errorMessage);
+
+      // End session with error
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, errorMessage);
+        currentSessionIdRef.current = null;
+      }
     }
   }, [
     selectedSource,
@@ -482,6 +543,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     connectOmiDevice,
     omiStreamer,
     startAudioListener,
+    onSessionStart,
+    onSessionEnd,
   ]);
 
   // Stop streaming
@@ -493,10 +556,23 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         await stopAudioListener();
         omiStreamer.stopStreaming();
       }
+
+      // End session (clean stop)
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current);
+        currentSessionIdRef.current = null;
+      }
     } catch (err) {
+      const errorMessage = (err as Error).message || 'Failed to stop streaming';
       console.error('[UnifiedStreaming] Failed to stop streaming:', err);
+
+      // End session with error
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, errorMessage);
+        currentSessionIdRef.current = null;
+      }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer]);
+  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, onSessionEnd]);
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {
