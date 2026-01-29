@@ -178,25 +178,7 @@ impl LauncherConfig {
 
     /// Validate the configuration structure and constraints
     fn validate(&self) -> Result<(), String> {
-        // TODO: Implement comprehensive validation logic
-        // This is where we'll check for:
-        // - Required fields are non-empty
-        // - Port ranges are valid
-        // - Service references in port_calculation exist
-        // - Paths don't contain dangerous characters
-        // - Command strings are properly formatted
-        //
-        // Your input is valuable here! Consider what validation rules
-        // would catch the most common configuration mistakes.
-        // For example:
-        // - Should we validate that service names don't contain special chars?
-        // - Should we check that port offsets don't create ports < 1024?
-        // - Should we validate that compose_file paths exist?
-        // - Should we enforce naming patterns for services?
-        //
-        // Add validation logic below:
-
-        // Basic validations (expand these!)
+        // Validate project basics
         if self.project.name.is_empty() {
             return Err("project.name cannot be empty".to_string());
         }
@@ -205,8 +187,29 @@ impl LauncherConfig {
             return Err("At least one service must be defined in services.definitions".to_string());
         }
 
-        // Validate port calculation references
+        // Validate port ranges
+        if self.ports.base_backend_port == 0 {
+            return Err("ports.base_backend_port must be greater than 0".to_string());
+        }
+
+        if self.ports.offset.max > 60000 {
+            return Err(format!(
+                "ports.offset.max ({}) too large - max allowed is 60000 to prevent exceeding port 65535",
+                self.ports.offset.max
+            ));
+        }
+
+        // Validate service definitions
         for service in &self.services.definitions {
+            // Ensure either default_port or port_calculation is set
+            if service.default_port.is_none() && service.port_calculation.is_none() && !service.optional {
+                return Err(format!(
+                    "Service '{}' must have either default_port or port_calculation (or be marked optional)",
+                    service.name
+                ));
+            }
+
+            // Validate port calculation references
             if let Some(calc) = &service.port_calculation {
                 if !self.services.definitions.iter().any(|s| s.name == calc.from) {
                     return Err(format!(
@@ -214,7 +217,7 @@ impl LauncherConfig {
                         service.name, calc.from
                     ));
                 }
-                // Check for circular dependencies
+
                 if calc.from == service.name {
                     return Err(format!(
                         "Service '{}' cannot calculate its port from itself",
