@@ -69,6 +69,7 @@ services:
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
       # Memory capability (optional, from selected provider)
       - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
+      - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 
       # Security (from settings) - AUTH_SECRET_KEY is required for JWT auth
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
@@ -76,6 +77,8 @@ services:
       - ACCEPTED_ISSUERS=${ACCEPTED_ISSUERS:-ushadow,chronicle}
       # CORS
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
+
+      
 
     volumes:
       # Data persistence
@@ -138,6 +141,7 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       # - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+      - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 
       # Worker orchestrator configuration
       - WORKER_CHECK_INTERVAL=${WORKER_CHECK_INTERVAL:-10}
