@@ -7,14 +7,14 @@ use super::container_discovery::{
 use super::prerequisites::{check_docker, check_tailscale};
 use super::worktree::{list_worktrees, get_colors_for_name};
 use std::collections::HashMap;
-use tauri::State;
-use super::docker::AppState;
 
 /// Discover environments using config-based Docker Compose labels
+/// Note: The project_root parameter is required to load the config
+/// The frontend should provide this from the user's project selection
 #[tauri::command]
 pub async fn discover_environments_v2(
+    project_root: String,
     main_repo: Option<String>,
-    state: State<'_, AppState>,
 ) -> Result<DiscoveryResult, String> {
     // Check prerequisites
     let (docker_installed, docker_running, _) = check_docker();
@@ -23,39 +23,11 @@ pub async fn discover_environments_v2(
     let docker_ok = docker_installed && docker_running;
     let tailscale_ok = tailscale_installed && tailscale_connected;
 
-    // Get config from state
-    let config_lock = state.config.lock().map_err(|e| e.to_string())?;
-    let config = match config_lock.as_ref() {
-        Some(cfg) => cfg.clone(),
-        None => {
-            // Fallback: If no config loaded, try to load from project root
-            drop(config_lock);
-            let project_root_lock = state.project_root.lock().map_err(|e| e.to_string())?;
-            let project_root = project_root_lock.as_ref().ok_or("No project root set")?;
+    // Load config from project root
+    let config = LauncherConfig::load(&std::path::PathBuf::from(&project_root))?;
 
-            let loaded_config = LauncherConfig::load(&std::path::PathBuf::from(project_root))?;
-
-            // Store it for future use
-            drop(project_root_lock);
-            let mut config_lock_mut = state.config.lock().map_err(|e| e.to_string())?;
-            *config_lock_mut = Some(loaded_config.clone());
-
-            loaded_config
-        }
-    };
-
-    // Get project root for worktree listing
-    let project_root_lock = state.project_root.lock().map_err(|e| e.to_string())?;
-    let main_repo = if let Some(repo) = main_repo {
-        repo
-    } else if let Some(root) = project_root_lock.as_ref() {
-        root.clone()
-    } else {
-        // Default fallback
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        format!("{}/repos/ushadow", home)
-    };
-    drop(project_root_lock);
+    // Use provided main_repo or default to project_root
+    let main_repo = main_repo.unwrap_or_else(|| project_root.clone());
 
     // Get worktrees (source of truth for environments)
     let worktrees = match list_worktrees(main_repo.clone()).await {
@@ -64,7 +36,7 @@ pub async fn discover_environments_v2(
             wt
         }
         Err(e) => {
-            eprintln!("[discovery_v2] Failed to list worktrees: {}", main_repo, e);
+            eprintln!("[discovery_v2] Failed to list worktrees from {}: {}", main_repo, e);
             Vec::new()
         }
     };
@@ -107,24 +79,30 @@ pub async fn discover_environments_v2(
         // Get primary service port
         let backend_port = get_primary_service_port(&containers, &config.containers.primary_service);
 
-        // TODO: Implement webui port calculation
-        // Currently hardcoded as backend - 5000, but this should come from:
-        // 1. Docker port mapping for the webui service
-        // 2. Or a config setting for port relationships
-        let webui_port = backend_port.and_then(|p| if p >= 5000 { Some(p - 5000) } else { None });
+        // Find webui port from containers (look for webui service)
+        // Falls back to backend - 5000 if webui service not found
+        let webui_port = containers
+            .iter()
+            .find(|c| c.service_name == "webui" || c.service_name == "frontend")
+            .and_then(|c| c.ports.first())
+            .map(|p| p.host_port)
+            .or_else(|| backend_port.and_then(|p| if p >= 5000 { Some(p - 5000) } else { None }));
 
-        // Build localhost URL
+        // Build localhost URL (prefer webui port, fallback to backend)
         let localhost_url = if status == EnvironmentStatus::Running {
             webui_port.or(backend_port).map(|p| format!("http://localhost:{}", p))
         } else {
             None
         };
 
-        // TODO: Implement Tailscale URL discovery
-        // This requires querying the health endpoint: config.containers.health_endpoint
-        // at http://localhost:{backend_port}{health_endpoint}
-        let tailscale_url = None;
-        let tailscale_active = false;
+        // Generate Tailscale URL using the host's tailnet
+        let tailscale_url = super::port_utils::generate_tailscale_url(
+            env_name,
+            config.containers.tailscale_project_prefix.as_deref(),
+        )
+        .unwrap_or(None);
+
+        let tailscale_active = tailscale_url.is_some() && status == EnvironmentStatus::Running;
 
         // Container names for display
         let container_names: Vec<String> = containers.iter().map(|c| c.name.clone()).collect();

@@ -52,6 +52,11 @@ containers:
   # Health check endpoint (relative to primary service)
   health_endpoint: "/api/unodes/leader/info"
 
+  # Optional: Project prefix for Tailscale hostnames (for multi-project setups)
+  # If not set, Tailscale URLs will be: https://{env}.{tailnet}
+  # If set to "ushadow", URLs will be: https://ushadow-{env}.{tailnet}
+  # tailscale_project_prefix: "ushadow"
+
 # Port management
 ports:
   # Strategy: "hash" (deterministic from env name) | "sequential" | "random"

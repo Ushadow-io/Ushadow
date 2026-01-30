@@ -46,6 +46,11 @@ pub struct ContainersConfig {
     pub naming_pattern: String,
     pub primary_service: String,
     pub health_endpoint: String,
+    /// Optional project prefix for Tailscale hostnames (for multi-project setups)
+    /// If set, Tailscale URLs will be: https://{prefix}-{env}.{tailnet}
+    /// If not set, Tailscale URLs will be: https://{env}.{tailnet}
+    #[serde(default)]
+    pub tailscale_project_prefix: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -207,6 +212,7 @@ mod tests {
                 naming_pattern: "{project_name}{env_name}-{service_name}".to_string(),
                 primary_service: "backend".to_string(),
                 health_endpoint: "/health".to_string(),
+                tailscale_project_prefix: None,
             },
             prerequisites: PrerequisitesConfig {
                 required: vec![],
@@ -265,6 +271,7 @@ mod tests {
                 naming_pattern: "test-{service_name}".to_string(),
                 primary_service: "backend".to_string(),
                 health_endpoint: "/health".to_string(),
+                tailscale_project_prefix: None,
             },
             infrastructure: InfrastructureConfig {
                 compose_file: "docker-compose.yml".to_string(),
@@ -313,6 +320,7 @@ mod tests {
                 naming_pattern: "test-{service_name}".to_string(),
                 primary_service: "backend".to_string(),
                 health_endpoint: "/health".to_string(),
+                tailscale_project_prefix: None,
             },
             infrastructure: InfrastructureConfig {
                 compose_file: "docker-compose.yml".to_string(),

@@ -51,29 +51,14 @@ pub fn find_available_ports(
     Err("Could not find available ports after 100 attempts".to_string())
 }
 
-/// Check if both backend and frontend ports are available using Python's validate_ports
+/// Check if both backend and frontend ports are available
+/// Uses native Rust implementation (faster than calling Python subprocess)
+/// This mirrors the logic from setup/setup_utils.py::check_port_in_use
 fn are_ports_available(
-    project_root: &str,
+    _project_root: &str,
     backend_port: u16,
     frontend_port: u16,
 ) -> Result<bool, String> {
-    // TODO: Implement the port availability check
-    // This should call the Python function from setup/setup_utils.py
-    //
-    // Implementation strategy:
-    // Option A: Shell out to Python:
-    //   python3 -c "from setup.setup_utils import validate_ports; ..."
-    //
-    // Option B: Use socket checking directly in Rust (reimplementing the logic):
-    //   use std::net::TcpStream;
-    //   TcpStream::connect(("127.0.0.1", port)).is_err()
-    //
-    // Your choice: Which approach do you prefer?
-    // - Option A keeps logic centralized in Python but adds subprocess overhead
-    // - Option B is faster but duplicates the port checking logic
-    //
-    // For now, implementing Option B (Rust native) for simplicity:
-
     Ok(is_port_available(backend_port) && is_port_available(frontend_port))
 }
 
@@ -111,26 +96,28 @@ pub fn get_tailnet_name() -> Result<String, String> {
 }
 
 /// Generate Tailscale URL for an environment
-/// Format: https://{hostname}.{tailnet}
-pub fn generate_tailscale_url(env_name: &str) -> Result<Option<String>, String> {
+/// Format: https://{env_name}.{tailnet} or https://{project}-{env_name}.{tailnet}
+///
+/// # Arguments
+/// * `env_name` - Environment name (e.g., "orange", "blue")
+/// * `project_prefix` - Optional project prefix for multi-project setups (e.g., Some("ushadow"))
+pub fn generate_tailscale_url(
+    env_name: &str,
+    project_prefix: Option<&str>,
+) -> Result<Option<String>, String> {
     // Get the tailnet name from the host
     let tailnet = match get_tailnet_name() {
         Ok(t) => t,
         Err(_) => return Ok(None), // Tailscale not available, return None instead of error
     };
 
-    // TODO: Implement hostname generation
-    // The hostname should match what the environment's Tailscale container uses
-    //
-    // Question: How are Tailscale hostnames determined?
-    // Option A: Use env_name directly: "ushadow-{env_name}"
-    // Option B: Query the running container's Tailscale status
-    // Option C: Use a config setting for hostname pattern
-    //
-    // Please implement the hostname generation logic below based on your
-    // project's Tailscale naming convention:
+    // Build hostname: either "envname" or "project-envname"
+    let hostname = if let Some(prefix) = project_prefix {
+        format!("{}-{}", prefix, env_name)
+    } else {
+        env_name.to_string()
+    };
 
-    let hostname = format!("ushadow-{}", env_name);
     let url = format!("https://{}.{}", hostname, tailnet);
 
     Ok(Some(url))

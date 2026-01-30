@@ -8,7 +8,7 @@ mod config;
 mod models;
 
 use commands::{AppState, check_prerequisites, discover_environments, get_os_type,
-    discover_environments_with_config,
+    discover_environments_with_config, discover_environments_v2,
     start_containers, stop_containers, get_container_status,
     start_infrastructure, stop_infrastructure, restart_infrastructure,
     start_environment, stop_environment, check_ports,
@@ -144,6 +144,7 @@ fn main() {
             install_git_macos,
             // Worktree management
             discover_environments_with_config,
+            discover_environments_v2,
             list_worktrees,
             create_worktree,
             open_in_vscode,

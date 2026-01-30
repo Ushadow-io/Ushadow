@@ -1,5 +1,6 @@
 mod docker;
 mod discovery;
+mod discovery_v2;
 mod prerequisites;
 mod installer;
 mod utils;
@@ -7,12 +8,15 @@ mod permissions;
 pub mod worktree;
 mod config_commands;
 mod container_discovery;
+mod port_utils;
 
 pub use docker::*;
 pub use discovery::*;
+pub use discovery_v2::*;
 pub use prerequisites::*;
 pub use installer::*;
 pub use permissions::*;
 pub use worktree::*;
 pub use config_commands::*;
 pub use container_discovery::*;
+pub use port_utils::*;
