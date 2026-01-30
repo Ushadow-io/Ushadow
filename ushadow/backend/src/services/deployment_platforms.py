@@ -173,18 +173,42 @@ class DockerDeployPlatform(DeployPlatform):
         try:
             docker_client = docker.from_env()
 
-            # Parse ports to Docker format
+            # ===== PORT CONFIGURATION =====
+            # Parse all port-related configuration in one place
+            logger.info(f"[PORT DEBUG] Starting port parsing for {resolved_service.service_id}")
+            logger.info(f"[PORT DEBUG] Input ports from resolved_service.ports: {resolved_service.ports}")
+
             port_bindings = {}
             exposed_ports = {}
+            exposed_port = None  # First host port for deployment tracking
+
             for port_str in resolved_service.ports:
+                logger.info(f"[PORT DEBUG] Processing port_str: {port_str}")
                 if ":" in port_str:
                     host_port, container_port = port_str.split(":")
                     port_key = f"{container_port}/tcp"
                     port_bindings[port_key] = int(host_port)
                     exposed_ports[port_key] = {}
+
+                    # Save first host port for deployment tracking
+                    if exposed_port is None:
+                        exposed_port = int(host_port)
+
+                    logger.info(f"[PORT DEBUG] Mapped: host={host_port} -> container={container_port} (key={port_key})")
                 else:
                     port_key = f"{port_str}/tcp"
                     exposed_ports[port_key] = {}
+
+                    # Save first port for deployment tracking
+                    if exposed_port is None:
+                        exposed_port = int(port_str)
+
+                    logger.info(f"[PORT DEBUG] Exposed only: {port_key}")
+
+            logger.info(f"[PORT DEBUG] Final port_bindings: {port_bindings}")
+            logger.info(f"[PORT DEBUG] Final exposed_ports: {exposed_ports}")
+            logger.info(f"[PORT DEBUG] Tracking exposed_port: {exposed_port}")
+            # ===== END PORT CONFIGURATION =====
 
             # Create container with ushadow labels for stateless tracking
             from datetime import datetime, timezone
@@ -214,50 +238,42 @@ class DockerDeployPlatform(DeployPlatform):
 
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
 
-            # Add service name as network alias so Docker DNS works
-            # This allows containers to reach each other by service name (e.g., "mycelia-python-worker")
-            # We use the low-level API to properly set network aliases
-            networking_config = docker_client.api.create_networking_config({
-                network: docker_client.api.create_endpoint_config(
-                    aliases=[resolved_service.service_id]
-                )
-            })
+            # Use high-level API which handles port format better
+            # High-level API expects ports dict like: {'8000/tcp': 8090} for host port mapping
+            logger.info(f"[PORT DEBUG] Creating container with high-level API")
+            logger.info(f"[PORT DEBUG] ports (high-level format): {port_bindings}")
 
-            # Build host config for ports and restart policy
-            host_config = docker_client.api.create_host_config(
-                port_bindings=port_bindings,
-                restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
-                binds=resolved_service.volumes if resolved_service.volumes else None,
-            )
-
-            # Create container using low-level API (properly supports networking_config)
-            container_data = docker_client.api.create_container(
+            container = docker_client.containers.create(
                 image=resolved_service.image,
                 name=container_name,
                 labels=labels,
                 environment=resolved_service.environment,
-                host_config=host_config,
                 command=resolved_service.command,
-                networking_config=networking_config,
+                ports=port_bindings,  # High-level API takes port_bindings directly as 'ports'
+                volumes={v.split(':')[0]: {'bind': v.split(':')[1], 'mode': v.split(':')[2] if len(v.split(':')) > 2 else 'rw'}
+                        for v in (resolved_service.volumes or [])},
+                restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
                 detach=True,
             )
+            logger.info(f"[PORT DEBUG] Container created with ID: {container.id[:12]}")
 
-            # Get container object and start it
-            container = docker_client.containers.get(container_data['Id'])
+            # Connect to custom network with service name as alias BEFORE starting
+            # This allows containers to reach each other by service name (e.g., "mycelia-python-worker")
+            logger.info(f"[PORT DEBUG] Connecting container to network {network} with alias {resolved_service.service_id}")
+            network_obj = docker_client.networks.get(network)
+            network_obj.connect(container, aliases=[resolved_service.service_id])
+            logger.info(f"[PORT DEBUG] Connected to network {network}")
+
+            # Now start the container
+            logger.info(f"[PORT DEBUG] Starting container {container_name}...")
             container.start()
 
+            # Reload to get updated port info
+            container.reload()
+            logger.info(f"[PORT DEBUG] Container started. Ports mapping: {container.ports}")
             logger.info(f"Container {container_name} created and started: {container.id[:12]}")
 
-            # Extract exposed port
-            exposed_port = None
-            if resolved_service.ports:
-                first_port = resolved_service.ports[0]
-                if ":" in first_port:
-                    exposed_port = int(first_port.split(":")[0])
-                else:
-                    exposed_port = int(first_port)
-
-            # Build deployment object
+            # Build deployment object (exposed_port was extracted during port parsing above)
             hostname = target.identifier  # Use standardized field (hostname for Docker targets)
             deployment = Deployment(
                 id=deployment_id,
