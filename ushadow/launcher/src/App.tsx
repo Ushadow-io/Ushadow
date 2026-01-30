@@ -11,6 +11,7 @@ import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
 import { EmbeddedView } from './components/EmbeddedView'
+import { ProjectManager } from './components/ProjectManager'
 import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil } from 'lucide-react'
 import { getColors } from './utils/colors'
 
@@ -28,6 +29,9 @@ function App() {
     setProjectRoot,
     worktreesDir,
     setWorktreesDir,
+    multiProjectMode,
+    projects,
+    activeProjectId,
   } = useAppStore()
 
   // State
@@ -1148,6 +1152,7 @@ function App() {
                 className="flex flex-col gap-4 overflow-y-auto"
                 style={{ width: `${leftColumnWidth}px`, flexShrink: 0 }}
               >
+                {multiProjectMode && <ProjectManager />}
                 <FoldersPanel
                   projectRoot={projectRoot}
                   worktreesDir={worktreesDir}

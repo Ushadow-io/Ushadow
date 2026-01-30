@@ -5,6 +5,7 @@ import { join } from '@tauri-apps/api/path'
 
 interface ProjectSetupDialogProps {
   isOpen: boolean
+  projectName?: string // e.g., "ushadow", "myproject" - defaults to "ushadow"
   defaultPath: string
   defaultWorktreesPath?: string
   onClose: () => void
@@ -18,6 +19,7 @@ interface ProjectStatus {
 
 export function ProjectSetupDialog({
   isOpen,
+  projectName = 'ushadow',
   defaultPath,
   defaultWorktreesPath,
   onClose,
@@ -32,8 +34,8 @@ export function ProjectSetupDialog({
   useEffect(() => {
     if (parentPath) {
       Promise.all([
-        join(parentPath, 'ushadow'),
-        join(parentPath, 'worktrees', 'ushadow')
+        join(parentPath, projectName),
+        join(parentPath, 'worktrees', projectName)
       ]).then(async ([installPath, defaultWorktreesPath]) => {
         setFullInstallPath(installPath)
         setWorktreesPath(defaultWorktreesPath)
@@ -52,7 +54,7 @@ export function ProjectSetupDialog({
       setWorktreesPath(null)
       setProjectStatus(null)
     }
-  }, [parentPath])
+  }, [parentPath, projectName])
 
   if (!isOpen) return null
 
@@ -61,7 +63,7 @@ export function ProjectSetupDialog({
       directory: true,
       multiple: false,
       defaultPath: parentPath || defaultPath || undefined,
-      title: 'Choose parent folder for Ushadow',
+      title: `Choose parent folder for ${projectName}`,
     })
 
     if (selected && typeof selected === 'string') {
@@ -75,8 +77,8 @@ export function ProjectSetupDialog({
     }
 
     // If paths aren't ready yet, compute them now
-    const pathToUse = fullInstallPath || (parentPath ? await join(parentPath, 'ushadow') : null)
-    const worktreesToUse = worktreesPath || (parentPath ? await join(parentPath, 'worktrees') : null)
+    const pathToUse = fullInstallPath || (parentPath ? await join(parentPath, projectName) : null)
+    const worktreesToUse = worktreesPath || (parentPath ? await join(parentPath, 'worktrees', projectName) : null)
 
     if (!pathToUse || !worktreesToUse) {
       return
@@ -102,7 +104,7 @@ export function ProjectSetupDialog({
 
         {/* Description */}
         <p className="text-sm text-text-secondary mb-4">
-          Select a parent folder. The Ushadow project will be in <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">ushadow/</code>, and worktrees in <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">worktrees/ushadow/</code>.
+          Select a parent folder. The {projectName} project will be in <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">{projectName}/</code>, and worktrees in <code className="text-primary-400 bg-surface-900/50 px-1 py-0.5 rounded">worktrees/{projectName}/</code>.
         </p>
 
         {/* Folder Picker */}
@@ -136,7 +138,7 @@ export function ProjectSetupDialog({
                 <>
                   <div className="flex items-center gap-2 mb-1">
                     <CheckCircle className="w-4 h-4 text-green-400" />
-                    <p className="text-xs text-green-400">Existing Ushadow repository found:</p>
+                    <p className="text-xs text-green-400">Existing {projectName} repository found:</p>
                   </div>
                   <p className="text-sm font-mono text-green-300 break-all">{fullInstallPath}</p>
                   <p className="text-xs text-green-400/70 mt-2">Will link to this existing installation</p>
@@ -146,7 +148,7 @@ export function ProjectSetupDialog({
                   <p className="text-xs text-primary-400 mb-1">Project folder:</p>
                   <p className="text-sm font-mono text-primary-300 break-all">{fullInstallPath}</p>
                   {projectStatus?.exists && !projectStatus?.is_valid_repo && (
-                    <p className="text-xs text-yellow-400 mt-2">Folder exists but is not a valid Ushadow repository</p>
+                    <p className="text-xs text-yellow-400 mt-2">Folder exists but is not a valid {projectName} repository</p>
                   )}
                 </>
               )}
