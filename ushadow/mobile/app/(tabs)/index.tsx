@@ -52,7 +52,7 @@ export default function HomeScreen() {
   const { entries: logEntries, connectionState: logConnectionState, logEvent, clearLogs, clearLogsByType } = useConnectionLog();
 
   // Session tracking hook
-  const { startSession, updateSessionStatus, endSession } = useSessionTracking();
+  const { sessions, startSession, updateSessionStatus, endSession, clearAllSessions } = useSessionTracking();
 
   // Load auth state on mount
   useEffect(() => {
@@ -190,6 +190,7 @@ export default function HomeScreen() {
           authToken={authToken}
           onAuthRequired={() => setShowLoginScreen(true)}
           onWebSocketLog={(status, message, details) => logEvent('websocket', status, message, details)}
+          onBluetoothLog={(status, message, details) => logEvent('bluetooth', status, message, details)}
           onSessionStart={startSession}
           onSessionUpdate={updateSessionStatus}
           onSessionEnd={endSession}
@@ -210,8 +211,10 @@ export default function HomeScreen() {
         onClose={() => setShowLogViewer(false)}
         entries={logEntries}
         connectionState={logConnectionState}
+        sessions={sessions}
         onClearLogs={clearLogs}
         onClearLogsByType={clearLogsByType}
+        onClearSessions={clearAllSessions}
       />
     </SafeAreaView>
   );

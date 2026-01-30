@@ -22,6 +22,7 @@ import {
   ConnectionState,
   CONNECTION_TYPE_LABELS,
 } from '../types/connectionLog';
+import { StreamingSession } from '../types/streamingSession';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 
 interface ConnectionLogViewerProps {
@@ -29,25 +30,29 @@ interface ConnectionLogViewerProps {
   onClose: () => void;
   entries: ConnectionLogEntry[];
   connectionState: ConnectionState;
+  sessions?: StreamingSession[];
   onClearLogs: () => void;
   onClearLogsByType: (type: ConnectionType) => void;
+  onClearSessions?: () => void;
 }
 
-type FilterType = 'all' | ConnectionType;
+type FilterType = 'all' | ConnectionType | 'sessions';
 
 // Type-specific colors and icons
-const TYPE_COLORS: Record<ConnectionType, string> = {
+const TYPE_COLORS: Record<ConnectionType | 'sessions', string> = {
   network: colors.info.default,
   server: colors.primary[400],
   bluetooth: '#5E5CE6',
   websocket: colors.success.default,
+  sessions: colors.warning.default,
 };
 
-const TYPE_ICONS: Record<ConnectionType, keyof typeof Ionicons.glyphMap> = {
+const TYPE_ICONS: Record<ConnectionType | 'sessions', keyof typeof Ionicons.glyphMap> = {
   network: 'wifi',
   server: 'server',
   bluetooth: 'bluetooth',
   websocket: 'swap-horizontal',
+  sessions: 'time-outline',
 };
 
 const STATUS_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -66,12 +71,13 @@ const STATUS_COLORS: Record<string, string> = {
   unknown: theme.textMuted,
 };
 
-const FILTER_OPTIONS: { key: FilterType; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'network', label: 'Network' },
-  { key: 'server', label: 'Server' },
-  { key: 'bluetooth', label: 'Bluetooth' },
-  { key: 'websocket', label: 'WebSocket' },
+const TAB_OPTIONS: { key: FilterType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'all', label: 'All', icon: 'list' },
+  { key: 'network', label: 'Network', icon: 'wifi' },
+  { key: 'server', label: 'Server', icon: 'server' },
+  { key: 'bluetooth', label: 'BT', icon: 'bluetooth' },
+  { key: 'websocket', label: 'WS', icon: 'swap-horizontal' },
+  { key: 'sessions', label: 'Sessions', icon: 'time-outline' },
 ];
 
 export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
@@ -79,15 +85,20 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
   onClose,
   entries,
   connectionState,
+  sessions = [],
   onClearLogs,
   onClearLogsByType,
+  onClearSessions,
 }) => {
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+  const [activeTab, setActiveTab] = useState<FilterType>('all');
 
   const filteredEntries = useMemo(() => {
-    if (activeFilter === 'all') return entries;
-    return entries.filter((entry) => entry.type === activeFilter);
-  }, [entries, activeFilter]);
+    if (activeTab === 'all') return entries;
+    if (activeTab === 'sessions') return [];
+    return entries.filter((entry) => entry.type === activeTab);
+  }, [entries, activeTab]);
+
+  const isSessionsView = activeTab === 'sessions';
 
   const formatTime = (date: Date): string => {
     return date.toLocaleTimeString('en-US', {
@@ -113,63 +124,49 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
     });
   };
 
-  const renderStatusSummary = () => (
-    <View style={styles.statusSummary} testID="connection-status-summary">
-      {(['network', 'server', 'bluetooth', 'websocket'] as ConnectionType[]).map((type) => {
-        const status = connectionState[type];
-        const typeColor = TYPE_COLORS[type];
-        const statusColor = STATUS_COLORS[status];
-        const typeIcon = TYPE_ICONS[type];
-        const statusIcon = STATUS_ICONS[status];
+  const renderTabs = () => (
+    <View style={styles.tabContainer} testID="connection-tabs">
+      {TAB_OPTIONS.map((tab) => {
+        const isActive = activeTab === tab.key;
+        let tabColor = colors.primary[400];
+        let status: string | undefined;
 
-        return (
-          <View key={type} style={styles.statusItem}>
-            <View style={[styles.statusIconContainer, { borderColor: typeColor }]}>
-              <Ionicons name={typeIcon} size={18} color={typeColor} />
-              <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-            </View>
-            <Text style={[styles.statusLabel, { color: typeColor }]}>
-              {CONNECTION_TYPE_LABELS[type]}
-            </Text>
-            <Ionicons name={statusIcon} size={14} color={statusColor} />
-          </View>
-        );
-      })}
-    </View>
-  );
+        if (tab.key !== 'all' && tab.key !== 'sessions') {
+          tabColor = TYPE_COLORS[tab.key as ConnectionType];
+          status = connectionState[tab.key as ConnectionType];
+        } else if (tab.key === 'sessions') {
+          tabColor = TYPE_COLORS.sessions;
+        }
 
-  const renderFilters = () => (
-    <View style={styles.filterContainer}>
-      {FILTER_OPTIONS.map((option) => {
-        const isActive = activeFilter === option.key;
-        const chipColor = option.key === 'all'
-          ? colors.primary[400]
-          : TYPE_COLORS[option.key as ConnectionType];
+        const statusColor = status ? STATUS_COLORS[status] : undefined;
 
         return (
           <TouchableOpacity
-            key={option.key}
+            key={tab.key}
             style={[
-              styles.filterChip,
-              isActive && [styles.filterChipActive, { borderColor: chipColor }],
+              styles.tab,
+              isActive && [styles.tabActive, { borderBottomColor: tabColor }],
             ]}
-            onPress={() => setActiveFilter(option.key)}
-            testID={`filter-${option.key}`}
+            onPress={() => setActiveTab(tab.key)}
+            testID={`tab-${tab.key}`}
           >
-            {option.key !== 'all' && (
+            <View style={styles.tabIconContainer}>
               <Ionicons
-                name={TYPE_ICONS[option.key as ConnectionType]}
-                size={14}
-                color={isActive ? chipColor : theme.textMuted}
+                name={tab.icon}
+                size={24}
+                color={isActive ? tabColor : theme.textMuted}
               />
-            )}
+              {status && statusColor && (
+                <View style={[styles.tabStatusDot, { backgroundColor: statusColor }]} />
+              )}
+            </View>
             <Text
               style={[
-                styles.filterText,
-                isActive && { color: chipColor },
+                styles.tabLabel,
+                isActive ? { color: tabColor } : { color: theme.textMuted },
               ]}
             >
-              {option.label}
+              {tab.label}
             </Text>
           </TouchableOpacity>
         );
@@ -217,12 +214,98 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
     );
   };
 
+  const renderSessionItem = ({ item }: { item: StreamingSession }) => {
+    const duration = item.durationSeconds
+      ? `${Math.floor(item.durationSeconds / 60)}m ${item.durationSeconds % 60}s`
+      : 'In progress';
+    const startTime = new Date(item.startTime).toLocaleString();
+    const hasError = !!item.error;
+
+    // Format end reason
+    const endReasonLabels = {
+      manual_stop: 'Stopped by user',
+      connection_lost: 'Connection lost',
+      error: 'Error occurred',
+      timeout: 'Connection timeout',
+    };
+    const endReasonText = item.endReason ? endReasonLabels[item.endReason] : 'Unknown';
+
+    return (
+      <View style={styles.sessionEntry} testID={`session-${item.id}`}>
+        <View style={styles.sessionHeader}>
+          <View style={styles.sessionIconContainer}>
+            <Ionicons
+              name={item.source.type === 'phone' ? 'phone-portrait' : 'bluetooth'}
+              size={20}
+              color={colors.primary[400]}
+            />
+          </View>
+          <View style={styles.sessionInfo}>
+            <Text style={styles.sessionSource}>
+              {item.source.type === 'phone' ? 'Phone Microphone' : `OMI Device (${item.source.deviceName})`}
+            </Text>
+            <Text style={styles.sessionTime}>{startTime}</Text>
+          </View>
+          {hasError && (
+            <Ionicons name="alert-circle" size={20} color={colors.error.default} />
+          )}
+        </View>
+        <View style={styles.sessionDetails}>
+          <View style={styles.sessionDetailRow}>
+            <Text style={styles.sessionDetailLabel}>Duration:</Text>
+            <Text style={styles.sessionDetailValue}>{duration}</Text>
+          </View>
+          <View style={styles.sessionDetailRow}>
+            <Text style={styles.sessionDetailLabel}>Codec:</Text>
+            <Text style={styles.sessionDetailValue}>{item.codec.toUpperCase()}</Text>
+          </View>
+          <View style={styles.sessionDetailRow}>
+            <Text style={styles.sessionDetailLabel}>Data:</Text>
+            <Text style={styles.sessionDetailValue}>
+              {(item.bytesTransferred / 1024).toFixed(1)} KB ({item.chunksTransferred} chunks)
+            </Text>
+          </View>
+          {item.endTime && (
+            <View style={styles.sessionDetailRow}>
+              <Text style={styles.sessionDetailLabel}>Ended:</Text>
+              <Text style={[styles.sessionDetailValue, hasError && { color: colors.error.default }]}>
+                {endReasonText}
+              </Text>
+            </View>
+          )}
+          {item.destinations && item.destinations.length > 0 && (
+            <View style={styles.sessionDetailRow}>
+              <Text style={styles.sessionDetailLabel}>Destinations:</Text>
+              <Text style={styles.sessionDetailValue}>
+                {item.destinations.map(d => d.name).join(', ')}
+              </Text>
+            </View>
+          )}
+          {hasError && (
+            <View style={styles.sessionErrorContainer}>
+              <Text style={styles.sessionErrorText}>{item.error}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Ionicons name="document-text-outline" size={48} color={theme.textMuted} />
-      <Text style={styles.emptyStateText}>No log entries</Text>
+      <Ionicons
+        name={isSessionsView ? "time-outline" : "document-text-outline"}
+        size={48}
+        color={theme.textMuted}
+      />
+      <Text style={styles.emptyStateText}>
+        {isSessionsView ? 'No sessions' : 'No log entries'}
+      </Text>
       <Text style={styles.emptyStateSubtext}>
-        Connection events will appear here as they occur
+        {isSessionsView
+          ? 'Streaming sessions will appear here as you use the app'
+          : 'Connection events will appear here as they occur'
+        }
       </Text>
     </View>
   );
@@ -247,28 +330,28 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* Current Status Summary */}
-        {renderStatusSummary()}
+        {/* Tabs */}
+        {renderTabs()}
 
-        {/* Filters */}
-        {renderFilters()}
-
-        {/* Log Count */}
+        {/* Count and Actions */}
         <View style={styles.countContainer}>
           <Text style={styles.countText}>
-            {filteredEntries.length} {filteredEntries.length === 1 ? 'entry' : 'entries'}
+            {isSessionsView
+              ? `${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'}`
+              : `${filteredEntries.length} ${filteredEntries.length === 1 ? 'entry' : 'entries'}`
+            }
           </Text>
           <View style={styles.clearButtonsContainer}>
-            {activeFilter !== 'all' && filteredEntries.length > 0 && (
+            {!isSessionsView && activeTab !== 'all' && filteredEntries.length > 0 && (
               <TouchableOpacity
                 style={styles.clearButton}
-                onPress={() => onClearLogsByType(activeFilter as ConnectionType)}
-                testID={`clear-${activeFilter}-logs-button`}
+                onPress={() => onClearLogsByType(activeTab as ConnectionType)}
+                testID={`clear-${activeTab}-logs-button`}
               >
-                <Text style={styles.clearButtonText}>Clear {CONNECTION_TYPE_LABELS[activeFilter as ConnectionType]}</Text>
+                <Text style={styles.clearButtonText}>Clear {CONNECTION_TYPE_LABELS[activeTab as ConnectionType]}</Text>
               </TouchableOpacity>
             )}
-            {entries.length > 0 && (
+            {!isSessionsView && entries.length > 0 && (
               <TouchableOpacity
                 style={styles.clearButton}
                 onPress={onClearLogs}
@@ -277,18 +360,38 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
                 <Text style={styles.clearButtonText}>Clear All</Text>
               </TouchableOpacity>
             )}
+            {isSessionsView && sessions.length > 0 && onClearSessions && (
+              <TouchableOpacity
+                style={styles.clearButton}
+                onPress={onClearSessions}
+                testID="clear-sessions-button"
+              >
+                <Text style={styles.clearButtonText}>Clear Sessions</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
-        {/* Log List */}
-        <FlatList
-          data={filteredEntries}
-          keyExtractor={(item) => item.id}
-          renderItem={renderLogEntry}
-          ListEmptyComponent={renderEmptyState}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={true}
-        />
+        {/* Content List */}
+        {isSessionsView ? (
+          <FlatList
+            data={sessions}
+            keyExtractor={(item) => item.id}
+            renderItem={renderSessionItem}
+            ListEmptyComponent={renderEmptyState}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={true}
+          />
+        ) : (
+          <FlatList
+            data={filteredEntries}
+            keyExtractor={(item) => item.id}
+            renderItem={renderLogEntry}
+            ListEmptyComponent={renderEmptyState}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={true}
+          />
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -322,68 +425,40 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.primary[400],
   },
-  statusSummary: {
+  tabContainer: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
     backgroundColor: theme.backgroundCard,
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
   },
-  statusItem: {
+  tab: {
+    flex: 1,
     alignItems: 'center',
-    gap: 4,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
   },
-  statusIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.backgroundInput,
+  tabActive: {
+    borderBottomWidth: 3,
+  },
+  tabIconContainer: {
     position: 'relative',
+    marginBottom: 4,
   },
-  statusDot: {
+  tabStatusDot: {
     position: 'absolute',
-    bottom: -2,
+    top: -2,
     right: -2,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     borderWidth: 2,
     borderColor: theme.backgroundCard,
   },
-  statusLabel: {
+  tabLabel: {
     fontSize: fontSize.xs,
     fontWeight: '500',
-  },
-  filterContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    gap: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
-  },
-  filterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    backgroundColor: theme.backgroundInput,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  filterChipActive: {
-    backgroundColor: theme.backgroundCard,
-  },
-  filterText: {
-    fontSize: fontSize.sm,
-    color: theme.textMuted,
   },
   countContainer: {
     flexDirection: 'row',
@@ -484,6 +559,69 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     marginTop: spacing.xs,
     textAlign: 'center',
+  },
+  // Session styles
+  sessionEntry: {
+    backgroundColor: theme.backgroundCard,
+    marginHorizontal: spacing.lg,
+    marginVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  sessionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  sessionIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary[400] + '20',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  sessionInfo: {
+    flex: 1,
+  },
+  sessionSource: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: theme.textPrimary,
+  },
+  sessionTime: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    marginTop: 2,
+  },
+  sessionDetails: {
+    gap: spacing.xs,
+  },
+  sessionDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  sessionDetailLabel: {
+    fontSize: fontSize.sm,
+    color: theme.textSecondary,
+  },
+  sessionDetailValue: {
+    fontSize: fontSize.sm,
+    color: theme.textPrimary,
+    fontWeight: '500',
+  },
+  sessionErrorContainer: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    backgroundColor: colors.error.bgSolid,
+    borderRadius: borderRadius.sm,
+  },
+  sessionErrorText: {
+    fontSize: fontSize.sm,
+    color: colors.error.light,
   },
 });
 

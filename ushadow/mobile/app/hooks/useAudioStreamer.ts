@@ -7,9 +7,8 @@
  * Wyoming Protocol: JSON header + binary payload for structured audio sessions.
  *
  * URL Format:
- * - Streaming URL: wss://{tailscale-host}/chronicle/ws_pcm?token={jwt}
- * - /chronicle prefix routes through Caddy to Chronicle backend
- * - /ws_pcm is the Wyoming protocol PCM audio endpoint
+ * - Audio relay: wss://{tailscale-host}/ws/audio/relay?destinations=[...]&token={jwt}
+ * - The relay forwards to Chronicle/Mycelia backends internally
  * - Token is appended automatically via appendTokenToUrl()
  */
 import { useState, useRef, useCallback, useEffect } from 'react';

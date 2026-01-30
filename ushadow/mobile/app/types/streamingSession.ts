@@ -32,6 +32,7 @@ export interface StreamingSession {
   codec: 'pcm' | 'opus';            // Audio codec used
   networkType?: string;              // WiFi, cellular, etc.
   error?: string;                    // Error message if session failed
+  endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout'; // How the session ended
 }
 
 export interface SessionState {

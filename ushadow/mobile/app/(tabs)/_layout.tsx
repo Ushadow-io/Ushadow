@@ -65,21 +65,6 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="sessions"
-        options={{
-          title: 'Sessions',
-          tabBarIcon: ({ focused, color, size }) => (
-            <Ionicons
-              name={focused ? 'pulse' : 'pulse-outline'}
-              size={size}
-              color={color}
-              testID="tab-icon-sessions"
-            />
-          ),
-          tabBarAccessibilityLabel: 'Sessions Tab',
-        }}
-      />
-      <Tabs.Screen
         name="conversations"
         options={{
           title: 'History',

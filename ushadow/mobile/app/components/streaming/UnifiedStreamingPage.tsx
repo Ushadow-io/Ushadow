@@ -67,9 +67,10 @@ interface UnifiedStreamingPageProps {
   authToken: string | null;
   onAuthRequired?: () => void;
   onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onBluetoothLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
   onSessionStart?: (source: SessionSourceType, codec: 'pcm' | 'opus') => Promise<string>;
   onSessionUpdate?: (sessionId: string, relayStatus: RelayStatus) => void;
-  onSessionEnd?: (sessionId: string, error?: string) => void;
+  onSessionEnd?: (sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout') => void;
   testID?: string;
 }
 
@@ -77,6 +78,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   authToken,
   onAuthRequired,
   onWebSocketLog,
+  onBluetoothLog,
   onSessionStart,
   onSessionUpdate,
   onSessionEnd,
@@ -116,7 +118,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Phone microphone streaming hook
   const phoneStreaming = useStreaming();
 
-  // OMI device connection
+  // OMI device connection with bluetooth logging
   const {
     connectedDeviceId,
     isConnecting: isOmiConnecting,
@@ -125,7 +127,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     batteryLevel,
     getBatteryLevel,
     currentCodec, // BROKEN: codec detection unreliable, so we hardcode Opus for all OMI devices
-  } = useDeviceConnection(omiConnection);
+  } = useDeviceConnection(omiConnection, {
+    onLog: onBluetoothLog,
+  });
 
   // Derive OMI connection status for SourceSelector
   const omiConnectionStatus: 'disconnected' | 'connecting' | 'connected' =
@@ -181,7 +185,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     // If there's an error, not retrying anymore, and we have an active session, it means connection failed permanently
     if (currentError && !currentRetrying && !wasStreaming && currentSessionIdRef.current && onSessionEnd) {
       console.log('[UnifiedStreaming] Connection failed permanently, ending session');
-      onSessionEnd(currentSessionIdRef.current, currentError);
+      const endReason = currentError.toLowerCase().includes('timeout') ? 'timeout' : 'connection_lost';
+      onSessionEnd(currentSessionIdRef.current, currentError, endReason);
       currentSessionIdRef.current = null;
     }
   }, [
@@ -531,7 +536,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
       // End session with error
       if (currentSessionIdRef.current && onSessionEnd) {
-        onSessionEnd(currentSessionIdRef.current, errorMessage);
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
         currentSessionIdRef.current = null;
       }
     }
@@ -557,9 +562,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         omiStreamer.stopStreaming();
       }
 
-      // End session (clean stop)
+      // End session (clean stop via user button)
       if (currentSessionIdRef.current && onSessionEnd) {
-        onSessionEnd(currentSessionIdRef.current);
+        onSessionEnd(currentSessionIdRef.current, undefined, 'manual_stop');
         currentSessionIdRef.current = null;
       }
     } catch (err) {
@@ -568,7 +573,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
       // End session with error
       if (currentSessionIdRef.current && onSessionEnd) {
-        onSessionEnd(currentSessionIdRef.current, errorMessage);
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
         currentSessionIdRef.current = null;
       }
     }

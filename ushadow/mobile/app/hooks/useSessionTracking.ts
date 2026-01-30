@@ -119,17 +119,27 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
    * Called when WebSocket connection drops and doesn't reconnect.
    * Keeps ALL sessions (including failed ones) for debugging conversation drops.
    */
-  const endSession = useCallback((sessionId: string, error?: string) => {
+  const endSession = useCallback((sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout') => {
     const endTime = new Date();
 
     setSessions(prev => prev.map(session => {
       if (session.id === sessionId) {
         const durationSeconds = Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000);
+        // Infer end reason if not provided
+        let finalEndReason = endReason;
+        if (!finalEndReason) {
+          if (error) {
+            finalEndReason = error.toLowerCase().includes('timeout') ? 'timeout' : 'error';
+          } else {
+            finalEndReason = 'manual_stop';
+          }
+        }
         return {
           ...session,
           endTime,
           durationSeconds,
           error,
+          endReason: finalEndReason,
         };
       }
       return session;
@@ -139,7 +149,7 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
       setActiveSession(null);
     }
 
-    console.log('[SessionTracking] Ended session:', sessionId, error ? `Error: ${error}` : 'Clean stop');
+    console.log('[SessionTracking] Ended session:', sessionId, endReason || 'unknown', error ? `Error: ${error}` : '');
   }, [activeSession]);
 
   /**
