@@ -24,6 +24,8 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     open_in_vscode, open_in_vscode_with_tmux, remove_worktree, delete_environment,
     get_tmux_sessions, kill_tmux_window, kill_tmux_server,
     open_tmux_in_terminal, capture_tmux_pane, get_claude_status,
+    // Kanban ticket commands
+    create_ticket_worktree, attach_ticket_to_worktree, get_tickets_for_tmux_window, get_ticket_tmux_info,
     // Settings
     load_launcher_settings, save_launcher_settings, write_credentials_to_worktree,
     // Prerequisites config (from prerequisites_config.rs)
@@ -164,6 +166,11 @@ fn main() {
             open_tmux_in_terminal,
             capture_tmux_pane,
             get_claude_status,
+            // Kanban ticket integration
+            create_ticket_worktree,
+            attach_ticket_to_worktree,
+            get_tickets_for_tmux_window,
+            get_ticket_tmux_info,
             // Settings
             load_launcher_settings,
             save_launcher_settings,

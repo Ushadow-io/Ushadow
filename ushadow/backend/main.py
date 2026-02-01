@@ -19,11 +19,12 @@ from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.models.user import User  # Beanie document model
+from src.models.kanban import Ticket, Epic  # Kanban models
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
 from src.routers import kubernetes, tailscale, unodes, docker
-from src.routers import github_import
+from src.routers import github_import, kanban
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -122,7 +123,7 @@ async def lifespan(app: FastAPI):
     app.state.db = db
 
     # Initialize Beanie ODM with document models
-    await init_beanie(database=db, document_models=[User])
+    await init_beanie(database=db, document_models=[User, Ticket, Epic])
     logger.info("✓ Beanie ODM initialized")
     
     # Create admin user if explicitly configured in secrets.yaml
@@ -185,6 +186,7 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
 app.include_router(github_import.router, prefix="/api/github-import", tags=["github-import"])
+app.include_router(kanban.router, tags=["kanban"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)

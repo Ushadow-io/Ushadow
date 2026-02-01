@@ -11,6 +11,7 @@ mod settings;
 mod bundled;  // Bundled resources locator
 pub mod worktree;
 pub mod platform;  // Platform abstraction layer
+mod kanban;  // Kanban ticket integration
 // Embedded terminal module (PTY-based) - DEPRECATED in favor of native terminal integration (iTerm2/Terminal.app/gnome-terminal)
 // pub mod terminal;
 mod config_commands;
@@ -27,6 +28,7 @@ pub use generic_installer::*;  // Export generic installer functions
 pub use permissions::*;
 pub use settings::*;
 pub use worktree::*;
+pub use kanban::*;  // Export kanban ticket functions
 // pub use terminal::*;
 pub use config_commands::*;
 pub use container_discovery::*;
