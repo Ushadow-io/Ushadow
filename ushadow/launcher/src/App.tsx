@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, type PlatformPrerequisitesConfig } from './hooks/useTauri'
+import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, type PlatformPrerequisitesConfig, type EnvironmentConflict } from './hooks/useTauri'
 import { useAppStore, type BranchType } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
@@ -11,9 +11,11 @@ import { EnvironmentsPanel } from './components/EnvironmentsPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
+import { EnvironmentConflictDialog } from './components/EnvironmentConflictDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
+import { ProjectManager } from './components/ProjectManager'
 import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
 import { getColors } from './utils/colors'
 
@@ -33,6 +35,7 @@ function App() {
     setProjectRoot,
     worktreesDir,
     setWorktreesDir,
+    multiProjectMode,
   } = useAppStore()
 
   // State
@@ -55,6 +58,8 @@ function App() {
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
   const [isResizing, setIsResizing] = useState(false)
+  const [environmentConflict, setEnvironmentConflict] = useState<EnvironmentConflict | null>(null)
+  const [pendingEnvCreation, setPendingEnvCreation] = useState<{ name: string; branch: string } | null>(null)
 
   // Window focus detection for smart polling
   const isWindowFocused = useWindowFocus()
@@ -942,6 +947,24 @@ function App() {
       return
     }
 
+    // Check for conflicts first
+    try {
+      const conflict = await tauri.checkEnvironmentConflict(projectRoot, name)
+      if (conflict) {
+        // Check if the environment is actually running (from discovery data)
+        const env = discovery?.environments.find(e => e.name === name)
+        conflict.is_running = env?.running || false
+
+        // Show conflict dialog
+        setEnvironmentConflict(conflict)
+        setPendingEnvCreation({ name, branch })
+        return
+      }
+    } catch (err) {
+      log(`Failed to check for conflicts: ${err}`, 'warning')
+      // Continue anyway
+    }
+
     const envPath = `${worktreesDir}/${name}`
 
     // Add to creating environments list
@@ -1013,6 +1036,120 @@ function App() {
       log(`Failed to create worktree: ${err}`, 'error')
       setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
     }
+  }
+
+  // Conflict resolution handlers
+  const handleConflictStartExisting = async () => {
+    if (!environmentConflict) return
+
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+    log(`Starting existing environment "${environmentConflict.name}"...`, 'step')
+
+    // Start the existing environment
+    await handleStartEnv(environmentConflict.name, environmentConflict.path)
+  }
+
+  const handleConflictSwitchBranch = async () => {
+    if (!environmentConflict || !pendingEnvCreation) return
+
+    const { name, branch } = pendingEnvCreation
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+
+    log(`Switching "${name}" to branch "${branch}"...`, 'step')
+
+    try {
+      // Stop if running
+      if (environmentConflict.is_running) {
+        log('Stopping environment before switching branch...', 'info')
+        await tauri.stopEnvironment(name)
+      }
+
+      // Checkout the new branch
+      log(`Checking out branch ${branch}...`, 'info')
+      await tauri.checkoutBranch(environmentConflict.path, branch)
+      log(`✓ Switched to ${branch}`, 'success')
+
+      // Start the environment
+      await handleStartEnv(name, environmentConflict.path)
+    } catch (err) {
+      log(`Failed to switch branch: ${err}`, 'error')
+    }
+  }
+
+  const handleConflictDeleteAndRecreate = async () => {
+    if (!environmentConflict || !pendingEnvCreation) return
+
+    const { name, branch } = pendingEnvCreation
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+
+    log(`Deleting and recreating "${name}"...`, 'step')
+
+    try {
+      // Delete the old environment (stops containers, removes worktree, closes tmux)
+      await tauri.deleteEnvironment(projectRoot, name)
+      log(`✓ Old environment deleted`, 'success')
+
+      // Wait a moment for cleanup
+      await new Promise(r => setTimeout(r, 1000))
+
+      // Now create the new environment (reuse existing logic from handleNewEnvWorktree)
+      const envPath = `${worktreesDir}/${name}`
+      setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
+      log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
+
+      if (dryRunMode) {
+        log(`[DRY RUN] Would create worktree "${name}" for branch "${branch}"`, 'warning')
+        setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting' } : e))
+        await new Promise(r => setTimeout(r, 2000))
+        log(`[DRY RUN] Worktree environment "${name}" created`, 'success')
+      } else {
+        log(`Creating git worktree at ${envPath}...`, 'info')
+        const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch || undefined, true)
+        log(`✓ Worktree created at ${worktree.path}`, 'success')
+
+        // Write credentials if configured
+        try {
+          const settings = await tauri.loadLauncherSettings()
+          if (settings.default_admin_email && settings.default_admin_password) {
+            log(`Writing admin credentials to secrets.yaml...`, 'info')
+            await tauri.writeCredentialsToWorktree(
+              worktree.path,
+              settings.default_admin_email,
+              settings.default_admin_password,
+              settings.default_admin_name || undefined
+            )
+            log(`✓ Admin credentials configured`, 'success')
+          }
+        } catch (err) {
+          log(`Could not write credentials: ${err}`, 'warning')
+        }
+
+        setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting', path: worktree.path } : e))
+
+        // Start the environment
+        log(`Starting environment "${name}"...`, 'step')
+        await handleStartEnv(name, worktree.path)
+
+        log(`✓ Worktree environment "${name}" created and started!`, 'success')
+      }
+
+      setTimeout(() => {
+        setCreatingEnvs(prev => prev.filter(e => e.name !== name))
+      }, 15000)
+
+      await refreshDiscovery()
+    } catch (err) {
+      log(`Failed to delete and recreate: ${err}`, 'error')
+      setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
+    }
+  }
+
+  const handleConflictCancel = () => {
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
   }
 
   // Project setup handler - saves paths, doesn't clone yet
@@ -1466,9 +1603,19 @@ function App() {
             <div className="text-center mb-4">
               <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
               <p className="text-text-secondary">
-                Install prerequisites and configure your single environment
+                {multiProjectMode
+                  ? 'Manage multiple projects with independent configurations'
+                  : 'Install prerequisites and configure your single environment'
+                }
               </p>
             </div>
+
+            {/* Multi-Project Manager - shown when feature flag is enabled */}
+            {multiProjectMode && (
+              <div className="mb-4">
+                <ProjectManager />
+              </div>
+            )}
 
             {/* Prerequisites and Infrastructure Side-by-Side */}
             <div className="grid grid-cols-2 gap-4">
@@ -1618,6 +1765,16 @@ function App() {
       <SettingsDialog
         isOpen={showSettingsDialog}
         onClose={() => setShowSettingsDialog(false)}
+      />
+
+      {/* Environment Conflict Dialog */}
+      <EnvironmentConflictDialog
+        conflict={environmentConflict}
+        newBranch={pendingEnvCreation?.branch || ''}
+        onStartExisting={handleConflictStartExisting}
+        onSwitchBranch={handleConflictSwitchBranch}
+        onDeleteAndRecreate={handleConflictDeleteAndRecreate}
+        onCancel={handleConflictCancel}
       />
     </div>
   )

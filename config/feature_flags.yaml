@@ -85,6 +85,16 @@ flags:
       resolution"
     type: release
 
+  # =============================================================================
+  # Launcher Features
+  # =============================================================================
+
+  # Multi-Project Launcher - Manage multiple codebases beyond ushadow
+  multi_project_launcher:
+    enabled: false
+    description: "Multi-project mode in launcher - manage multiple projects with independent configs"
+    type: experiment
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false

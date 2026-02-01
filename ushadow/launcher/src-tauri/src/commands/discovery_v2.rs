@@ -123,6 +123,8 @@ pub async fn discover_environments_v2(
             tailscale_active,
             containers: container_names,
             is_worktree: true,
+            created_at: None,  // TODO: Get actual creation timestamp from git worktree
+            base_branch: None,  // TODO: Determine base branch (main/dev) from worktree
         });
     }
 
