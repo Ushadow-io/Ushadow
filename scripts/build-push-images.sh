@@ -93,6 +93,12 @@ case "$SERVICE" in
             "chronicle/backends/advanced/Dockerfile" \
             "chronicle-backend"
 
+        # Build workers (same Dockerfile as backend, different tag)
+        build_and_push \
+            "chronicle/backends/advanced" \
+            "chronicle/backends/advanced/Dockerfile" \
+            "chronicle-workers"
+
         # Build webui
         build_and_push \
             "chronicle/backends/advanced/webui" \
@@ -102,6 +108,7 @@ case "$SERVICE" in
         info "============================================="
         info "Chronicle images pushed successfully!"
         info "  ${REGISTRY}/chronicle-backend:${TAG}"
+        info "  ${REGISTRY}/chronicle-workers:${TAG}"
         info "  ${REGISTRY}/chronicle-webui:${TAG}"
         info "============================================="
         ;;
@@ -124,17 +131,37 @@ case "$SERVICE" in
         info "============================================="
         ;;
 
+    openmemory)
+        info "============================================="
+        info "Building OpenMemory (tag: ${TAG})"
+        info "============================================="
+        ensure_builder
+
+        # Build server
+        build_and_push \
+            "openmemory/server" \
+            "openmemory/server/Dockerfile" \
+            "openmemory-server"
+
+        info "============================================="
+        info "OpenMemory images pushed successfully!"
+        info "  ${REGISTRY}/openmemory-server:${TAG}"
+        info "============================================="
+        ;;
+
     *)
         echo "Usage: $0 <service> [tag]"
         echo ""
         echo "Available services:"
-        echo "  chronicle  - Build Chronicle backend + webui"
-        echo "  mycelia    - Build Mycelia backend"
+        echo "  chronicle   - Build Chronicle backend + workers + webui"
+        echo "  mycelia     - Build Mycelia backend"
+        echo "  openmemory  - Build OpenMemory server"
         echo ""
         echo "Examples:"
         echo "  $0 chronicle"
         echo "  $0 chronicle v1.0.0"
         echo "  $0 mycelia latest"
+        echo "  $0 openmemory v2.0.0"
         echo ""
         echo "Prerequisites:"
         echo "  1. Docker with buildx support"

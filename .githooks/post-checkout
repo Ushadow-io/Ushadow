@@ -34,4 +34,12 @@ SPARSE
     fi
 fi
 
+# Configure openmemory (no exclusions needed currently)
+if [ -d "openmemory" ]; then
+    OPENMEMORY_GIT="$(cd openmemory && git rev-parse --git-dir 2>/dev/null || echo "")"
+    if [ -n "$OPENMEMORY_GIT" ] && [ -d "$OPENMEMORY_GIT" ]; then
+        echo "  📁 Openmemory configured (no exclusions)"
+    fi
+fi
+
 echo "✅ Sparse checkout configured successfully"
