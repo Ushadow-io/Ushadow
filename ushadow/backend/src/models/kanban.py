@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Optional, List
 
 from beanie import Document, PydanticObjectId, Link
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ class Ticket(Document):
 
 # Pydantic schemas for API requests/responses
 
-class EpicCreate(ConfigDict):
+class EpicCreate(BaseModel):
     """Schema for creating a new epic."""
     title: str
     description: Optional[str] = None
@@ -198,7 +198,7 @@ class EpicCreate(ConfigDict):
     project_id: Optional[str] = None
 
 
-class EpicRead(ConfigDict):
+class EpicRead(BaseModel):
     """Schema for reading epic data."""
     id: PydanticObjectId
     title: str
@@ -211,7 +211,7 @@ class EpicRead(ConfigDict):
     updated_at: datetime
 
 
-class EpicUpdate(ConfigDict):
+class EpicUpdate(BaseModel):
     """Schema for updating epic data."""
     title: Optional[str] = None
     description: Optional[str] = None
@@ -219,7 +219,7 @@ class EpicUpdate(ConfigDict):
     branch_name: Optional[str] = None
 
 
-class TicketCreate(ConfigDict):
+class TicketCreate(BaseModel):
     """Schema for creating a new ticket."""
     title: str
     description: Optional[str] = None
@@ -232,7 +232,7 @@ class TicketCreate(ConfigDict):
     assigned_to: Optional[str] = None
 
 
-class TicketRead(ConfigDict):
+class TicketRead(BaseModel):
     """Schema for reading ticket data."""
     id: PydanticObjectId
     title: str
@@ -254,7 +254,7 @@ class TicketRead(ConfigDict):
     updated_at: datetime
 
 
-class TicketUpdate(ConfigDict):
+class TicketUpdate(BaseModel):
     """Schema for updating ticket data."""
     title: Optional[str] = None
     description: Optional[str] = None
