@@ -1,0 +1,3 @@
+[submodule "chronicle"]
+	path = chronicle
+	url = https://github.com/Ushadow-io/chronicle.git
