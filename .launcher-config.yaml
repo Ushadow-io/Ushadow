@@ -1,0 +1,80 @@
+# Ushadow Launcher Configuration
+# This file defines how the launcher manages environments for this project
+
+project:
+  name: "ushadow"
+  display_name: "Ushadow"
+
+# Prerequisites required for this project
+prerequisites:
+  required:
+    - docker
+    - git
+    - python3
+  optional:
+    - tailscale
+    - uv
+
+# Environment setup configuration
+setup:
+  # Command to run when creating a new environment
+  # Available variables: {ENV_NAME}, {PORT_OFFSET}, {WORKING_DIR}
+  command: "uv run --with pyyaml setup/run.py --dev --quick --skip-admin"
+
+  # Environment variables passed during setup
+  env_vars:
+    - ENV_NAME
+    - PORT_OFFSET
+    - USHADOW_NO_BROWSER=1
+
+# Docker infrastructure configuration (shared services)
+infrastructure:
+  # Path to infrastructure compose file (relative to project root)
+  compose_file: "compose/docker-compose.infra.yml"
+
+  # Docker Compose project name for infrastructure
+  project_name: "infra"
+
+  # Profile to use when starting infrastructure (optional)
+  profile: "infra"
+
+# Container naming and discovery
+containers:
+  # Naming pattern for environment containers
+  # Variables: {project_name}, {env_name}, {service_name}
+  # Note: {env_name} will be empty for "default" environment
+  naming_pattern: "{project_name}{env_name}-{service_name}"
+
+  # Primary service that exposes the main application port
+  # This service's port is used to calculate other service ports
+  primary_service: "backend"
+
+  # Health check endpoint (relative to primary service)
+  health_endpoint: "/api/unodes/leader/info"
+
+  # Optional: Project prefix for Tailscale hostnames (for multi-project setups)
+  # If not set, Tailscale URLs will be: https://{env}.{tailnet}
+  # If set to "ushadow", URLs will be: https://ushadow-{env}.{tailnet}
+  # tailscale_project_prefix: "ushadow"
+
+# Port management
+ports:
+  # Strategy: "hash" (deterministic from env name) | "sequential" | "random"
+  allocation_strategy: "hash"
+
+  # Base port for primary service (default environment)
+  base_port: 8000
+
+  # Port offset configuration (for hash-based allocation)
+  offset:
+    min: 0
+    max: 500
+    step: 10  # Offsets are multiples of 10: 0, 10, 20, 30...
+
+# Worktree configuration
+worktrees:
+  # Default parent directory for worktrees (expandable via ~)
+  default_parent: "~/repos/worktrees/{project_name}"
+
+  # Optional prefix for branch names (e.g., "env/" creates "env/staging")
+  branch_prefix: ""

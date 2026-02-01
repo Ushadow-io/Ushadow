@@ -25,11 +25,11 @@ from fastapi_users.authentication import (
     JWTStrategy,
 )
 
-from src.config.omegaconf_settings import get_settings_store
+from src.config.omegaconf_settings import get_settings
 from src.models.user import User, UserCreate, get_user_db
 
 logger = logging.getLogger(__name__)
-config = get_settings_store()
+config = get_settings()
 
 # JWT Configuration
 JWT_LIFETIME_SECONDS = 86400  # 24 hours (matches chronicle)
@@ -101,8 +101,8 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         # https://linear.app/ushadow/issue/USH-5/align-container-passwords
         if user.is_superuser:
             try:
-                settings = get_settings_store()
-                await settings.save_to_secrets({
+                settings = get_settings()
+                await settings.update({
                     "admin": {
                         "email": user.email,
                         "password": self._pending_plaintext_password,
@@ -377,8 +377,8 @@ async def create_admin_user_if_needed():
         # read admin.password and admin.password_hash from config/SECRETS/secrets.yaml
         # https://linear.app/ushadow/issue/USH-5/align-container-passwords
         try:
-            settings = get_settings_store()
-            await settings.save_to_secrets({
+            settings = get_settings()
+            await settings.update({
                 "admin": {
                     "email": admin_user.email,
                     "password": ADMIN_PASSWORD,

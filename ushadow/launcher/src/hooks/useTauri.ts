@@ -203,6 +203,12 @@ export const tauri = {
   saveLauncherSettings: (settings: LauncherSettings) => invoke<void>('save_launcher_settings', { settings }),
   writeCredentialsToWorktree: (worktreePath: string, adminEmail: string, adminPassword: string, adminName?: string) =>
     invoke<void>('write_credentials_to_worktree', { worktreePath, adminEmail, adminPassword, adminName }),
+
+  // Configuration management
+  loadProjectConfig: (projectRoot: string) => invoke<LauncherConfig>('load_project_config', { projectRoot }),
+  getCurrentConfig: () => invoke<LauncherConfig | null>('get_current_config'),
+  checkLauncherConfigExists: (projectRoot: string) => invoke<boolean>('check_launcher_config_exists', { projectRoot }),
+  validateConfigFile: (projectRoot: string) => invoke<string>('validate_config_file', { projectRoot }),
 }
 
 // WorktreeInfo type
@@ -241,6 +247,46 @@ export interface ClaudeStatus {
   is_running: boolean
   current_task: string | null
   last_output: string | null
+}
+
+// LauncherConfig type (matches Rust struct)
+export interface LauncherConfig {
+  project: {
+    name: string
+    display_name: string
+  }
+  prerequisites: {
+    required: string[]
+    optional: string[]
+  }
+  setup: {
+    command: string
+    env_vars: string[]
+  }
+  infrastructure: {
+    compose_file: string
+    project_name: string
+    profile?: string
+  }
+  containers: {
+    naming_pattern: string
+    primary_service: string
+    health_endpoint: string
+    tailscale_project_prefix?: string
+  }
+  ports: {
+    allocation_strategy: string
+    base_port: number
+    offset: {
+      min: number
+      max: number
+      step: number
+    }
+  }
+  worktrees: {
+    default_parent: string
+    branch_prefix: string
+  }
 }
 
 export default tauri

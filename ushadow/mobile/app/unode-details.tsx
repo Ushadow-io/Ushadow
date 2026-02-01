@@ -37,8 +37,8 @@ import {
   updateUnodeStreamConfig,
   updateUnodeUrls,
   parseStreamUrl,
-} from './utils/unodeStorage';
-import { getAuthToken, saveAuthToken } from './utils/authStorage';
+} from './_utils/unodeStorage';
+import { getAuthToken, saveAuthToken } from './_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from './services/chronicleApi';

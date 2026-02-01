@@ -17,7 +17,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
-import { UNode } from '../../utils/unodeStorage';
+import { UNode } from '../../_utils/unodeStorage';
 
 export type AuthStatus = 'unknown' | 'checking' | 'authenticated' | 'expired' | 'error';
 

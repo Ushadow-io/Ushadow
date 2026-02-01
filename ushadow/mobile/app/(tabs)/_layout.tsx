@@ -50,12 +50,27 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="conversations"
+        name="chat"
         options={{
-          title: 'Conversations',
+          title: 'Chat',
           tabBarIcon: ({ focused, color, size }) => (
             <Ionicons
-              name={focused ? 'chatbubbles' : 'chatbubbles-outline'}
+              name={focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
+              size={size}
+              color={color}
+              testID="tab-icon-chat"
+            />
+          ),
+          tabBarAccessibilityLabel: 'Chat Tab',
+        }}
+      />
+      <Tabs.Screen
+        name="conversations"
+        options={{
+          title: 'History',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'time' : 'time-outline'}
               size={size}
               color={color}
               testID="tab-icon-conversations"

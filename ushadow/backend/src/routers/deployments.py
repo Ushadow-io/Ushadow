@@ -1,9 +1,10 @@
 """API routes for service deployments."""
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 
 from src.models.deployment import (
     ServiceDefinition,
@@ -14,10 +15,89 @@ from src.models.deployment import (
 )
 from src.services.deployment_manager import get_deployment_manager
 from src.services.auth import get_current_user
+from src.services.unode_manager import get_unode_manager
+from src.services.kubernetes_manager import get_kubernetes_manager
+from src.models.deploy_target import DeployTarget
+from src.models.unode import UNodeType
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/deployments", tags=["deployments"])
+
+
+# =============================================================================
+# Deployment Targets Endpoint
+# =============================================================================
+
+@router.get("/targets", response_model=List[Dict[str, Any]])
+async def list_deployment_targets(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    List all available deployment targets (UNodes + Kubernetes clusters).
+
+    Returns unified DeployTarget format for both local/remote unodes and K8s clusters.
+    Frontend can use this single endpoint instead of separate kubernetes/unodes calls.
+    """
+    from src.utils.deployment_targets import parse_deployment_target_id
+
+    targets = []
+
+    # Get all UNodes (local leader + remote unodes)
+    unode_manager = await get_unode_manager()
+    unodes = await unode_manager.list_unodes()
+
+    for unode in unodes:
+        from src.models.unode import UNodeRole
+        parsed = parse_deployment_target_id(unode.deployment_target_id)
+        is_leader = unode.role == UNodeRole.LEADER
+
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="docker",
+            name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+            identifier=unode.hostname,
+            environment=parsed["environment"],
+            status=unode.status.value if unode.status else "unknown",
+            provider="local" if is_leader else "remote",
+            region=None,
+            is_leader=is_leader,
+            namespace=None,
+            infrastructure=None,
+            raw_metadata=unode.model_dump()
+        )
+        targets.append(target.model_dump())
+
+    # Get all Kubernetes clusters
+    k8s_manager = await get_kubernetes_manager()
+    clusters = await k8s_manager.list_clusters()
+
+    for cluster in clusters:
+        parsed = parse_deployment_target_id(cluster.deployment_target_id)
+        # Get infrastructure from default namespace if available
+        infra = cluster.infra_scans.get(cluster.namespace, {}) if cluster.infra_scans else {}
+
+        # Try to infer provider from labels or use default
+        provider = cluster.labels.get("provider", "kubernetes")
+        region = cluster.labels.get("region")
+
+        target = DeployTarget(
+            id=cluster.deployment_target_id,
+            type="k8s",
+            name=cluster.name,
+            identifier=cluster.cluster_id,
+            environment=parsed["environment"],
+            status=cluster.status.value if cluster.status else "unknown",
+            provider=provider,
+            region=region,
+            is_leader=None,
+            namespace=cluster.namespace,
+            infrastructure=infra,
+            raw_metadata=cluster.model_dump()
+        )
+        targets.append(target.model_dump())
+
+    return targets
 
 
 # =============================================================================
@@ -108,7 +188,8 @@ async def deploy_service(
     try:
         deployment = await manager.deploy_service(
             data.service_id,
-            data.unode_hostname
+            data.unode_hostname,
+            config_id=data.config_id
         )
         return deployment
     except ValueError as e:

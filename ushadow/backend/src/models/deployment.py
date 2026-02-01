@@ -213,6 +213,7 @@ class DeployRequest(BaseModel):
     """Request to deploy a service to a node."""
     service_id: str
     unode_hostname: str
+    config_id: Optional[str] = Field(None, description="ServiceConfig ID with env var overrides")
 
 
 class ServiceDefinitionCreate(BaseModel):

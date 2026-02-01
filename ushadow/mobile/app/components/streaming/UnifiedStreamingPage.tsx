@@ -42,7 +42,7 @@ import {
   SavedOmiDevice,
   getSavedOmiDevices,
   removeOmiDevice,
-} from '../../utils/omiDeviceStorage';
+} from '../../_utils/omiDeviceStorage';
 import {
   UNode,
   getUnodes,
@@ -51,8 +51,8 @@ import {
   getActiveUnodeId,
   setActiveUnode as setActiveUnodeStorage,
   parseStreamUrl,
-} from '../../utils/unodeStorage';
-import { appendTokenToUrl, saveAuthToken } from '../../utils/authStorage';
+} from '../../_utils/unodeStorage';
+import { appendTokenToUrl, saveAuthToken } from '../../_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from '../../services/chronicleApi';

@@ -122,12 +122,16 @@ fn find_available_ports(default_backend: u16, default_webui: u16) -> (u16, u16) 
 /// Application state
 pub struct AppState {
     pub project_root: Mutex<Option<String>>,
+    pub containers_running: Mutex<bool>,
+    pub config: Mutex<Option<crate::config::LauncherConfig>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             project_root: Mutex::new(None),
+            containers_running: Mutex::new(false),
+            config: Mutex::new(None),
         }
     }
 }

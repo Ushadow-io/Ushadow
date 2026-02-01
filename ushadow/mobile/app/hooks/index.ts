@@ -11,6 +11,9 @@ export type { UseAudioStreamer } from './useAudioStreamer';
 export { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
 export type { UsePhoneAudioRecorder } from './usePhoneAudioRecorder';
 
+export { useSpeechToText } from './useSpeechToText';
+export type { UseSpeechToTextOptions, UseSpeechToTextReturn } from './useSpeechToText';
+
 export { useStreaming } from './useStreaming';
 export type { UseStreaming } from './useStreaming';
 

@@ -731,7 +731,7 @@ class DockerManager:
         Returns:
             List of port configurations with 'port', 'env_var', and 'source' keys
         """
-        from src.config.omegaconf_settings import get_settings_store
+        from src.config.omegaconf_settings import get_settings
 
         service_config = self.MANAGEABLE_SERVICES.get(service_name, {})
         ports = service_config.get('ports', [])
@@ -740,7 +740,7 @@ class DockerManager:
             ports = metadata.get('ports', [])
 
         # Load port overrides from services.{name}.ports
-        settings = get_settings_store()
+        settings = get_settings()
         config_key = service_name.replace("-", "_")
         port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
 
@@ -908,9 +908,11 @@ class DockerManager:
         """
         Build environment variables from user's saved compose configuration.
 
-        For compose-discovered services, users configure env vars via the
-        /api/compose/services/{id}/env endpoint. This method resolves those
-        configurations to actual values.
+        Uses the entity-based Settings API (v2) to resolve values from all sources:
+        - Service-specific config
+        - Capability providers
+        - Global settings
+        - Defaults
 
         Args:
             service_name: Name of the service (docker_service_name)
@@ -918,9 +920,9 @@ class DockerManager:
         Returns:
             Dict of env var name -> resolved value
         """
-        from src.config.omegaconf_settings import get_settings_store
+        from src.config.omegaconf_settings import get_settings
 
-        settings = get_settings_store()
+        settings = get_settings()
         compose_registry = get_compose_registry()
 
         # Find the service in compose registry
@@ -928,39 +930,27 @@ class DockerManager:
         if not service:
             return {}
 
-        # Load saved configuration
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await settings.get(config_key)
-        saved_config = saved_config or {}
+        # Use entity-based Settings API to resolve all env vars
+        # This automatically checks: service config, capabilities, providers, settings, defaults
+        resolutions = await settings.for_service(service.service_id)
 
         resolved = {}
 
         for env_var in service.all_env_vars:
-            config = saved_config.get(env_var.name, {})
-            source = config.get("source", "default")
-            setting_path = config.get("setting_path")
-            literal_value = config.get("value")
+            resolution = resolutions.get(env_var.name)
 
-            # Use settings.resolve_env_value as single source of truth
-            # This ensures UI display and container startup use identical resolution
-            value = await settings.resolve_env_value(
-                source=source,
-                setting_path=setting_path,
-                literal_value=literal_value,
-                default_value=env_var.default_value,
-                env_name=env_var.name
-            )
-
-            if value:
-                resolved[env_var.name] = str(value)
-            elif env_var.is_required and source != "default":
+            if resolution and resolution.found and resolution.value:
+                resolved[env_var.name] = str(resolution.value)
+                logger.debug(
+                    f"Resolved {env_var.name} from {resolution.source.value}: {mask_if_secret(env_var.name, str(resolution.value))}"
+                )
+            elif env_var.is_required:
                 logger.warning(
-                    f"Service {service_name}: env var {env_var.name} "
-                    f"has no value for source={source}"
+                    f"Service {service_name}: required env var {env_var.name} has no value"
                 )
 
         logger.info(
-            f"Resolved {len(resolved)} env vars for {service_name} from compose config"
+            f"Resolved {len(resolved)} env vars for {service_name} using Settings API v2"
         )
         return resolved
 
@@ -1067,9 +1057,44 @@ class DockerManager:
                             container_env[key] = str(value)
                             subprocess_env[key] = str(value)
 
+                # Apply ServiceConfig-specific env var overrides (highest priority)
+                if config_id:
+                    from src.services.service_config_manager import get_service_config_manager
+                    sc_manager = get_service_config_manager()
+                    service_config = sc_manager.get_service_config(config_id)
+
+                    if service_config and service_config.config.values:
+                        for key, value in service_config.config.values.items():
+                            # Skip internal metadata fields (prefixed with _)
+                            if key.startswith('_'):
+                                continue
+
+                            # Handle _from_setting references
+                            if isinstance(value, dict) and '_from_setting' in value:
+                                # Resolve the setting path
+                                from src.config.omegaconf_settings import get_settings
+                                settings = get_settings()
+                                setting_path = value['_from_setting']
+                                resolved_value = await settings.get(setting_path)
+                                if resolved_value:
+                                    value = str(resolved_value)
+                                else:
+                                    continue
+
+                            # Apply the override
+                            if key in container_env and str(container_env[key]) != str(value):
+                                old_val = mask_if_secret(key, container_env[key])
+                                new_val = mask_if_secret(key, value)
+                                logger.info(
+                                    f"[ServiceConfig Override] {key}: {old_val} -> {new_val} "
+                                    f"(config_id={config_id})"
+                                )
+                            container_env[key] = str(value)
+                            subprocess_env[key] = str(value)
+
                 # Apply port overrides from services.{name}.ports
-                from src.config.omegaconf_settings import get_settings_store
-                settings = get_settings_store()
+                from src.config.omegaconf_settings import get_settings
+                settings = get_settings()
                 config_key = service_name.replace("-", "_")
                 port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
                 for env_var, port in port_overrides.items():

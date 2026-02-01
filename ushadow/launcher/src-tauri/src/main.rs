@@ -4,10 +4,11 @@
 )]
 
 mod commands;
+mod config;
 mod models;
 
 use commands::{AppState, check_prerequisites, discover_environments, get_os_type,
-    discover_environments_with_config,
+    discover_environments_with_config, discover_environments_v2,
     start_containers, stop_containers, get_container_status,
     start_infrastructure, stop_infrastructure, restart_infrastructure,
     start_environment, stop_environment, check_ports,
@@ -29,6 +30,8 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     get_prerequisites_config, get_platform_prerequisites_config,
     // Generic installer (from generic_installer.rs) - replaces all platform-specific installers
     install_prerequisite, start_prerequisite,
+    // Config commands (from 4bdc-ushadow-launchge)
+    load_project_config, get_current_config, check_launcher_config_exists, validate_config_file,
     // Permissions
     check_install_path};
 use tauri::{
@@ -138,6 +141,7 @@ fn main() {
             get_base_branch,
             // Worktree management
             discover_environments_with_config,
+            discover_environments_v2,
             list_worktrees,
             list_git_branches,
             check_worktree_exists,
@@ -170,6 +174,11 @@ fn main() {
             // Generic installer
             install_prerequisite,
             start_prerequisite,
+            // Config management (from 4bdc-ushadow-launchge)
+            load_project_config,
+            get_current_config,
+            check_launcher_config_exists,
+            validate_config_file,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

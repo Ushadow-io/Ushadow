@@ -5,14 +5,17 @@ Environment variables are read from YAML config files, not from a separate Infra
 """
 
 from .omegaconf_settings import (
-    # Main API
+    # Primary API
+    get_settings,
+    Settings,
+    Resolution,
+    Source,
+    Suggestion,
+    SettingSuggestion,
+    # Low-level store (internal, prefer get_settings())
     get_settings_store,
     SettingsStore,
-    # Backward compatibility aliases
-    get_omegaconf_settings,
-    OmegaConfSettingsManager,
     # Helpers
-    SettingSuggestion,
     infer_setting_type,
     categorize_setting,
     mask_secret_value,
@@ -28,15 +31,17 @@ from .secrets import (
 )
 
 __all__ = [
-    # Settings store (YAML files)
+    # Primary API
+    "get_settings",
+    "Settings",
+    "Resolution",
+    "Source",
+    "Suggestion",
+    "SettingSuggestion",
+    # Low-level store (internal)
     "get_settings_store",
     "SettingsStore",
-    # Backward compatibility aliases
-    "get_omegaconf_settings",
-    "OmegaConfSettingsManager",
     # Helpers
-    "SettingSuggestion",
-    # Setting helpers
     "infer_setting_type",
     "categorize_setting",
     "mask_secret_value",
