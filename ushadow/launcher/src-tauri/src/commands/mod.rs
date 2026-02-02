@@ -16,6 +16,7 @@ pub mod platform;  // Platform abstraction layer
 mod config_commands;
 mod container_discovery;
 mod port_utils;
+mod env_scanner;
 
 pub use docker::*;
 pub use discovery::*;
@@ -31,3 +32,4 @@ pub use worktree::*;
 pub use config_commands::*;
 pub use container_discovery::*;
 pub use port_utils::*;
+pub use env_scanner::*;

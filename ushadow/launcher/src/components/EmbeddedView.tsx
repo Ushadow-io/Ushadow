@@ -1,4 +1,5 @@
-import { X, ExternalLink, RefreshCw, ArrowLeft, Terminal } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { X, ExternalLink, RefreshCw, ArrowLeft, Terminal, AlertCircle, Loader2 } from 'lucide-react'
 import { tauri } from '../hooks/useTauri'
 
 interface EmbeddedViewProps {
@@ -10,13 +11,38 @@ interface EmbeddedViewProps {
 }
 
 export function EmbeddedView({ url, envName, envColor, envPath, onClose }: EmbeddedViewProps) {
+  const [iframeError, setIframeError] = useState(false)
+  const [iframeLoading, setIframeLoading] = useState(true)
+
   // Add launcher query param so frontend knows to hide footer
+  // Add timestamp to force reload and avoid cookie conflicts
   const displayUrl = url
+  const timestamp = Date.now()
   const iframeUrl = url
     ? url.includes('?')
-      ? `${url}&launcher=true`
-      : `${url}?launcher=true`
+      ? `${url}&launcher=true&_t=${timestamp}`
+      : `${url}?launcher=true&_t=${timestamp}`
     : ''
+
+  // Reset error state when environment changes
+  useEffect(() => {
+    setIframeError(false)
+    setIframeLoading(true)
+    console.log(`[EmbeddedView] Loading environment: ${envName}`)
+    console.log(`[EmbeddedView] URL: ${iframeUrl}`)
+  }, [envName, iframeUrl])
+
+  const handleIframeLoad = () => {
+    console.log(`[EmbeddedView] Iframe loaded successfully for ${envName}`)
+    setIframeLoading(false)
+    setIframeError(false)
+  }
+
+  const handleIframeError = () => {
+    console.error(`[EmbeddedView] Iframe failed to load for ${envName}`)
+    setIframeLoading(false)
+    setIframeError(true)
+  }
 
   const handleOpenExternal = () => {
     tauri.openBrowser(displayUrl)
@@ -122,13 +148,37 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
 
       {/* iframe container */}
       <div className="flex-1 relative">
+        {iframeLoading && !iframeError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-900 z-10">
+            <Loader2 className="w-16 h-16 text-primary-400 animate-spin mb-4" />
+            <p className="text-lg font-semibold text-text-primary mb-2">Loading {envName}...</p>
+            <p className="text-sm text-text-muted font-mono">{displayUrl}</p>
+          </div>
+        )}
+        {iframeError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-900 z-10">
+            <AlertCircle className="w-16 h-16 text-error-400 mb-4" />
+            <p className="text-lg font-semibold text-text-primary mb-2">Failed to load {envName}</p>
+            <p className="text-sm text-text-muted mb-4 font-mono">{displayUrl}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Reload Page
+            </button>
+          </div>
+        )}
         <iframe
+          key={envName}
           id="embedded-iframe"
           src={iframeUrl}
           className="absolute inset-0 w-full h-full border-0"
           title={`${envName} environment`}
           data-testid="embedded-iframe"
           allow="microphone; camera; autoplay; clipboard-write"
+          onLoad={handleIframeLoad}
+          onError={handleIframeError}
         />
       </div>
     </div>

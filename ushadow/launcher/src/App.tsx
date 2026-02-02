@@ -7,6 +7,7 @@ import { writeText, readText } from '@tauri-apps/api/clipboard'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
+import { InfraConfigPanel } from './components/InfraConfigPanel'
 import { EnvironmentsPanel } from './components/EnvironmentsPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
@@ -36,7 +37,16 @@ function App() {
     worktreesDir,
     setWorktreesDir,
     multiProjectMode,
+    projects,
+    activeProjectId,
   } = useAppStore()
+
+  // Get active project in multi-project mode, or use legacy projectRoot
+  const activeProject = multiProjectMode && activeProjectId
+    ? projects.find(p => p.id === activeProjectId)
+    : null
+  const effectiveProjectRoot = activeProject?.rootPath || projectRoot
+  const effectiveWorktreesDir = activeProject?.worktreesPath || worktreesDir
 
   // State
   const [platform, setPlatform] = useState<string>('')
@@ -67,6 +77,40 @@ function App() {
   // Tmux monitoring for agent status (only when window is focused and worktrees exist)
   const environmentNames = discovery?.environments.map(e => e.name) ?? []
   const tmuxStatuses = useTmuxMonitoring(environmentNames, isWindowFocused && environmentNames.length > 0)
+
+  // Infrastructure service selection
+  const [selectedInfraServices, setSelectedInfraServices] = useState<string[]>([])
+
+  // Auto-select running infrastructure services
+  useEffect(() => {
+    if (discovery?.infrastructure) {
+      const runningServiceIds = discovery.infrastructure
+        .filter(service => service.running)
+        .map(service => service.name)
+
+      // Only update if the running services have changed
+      setSelectedInfraServices(prev => {
+        const prevSet = new Set(prev)
+        const newSet = new Set(runningServiceIds)
+
+        // Check if sets are different
+        if (prevSet.size !== newSet.size) return runningServiceIds
+        for (const id of runningServiceIds) {
+          if (!prevSet.has(id)) return runningServiceIds
+        }
+
+        return prev // No change needed
+      })
+    }
+  }, [discovery?.infrastructure])
+
+  const handleToggleInfraService = (serviceId: string) => {
+    setSelectedInfraServices(prev =>
+      prev.includes(serviceId)
+        ? prev.filter(id => id !== serviceId)
+        : [...prev, serviceId]
+    )
+  }
 
   const logIdRef = useRef(0)
   const lastStateRef = useRef<string>('')
@@ -382,6 +426,16 @@ function App() {
 
     return () => clearInterval(interval)
   }, [refreshPrerequisites, refreshDiscovery, isWindowFocused, projectRoot])
+
+  // Sync active project root to Rust backend when it changes (multi-project mode)
+  useEffect(() => {
+    if (effectiveProjectRoot && effectiveProjectRoot !== projectRoot) {
+      console.log('[Multi-Project] Syncing active project to backend:', effectiveProjectRoot)
+      tauri.setProjectRoot(effectiveProjectRoot).catch(err => {
+        console.error('Failed to sync project root to backend:', err)
+      })
+    }
+  }, [effectiveProjectRoot, projectRoot])
 
   // Install handlers
   const handleInstall = async (item: string) => {
@@ -798,7 +852,7 @@ function App() {
     log(`Deleting environment "${envName}"...`, 'step')
 
     try {
-      const result = await tauri.deleteEnvironment(projectRoot, envName)
+      const result = await tauri.deleteEnvironment(effectiveProjectRoot, envName)
       log(result, 'success')
       log(`✓ Environment "${envName}" deleted`, 'success')
 
@@ -837,7 +891,7 @@ function App() {
     // Force lowercase to avoid Docker Compose naming issues
     name = name.toLowerCase()
 
-    const envPath = `${projectRoot}/../${name}` // Expected clone location
+    const envPath = `${effectiveProjectRoot}/../${name}` // Expected clone location
     const modeLabel = serverMode === 'dev' ? 'hot reload' : 'production'
 
     // Check port availability in dev mode (non-quick launch)
@@ -894,17 +948,17 @@ function App() {
     name = name.toLowerCase()
     branch = branch.toLowerCase()
 
-    if (!worktreesDir) {
+    if (!effectiveWorktreesDir) {
       log('Worktrees directory not configured', 'error')
       throw new Error('Worktrees directory not configured')
     }
 
     log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
-    log(`Project root: ${projectRoot}`, 'info')
-    log(`Worktrees dir: ${worktreesDir}`, 'info')
+    log(`Project root: ${effectiveProjectRoot}`, 'info')
+    log(`Worktrees dir: ${effectiveWorktreesDir}`, 'info')
 
     try {
-      const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch, true)
+      const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch, true)
       log(`✓ Worktree created successfully`, 'success')
       log(`Path: ${worktree.path}`, 'info')
       log(`Branch: ${worktree.branch}`, 'info')
@@ -942,14 +996,14 @@ function App() {
     name = name.toLowerCase()
     branch = branch.toLowerCase()
 
-    if (!worktreesDir) {
+    if (!effectiveWorktreesDir) {
       log('Worktrees directory not configured', 'error')
       return
     }
 
     // Check for conflicts first
     try {
-      const conflict = await tauri.checkEnvironmentConflict(projectRoot, name)
+      const conflict = await tauri.checkEnvironmentConflict(effectiveProjectRoot, name)
       if (conflict) {
         // Check if the environment is actually running (from discovery data)
         const env = discovery?.environments.find(e => e.name === name)
@@ -965,7 +1019,7 @@ function App() {
       // Continue anyway
     }
 
-    const envPath = `${worktreesDir}/${name}`
+    const envPath = `${effectiveWorktreesDir}/${name}`
 
     // Add to creating environments list
     setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
@@ -980,7 +1034,7 @@ function App() {
       } else {
         // Step 1: Create the git worktree with workmux (includes tmux integration)
         log(`Creating git worktree at ${envPath}...`, 'info')
-        const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch || undefined, true)
+        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, true)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
 
         // Step 1.5: Write default admin credentials if configured
@@ -1089,14 +1143,14 @@ function App() {
 
     try {
       // Delete the old environment (stops containers, removes worktree, closes tmux)
-      await tauri.deleteEnvironment(projectRoot, name)
+      await tauri.deleteEnvironment(effectiveProjectRoot, name)
       log(`✓ Old environment deleted`, 'success')
 
       // Wait a moment for cleanup
       await new Promise(r => setTimeout(r, 1000))
 
       // Now create the new environment (reuse existing logic from handleNewEnvWorktree)
-      const envPath = `${worktreesDir}/${name}`
+      const envPath = `${effectiveWorktreesDir}/${name}`
       setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
       log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
 
@@ -1107,7 +1161,7 @@ function App() {
         log(`[DRY RUN] Worktree environment "${name}" created`, 'success')
       } else {
         log(`Creating git worktree at ${envPath}...`, 'info')
-        const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch || undefined, true)
+        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, true)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
 
         // Write credentials if configured
@@ -1484,7 +1538,7 @@ function App() {
             <button
               onClick={() => setAppMode('install')}
               className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'infra' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                appMode === 'install' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
               }`}
               data-testid="nav-install"
             >
@@ -1549,53 +1603,71 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
         {appMode === 'install' ? (
-          /* Install Page - One-Click Launch (Landing Page) */
-          <div className="h-full flex flex-col items-center justify-center">
-            <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
-              <p className="text-text-secondary">
-                Automatically install prerequisites and start Ushadow
-              </p>
-            </div>
+          /* Install Page - Project Configuration */
+          <div className="h-full flex flex-col overflow-y-auto p-8">
+            {multiProjectMode ? (
+              /* Multi-Project Mode - Project Manager */
+              <>
+                <div className="text-center mb-8">
+                  <h2 className="text-2xl font-bold mb-2">Project Management</h2>
+                  <p className="text-text-secondary">
+                    Manage multiple projects with independent configurations
+                  </p>
+                </div>
+                <div className="max-w-4xl mx-auto w-full">
+                  <ProjectManager />
+                </div>
+              </>
+            ) : (
+              /* Single-Project Mode - One-Click Launch */
+              <div className="flex flex-col items-center justify-center flex-1">
+                <div className="text-center mb-8">
+                  <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
+                  <p className="text-text-secondary">
+                    Automatically install prerequisites and start Ushadow
+                  </p>
+                </div>
 
-            {/* Project Folder Display */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
-              <FolderOpen className="w-4 h-4 text-text-muted" />
-              <span className="text-text-muted">Project folder:</span>
-              <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
-                {projectRoot || 'Not set'}
-              </span>
-              <button
-                onClick={() => setShowProjectDialog(true)}
-                className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
-                title="Change folder locations"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                {/* Project Folder Display */}
+                <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
+                  <FolderOpen className="w-4 h-4 text-text-muted" />
+                  <span className="text-text-muted">Project folder:</span>
+                  <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
+                    {projectRoot || 'Not set'}
+                  </span>
+                  <button
+                    onClick={() => setShowProjectDialog(true)}
+                    className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
+                    title="Change folder locations"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
 
-            <button
-              onClick={handleQuickLaunch}
-              disabled={isLaunching}
-              className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
-                isLaunching
-                  ? 'bg-surface-600 cursor-not-allowed'
-                  : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
-              }`}
-              data-testid="quick-launch-button"
-            >
-              {isLaunching ? (
-                <>
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  Launching...
-                </>
-              ) : (
-                <>
-                  <Zap className="w-6 h-6" />
-                  Launch Ushadow
-                </>
-              )}
-            </button>
+                <button
+                  onClick={handleQuickLaunch}
+                  disabled={isLaunching}
+                  className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
+                    isLaunching
+                      ? 'bg-surface-600 cursor-not-allowed'
+                      : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
+                  }`}
+                  data-testid="quick-launch-button"
+                >
+                  {isLaunching ? (
+                    <>
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                      Launching...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-6 h-6" />
+                      Launch Ushadow
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         ) : appMode === 'infra' ? (
           /* Infra Page - Prerequisites & Infrastructure Setup */
@@ -1603,19 +1675,9 @@ function App() {
             <div className="text-center mb-4">
               <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
               <p className="text-text-secondary">
-                {multiProjectMode
-                  ? 'Manage multiple projects with independent configurations'
-                  : 'Install prerequisites and configure your single environment'
-                }
+                Install prerequisites and configure shared infrastructure
               </p>
             </div>
-
-            {/* Multi-Project Manager - shown when feature flag is enabled */}
-            {multiProjectMode && (
-              <div className="mb-4">
-                <ProjectManager />
-              </div>
-            )}
 
             {/* Prerequisites and Infrastructure Side-by-Side */}
             <div className="grid grid-cols-2 gap-4">
@@ -1640,68 +1702,22 @@ function App() {
                 onStop={handleStopInfra}
                 onRestart={handleRestartInfra}
                 isLoading={loadingInfra}
+                selectedServices={selectedInfraServices}
+                onToggleService={handleToggleInfraService}
               />
             </div>
 
-            {/* Single Environment Section for Consumers */}
-            <div className="bg-surface-800 rounded-lg p-6 border border-surface-700">
-              <h3 className="text-lg font-semibold mb-4">Your Environment</h3>
-              {!discovery || discovery.environments.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-text-muted mb-4">No environment created yet</p>
-                  <button
-                    onClick={() => handleNewEnvClone('main', 'dev')}
-                    className="px-6 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors font-medium"
-                  >
-                    Create Main Environment
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {discovery.environments.map(env => (
-                    <div key={env.name} className="flex items-center justify-between p-4 bg-surface-700 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-3 h-3 rounded-full"
-                          style={{ backgroundColor: getColors(env.color || env.name).primary }}
-                        />
-                        <span className="font-medium">{env.name}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${
-                          env.running ? 'bg-success-500/20 text-success-400' : 'bg-surface-600 text-text-muted'
-                        }`}>
-                          {env.status}
-                        </span>
-                      </div>
-                      <div className="flex gap-2">
-                        {env.running ? (
-                          <>
-                            <button
-                              onClick={() => handleOpenInApp(env)}
-                              className="px-3 py-1 rounded bg-primary-500 hover:bg-primary-600 transition-colors text-sm"
-                            >
-                              Open
-                            </button>
-                            <button
-                              onClick={() => handleStopEnv(env.name)}
-                              className="px-3 py-1 rounded bg-surface-600 hover:bg-surface-500 transition-colors text-sm"
-                            >
-                              Stop
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            onClick={() => handleStartEnv(env.name, env.path || undefined)}
-                            className="px-3 py-1 rounded bg-success-500 hover:bg-success-600 transition-colors text-sm"
-                          >
-                            Start
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Infrastructure Configuration */}
+            {effectiveProjectRoot && (
+              <InfraConfigPanel
+                projectRoot={effectiveProjectRoot}
+                selectedInfraServices={selectedInfraServices}
+                onSave={(config) => {
+                  console.log('Infra config saved:', config)
+                  // TODO: Save to backend
+                }}
+              />
+            )}
           </div>
         ) : (
           /* Environments Page - Worktree Management */
@@ -1748,7 +1764,7 @@ function App() {
       {/* New Environment Dialog */}
       <NewEnvironmentDialog
         isOpen={showNewEnvDialog}
-        projectRoot={projectRoot}
+        projectRoot={effectiveProjectRoot}
         onClose={() => setShowNewEnvDialog(false)}
         onLink={handleNewEnvLink}
         onWorktree={handleNewEnvWorktree}

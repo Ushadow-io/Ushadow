@@ -18,7 +18,7 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     get_default_project_dir, check_project_dir, clone_ushadow_repo,
     update_ushadow_repo, get_current_branch, checkout_branch, get_base_branch,
     // Worktree commands
-    list_worktrees, list_git_branches, check_worktree_exists, create_worktree, create_worktree_with_workmux,
+    list_worktrees, list_git_branches, check_worktree_exists, check_environment_conflict, create_worktree, create_worktree_with_workmux,
     merge_worktree_with_rebase, list_tmux_sessions, get_tmux_window_status,
     get_environment_tmux_status, get_tmux_info, ensure_tmux_running, attach_tmux_to_worktree,
     open_in_vscode, open_in_vscode_with_tmux, remove_worktree, delete_environment,
@@ -32,6 +32,10 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     install_prerequisite, start_prerequisite,
     // Config commands (from 4bdc-ushadow-launchge)
     load_project_config, get_current_config, check_launcher_config_exists, validate_config_file,
+    // Environment scanning
+    scan_env_file, scan_all_env_vars,
+    // Infrastructure discovery
+    get_infra_services_from_compose,
     // Permissions
     check_install_path};
 use tauri::{
@@ -145,6 +149,7 @@ fn main() {
             list_worktrees,
             list_git_branches,
             check_worktree_exists,
+            check_environment_conflict,
             create_worktree,
             create_worktree_with_workmux,
             merge_worktree_with_rebase,
@@ -179,6 +184,11 @@ fn main() {
             get_current_config,
             check_launcher_config_exists,
             validate_config_file,
+            // Environment scanning
+            scan_env_file,
+            scan_all_env_vars,
+            // Infrastructure discovery
+            get_infra_services_from_compose,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

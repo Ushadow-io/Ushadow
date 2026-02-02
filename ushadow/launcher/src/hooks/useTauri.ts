@@ -173,6 +173,7 @@ export const tauri = {
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
   listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),
   checkWorktreeExists: (mainRepo: string, branch: string) => invoke<WorktreeInfo | null>('check_worktree_exists', { mainRepo, branch }),
+  checkEnvironmentConflict: (mainRepo: string, envName: string) => invoke<EnvironmentConflict | null>('check_environment_conflict', { mainRepo, envName }),
   createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
     invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
   createWorktreeWithWorkmux: (mainRepo: string, name: string, baseBranch?: string, background?: boolean) =>
@@ -209,6 +210,38 @@ export const tauri = {
   getCurrentConfig: () => invoke<LauncherConfig | null>('get_current_config'),
   checkLauncherConfigExists: (projectRoot: string) => invoke<boolean>('check_launcher_config_exists', { projectRoot }),
   validateConfigFile: (projectRoot: string) => invoke<string>('validate_config_file', { projectRoot }),
+
+  // Environment scanning
+  scanEnvFile: (projectRoot: string) => invoke<DetectedPort[]>('scan_env_file', { projectRoot }),
+  scanAllEnvVars: (projectRoot: string) => invoke<DetectedEnvVar[]>('scan_all_env_vars', { projectRoot }),
+
+  // Infrastructure discovery
+  getInfraServicesFromCompose: () => invoke<ComposeServiceDefinition[]>('get_infra_services_from_compose'),
+}
+
+// DetectedPort type (from env_scanner.rs)
+export interface DetectedPort {
+  name: string
+  default_value: string | null
+  base_port: number | null
+  is_database: boolean
+}
+
+// DetectedEnvVar type (from env_scanner.rs)
+export interface DetectedEnvVar {
+  name: string
+  default_value: string | null
+  is_port: boolean
+  is_database_port: boolean
+  should_append_env_name: boolean
+}
+
+// ComposeServiceDefinition type (from docker-compose parsing)
+export interface ComposeServiceDefinition {
+  id: string              // Service name from compose (e.g., "postgres", "redis")
+  display_name: string    // Human-readable name (e.g., "PostgreSQL", "Redis")
+  default_port: number | null // Primary exposed port
+  profiles: string[]      // Profiles this service belongs to
 }
 
 // WorktreeInfo type
@@ -247,6 +280,14 @@ export interface ClaudeStatus {
   is_running: boolean
   current_task: string | null
   last_output: string | null
+}
+
+// Environment conflict types
+export interface EnvironmentConflict {
+  name: string
+  current_branch: string
+  path: string
+  is_running: boolean
 }
 
 // LauncherConfig type (matches Rust struct)

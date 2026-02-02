@@ -30,8 +30,11 @@ export function ProjectSetupDialog({
   const [worktreesPath, setWorktreesPath] = useState<string | null>(null)
   const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
 
-  const title = 'Configure Folders'
-  const description = 'Select a parent folder. The Ushadow project will be in ushadow/, and worktrees in worktrees/ushadow/.'
+  const isMultiProjectMode = projectName === 'project'
+  const title = isMultiProjectMode ? 'Add Project' : 'Configure Folders'
+  const description = isMultiProjectMode
+    ? 'Select the project folder. Worktrees will be created in ../worktrees/[projectname]/ relative to the project.'
+    : 'Select a parent folder. The Ushadow project will be in ushadow/, and worktrees in worktrees/ushadow/.'
 
   // Reset when dialog closes
   useEffect(() => {
@@ -43,22 +46,58 @@ export function ProjectSetupDialog({
   // Calculate the full install path and worktrees path using cross-platform path joining
   useEffect(() => {
     if (parentPath) {
-      Promise.all([
-        join(parentPath, projectName),
-        join(parentPath, 'worktrees', projectName)
-      ]).then(async ([installPath, defaultWorktreesPath]) => {
-        setFullInstallPath(installPath)
-        setWorktreesPath(defaultWorktreesPath)
+      // For multi-project mode (projectName="project"), treat selected folder as the project root directly
+      // For single-project mode (projectName="ushadow"), create subdirectories
+      const isMultiProjectMode = projectName === 'project'
 
-        // Check if this path already has a ushadow repo
-        try {
-          const status = await invoke<ProjectStatus>('check_project_dir', { path: installPath })
-          setProjectStatus(status)
-        } catch (err) {
-          console.error('Failed to check project directory:', err)
-          setProjectStatus(null)
-        }
-      })
+      if (isMultiProjectMode) {
+        // Multi-project: selected folder IS the project root
+        // Worktrees go in ../worktrees/projectname (sibling to project)
+        const pathParts = parentPath.split(/[/\\]/)
+        const folderName = pathParts.pop() || 'project'
+        const grandParent = pathParts.join('/')
+
+        join(grandParent, 'worktrees', folderName).then(async (worktreesPath) => {
+          setFullInstallPath(parentPath)  // Use selected folder directly
+          setWorktreesPath(worktreesPath)  // ../worktrees/projectname
+
+          // For multi-project mode, just check if .git exists (don't require ushadow-specific files)
+          try {
+            const gitPath = await join(parentPath, '.git')
+            // Use a simple file system check instead of check_project_dir
+            const pathExists = await invoke('check_install_path', { path: gitPath })
+            setProjectStatus({
+              path: parentPath,
+              exists: true,
+              is_valid_repo: pathExists
+            })
+          } catch (err) {
+            console.error('Failed to check git directory:', err)
+            setProjectStatus({
+              path: parentPath,
+              exists: true,
+              is_valid_repo: false
+            })
+          }
+        })
+      } else {
+        // Single-project: create subdirectories under parent
+        Promise.all([
+          join(parentPath, projectName),
+          join(parentPath, 'worktrees', projectName)
+        ]).then(async ([installPath, defaultWorktreesPath]) => {
+          setFullInstallPath(installPath)
+          setWorktreesPath(defaultWorktreesPath)
+
+          try {
+            const status = await invoke<ProjectStatus>('check_project_dir', { path: installPath })
+            setProjectStatus(status)
+          } catch (err) {
+            console.error('Failed to check project directory:', err)
+            setProjectStatus(null)
+          }
+        })
+      }
     } else {
       setFullInstallPath(null)
       setWorktreesPath(null)
@@ -128,11 +167,15 @@ export function ProjectSetupDialog({
             <div className="flex-1 text-left">
               {parentPath ? (
                 <>
-                  <p className="text-xs text-text-muted mb-1">Parent folder:</p>
+                  <p className="text-xs text-text-muted mb-1">
+                    {isMultiProjectMode ? 'Project folder:' : 'Parent folder:'}
+                  </p>
                   <p className="text-sm font-medium truncate">{parentPath}</p>
                 </>
               ) : (
-                <p className="text-sm text-text-secondary">Click to choose parent folder...</p>
+                <p className="text-sm text-text-secondary">
+                  {isMultiProjectMode ? 'Click to choose project folder...' : 'Click to choose parent folder...'}
+                </p>
               )}
             </div>
           </button>
@@ -148,17 +191,26 @@ export function ProjectSetupDialog({
                 <>
                   <div className="flex items-center gap-2 mb-1">
                     <CheckCircle className="w-4 h-4 text-green-400" />
-                    <p className="text-xs text-green-400">Existing {projectName} repository found:</p>
+                    <p className="text-xs text-green-400">
+                      {isMultiProjectMode ? 'Existing git repository found:' : `Existing ${projectName} repository found:`}
+                    </p>
                   </div>
                   <p className="text-sm font-mono text-green-300 break-all">{fullInstallPath}</p>
                   <p className="text-xs text-green-400/70 mt-2">Will link to this existing installation</p>
                 </>
               ) : (
                 <>
-                  <p className="text-xs text-primary-400 mb-1">Project folder:</p>
+                  <p className="text-xs text-primary-400 mb-1">
+                    {isMultiProjectMode ? 'Project root:' : 'Project folder:'}
+                  </p>
                   <p className="text-sm font-mono text-primary-300 break-all">{fullInstallPath}</p>
                   {projectStatus?.exists && !projectStatus?.is_valid_repo && (
-                    <p className="text-xs text-yellow-400 mt-2">Folder exists but is not a valid {projectName} repository</p>
+                    <p className="text-xs text-yellow-400 mt-2">
+                      {isMultiProjectMode
+                        ? 'Folder exists but is not a valid git repository'
+                        : `Folder exists but is not a valid ${projectName} repository`
+                      }
+                    </p>
                   )}
                 </>
               )}
