@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, TRello } from 'lucide-react'
 import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
 import { TmuxManagerDialog } from './TmuxManagerDialog'
+import { CreateTicketDialog } from './CreateTicketDialog'
 
 interface CreatingEnv {
   name: string
@@ -47,6 +48,8 @@ export function EnvironmentsPanel({
   const [showBrowserView, setShowBrowserView] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(320)
   const [isResizing, setIsResizing] = useState(false)
+  const [showCreateTicket, setShowCreateTicket] = useState(false)
+  const [ticketEnvironment, setTicketEnvironment] = useState<string | null>(null)
 
   // Sort environments: worktrees first, then reverse to show newest first
   const sortedEnvironments = [...environments].sort((a, b) => {
@@ -115,6 +118,12 @@ export function EnvironmentsPanel({
   // Handle environment selection
   const handleEnvSelect = (env: UshadowEnvironment) => {
     setSelectedEnv(env)
+  }
+
+  // Handle creating ticket from environment
+  const handleCreateTicket = (envName: string) => {
+    setTicketEnvironment(envName)
+    setShowCreateTicket(true)
   }
 
   // Handle opening in browser view
@@ -207,6 +216,7 @@ export function EnvironmentsPanel({
                     onStart={() => onStart(env.name)}
                     onStop={() => onStop(env.name)}
                     onOpenInApp={() => onOpenInApp(env)}
+                    onCreateTicket={() => handleCreateTicket(env.name)}
                     isLoading={loadingEnv === env.name}
                     isSelected={selectedEnv?.name === env.name}
                     onSelect={() => handleEnvSelect(env)}
@@ -224,6 +234,7 @@ export function EnvironmentsPanel({
                     onStart={() => onStart(env.name)}
                     onStop={() => onStop(env.name)}
                     onOpenInApp={() => onOpenInApp(env)}
+                    onCreateTicket={() => handleCreateTicket(env.name)}
                     isLoading={loadingEnv === env.name}
                     isSelected={selectedEnv?.name === env.name}
                     onSelect={() => handleEnvSelect(env)}
@@ -283,6 +294,24 @@ export function EnvironmentsPanel({
         isOpen={showTmuxManager}
         onClose={() => setShowTmuxManager(false)}
       />
+
+      {/* Create Ticket Dialog */}
+      {showCreateTicket && (
+        <CreateTicketDialog
+          isOpen={showCreateTicket}
+          onClose={() => {
+            setShowCreateTicket(false)
+            setTicketEnvironment(null)
+          }}
+          onCreated={() => {
+            setShowCreateTicket(false)
+            setTicketEnvironment(null)
+          }}
+          epics={[]}
+          backendUrl={environments.find(e => e.running)?.localhost_url || 'http://localhost:8000'}
+          initialEnvironment={ticketEnvironment || undefined}
+        />
+      )}
     </div>
   )
 }
@@ -874,12 +903,13 @@ interface EnvironmentCardProps {
   onStart: () => void
   onStop: () => void
   onOpenInApp: () => void
+  onCreateTicket: () => void
   isLoading: boolean
   isSelected: boolean
   onSelect: () => void
 }
 
-function EnvironmentCard({ environment, onStart, onStop, isLoading, isSelected, onSelect }: EnvironmentCardProps) {
+function EnvironmentCard({ environment, onStart, onStop, onCreateTicket, isLoading, isSelected, onSelect }: EnvironmentCardProps) {
   const colors = getColors(environment.color || environment.name)
 
   return (
@@ -963,6 +993,17 @@ function EnvironmentCard({ environment, onStart, onStop, isLoading, isSelected, 
             {environment.name}
           </span>
         </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onCreateTicket()
+          }}
+          className="p-1.5 rounded hover:bg-surface-700 transition-colors opacity-0 group-hover:opacity-100"
+          title="Create ticket for this environment"
+          data-testid={`env-${environment.name}-create-ticket`}
+        >
+          <Trello className="w-3.5 h-3.5 text-text-muted hover:text-primary-400" />
+        </button>
         {environment.base_branch && (
           <span className={`px-1.5 py-0.5 rounded text-xs font-bold flex-shrink-0 ${
             environment.base_branch === 'dev'

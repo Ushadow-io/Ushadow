@@ -17,8 +17,9 @@ import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
 import { ProjectManager } from './components/ProjectManager'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2, Trello } from 'lucide-react'
 import { getColors } from './utils/colors'
+import { KanbanBoard } from './components/KanbanBoard'
 
 function App() {
   // Store
@@ -1565,6 +1566,16 @@ function App() {
               <FolderGit2 className="w-3 h-3 inline mr-1" />
               Environments
             </button>
+            <button
+              onClick={() => setAppMode('kanban')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                appMode === 'kanban' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-kanban"
+            >
+              <Trello className="w-3 h-3 inline mr-1" />
+              Kanban
+            </button>
           </div>
 
           {/* Tmux Manager */}
@@ -1719,7 +1730,7 @@ function App() {
               />
             )}
           </div>
-        ) : (
+        ) : appMode === 'environments' ? (
           /* Environments Page - Worktree Management */
           <div className="h-full flex flex-col overflow-hidden p-4">
             <EnvironmentsPanel
@@ -1737,7 +1748,13 @@ function App() {
               tmuxStatuses={tmuxStatuses}
             />
           </div>
-        )}
+        ) : appMode === 'kanban' ? (
+          /* Kanban Page - Ticket Management */
+          <KanbanBoard
+            projectId={projectRoot}
+            backendUrl={discovery?.environments[0]?.localhost_url ?? 'http://localhost:8000'}
+          />
+        ) : null}
       </main>
 
       {/* Log Panel - Bottom */}

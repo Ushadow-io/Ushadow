@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type AppMode = 'install' | 'infra' | 'environments'
+export type AppMode = 'install' | 'infra' | 'environments' | 'kanban'
 
 export interface SpoofedPrerequisites {
   git_installed: boolean | null  // null = use real value
