@@ -144,6 +144,44 @@ services:
       retries: 5
       start_period: 30s
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    profiles: ["infra"]
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+      - "${KEYCLOAK_MGMT_PORT:-9000}:9000"  # Management
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/ushadow
+      - KC_DB_USERNAME=ushadow
+      - KC_DB_PASSWORD=ushadow
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+      - KC_HEALTH_ENABLED=true
+    volumes:
+      - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
+      - ../config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    command:
+      - start-dev
+      - --import-realm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ushadow-network
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   # tailscale:
   #   image: tailscale/tailscale:latest
   #   container_name: ushadow-tailscale
