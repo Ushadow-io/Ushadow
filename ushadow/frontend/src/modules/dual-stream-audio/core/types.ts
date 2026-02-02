@@ -162,11 +162,11 @@ export interface DualStreamRecordingHook {
   activeStreams: StreamInfo[]
 
   // Controls
-  startRecording: (mode: RecordingMode) => Promise<void>
+  startRecording: (mode: RecordingMode, preCapturedDisplayStream?: MediaStream) => Promise<void>
   stopRecording: () => void
   setStreamGain: (streamId: string, gain: number) => void
 
   // Utilities
   formatDuration: (seconds: number) => string
-  getAnalyser: (streamType: StreamType) => AnalyserNode | null
+  getAnalyser: (streamType: StreamType | 'mixed') => AnalyserNode | null
 }

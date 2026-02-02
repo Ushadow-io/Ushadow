@@ -65,8 +65,8 @@ export function useServiceConfigData(): UseServiceConfigDataResult {
 
       return result
     },
-    staleTime: 0, // Never cache - always fetch fresh data
-    gcTime: 0, // Don't keep inactive data in cache
+    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes after component unmounts
     refetchOnWindowFocus: false, // Only refetch on manual refresh
     retry: 1,
   })

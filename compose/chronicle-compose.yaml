@@ -68,6 +68,7 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
       # Memory capability (optional, from selected provider)
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-openmemory}
       - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
       - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 

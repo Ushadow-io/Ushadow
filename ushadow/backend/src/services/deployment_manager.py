@@ -354,7 +354,7 @@ class DeploymentManager:
             if isinstance(networks, list):
                 network = networks[0] if networks else None
             elif isinstance(networks, dict):
-                # Dict format: {"infra-network": null} - get first key
+                # Dict format: {"ushadow-network": null} - get first key
                 network = list(networks.keys())[0] if networks else None
             else:
                 network = None
