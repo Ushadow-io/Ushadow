@@ -1,0 +1,37 @@
+#!/bin/bash
+# Post-checkout hook to configure sparse checkout for submodules
+# This prevents circular dependencies between chronicle and mycelia
+
+set -e
+
+echo "🔧 Configuring sparse checkout for submodules..."
+
+# Configure chronicle to exclude extras/mycelia
+if [ -d "chronicle" ]; then
+    CHRONICLE_GIT="$(cd chronicle && git rev-parse --git-dir 2>/dev/null || echo "")"
+    if [ -n "$CHRONICLE_GIT" ] && [ -d "$CHRONICLE_GIT" ]; then
+        echo "  📁 Configuring chronicle (excluding extras/mycelia)"
+        mkdir -p "$CHRONICLE_GIT/info"
+        cat > "$CHRONICLE_GIT/info/sparse-checkout" <<'SPARSE'
+/*
+!extras/mycelia/
+SPARSE
+        (cd chronicle && git config core.sparseCheckout true && git read-tree -mu HEAD 2>/dev/null || true)
+    fi
+fi
+
+# Configure mycelia to exclude friend
+if [ -d "mycelia" ]; then
+    MYCELIA_GIT="$(cd mycelia && git rev-parse --git-dir 2>/dev/null || echo "")"
+    if [ -n "$MYCELIA_GIT" ] && [ -d "$MYCELIA_GIT" ]; then
+        echo "  📁 Configuring mycelia (excluding friend)"
+        mkdir -p "$MYCELIA_GIT/info"
+        cat > "$MYCELIA_GIT/info/sparse-checkout" <<'SPARSE'
+/*
+!friend/
+SPARSE
+        (cd mycelia && git config core.sparseCheckout true && git read-tree -mu HEAD 2>/dev/null || true)
+    fi
+fi
+
+echo "✅ Sparse checkout configured successfully"

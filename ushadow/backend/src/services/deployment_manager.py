@@ -19,17 +19,17 @@ from src.models.deployment import (
     ResolvedServiceDefinition,
 )
 from src.models.unode import UNode
+from src.models.deploy_target import DeployTarget
 from src.services.compose_registry import get_compose_registry
-from src.services.deployment_backends import get_deployment_backend
+from src.services.deployment_platforms import get_deploy_platform
+from src.utils.environment import is_local_deployment as env_is_local_deployment
 
 logger = logging.getLogger(__name__)
 
 
 def _is_local_deployment(unode_hostname: str) -> bool:
-    """Check if deployment is to the local node (same COMPOSE_PROJECT_NAME)."""
-    env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
-    # Local if hostname matches environment name or is the local machine
-    return unode_hostname == env_name or unode_hostname == "localhost"
+    """Check if deployment is to the local node."""
+    return env_is_local_deployment(unode_hostname)
 
 
 def _update_tailscale_serve_route(service_id: str, container_name: str, port: int, add: bool = True) -> bool:
@@ -73,40 +73,43 @@ class DeploymentManager:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.services_collection = db.service_definitions
-        self.deployments_collection = db.deployments
+        # NOTE: deployments_collection no longer used - deployments are stateless
+        # self.deployments_collection = db.deployments
         self.unodes_collection = db.unodes
         self._http_session: Optional[aiohttp.ClientSession] = None
 
     async def initialize(self):
         """Initialize indexes."""
         await self.services_collection.create_index("service_id", unique=True)
-        await self.deployments_collection.create_index("id", unique=True)
-        await self.deployments_collection.create_index("service_id")
-        await self.deployments_collection.create_index("unode_hostname")
+        # NOTE: Deployment indexes no longer needed - deployments are stateless (queried from Docker/K8s runtime)
+        # await self.deployments_collection.create_index("id", unique=True)
+        # await self.deployments_collection.create_index("service_id")
+        # await self.deployments_collection.create_index("unode_hostname")
 
         # Handle compound index with potential conflicts from old versions
-        try:
-            await self.deployments_collection.create_index(
-                [("service_id", 1), ("unode_hostname", 1)],
-                unique=True
-            )
-        except Exception as e:
-            # If index exists with different spec (e.g., with partialFilterExpression),
-            # drop it and recreate
-            if "IndexKeySpecsConflict" in str(e) or "index has the same name" in str(e):
-                logger.warning("Dropping conflicting index 'service_id_1_unode_hostname_1' and recreating")
-                try:
-                    await self.deployments_collection.drop_index("service_id_1_unode_hostname_1")
-                    await self.deployments_collection.create_index(
-                        [("service_id", 1), ("unode_hostname", 1)],
-                        unique=True
-                    )
-                except Exception as drop_error:
-                    logger.error(f"Failed to drop and recreate index: {drop_error}")
-                    # Index might not exist or other issue, continue anyway
-            else:
-                # Re-raise if it's a different error
-                raise
+        # NOTE: No longer needed - deployments are stateless
+        # try:
+        #     await self.deployments_collection.create_index(
+        #         [("service_id", 1), ("unode_hostname", 1)],
+        #         unique=True
+        #     )
+        # except Exception as e:
+        #     # If index exists with different spec (e.g., with partialFilterExpression),
+        #     # drop it and recreate
+        #     if "IndexKeySpecsConflict" in str(e) or "index has the same name" in str(e):
+        #         logger.warning("Dropping conflicting index 'service_id_1_unode_hostname_1' and recreating")
+        #         try:
+        #             await self.deployments_collection.drop_index("service_id_1_unode_hostname_1")
+        #             await self.deployments_collection.create_index(
+        #                 [("service_id", 1), ("unode_hostname", 1)],
+        #                 unique=True
+        #             )
+        #         except Exception as drop_error:
+        #             logger.error(f"Failed to drop and recreate index: {drop_error}")
+        #             # Index might not exist or other issue, continue anyway
+        #     else:
+        #         # Re-raise if it's a different error
+        #         raise
 
         logger.info("DeploymentManager initialized")
 
@@ -130,23 +133,34 @@ class DeploymentManager:
     async def resolve_service_for_deployment(
         self,
         service_id: str,
+        deploy_target: Optional[str] = None,
         config_id: Optional[str] = None
     ) -> "ResolvedServiceDefinition":
         """
-        Resolve all variables for a service using docker-compose config.
+        Resolve all variables for a service using the new Settings API.
 
         This is the single source of truth for variable resolution across all
         deployment targets (local docker, remote unode, kubernetes).
 
+        Uses Settings.for_deploy_config() to get properly resolved environment
+        variables through the complete hierarchy:
+        - config.defaults.yaml
+        - Docker Compose file defaults
+        - .env file (os.environ)
+        - Capability/provider values
+        - Deploy environment overrides
+        - User overrides (if config_id provided)
+
         Steps:
         1. Get service from compose registry
-        2. Get user's saved env configuration (from ServiceConfig if config_id provided)
-        3. Run `docker-compose -f <file> config <service>` with resolved env vars
-        4. Parse the resolved YAML output (all ${VAR:-default} substituted)
+        2. Use Settings API to resolve all env vars for this deployment target
+        3. Run `docker-compose config` to resolve image/port/volume variables
+        4. Combine Settings-resolved env vars with compose-resolved structure
         5. Return ResolvedServiceDefinition with clean values
 
         Args:
             service_id: Service identifier (e.g., "openmemory-compose:mem0-ui")
+            deploy_target: Target unode hostname or cluster ID for deployment
             config_id: Optional ServiceConfig ID to load env var overrides from
 
         Returns:
@@ -162,20 +176,56 @@ class DeploymentManager:
 
         compose_registry = get_compose_registry()
 
+        logger.info(f"[DEBUG resolve_service_for_deployment] Called with service_id={service_id}, config_id={config_id}")
+
         # Get service from compose registry
         service = compose_registry.get_service(service_id)
         if not service:
             raise ValueError(f"Service not found: {service_id}")
 
-        # Get user's saved env configuration (same as docker_manager does)
-        from src.services.docker_manager import get_docker_manager
-        docker_manager = get_docker_manager()
+        logger.info(f"[DEBUG resolve_service_for_deployment] Found service: service_id={service.service_id}, service_name={service.service_name}")
 
-        # Build environment variables with user configuration (including ServiceConfig overrides)
-        subprocess_env, container_env = await docker_manager._build_env_vars_for_service(
-            service.service_name,
-            config_id=config_id
-        )
+        # Use new Settings API to resolve environment variables
+        from src.config import get_settings
+        settings = get_settings()
+
+        # Choose resolution method based on context:
+        # - config_id provided: use for_deployment() (full hierarchy with user overrides)
+        # - deploy_target provided: use for_deploy_config() (up to deploy_env layer)
+        # - neither: use for_service() (up to capability layer)
+        if config_id:
+            logger.info(f"Resolving settings for deployment {config_id}")
+            env_resolutions = await settings.for_deployment(config_id)
+        elif deploy_target:
+            logger.info(f"Resolving settings for service {service_id} targeting {deploy_target}")
+            env_resolutions = await settings.for_deploy_config(deploy_target, service_id)
+        else:
+            # Fallback to service-level resolution (layers 1-4 only)
+            logger.info(f"Resolving settings for service {service_id} (no context)")
+            env_resolutions = await settings.for_service(service_id)
+
+        # Extract values from Resolution objects
+        container_env = {
+            env_var: resolution.value
+            for env_var, resolution in env_resolutions.items()
+            if resolution.value is not None
+        }
+
+        # Build subprocess environment for docker-compose config (needs all vars for ${VAR} substitution)
+        import os
+        subprocess_env = os.environ.copy()
+        subprocess_env.update(container_env)
+
+        # Ensure PROJECT_ROOT is set for volume mount substitution
+        if "PROJECT_ROOT" not in subprocess_env:
+            project_root = os.environ.get("PROJECT_ROOT")
+            if project_root:
+                subprocess_env["PROJECT_ROOT"] = project_root
+                logger.info(f"[FIX] Added PROJECT_ROOT to subprocess_env for deployment: {project_root}")
+            else:
+                logger.warning("[FIX] PROJECT_ROOT not found in environment for deployment!")
+        else:
+            logger.info(f"[DEBUG] PROJECT_ROOT in subprocess_env for deployment: {subprocess_env['PROJECT_ROOT']}")
 
         # Get compose file path (DiscoveredService has compose_file as direct attribute)
         compose_file = str(service.compose_file)
@@ -258,16 +308,27 @@ class DeploymentManager:
                     # Short format: "3002:3000" or "3000"
                     ports.append(str(port_def))
 
-            # Get resolved environment
-            environment = resolved_service.get("environment", {})
-            if isinstance(environment, list):
+            # Use the properly resolved environment from _build_env_vars_for_service
+            # This includes all layers: config defaults, compose defaults, .env, capabilities, etc.
+            # Don't rely on docker-compose config output as it only includes vars listed in the compose file
+            environment = container_env
+
+            # Also merge any environment vars from the compose file output that aren't in container_env
+            # This handles edge cases where compose file has additional vars not managed by our system
+            compose_environment = resolved_service.get("environment", {})
+            if isinstance(compose_environment, list):
                 # Convert list format ["KEY=value"] to dict
                 env_dict = {}
-                for env_item in environment:
+                for env_item in compose_environment:
                     if "=" in env_item:
                         key, value = env_item.split("=", 1)
                         env_dict[key] = value
-                environment = env_dict
+                compose_environment = env_dict
+
+            # Merge compose environment (lower priority) with container_env (higher priority)
+            for key, value in compose_environment.items():
+                if key not in environment:
+                    environment[key] = value
 
             # Get other fields - handle volumes (can be list of strings or dicts)
             volumes_raw = resolved_service.get("volumes", [])
@@ -293,9 +354,9 @@ class DeploymentManager:
                         # Anonymous volume
                         volumes.append(target)
 
+            # Keep command as-is (list or string) - don't join lists
+            # Docker needs the array format to preserve shell quoting
             command = resolved_service.get("command")
-            if isinstance(command, list):
-                command = " ".join(command)
 
             restart_policy = resolved_service.get("restart", "unless-stopped")
 
@@ -310,6 +371,7 @@ class DeploymentManager:
                 network = None
 
             # Create ResolvedServiceDefinition
+            logger.info(f"[DEBUG resolve_service_for_deployment] Creating ResolvedServiceDefinition with service_id={service_id}, service_name={service.service_name}")
             resolved = ResolvedServiceDefinition(
                 service_id=service_id,
                 name=service.service_name,
@@ -418,14 +480,16 @@ class DeploymentManager:
 
     async def delete_service(self, service_id: str) -> bool:
         """Delete a service definition."""
-        # Check for active deployments
-        deployment_count = await self.deployments_collection.count_documents({
-            "service_id": service_id,
-            "status": {"$in": [DeploymentStatus.RUNNING, DeploymentStatus.DEPLOYING]}
-        })
-        if deployment_count > 0:
+        # Check for active deployments (query runtime, not database)
+        deployments = await self.list_deployments(service_id=service_id)
+        active_deployments = [
+            d for d in deployments
+            if d.status in [DeploymentStatus.RUNNING, DeploymentStatus.DEPLOYING]
+        ]
+
+        if active_deployments:
             raise ValueError(
-                f"Cannot delete service with {deployment_count} active deployments. "
+                f"Cannot delete service with {len(active_deployments)} active deployments. "
                 "Remove deployments first."
             )
 
@@ -443,8 +507,8 @@ class DeploymentManager:
         self,
         service_id: str,
         unode_hostname: str,
+        config_id: str,
         namespace: Optional[str] = None,
-        config_id: Optional[str] = None
     ) -> Deployment:
         """
         Deploy a service to any deployment target (Docker unode or K8s cluster).
@@ -453,14 +517,21 @@ class DeploymentManager:
         all variables are resolved before sending to target.
 
         Args:
-            service_id: Service to deploy
+            service_id: Service to deploy (DEPRECATED - extracted from config)
             unode_hostname: Target unode hostname (Docker host or K8s cluster ID)
+            config_id: ServiceConfig ID or Template ID (required) - references config to use
             namespace: Optional K8s namespace (only used for K8s deployments)
-            config_id: Optional instance ID (for instance-based deployments)
         """
+        logger.info(f"[DEBUG deploy_service] Called with service_id={service_id}, config_id={config_id}")
+
         # Resolve service with all variables substituted
         try:
-            resolved_service = await self.resolve_service_for_deployment(service_id)
+            resolved_service = await self.resolve_service_for_deployment(
+                service_id,
+                deploy_target=unode_hostname,
+                config_id=config_id
+            )
+            logger.info(f"[DEBUG deploy_service] Resolved service has service_id={resolved_service.service_id}, name={resolved_service.name}")
         except ValueError as e:
             logger.error(f"Failed to resolve service {service_id}: {e}")
             raise ValueError(f"Service resolution failed: {e}")
@@ -476,195 +547,131 @@ class DeploymentManager:
         # Convert to UNode model
         unode = UNode(**unode_dict)
 
-        # Check if already deployed
-        # If config_id is provided, check for that specific instance
-        # Otherwise, check for any deployment of this service (legacy behavior)
-        query = {
-            "service_id": service_id,
-            "unode_hostname": unode_hostname
-        }
-        if config_id:
-            query["config_id"] = config_id
-
-        existing = await self.deployments_collection.find_one(query)
-        if existing and existing.get("status") in [
-            DeploymentStatus.RUNNING,
-            DeploymentStatus.DEPLOYING
-        ]:
-            if config_id:
-                raise ValueError(
-                    f"ServiceConfig {config_id} already deployed to {unode_hostname}"
-                )
-            else:
-                raise ValueError(
-                    f"Service {service_id} already deployed to {unode_hostname}"
-                )
-
         # Create deployment ID
         deployment_id = str(uuid.uuid4())[:8]
 
-        # Get appropriate deployment backend
-        k8s_manager = None
-        from src.models.unode import UNodeType
-        if unode.type == UNodeType.KUBERNETES:
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = await get_kubernetes_manager()
+        # Create deployment target from unode with standardized fields
+        from src.models.unode import UNodeType, UNodeRole
+        from src.utils.deployment_targets import parse_deployment_target_id
 
-        backend = get_deployment_backend(unode, k8s_manager)
+        parsed = parse_deployment_target_id(unode.deployment_target_id)
+        is_leader = unode.role == UNodeRole.LEADER
 
-        # Check for port conflicts using the existing method (Docker only)
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+            identifier=unode.hostname,
+            environment=parsed["environment"],
+            status=unode.status.value if unode.status else "unknown",
+            provider="local" if is_leader else "remote",
+            region=None,
+            is_leader=is_leader,
+            namespace=None,
+            infrastructure=None,
+            raw_metadata=unode.model_dump()
+        )
+
+        # Get appropriate deployment platform
+        platform = get_deploy_platform(target)
+
+        # Check for port conflicts directly from resolved service (Docker only)
         if unode.type != UNodeType.KUBERNETES:
-            from src.services.docker_manager import get_docker_manager
-            docker_mgr = get_docker_manager()
+            from src.services.docker_manager import check_port_in_use
 
-            # Get the service name from the resolved service
-            service_name = resolved_service.compose_service_name
+            logger.info(f"Checking port conflicts for {resolved_service.service_id}")
+            logger.info(f"Ports to check: {resolved_service.ports}")
 
-            # Use existing port conflict checking method
-            conflicts = docker_mgr.check_port_conflicts(service_name)
+            updated_ports = []
+            conflicts_found = False
 
-            if conflicts:
-                logger.info(f"Found {len(conflicts)} port conflicts for {service_name}, remapping ports")
+            for port_str in resolved_service.ports:
+                if ":" in port_str:
+                    host_port, container_port = port_str.split(":")
+                    original_port = int(host_port)
 
-                # Remap ports in resolved_service to use suggested alternatives
-                updated_ports = []
-                for port_str in resolved_service.ports:
-                    if ":" in port_str:
-                        host_port, container_port = port_str.split(":")
-                        original_port = int(host_port)
+                    # Check if port is in use (don't exclude anything - we're deploying a new instance)
+                    used_by = check_port_in_use(original_port)
 
-                        # Find if this port has a conflict
-                        conflict = next((c for c in conflicts if c.port == original_port), None)
-                        if conflict and conflict.suggested_port:
-                            # Use suggested alternative port
-                            updated_ports.append(f"{conflict.suggested_port}:{container_port}")
-                            logger.info(f"Remapped port {original_port} -> {conflict.suggested_port}")
+                    if used_by:
+                        conflicts_found = True
+                        logger.warning(f"Port conflict detected: port {original_port} is used by {used_by}")
+
+                        # Find alternative port
+                        suggested_port = original_port + 1
+                        while check_port_in_use(suggested_port) and suggested_port < original_port + 100:
+                            suggested_port += 1
+
+                        if suggested_port < original_port + 100:
+                            updated_ports.append(f"{suggested_port}:{container_port}")
+                            logger.info(f"Remapped port {original_port} -> {suggested_port} for container port {container_port}")
                         else:
-                            updated_ports.append(port_str)
+                            # No available port found in range
+                            raise ValueError(f"Could not find available port for {original_port} (checked up to {original_port + 100})")
                     else:
                         updated_ports.append(port_str)
+                        logger.debug(f"Port {original_port} is available")
+                else:
+                    updated_ports.append(port_str)
 
-                # Update the resolved service with new ports
+            if conflicts_found:
+                logger.info(f"Remapped ports: {resolved_service.ports} -> {updated_ports}")
                 resolved_service.ports = updated_ports
             else:
-                logger.info(f"No port conflicts detected for {service_name}")
+                logger.info(f"No port conflicts detected for {resolved_service.service_id}")
 
-        # Deploy using the backend
+        # Deploy using the platform
         try:
-            deployment = await backend.deploy(
-                unode=unode,
+            deployment = await platform.deploy(
+                target=target,
                 resolved_service=resolved_service,
                 deployment_id=deployment_id,
-                namespace=namespace
+                namespace=namespace,
+                config_id=config_id  # Pass config_id to platform for Deployment model validation
             )
 
-            # Set config_id on the deployment
-            deployment.config_id = config_id
-
-            # For Docker deployments, update tailscale serve routes
+            # For Docker deployments, optionally update tailscale serve routes (non-blocking)
             if deployment.backend_type == "docker":
                 is_local = _is_local_deployment(unode_hostname)
-                if is_local and deployment.exposed_port:
-                    _update_tailscale_serve_route(
-                        service_id,
-                        deployment.container_name,
-                        deployment.exposed_port,
-                        add=True
-                    )
 
-                # Set access URL using tailscale helper
-                if deployment.exposed_port:
-                    from src.services.tailscale_serve import get_service_access_url
-                    access_url = get_service_access_url(
-                        unode_hostname,
-                        deployment.exposed_port,
-                        is_local=is_local
-                    )
-                    if access_url:
-                        if is_local:
-                            # Local services have path-based routing
-                            deployment.access_url = f"{access_url}/{service_id}"
-                        else:
-                            deployment.access_url = access_url
+                try:
+                    if is_local and deployment.exposed_port:
+                        _update_tailscale_serve_route(
+                            service_id,
+                            deployment.container_name,
+                            deployment.exposed_port,
+                            add=True
+                        )
+
+                    # Set access URL using tailscale helper
+                    if deployment.exposed_port:
+                        from src.utils.tailscale_serve import get_service_access_url
+                        access_url = get_service_access_url(
+                            unode_hostname,
+                            deployment.exposed_port,
+                            is_local=is_local
+                        )
+                        if access_url:
+                            if is_local:
+                                # Local services have path-based routing
+                                deployment.access_url = f"{access_url}/{service_id}"
+                            else:
+                                deployment.access_url = access_url
+                except Exception as e:
+                    # Tailscale configuration is optional - don't fail deployment
+                    logger.warning(f"Could not configure Tailscale access URL: {e}")
+                    logger.debug("Deployment will continue without Tailscale URL")
 
             deployment.deployed_at = datetime.now(timezone.utc)
 
         except Exception as e:
             logger.error(f"Deploy failed for {service_id} on {unode_hostname}: {e}")
-            # Create failed deployment record
-            deployment = Deployment(
-                id=deployment_id,
-                service_id=service_id,
-                unode_hostname=unode_hostname,
-                config_id=config_id,
-                status=DeploymentStatus.FAILED,
-                created_at=datetime.now(timezone.utc),
-                deployed_config=resolved_service.model_dump(),
-                error=str(e),
-                backend_type=unode.type.value
-            )
-
-            # Upsert failed deployment record
-            await self.deployments_collection.replace_one(
-                {"service_id": service_id, "unode_hostname": unode_hostname},
-                deployment.model_dump(),
-                upsert=True
-            )
-
-            # Re-raise exception so API returns proper error status
+            # Re-raise exception - no database state to save
             raise
 
-        # Upsert deployment (replace if exists)
-        await self.deployments_collection.replace_one(
-            {"service_id": service_id, "unode_hostname": unode_hostname},
-            deployment.model_dump(),
-            upsert=True
-        )
-
-        # Send deploy command to node
-        try:
-            result = await self._send_deploy_command(unode, service, container_name)
-
-            logger.info(f"Deploy result from {unode_hostname}: {result}")
-            if result.get("success"):
-                deployment.status = DeploymentStatus.RUNNING
-                deployment.container_id = result.get("container_id")
-                deployment.deployed_at = datetime.now(timezone.utc)
-
-                # Get port from service definition (first exposed port or default 8080)
-                port = 8080
-                if service.ports:
-                    port = list(service.ports.values())[0] if service.ports else 8080
-                deployment.exposed_port = port
-
-                # Calculate access URL and update tailscale serve for local deployments
-                is_local = _is_local_deployment(unode_hostname)
-                if is_local:
-                    _update_tailscale_serve_route(service_id, container_name, port, add=True)
-
-                # Set access URL using tailscale helper
-                from src.utils.tailscale_serve import get_service_access_url
-                access_url = get_service_access_url(unode_hostname, port, is_local=is_local)
-                if access_url:
-                    if is_local:
-                        # Local services have path-based routing
-                        deployment.access_url = f"{access_url}/{service_id}"
-                    else:
-                        deployment.access_url = access_url
-            else:
-                deployment.status = DeploymentStatus.FAILED
-                deployment.error = result.get("error", "Unknown error")
-                logger.error(f"Deploy failed on {unode_hostname}: {deployment.error}")
-
-        except Exception as e:
-            logger.error(f"Deploy failed for {service_id} on {unode_hostname}: {e}")
-            deployment.status = DeploymentStatus.FAILED
-            deployment.error = str(e)
-
-        # Update deployment record
-        await self.deployments_collection.replace_one(
-            {"id": deployment_id},
-            deployment.model_dump()
+        logger.info(
+            f"Deployment {deployment_id} completed successfully: "
+            f"{service_id} on {unode_hostname} (status: {deployment.status})"
         )
 
         return deployment
@@ -675,40 +682,73 @@ class DeploymentManager:
         if not deployment:
             raise ValueError(f"Deployment not found: {deployment_id}")
 
-        unode_dict = await self.unodes_collection.find_one({
-            "hostname": deployment.unode_hostname
-        })
-        if not unode_dict:
-            raise ValueError(f"U-node not found: {deployment.unode_hostname}")
+        # Check if this is a local deployment
+        if _is_local_deployment(deployment.unode_hostname):
+            # Local deployment - use Docker API directly
+            try:
+                import docker
+                docker_client = docker.from_env()
+                container = docker_client.containers.get(deployment.container_id or deployment.container_name)
+                container.stop()
+                logger.info(f"Stopped local container {deployment.container_name}")
 
-        unode = UNode(**unode_dict)
-
-        # Get appropriate backend
-        k8s_manager = None
-        from src.models.unode import UNodeType
-        if unode.type == UNodeType.KUBERNETES:
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = await get_kubernetes_manager()
-
-        backend = get_deployment_backend(unode, k8s_manager)
-
-        try:
-            success = await backend.stop(unode, deployment)
-
-            if success:
+                # Refresh container status
+                container.reload()
                 deployment.status = DeploymentStatus.STOPPED
                 deployment.stopped_at = datetime.now(timezone.utc)
-            else:
-                deployment.error = "Stop failed"
 
-        except Exception as e:
-            logger.error(f"Stop failed for deployment {deployment_id}: {e}")
-            deployment.error = str(e)
+            except Exception as e:
+                logger.error(f"Failed to stop local deployment {deployment_id}: {e}")
+                deployment.error = str(e)
+                deployment.status = DeploymentStatus.FAILED
+        else:
+            # Remote deployment - use unode manager API
+            unode_dict = await self.unodes_collection.find_one({
+                "hostname": deployment.unode_hostname
+            })
+            if not unode_dict:
+                raise ValueError(f"U-node not found: {deployment.unode_hostname}")
 
-        await self.deployments_collection.replace_one(
-            {"id": deployment_id},
-            deployment.model_dump()
-        )
+            unode = UNode(**unode_dict)
+
+            # Create deployment target from unode with standardized fields
+            from src.models.unode import UNodeType, UNodeRole
+            from src.utils.deployment_targets import parse_deployment_target_id
+
+            parsed = parse_deployment_target_id(unode.deployment_target_id)
+            is_leader = unode.role == UNodeRole.LEADER
+
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=parsed["environment"],
+                status=unode.status.value if unode.status else "unknown",
+                provider="local" if is_leader else "remote",
+                region=None,
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
+            )
+
+            # Get appropriate deployment platform
+            platform = get_deploy_platform(target)
+
+            try:
+                success = await platform.stop(target, deployment)
+
+                if success:
+                    deployment.status = DeploymentStatus.STOPPED
+                    deployment.stopped_at = datetime.now(timezone.utc)
+
+            except Exception as e:
+                logger.error(f"Failed to stop remote deployment {deployment_id}: {e}")
+                deployment.error = str(e)
+                deployment.status = DeploymentStatus.FAILED
+
+        # Stateless: Container state is source of truth, no database update needed
         return deployment
 
     async def restart_deployment(self, deployment_id: str) -> Deployment:
@@ -717,30 +757,120 @@ class DeploymentManager:
         if not deployment:
             raise ValueError(f"Deployment not found: {deployment_id}")
 
-        unode = await self.unodes_collection.find_one({
-            "hostname": deployment.unode_hostname
-        })
-        if not unode:
-            raise ValueError(f"U-node not found: {deployment.unode_hostname}")
+        # Check if this is a local deployment
+        if _is_local_deployment(deployment.unode_hostname):
+            # Local deployment - use Docker API directly
+            try:
+                import docker
+                docker_client = docker.from_env()
+                container = docker_client.containers.get(deployment.container_id or deployment.container_name)
+                container.start()
+                logger.info(f"Started local container {deployment.container_name}")
 
-        try:
-            result = await self._send_restart_command(unode, deployment.container_name)
-
-            if result.get("success"):
-                deployment.status = DeploymentStatus.RUNNING
+                # Refresh container status
+                container.reload()
+                deployment.status = DeploymentStatus.RUNNING if container.status == "running" else DeploymentStatus.STOPPED
                 deployment.stopped_at = None
-            else:
-                deployment.error = result.get("error", "Restart failed")
 
-        except Exception as e:
-            logger.error(f"Restart failed for deployment {deployment_id}: {e}")
-            deployment.error = str(e)
+            except Exception as e:
+                logger.error(f"Failed to restart local deployment {deployment_id}: {e}")
+                deployment.error = str(e)
+                deployment.status = DeploymentStatus.FAILED
+        else:
+            # Remote deployment - use unode manager API
+            unode = await self.unodes_collection.find_one({
+                "hostname": deployment.unode_hostname
+            })
+            if not unode:
+                raise ValueError(f"U-node not found: {deployment.unode_hostname}")
 
-        await self.deployments_collection.replace_one(
-            {"id": deployment_id},
-            deployment.model_dump()
-        )
+        # Stateless: Container state is source of truth, no database update needed
         return deployment
+
+    async def update_deployment(
+        self,
+        deployment_id: str,
+        env_vars: Dict[str, str]
+    ) -> Deployment:
+        """
+        Update a deployment's environment variables and redeploy.
+
+        Compares provided env_vars against what Settings would normally resolve
+        (layers 1-5) and only saves actual overrides to ServiceConfig.
+        """
+        from src.services.service_config_manager import get_service_config_manager
+        from src.models.service_config import ServiceConfigCreate, ServiceConfigUpdate
+        from src.config import get_settings
+
+        # Get existing deployment
+        deployment = await self.get_deployment(deployment_id)
+        if not deployment:
+            raise ValueError(f"Deployment not found: {deployment_id}")
+
+        logger.info(f"Updating deployment {deployment_id}, received {len(env_vars)} env vars")
+
+        # Get baseline values from Settings (layers 1-5, without user overrides)
+        settings = get_settings()
+        baseline_resolutions = await settings.for_deploy_config(
+            deployment.unode_hostname,
+            deployment.service_id
+        )
+
+        # Filter to only actual overrides
+        overrides_only = {}
+        for key, new_value in env_vars.items():
+            baseline_resolution = baseline_resolutions.get(key)
+            baseline_value = baseline_resolution.value if baseline_resolution else None
+
+            # Save if different from baseline
+            if new_value != baseline_value:
+                overrides_only[key] = new_value
+                logger.info(f"  Override: {key} (baseline={baseline_value}, new={new_value})")
+            else:
+                logger.debug(f"  Skip: {key} (matches baseline)")
+
+        logger.info(f"Filtered to {len(overrides_only)} actual overrides")
+
+        config_manager = get_service_config_manager()
+        config_id = deployment.config_id
+
+        if config_id:
+            # Update existing ServiceConfig
+            logger.info(f"Updating ServiceConfig: {config_id}")
+            config_manager.update_service_config(
+                config_id,
+                ServiceConfigUpdate(config=overrides_only)
+            )
+        elif overrides_only:
+            # Create new ServiceConfig only if there are overrides
+            # Use deployment.config_id if available, otherwise generate one
+            config_id = deployment.config_id or f"{deployment.service_id}-{deployment.unode_hostname}".replace(":", "-").replace("/", "-").replace("(", "").replace(")", "")
+            logger.info(f"Creating ServiceConfig: {config_id}")
+
+            config_manager.create_service_config(
+                ServiceConfigCreate(
+                    id=config_id,
+                    template_id=deployment.service_id,
+                    name=f"{deployment.service_id} ({deployment.unode_hostname})",
+                    description=f"Deployment configuration",
+                    config=overrides_only,
+                )
+            )
+
+        # Stop and remove current deployment
+        await self.stop_deployment(deployment_id)
+        await self.remove_deployment(deployment_id)
+
+        # Redeploy with the config_id
+        updated_deployment = await self.deploy_service(
+            service_id=deployment.service_id,
+            unode_hostname=deployment.unode_hostname,
+            namespace=deployment.backend_metadata.get("namespace") if deployment.backend_type == "kubernetes" else None,
+            config_id=config_id if overrides_only else None
+        )
+
+        logger.info(f"Deployment updated with {len(overrides_only)} overrides")
+        return updated_deployment
 
     async def remove_deployment(self, deployment_id: str) -> bool:
         """Remove a deployment (stop and delete)."""
@@ -755,32 +885,138 @@ class DeploymentManager:
         if unode_dict:
             unode = UNode(**unode_dict)
 
-            # Get appropriate backend
-            k8s_manager = None
-            if unode.type.value == "kubernetes":
-                from src.services.kubernetes_manager import get_kubernetes_manager
-                k8s_manager = await get_kubernetes_manager()
+            # Create deployment target from unode with standardized fields
+            from src.models.unode import UNodeType, UNodeRole
+            from src.utils.deployment_targets import parse_deployment_target_id
 
-            backend = get_deployment_backend(unode, k8s_manager)
+            parsed = parse_deployment_target_id(unode.deployment_target_id)
+            is_leader = unode.role == UNodeRole.LEADER
+
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=parsed["environment"],
+                status=unode.status.value if unode.status else "unknown",
+                provider="local" if is_leader else "remote",
+                region=None,
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
+            )
+
+            # Get appropriate deployment platform
+            platform = get_deploy_platform(target)
 
             try:
-                await backend.remove(unode, deployment)
+                import docker
+                docker_client = docker.from_env()
+
+                # Get container
+                container = docker_client.containers.get(deployment.container_id or deployment.container_name)
+
+                # Stop if running
+                if container.status == "running":
+                    container.stop(timeout=10)
+                    logger.info(f"Stopped local container {deployment.container_name}")
+
+                # Remove container
+                container.remove()
+                logger.info(f"Removed local container {deployment.container_name}")
+
             except Exception as e:
-                logger.warning(f"Failed to remove deployment on node: {e}")
+                logger.error(f"Failed to remove local deployment {deployment_id}: {e}")
+                return False
+        else:
+            # Remote deployment - use unode manager API
+            unode_dict = await self.unodes_collection.find_one({
+                "hostname": deployment.unode_hostname
+            })
+
+            if unode_dict:
+                unode = UNode(**unode_dict)
+
+                # Create deployment target from unode with standardized fields
+                from src.models.unode import UNodeType, UNodeRole
+                from src.utils.deployment_targets import parse_deployment_target_id
+
+                parsed = parse_deployment_target_id(unode.deployment_target_id)
+                is_leader = unode.role == UNodeRole.LEADER
+
+                target = DeployTarget(
+                    id=unode.deployment_target_id,
+                    type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                    name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                    identifier=unode.hostname,
+                    environment=parsed["environment"],
+                    status=unode.status.value if unode.status else "unknown",
+                    provider="local" if is_leader else "remote",
+                    region=None,
+                    is_leader=is_leader,
+                    namespace=None,
+                    infrastructure=None,
+                    raw_metadata=unode.model_dump()
+                )
+
+                # Get appropriate deployment platform
+                platform = get_deploy_platform(target)
+
+                try:
+                    await platform.remove(target, deployment)
+                except Exception as e:
+                    logger.warning(f"Failed to remove deployment on node: {e}")
+                    return False
 
         # Remove tailscale serve route for local Docker deployments
         if deployment.backend_type == "docker" and _is_local_deployment(deployment.unode_hostname):
             _update_tailscale_serve_route(deployment.service_id, "", 0, add=False)
 
-        await self.deployments_collection.delete_one({"id": deployment_id})
+        # Stateless: Container removed, no database record to delete
         logger.info(f"Removed deployment: {deployment_id}")
         return True
 
     async def get_deployment(self, deployment_id: str) -> Optional[Deployment]:
-        """Get a deployment by ID."""
-        doc = await self.deployments_collection.find_one({"id": deployment_id})
-        if doc:
-            return Deployment(**doc)
+        """
+        Get a deployment by ID by querying runtime.
+
+        Queries all online unodes until deployment is found.
+        """
+        from src.models.unode import UNodeType, UNodeRole
+        from src.utils.deployment_targets import parse_deployment_target_id
+
+        # Query all online unodes
+        cursor = self.unodes_collection.find({"status": "online"})
+        async for unode_dict in cursor:
+            unode = UNode(**unode_dict)
+
+            # Create deployment target
+            parsed = parse_deployment_target_id(unode.deployment_target_id)
+            is_leader = unode.role == UNodeRole.LEADER
+
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=parsed["environment"],
+                status=unode.status.value,
+                provider="local" if is_leader else "remote",
+                region=None,
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
+            )
+
+            # Query platform
+            platform = get_deploy_platform(target)
+            deployment = await platform.get_deployment_by_id(target, deployment_id)
+
+            if deployment:
+                return deployment
+
         return None
 
     async def list_deployments(
@@ -788,18 +1024,61 @@ class DeploymentManager:
         service_id: Optional[str] = None,
         unode_hostname: Optional[str] = None
     ) -> List[Deployment]:
-        """List deployments with optional filters."""
-        query = {}
-        if service_id:
-            query["service_id"] = service_id
-        if unode_hostname:
-            query["unode_hostname"] = unode_hostname
+        """
+        List deployments by querying runtime (Docker/K8s).
 
-        cursor = self.deployments_collection.find(query)
-        deployments = []
-        async for doc in cursor:
-            deployments.append(Deployment(**doc))
-        return deployments
+        This is stateless - queries container runtime, not database.
+        """
+        from src.models.unode import UNodeType, UNodeRole
+        from src.utils.deployment_targets import parse_deployment_target_id
+
+        all_deployments = []
+
+        # Get all unodes (or specific one if hostname provided)
+        query = {}
+        if unode_hostname:
+            query["hostname"] = unode_hostname
+
+        logger.info(f"[list_deployments] Querying unodes with: {query}")
+        cursor = self.unodes_collection.find(query)
+        unode_count = 0
+        async for unode_dict in cursor:
+            unode_count += 1
+            unode = UNode(**unode_dict)
+            logger.info(f"[list_deployments] Found unode: hostname={unode.hostname}, status={unode.status.value}")
+
+            # Skip if not online
+            if unode.status.value != "online":
+                logger.info(f"[list_deployments] Skipping unode {unode.hostname} - not online")
+                continue
+
+            # Create deployment target
+            parsed = parse_deployment_target_id(unode.deployment_target_id)
+            is_leader = unode.role == UNodeRole.LEADER
+
+            target = DeployTarget(
+                id=unode.deployment_target_id,
+                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=parsed["environment"],
+                status=unode.status.value,
+                provider="local" if is_leader else "remote",
+                region=None,
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
+            )
+
+            # Query platform for deployments
+            platform = get_deploy_platform(target)
+            deployments = await platform.list_deployments(target, service_id=service_id)
+            logger.info(f"[list_deployments] Platform returned {len(deployments)} deployments for unode {unode.hostname}")
+            all_deployments.extend(deployments)
+
+        logger.info(f"[list_deployments] Checked {unode_count} unodes, returning {len(all_deployments)} total deployments")
+        return all_deployments
 
     async def get_deployment_logs(
         self,
@@ -819,17 +1098,33 @@ class DeploymentManager:
 
         unode = UNode(**unode_dict)
 
-        # Get appropriate backend
-        k8s_manager = None
-        from src.models.unode import UNodeType
-        if unode.type == UNodeType.KUBERNETES:
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = await get_kubernetes_manager()
+        # Create deployment target from unode with standardized fields
+        from src.models.unode import UNodeType, UNodeRole
+        from src.utils.deployment_targets import parse_deployment_target_id
 
-        backend = get_deployment_backend(unode, k8s_manager)
+        parsed = parse_deployment_target_id(unode.deployment_target_id)
+        is_leader = unode.role == UNodeRole.LEADER
+
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+            identifier=unode.hostname,
+            environment=parsed["environment"],
+            status=unode.status.value if unode.status else "unknown",
+            provider="local" if is_leader else "remote",
+            region=None,
+            is_leader=is_leader,
+            namespace=None,
+            infrastructure=None,
+            raw_metadata=unode.model_dump()
+        )
+
+        # Get appropriate deployment platform
+        platform = get_deploy_platform(target)
 
         try:
-            logs = await backend.get_logs(unode, deployment, tail)
+            logs = await platform.get_logs(target, deployment, tail)
             return "\n".join(logs)
         except Exception as e:
             logger.error(f"Failed to get logs for {deployment_id}: {e}")

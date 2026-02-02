@@ -2,7 +2,7 @@
 
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class KubernetesClusterStatus(str, Enum):
@@ -35,6 +35,19 @@ class KubernetesCluster(BaseModel):
 
     # Labels for organization
     labels: Dict[str, str] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def deployment_target_id(self) -> str:
+        """
+        Get unified deployment target ID.
+
+        Format: {name}.k8s.{environment}
+        Example: "my-cluster.k8s.purple"
+        """
+        from src.utils.deployment_targets import make_deployment_target_id
+        # Use name (human-readable) as identifier for k8s clusters
+        return make_deployment_target_id(self.name, "k8s")
 
     class Config:
         json_schema_extra = {

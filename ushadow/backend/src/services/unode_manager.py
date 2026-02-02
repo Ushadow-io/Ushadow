@@ -16,7 +16,6 @@ from aiohttp import UnixConnector
 from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
-from src.config.omegaconf_settings import get_settings_store
 from src.config.secrets import get_auth_secret_key
 from src.utils.tailscale_serve import get_tailscale_status, TailscaleStatus
 from src.models.unode import (
@@ -33,10 +32,12 @@ from src.models.unode import (
 )
 
 logger = logging.getLogger(__name__)
-config = get_settings_store()
 
-# Get backend port from OmegaConf (sync for module-level access)
-BACKEND_PORT = config.get_sync("network.backend_public_port") or 8000
+def _get_backend_port() -> int:
+    """Lazy getter for backend port to avoid circular import."""
+    from src.config import get_settings
+    config = get_settings()
+    return config.get_sync("network.backend_public_port") or 8000
 
 # =============================================================================
 # Constants
@@ -393,7 +394,7 @@ class UNodeManager:
         if not leader_host:
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        leader_port = BACKEND_PORT
+        leader_port = _get_backend_port()
 
         script = f'''#!/bin/sh
 # Ushadow UNode Bootstrap Script
@@ -445,7 +446,7 @@ curl -sL "$LEADER_URL/api/unodes/join/$TOKEN" | sh
         if not leader_host:
             leader = await self.unodes_collection.find_one({"role": UNodeRole.LEADER.value})
             leader_host = leader.get("tailscale_ip") or leader.get("hostname") if leader else "localhost"
-        leader_port = BACKEND_PORT
+        leader_port = _get_backend_port()
 
         script = f'''# Ushadow UNode Bootstrap - All-in-one installer
 # Just run: iex (iwr "http://LEADER:8000/api/unodes/bootstrap/TOKEN/ps1").Content

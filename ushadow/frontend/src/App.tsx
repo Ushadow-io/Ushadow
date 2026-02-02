@@ -2,9 +2,11 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { KeycloakAuthProvider } from './contexts/KeycloakAuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
+import { ToastProvider } from './contexts/ToastContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
 import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
@@ -22,6 +24,7 @@ const getBasename = () => {
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import FeatureRoute from './components/auth/FeatureRoute'
 import Layout from './components/layout/Layout'
+import OAuthCallback from './auth/OAuthCallback'
 
 // Pages
 import RegistrationPage from './pages/RegistrationPage'
@@ -30,6 +33,7 @@ import ErrorPage from './pages/ErrorPage'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import ChroniclePage from './pages/ChroniclePage'
+import RecordingPage from './pages/RecordingPage'
 import MCPPage from './pages/MCPPage'
 import AgentZeroPage from './pages/AgentZeroPage'
 import N8NPage from './pages/N8NPage'
@@ -41,6 +45,9 @@ import MemoriesPage from './pages/MemoriesPage'
 import ClusterPage from './pages/ClusterPage'
 import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
 import ChatPage from './pages/ChatPage'
+import KeycloakTestPage from './pages/KeycloakTestPage'
+// TimelinePage requires frappe-gantt which is not in mycelia image yet
+// import TimelinePage from './pages/TimelinePage'
 
 // Wizards (all use WizardShell pattern)
 import {
@@ -51,6 +58,7 @@ import {
   LocalServicesWizard,
   MobileAppWizard,
   SpeakerRecognitionWizard,
+  MyceliaWizard,
 } from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
 import ColorSystemPreview from './components/ColorSystemPreview'
@@ -59,12 +67,21 @@ function AppContent() {
   // Set dynamic favicon based on environment
   useEnvironmentFavicon()
 
-  const { backendError, checkSetupStatus } = useAuth()
+  const { backendError, checkSetupStatus, isLoading, token } = useAuth()
 
   // Show error page if backend has configuration errors
   if (backendError) {
     return <ErrorPage error={backendError} onRetry={checkSetupStatus} />
   }
+
+  // Check if on public route (login/register)
+  const isPublicRoute = window.location.pathname === '/login' ||
+                        window.location.pathname === '/register' ||
+                        window.location.pathname === '/design-system'
+
+  // Check if running in launcher mode (embedded iframe)
+  const searchParams = new URLSearchParams(window.location.search)
+  const isLauncherMode = searchParams.get('launcher') === 'true'
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -74,6 +91,8 @@ function AppContent() {
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/oauth/callback" element={<OAuthCallback />} />
+              <Route path="/auth/test" element={<KeycloakTestPage />} />
               <Route path="/design-system" element={<ColorSystemPreview />} />
 
               {/* Protected Routes - All wrapped in Layout */}
@@ -81,7 +100,11 @@ function AppContent() {
                 path="/*"
                 element={
                   <ProtectedRoute>
-                    <Layout />
+                    <WizardProvider>
+                      <ChronicleProvider>
+                        <Layout />
+                      </ChronicleProvider>
+                    </WizardProvider>
                   </ProtectedRoute>
                 }
               >
@@ -98,7 +121,9 @@ function AppContent() {
                 <Route path="wizard/tailscale" element={<TailscaleWizard />} />
                 <Route path="wizard/mobile-app" element={<MobileAppWizard />} />
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
+                <Route path="wizard/mycelia" element={<MyceliaWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="recording" element={<RecordingPage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
@@ -108,6 +133,8 @@ function AppContent() {
                 <Route path="interfaces" element={<InterfacesPage />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
+                {/* Timeline disabled until mycelia image rebuild with frappe-gantt */}
+                {/* <Route path="timeline" element={<FeatureRoute featureFlag="timeline"><TimelinePage /></FeatureRoute>} /> */}
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />
                 <Route path="settings" element={<SettingsPage />} />
@@ -118,7 +145,8 @@ function AppContent() {
         </Routes>
       </div>
       <BugReportButton />
-      <EnvironmentFooter />
+      {/* Only show footer on protected routes and when not in launcher mode */}
+      {!isPublicRoute && !isLauncherMode && <EnvironmentFooter />}
     </div>
   )
 }
@@ -127,18 +155,22 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <VibeKanbanWebCompanion />
-        <AuthProvider>
-          <FeatureFlagsProvider>
-            <WizardProvider>
-              <ChronicleProvider>
-                <BrowserRouter basename={getBasename()}>
-                  <AppContent />
-                </BrowserRouter>
-              </ChronicleProvider>
-            </WizardProvider>
-          </FeatureFlagsProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <VibeKanbanWebCompanion />
+          <AuthProvider>
+            <KeycloakAuthProvider>
+              <FeatureFlagsProvider>
+                <WizardProvider>
+                  <ChronicleProvider>
+                    <BrowserRouter basename={getBasename()}>
+                      <AppContent />
+                    </BrowserRouter>
+                  </ChronicleProvider>
+                </WizardProvider>
+              </FeatureFlagsProvider>
+            </KeycloakAuthProvider>
+          </AuthProvider>
+        </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>
   )

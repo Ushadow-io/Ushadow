@@ -18,7 +18,8 @@ import getpass
 from pathlib import Path
 
 # Fix Windows console encoding to support Unicode
-if sys.platform == 'win32':
+IS_WINDOWS = sys.platform == 'win32'
+if IS_WINDOWS:
     try:
         # Try to set UTF-8 encoding for stdout/stderr
         import io
@@ -29,10 +30,25 @@ if sys.platform == 'win32':
 
 # Add setup directory to path for imports
 SCRIPT_DIR = Path(__file__).parent
+# Calculate PROJECT_ROOT robustly - go up from setup directory
+# Handle both normal location (repo/setup) and copied location (anywhere/setup)
 PROJECT_ROOT = SCRIPT_DIR.parent
+
+# Validate PROJECT_ROOT by checking for docker-compose.yml
+# If not found, this might be a copied setup script - use current working directory instead
+if not (PROJECT_ROOT / "docker-compose.yml").exists():
+    # Try current working directory (where we were cd'd to)
+    cwd = Path.cwd()
+    if (cwd / "docker-compose.yml").exists():
+        PROJECT_ROOT = cwd
+    else:
+        # Last resort: check if docker-compose.yml is one level up from cwd
+        if (cwd.parent / "docker-compose.yml").exists():
+            PROJECT_ROOT = cwd.parent
+
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from setup_utils import validate_ports, ensure_secrets_yaml, find_available_redis_db, set_redis_db_env_marker
+from setup_utils import validate_ports, ensure_secrets_yaml, ensure_keycloak_secrets, populate_keycloak_realm_template, find_available_redis_db, set_redis_db_env_marker, check_keycloak_configured
 from start_utils import ensure_networks, check_infrastructure_running, start_infrastructure, wait_for_backend_health
 
 # Configuration
@@ -53,6 +69,48 @@ class Colors:
     BOLD = '\033[1m'
     NC = '\033[0m'  # No Color
 
+# Platform-safe emoji/unicode characters
+class Icons:
+    """Platform-safe icons that work on all terminals."""
+    if IS_WINDOWS:
+        ROCKET = ">"
+        PENCIL = "-"
+        USER = "*"
+        CHECK = "OK"
+        CHECKMARK = "[OK]"
+        CROSS = "X"
+        WARNING = "!"
+        ERROR = "ERROR"
+        SEARCH = "?"
+        BUILDING = "+"
+        STOP = "[]"
+        RESTART = "@"
+        CLIPBOARD = "#"
+        WRENCH = "*"
+        SEPARATOR = "=" * 44
+        BOX_TOP = "+" + ("=" * 52) + "+"
+        BOX_MID = "|" + (" " * 52) + "|"
+        BOX_BTM = "+" + ("=" * 52) + "+"
+    else:
+        ROCKET = "🚀"
+        PENCIL = "📝"
+        USER = "👤"
+        CHECK = "✓"
+        CHECKMARK = "✅"
+        CROSS = "✗"
+        WARNING = "⚠️"
+        ERROR = "❌"
+        SEARCH = "🔍"
+        BUILDING = "🏗️"
+        STOP = "🛑"
+        RESTART = "🔄"
+        CLIPBOARD = "📋"
+        WRENCH = "🔧"
+        SEPARATOR = "━" * 44
+        BOX_TOP = "╔" + ("═" * 52) + "╗"
+        BOX_MID = "║" + (" " * 52) + "║"
+        BOX_BTM = "╚" + ("═" * 52) + "╝"
+
 def print_color(color: str, message: str):
     """Print colored message."""
     print(f"{color}{message}{Colors.NC}")
@@ -60,14 +118,14 @@ def print_color(color: str, message: str):
 def print_header():
     """Print startup header."""
     print()
-    print_color(Colors.BOLD, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print_color(Colors.BOLD, f"🚀 {APP_DISPLAY_NAME} Quick Start")
-    print_color(Colors.BOLD, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print_color(Colors.BOLD, Icons.SEPARATOR)
+    print_color(Colors.BOLD, f"{Icons.ROCKET} {APP_DISPLAY_NAME} Quick Start")
+    print_color(Colors.BOLD, Icons.SEPARATOR)
     print()
 
 def prompt_for_config() -> dict:
     """Prompt user for configuration in interactive mode."""
-    print_color(Colors.BLUE, "📝 Configuration")
+    print_color(Colors.BLUE, f"{Icons.PENCIL} Configuration")
     print()
 
     # Environment name
@@ -94,7 +152,7 @@ def prompt_for_config() -> dict:
 
 def prompt_for_admin() -> dict:
     """Prompt user for admin credentials."""
-    print_color(Colors.BLUE, "👤 Admin Account")
+    print_color(Colors.BLUE, f"{Icons.USER} Admin Account")
     print()
 
     # Email
@@ -124,12 +182,12 @@ def check_docker():
             text=True
         )
         if result.returncode == 0:
-            print_color(Colors.GREEN, f"✅ Docker found: {result.stdout.strip()}")
+            print_color(Colors.GREEN, f"{Icons.CHECKMARK} Docker found: {result.stdout.strip()}")
             return True
     except FileNotFoundError:
         pass
 
-    print_color(Colors.RED, "❌ Docker not found. Please install Docker Desktop.")
+    print_color(Colors.RED, f"{Icons.ERROR} Docker not found. Please install Docker Desktop.")
     return False
 
 def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_file: Path, dev_mode: bool = False, quick_mode: bool = False):
@@ -142,8 +200,8 @@ def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_f
     if conflicts:
         if quick_mode:
             # In quick mode, automatically find available ports
-            print_color(Colors.YELLOW, f"⚠️  Port conflict detected: {conflicts}")
-            print_color(Colors.BLUE, "🔍 Auto-finding available ports...")
+            print_color(Colors.YELLOW, f"{Icons.WARNING}  Port conflict detected: {conflicts}")
+            print_color(Colors.BLUE, f"{Icons.SEARCH} Auto-finding available ports...")
             
             # Try incrementing port offset until we find available ports (max 100 attempts)
             for _ in range(100):
@@ -153,13 +211,13 @@ def generate_env_file(env_name: str, port_offset: int, env_file: Path, secrets_f
                 
                 all_available, conflicts = validate_ports([backend_port, webui_port])
                 if all_available:
-                    print_color(Colors.GREEN, f"✅ Found available ports (offset: {port_offset})")
+                    print_color(Colors.GREEN, f"{Icons.CHECKMARK} Found available ports (offset: {port_offset})")
                     break
             else:
-                print_color(Colors.RED, "❌ Could not find available ports after 100 attempts")
+                print_color(Colors.RED, f"{Icons.ERROR} Could not find available ports after 100 attempts")
                 return None
         else:
-            print_color(Colors.RED, f"❌ Port conflict: {conflicts}")
+            print_color(Colors.RED, f"{Icons.ERROR} Port conflict: {conflicts}")
             return None
 
     # Find available Redis database
@@ -214,7 +272,7 @@ DEV_MODE={'true' if dev_mode else 'false'}
     env_file.write_text(env_content)
     os.chmod(env_file, 0o600)
 
-    print_color(Colors.GREEN, "✅ Environment configured")
+    print_color(Colors.GREEN, f"{Icons.CHECKMARK} Environment configured")
     print(f"  Name:     {env_name}")
     print(f"  Project:  {compose_project_name}")
     print(f"  Backend:  {backend_port}")
@@ -225,9 +283,28 @@ DEV_MODE={'true' if dev_mode else 'false'}
     # Ensure secrets.yaml exists
     created_new, _ = ensure_secrets_yaml(str(secrets_file))
     if created_new:
-        print_color(Colors.GREEN, f"Secrets file written: ✅ {secrets_file}")
+        print_color(Colors.GREEN, f"Secrets file written: {Icons.CHECKMARK} {secrets_file}")
     else:
-        print(f"Secrets already configured: ✅ {secrets_file}")
+        print(f"Secrets already configured: {Icons.CHECKMARK} {secrets_file}")
+
+    # Ensure Keycloak secrets exist (shared across all environments)
+    kc_created, kc_secrets = ensure_keycloak_secrets(str(secrets_file))
+    if kc_created:
+        print_color(Colors.GREEN, "Keycloak secrets generated: ✅")
+    else:
+        print("Keycloak secrets configured: ✅")
+
+    # Populate Keycloak realm template (idempotent - shared across environments)
+    realm_created, realm_msg = populate_keycloak_realm_template(
+        template_file=str(PROJECT_ROOT / "config" / "keycloak" / "realm-template.json"),
+        output_file=str(PROJECT_ROOT / "config" / "keycloak" / "realm-export.json"),
+        secrets_file=str(secrets_file)
+    )
+    if realm_created:
+        print_color(Colors.GREEN, f"Keycloak realm template populated: ✅")
+        print(f"  {realm_msg}")
+    else:
+        print(f"  {realm_msg}")
 
     return {
         "backend_port": backend_port,
@@ -256,22 +333,22 @@ def compose_up(dev_mode: bool, build: bool = False) -> bool:
     """Start containers (optionally with rebuild)."""
     # Ensure Docker networks exist
     if not ensure_networks():
-        print_color(Colors.RED, "❌ Failed to create required Docker networks (ushadow-network, infra-network)")
+        print_color(Colors.RED, f"{Icons.ERROR} Failed to create required Docker networks (ushadow-network, infra-network)")
         print_color(Colors.YELLOW, "   Make sure Docker is running and you have permissions to create networks")
         return False
 
     # Check/start infrastructure
     infra_running = check_infrastructure_running()
     if not infra_running:
-        print_color(Colors.YELLOW, "🏗️  Starting infrastructure...")
+        print_color(Colors.YELLOW, f"{Icons.BUILDING}  Starting infrastructure...")
         success, message = start_infrastructure(INFRA_COMPOSE_FILE, INFRA_PROJECT_NAME)
         if not success:
-            print_color(Colors.RED, f"❌ {message}")
+            print_color(Colors.RED, f"{Icons.ERROR} {message}")
             return False
 
     mode_label = "dev" if dev_mode else "prod"
     action = "Building and starting" if build else "Starting"
-    print_color(Colors.BLUE, f"🚀 {action} {APP_DISPLAY_NAME} ({mode_label} mode)...")
+    print_color(Colors.BLUE, f"{Icons.ROCKET} {action} {APP_DISPLAY_NAME} ({mode_label} mode)...")
 
     cmd = get_compose_cmd(dev_mode) + ["up", "-d"]
     if build:
@@ -280,42 +357,42 @@ def compose_up(dev_mode: bool, build: bool = False) -> bool:
     # Use native path format for cwd (subprocess handles it correctly)
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
-        print_color(Colors.RED, "❌ Failed to start application")
+        print_color(Colors.RED, f"{Icons.ERROR} Failed to start application")
         return False
 
-    print_color(Colors.GREEN, "✅ Done")
+    print_color(Colors.GREEN, f"{Icons.CHECKMARK} Done")
     return True
 
 
 def compose_down(dev_mode: bool) -> bool:
     """Stop containers."""
     mode_label = "dev" if dev_mode else "prod"
-    print_color(Colors.BLUE, f"🛑 Stopping {APP_DISPLAY_NAME} ({mode_label} mode)...")
+    print_color(Colors.BLUE, f"{Icons.STOP} Stopping {APP_DISPLAY_NAME} ({mode_label} mode)...")
 
     cmd = get_compose_cmd(dev_mode) + ["down"]
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
 
     if result.returncode != 0:
-        print_color(Colors.RED, "❌ Failed to stop application")
+        print_color(Colors.RED, f"{Icons.ERROR} Failed to stop application")
         return False
 
-    print_color(Colors.GREEN, "✅ Stopped")
+    print_color(Colors.GREEN, f"{Icons.CHECKMARK} Stopped")
     return True
 
 
 def compose_restart(dev_mode: bool) -> bool:
     """Restart containers."""
     mode_label = "dev" if dev_mode else "prod"
-    print_color(Colors.BLUE, f"🔄 Restarting {APP_DISPLAY_NAME} ({mode_label} mode)...")
+    print_color(Colors.BLUE, f"{Icons.RESTART} Restarting {APP_DISPLAY_NAME} ({mode_label} mode)...")
 
     cmd = get_compose_cmd(dev_mode) + ["restart"]
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
 
     if result.returncode != 0:
-        print_color(Colors.RED, "❌ Failed to restart application")
+        print_color(Colors.RED, f"{Icons.ERROR} Failed to restart application")
         return False
 
-    print_color(Colors.GREEN, "✅ Restarted")
+    print_color(Colors.GREEN, f"{Icons.CHECKMARK} Restarted")
     return True
 
 
@@ -333,23 +410,23 @@ def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
 
     print()
     if healthy:
-        print_color(Colors.GREEN + Colors.BOLD, f"✅ {APP_DISPLAY_NAME} is ready!")
+        print_color(Colors.GREEN + Colors.BOLD, f"{Icons.CHECKMARK} {APP_DISPLAY_NAME} is ready!")
     else:
-        print_color(Colors.YELLOW, "⚠️  Backend is starting... (may take a moment)")
+        print_color(Colors.YELLOW, f"{Icons.WARNING}  Backend is starting... (may take a moment)")
 
     # Print success box
     print()
-    print_color(Colors.BOLD, "╔════════════════════════════════════════════════════╗")
-    print_color(Colors.BOLD, "║                                                    ║")
-    print_color(Colors.BOLD, f"║  🚀 {APP_DISPLAY_NAME} is ready!                          ║")
-    print_color(Colors.BOLD, "║                                                    ║")
+    print_color(Colors.BOLD, Icons.BOX_TOP)
+    print_color(Colors.BOLD, Icons.BOX_MID)
+    print_color(Colors.BOLD, f"║  {Icons.ROCKET} {APP_DISPLAY_NAME} is ready!                          ║")
+    print_color(Colors.BOLD, Icons.BOX_MID)
     print_color(Colors.BOLD, f"║     http://localhost:{webui_port}                          ║")
-    print_color(Colors.BOLD, "║                                                    ║")
-    print_color(Colors.BOLD, "╚════════════════════════════════════════════════════╝")
+    print_color(Colors.BOLD, Icons.BOX_MID)
+    print_color(Colors.BOLD, Icons.BOX_BTM)
     print()
 
     # First-time setup instructions
-    print_color(Colors.BOLD, "📋 First-Time Setup:")
+    print_color(Colors.BOLD, f"{Icons.CLIPBOARD} First-Time Setup:")
     print()
     print("  1. Open the web interface (link above)")
     print("  2. Complete the setup wizard:")
@@ -441,9 +518,9 @@ def main():
     # Always ensure secrets.yaml exists with auth keys
     created_new, secrets_data = ensure_secrets_yaml(str(secrets_file))
     if created_new:
-        print_color(Colors.GREEN, f"Secrets file written: ✅ {secrets_file}")
+        print_color(Colors.GREEN, f"Secrets file written: {Icons.CHECKMARK} {secrets_file}")
     else:
-        print(f"Secrets already configured: ✅ {secrets_file}")
+        print(f"Secrets already configured: {Icons.CHECKMARK} {secrets_file}")
 
     # Check for existing config
     use_existing = False
@@ -470,7 +547,7 @@ def main():
             print()
 
     if use_existing:
-        print_color(Colors.GREEN, "✅ Using existing configuration")
+        print_color(Colors.GREEN, f"{Icons.CHECKMARK} Using existing configuration")
         env_content = env_file.read_text()
         backend_port = DEFAULT_BACKEND_PORT
         webui_port = DEFAULT_WEBUI_PORT
@@ -505,11 +582,11 @@ def main():
                         f.write("# Ushadow Secrets\n")
                         f.write("# DO NOT COMMIT - Contains sensitive credentials\n\n")
                         yaml.dump(secrets_data, f, default_flow_style=False, sort_keys=False)
-                    print_color(Colors.GREEN, "✅ Admin credentials saved to secrets.yaml")
+                    print_color(Colors.GREEN, f"{Icons.CHECKMARK} Admin credentials saved to secrets.yaml")
                 except Exception as e:
-                    print_color(Colors.YELLOW, f"⚠️  Could not save admin credentials: {e}")
+                    print_color(Colors.YELLOW, f"{Icons.WARNING}  Could not save admin credentials: {e}")
 
-        print_color(Colors.BLUE, "🔧 Generating configuration...")
+        print_color(Colors.BLUE, f"{Icons.WRENCH} Generating configuration...")
         print()
         config = generate_env_file(
             env_name=env_name,

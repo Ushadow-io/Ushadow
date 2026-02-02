@@ -25,7 +25,7 @@ import {
   getActiveOmiDeviceId,
   setActiveOmiDevice,
   clearActiveOmiDevice,
-} from '../utils/omiDeviceStorage';
+} from '../_utils/omiDeviceStorage';
 
 interface OmiDeviceSectionProps {
   webSocketUrl: string;

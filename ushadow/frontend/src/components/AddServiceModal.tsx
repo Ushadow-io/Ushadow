@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { X, Plus, Loader2, Server } from 'lucide-react'
 import { servicesApi, ComposeService } from '../services/api'
 
@@ -13,6 +14,7 @@ export default function AddServiceModal({
   onClose,
   onServiceInstalled,
 }: AddServiceModalProps) {
+  const navigate = useNavigate()
   const [services, setServices] = useState<ComposeService[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)

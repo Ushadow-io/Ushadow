@@ -45,6 +45,7 @@ from src.models.github_import import (
     detect_import_source,
 )
 from src.services.auth import get_current_user
+from src.services.keycloak_auth import get_current_user_hybrid
 from src.models.user import User
 from src.config.yaml_parser import ComposeParser
 
@@ -292,6 +293,7 @@ def generate_compose_from_dockerhub(
     display_name: Optional[str] = None,
     description: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
+    requires: Optional[List[str]] = None,
 ) -> str:
     """Generate a docker-compose.yaml from Docker Hub image info."""
     yaml = YAML()
@@ -301,7 +303,7 @@ def generate_compose_from_dockerhub(
     service_metadata = {
         'display_name': display_name or service_name.replace('-', ' ').title(),
         'description': description or f"Imported from Docker Hub: {image_info.full_image_name}",
-        'requires': [],
+        'requires': requires or [],
         'optional': [],
         'dockerhub_source': {
             'namespace': image_info.namespace,
@@ -329,9 +331,9 @@ def generate_compose_from_dockerhub(
             }
         },
         'networks': {
-            'infra-network': {
+            'ushadow-network': {
                 'external': True,
-                'name': '${COMPOSE_PROJECT_NAME:-ushadow}_infra-network'
+                'name': 'ushadow-network'
             }
         }
     }
@@ -384,7 +386,7 @@ def generate_compose_from_dockerhub(
             compose_data['volumes'] = volume_definitions
 
     # Add network
-    service_config['networks'] = ['infra-network']
+    service_config['networks'] = ['ushadow-network']
 
     # Add extra_hosts for host.docker.internal
     service_config['extra_hosts'] = ['host.docker.internal:host-gateway']
@@ -415,7 +417,7 @@ def generate_compose_from_dockerhub(
 @router.post("/scan", response_model=GitHubScanResponse)
 async def scan_github_repo(
     request: GitHubImportRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> GitHubScanResponse:
     """
     Scan a GitHub repository for docker-compose files.
@@ -485,7 +487,7 @@ async def scan_github_repo(
 async def parse_compose_file(
     github_url: str,
     compose_path: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> ComposeParseResponse:
     """
     Parse a docker-compose file and extract service/environment information.
@@ -536,7 +538,7 @@ async def parse_compose_file(
 @router.post("/register", response_model=ImportServiceResponse)
 async def register_imported_service(
     request: ImportServiceRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> ImportServiceResponse:
     """
     Register an imported service from GitHub.
@@ -637,8 +639,8 @@ async def register_imported_service(
                 f.write('\n'.join(env_file_content) + '\n')
 
         # Save service configuration to settings
-        from src.config.omegaconf_settings import get_settings_store
-        settings = get_settings_store()
+        from src.config import get_settings_store as get_settings
+        settings = get_settings()
 
         service_config_key = f"imported_services.{safe_name}"
         await settings.update({
@@ -660,12 +662,13 @@ async def register_imported_service(
         registry = get_compose_registry()
         registry.refresh()
 
-        # Auto-install the service (mark as added so it shows in installed services)
-        installed_key = f"installed_services.{request.service_name}"
-        await settings.update({
-            f"{installed_key}.added": True,
-            f"{installed_key}.enabled": True
-        })
+        # Auto-install the service (add to installed list)
+        installed_services = await settings.get("installed_services") or []
+        if request.service_name not in installed_services:
+            installed_services.append(request.service_name)
+            await settings.update({
+                "installed_services": installed_services
+            })
 
         logger.info(f"Imported and installed service '{request.service_name}' from GitHub: {request.github_url}")
 
@@ -687,12 +690,12 @@ async def register_imported_service(
 
 @router.get("/imported")
 async def list_imported_services(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> List[Dict[str, Any]]:
     """List all imported services from GitHub."""
     try:
-        from src.config.omegaconf_settings import get_settings_store
-        settings = get_settings_store()
+        from src.config import get_settings_store as get_settings
+        settings = get_settings()
 
         imported = settings.get("imported_services", {})
         return [
@@ -711,12 +714,12 @@ async def list_imported_services(
 @router.delete("/imported/{service_id}")
 async def delete_imported_service(
     service_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Delete an imported service."""
     try:
-        from src.config.omegaconf_settings import get_settings_store
-        settings = get_settings_store()
+        from src.config import get_settings_store as get_settings
+        settings = get_settings()
 
         imported = settings.get("imported_services", {})
         if service_id not in imported:
@@ -760,12 +763,12 @@ async def delete_imported_service(
 async def update_imported_service_config(
     service_id: str,
     config: ImportedServiceConfig,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Update configuration for an imported service."""
     try:
-        from src.config.omegaconf_settings import get_settings_store
-        settings = get_settings_store()
+        from src.config import get_settings_store as get_settings
+        settings = get_settings()
 
         imported = settings.get("imported_services", {})
         if service_id not in imported:
@@ -814,7 +817,7 @@ async def update_imported_service_config(
 @router.post("/dockerhub/scan", response_model=DockerHubScanResponse)
 async def scan_dockerhub_image(
     request: DockerHubImportRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> DockerHubScanResponse:
     """
     Scan a Docker Hub image for information.
@@ -887,7 +890,8 @@ async def register_dockerhub_service(
     shadow_header_value: Optional[str] = None,
     route_path: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
-    current_user: User = Depends(get_current_user)
+    requires: Optional[List[str]] = None,
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> ImportServiceResponse:
     """
     Register a service from Docker Hub by generating a compose file.
@@ -952,7 +956,8 @@ async def register_dockerhub_service(
             shadow_header=shadow_header,
             display_name=display_name,
             description=description,
-            capabilities=capabilities
+            capabilities=capabilities,
+            requires=requires
         )
 
         # Ensure compose directory exists
@@ -982,8 +987,8 @@ async def register_dockerhub_service(
                 f.write('\n'.join(env_file_content) + '\n')
 
         # Save service configuration to settings
-        from src.config.omegaconf_settings import get_settings_store
-        settings = get_settings_store()
+        from src.config import get_settings_store as get_settings
+        settings = get_settings()
 
         service_config_key = f"imported_services.{safe_name}"
         await settings.update({
@@ -1008,12 +1013,13 @@ async def register_dockerhub_service(
         registry = get_compose_registry()
         registry.refresh()
 
-        # Auto-install the service (mark as added so it shows in installed services)
-        installed_key = f"installed_services.{service_name}"
-        await settings.update({
-            f"{installed_key}.added": True,
-            f"{installed_key}.enabled": True
-        })
+        # Auto-install the service (add to installed list)
+        installed_services = await settings.get("installed_services") or []
+        if service_name not in installed_services:
+            installed_services.append(service_name)
+            await settings.update({
+                "installed_services": installed_services
+            })
 
         logger.info(f"Imported and installed service '{service_name}' from Docker Hub: {image_info.full_image_name}")
 
@@ -1045,7 +1051,7 @@ async def register_dockerhub_service(
 @router.post("/unified/scan", response_model=UnifiedScanResponse)
 async def unified_scan(
     request: UnifiedImportRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ) -> UnifiedScanResponse:
     """
     Scan any supported source (GitHub or Docker Hub).

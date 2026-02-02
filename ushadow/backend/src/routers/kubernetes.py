@@ -16,6 +16,7 @@ from src.models.kubernetes import (
 from src.services.kubernetes_manager import get_kubernetes_manager
 from src.services.compose_registry import get_compose_registry
 from src.services.auth import get_current_user
+from src.services.keycloak_auth import get_current_user_hybrid
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class CreateEnvmapRequest(BaseModel):
 @router.post("", response_model=KubernetesCluster)
 async def add_cluster(
     cluster_data: KubernetesClusterCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Add a new Kubernetes cluster.
@@ -64,7 +65,7 @@ async def add_cluster(
 
 @router.get("", response_model=List[KubernetesCluster])
 async def list_clusters(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """List all registered Kubernetes clusters."""
     k8s_manager = await get_kubernetes_manager()
@@ -74,7 +75,7 @@ async def list_clusters(
 @router.get("/{cluster_id}", response_model=KubernetesCluster)
 async def get_cluster(
     cluster_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """Get details of a specific Kubernetes cluster."""
     k8s_manager = await get_kubernetes_manager()
@@ -89,7 +90,7 @@ async def get_cluster(
 @router.get("/{cluster_id}/nodes", response_model=List[KubernetesNode])
 async def list_cluster_nodes(
     cluster_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     List all nodes in a Kubernetes cluster.
@@ -112,7 +113,7 @@ async def list_cluster_nodes(
 @router.delete("/{cluster_id}")
 async def remove_cluster(
     cluster_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """Remove a Kubernetes cluster from Ushadow."""
     k8s_manager = await get_kubernetes_manager()
@@ -127,7 +128,7 @@ async def remove_cluster(
 
 @router.get("/services/available")
 async def get_available_services(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Get list of all available services from compose registry.
@@ -156,7 +157,7 @@ async def get_available_services(
 
 @router.get("/services/infra")
 async def get_infra_services(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Get list of infrastructure services.
@@ -195,7 +196,7 @@ async def get_infra_services(
 async def scan_cluster_for_infra(
     cluster_id: str,
     request: ScanInfraRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Scan a Kubernetes cluster for existing infrastructure services.
@@ -233,7 +234,7 @@ async def scan_cluster_for_infra(
 async def create_or_update_envmap(
     cluster_id: str,
     request: CreateEnvmapRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Create or update ConfigMap and Secret for a service.
@@ -272,7 +273,7 @@ async def create_or_update_envmap(
 async def deploy_service_to_cluster(
     cluster_id: str,
     request: DeployServiceRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Deploy a service to a Kubernetes cluster.
@@ -296,6 +297,7 @@ async def deploy_service_to_cluster(
     try:
         resolved_service = await deployment_manager.resolve_service_for_deployment(
             request.service_id,
+            deploy_target=cluster_id,
             config_id=request.config_id
         )
     except ValueError as e:
@@ -312,14 +314,8 @@ async def deploy_service_to_cluster(
         "volumes": resolved_service.volumes,  # Volume mounts for config files
     }
 
-    # Update ServiceConfig status to DEPLOYING if config_id provided
-    if request.config_id:
-        from src.services.service_config_manager import get_service_config_manager
-        from src.models.service_config import ServiceConfigStatus
-
-        sc_manager = get_service_config_manager()
-        sc_manager.update_instance_status(request.config_id, ServiceConfigStatus.DEPLOYING)
-        logger.info(f"Updated ServiceConfig {request.config_id} status to DEPLOYING")
+    # TODO: Track deployment status in Deployment record, not ServiceConfig
+    # ServiceConfig no longer tracks deployment state (removed in architecture refactor)
 
     # Add node selector if node_name specified
     k8s_spec = request.k8s_spec or KubernetesDeploymentSpec()
@@ -339,39 +335,15 @@ async def deploy_service_to_cluster(
     )
 
     if not success:
-        # Update ServiceConfig status to ERROR if deployment failed
-        if request.config_id:
-            from src.services.service_config_manager import get_service_config_manager
-            from src.models.service_config import ServiceConfigStatus
-
-            sc_manager = get_service_config_manager()
-            sc_manager.update_instance_status(
-                request.config_id,
-                ServiceConfigStatus.ERROR,
-                error=message
-            )
-            logger.error(f"Updated ServiceConfig {request.config_id} status to ERROR: {message}")
-
+        # TODO: Track deployment errors in Deployment record
+        logger.error(f"K8s deployment failed for config {request.config_id}: {message}")
         raise HTTPException(status_code=500, detail=message)
 
-    # Update ServiceConfig status if config_id was provided
+    # TODO: Track deployment success and access URL in Deployment record
     if request.config_id:
-        from src.services.service_config_manager import get_service_config_manager
-        from src.models.service_config import ServiceConfigStatus
-
-        sc_manager = get_service_config_manager()
-
-        # Build access URL (use service name if available)
         service_name = resolved_service.name
         access_url = f"http://{service_name}.{request.namespace}.svc.cluster.local"
-
-        # Update status to RUNNING after successful deployment
-        sc_manager.update_instance_status(
-            request.config_id,
-            ServiceConfigStatus.RUNNING,
-            access_url=access_url
-        )
-        logger.info(f"Updated ServiceConfig {request.config_id} status to RUNNING")
+        logger.info(f"K8s deployment successful for config {request.config_id}, access URL: {access_url}")
 
     return {
         "success": True,
@@ -386,7 +358,7 @@ async def deploy_service_to_cluster(
 async def list_pods(
     cluster_id: str,
     namespace: str = "ushadow",
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     List all pods in a namespace.
@@ -415,7 +387,7 @@ async def get_pod_logs(
     namespace: str = "ushadow",
     previous: bool = False,
     tail_lines: int = 100,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Get logs from a pod.
@@ -458,7 +430,7 @@ async def get_pod_events(
     cluster_id: str,
     pod_name: str,
     namespace: str = "ushadow",
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Get events for a pod (useful for debugging why pod won't start).

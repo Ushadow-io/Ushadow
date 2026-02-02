@@ -20,10 +20,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.models.user import User  # Beanie document model
 
-from src.routers import health, wizard, chronicle, auth, feature_flags
+from src.routers import health, wizard, chronicle, auth, auth_token, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
-from src.routers import kubernetes, tailscale, unodes, docker
-from src.routers import github_import
+from src.routers import kubernetes, tailscale, unodes, docker, sse
+from src.routers import github_import, audio_relay
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -31,7 +31,7 @@ from src.services.deployment_manager import init_deployment_manager
 from src.services.kubernetes_manager import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
-from src.config.omegaconf_settings import get_settings_store
+from src.config import get_settings_store
 from src.utils.telemetry import TelemetryClient
 from src.utils.version import VERSION as BACKEND_VERSION
 
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Telemetry configuration
 TELEMETRY_ENDPOINT = os.environ.get(
     "TELEMETRY_ENDPOINT",
-    "https://ushadow-telemetry.your-subdomain.workers.dev"
+    "https://ushadow-telemetry.stu-6b7.workers.dev"
 )
 
 
@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Get settings: OS env vars take priority over OmegaConf YAML
     env_name = os.environ.get("COMPOSE_PROJECT_NAME") or await config.get("environment.name") or "ushadow"
-    mongodb_uri = os.environ.get("MONGODB_URI") or await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
+    mongodb_uri = os.environ.get("MONGODB_URI") or await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017/?replicaSet=rs0"
     mongodb_database = os.environ.get("MONGODB_DATABASE") or await config.get("infrastructure.mongodb_database") or "ushadow"
 
     logger.info("🚀 ushadow starting up...")
@@ -117,7 +117,10 @@ async def lifespan(app: FastAPI):
     # Initialize MongoDB connection
     client = AsyncIOMotorClient(mongodb_uri)
     db = client[mongodb_database]
-    
+
+    # Store db in app.state for health checks
+    app.state.db = db
+
     # Initialize Beanie ODM with document models
     await init_beanie(database=db, document_models=[User])
     logger.info("✓ Beanie ODM initialized")
@@ -141,6 +144,13 @@ async def lifespan(app: FastAPI):
     # Initialize Kubernetes manager
     await init_kubernetes_manager(db)
     logger.info("✓ Kubernetes manager initialized")
+
+    # Register redirect URI with Keycloak for this environment
+    try:
+        from src.services.keycloak_admin import register_current_environment_redirect_uri
+        await register_current_environment_redirect_uri()
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to register Keycloak redirect URI (non-critical): {e}")
 
     # Start background task for stale u-node checking
     stale_check_task = asyncio.create_task(check_stale_unodes_task())
@@ -168,6 +178,9 @@ setup_middleware(app)
 # Include routers
 app.include_router(health.router, tags=["health"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(auth_token.router, prefix="/api/auth", tags=["auth"])  # Token exchange endpoint
+from src.routers import keycloak_admin
+app.include_router(keycloak_admin.router, prefix="/api/keycloak-admin", tags=["keycloak-admin"])
 app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"])
 app.include_router(chronicle.router, prefix="/api/chronicle", tags=["chronicle"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
@@ -181,7 +194,9 @@ app.include_router(service_configs.router, tags=["service-configs"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(deployments.router, tags=["deployments"])
 app.include_router(tailscale.router, tags=["tailscale"])
+app.include_router(sse.router, prefix="/api/sse", tags=["sse"])
 app.include_router(github_import.router, prefix="/api/github-import", tags=["github-import"])
+app.include_router(audio_relay.router, tags=["audio"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 
 from src.services.docker_manager import get_docker_manager
 from src.services.auth import get_current_user
+from src.services.keycloak_auth import get_current_user_hybrid
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ router = APIRouter()
 
 @router.get("/status")
 async def get_docker_status(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Check if Docker daemon is available.

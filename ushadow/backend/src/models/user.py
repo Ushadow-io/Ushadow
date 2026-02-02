@@ -72,6 +72,8 @@ class User(BeanieBaseUser, Document):
 
     # Custom fields
     display_name: Optional[str] = None
+    name: Optional[str] = None  # Full name (from Keycloak or registration)
+    keycloak_id: Optional[str] = None  # Keycloak subject ID (UUID) for federated users
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

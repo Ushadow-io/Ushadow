@@ -1,0 +1,103 @@
+{
+  "realm": "ushadow",
+  "enabled": true,
+  "displayName": "Ushadow",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
+  "resetPasswordAllowed": true,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "sslRequired": "none",
+  "accessTokenLifespan": 86400,
+  "attributes": {
+    "frontendUrl": "http://localhost:8081"
+  },
+  "loginTheme": "keycloak",
+  "accountTheme": "keycloak",
+  "emailTheme": "keycloak",
+  "clients": [
+    {
+      "clientId": "ushadow-backend",
+      "name": "Ushadow Backend API",
+      "description": "Backend API server with authorization services",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:*"],
+      "webOrigins": ["+"],
+      "secret": "{{BACKEND_CLIENT_SECRET}}",
+      "attributes": {
+        "access.token.lifespan": "86400"
+      }
+    },
+    {
+      "clientId": "ushadow-frontend",
+      "name": "Ushadow Web UI",
+      "description": "React frontend application",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:*/*",
+        "http://localhost:*/auth/callback"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "ushadow-chronicle",
+      "name": "Chronicle Service",
+      "description": "Chronicle service client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "secret": "{{CHRONICLE_CLIENT_SECRET}}"
+    }
+  ],
+  "users": [
+    {
+      "username": "alice@example.com",
+      "email": "alice@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Alice",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "bob@example.com",
+      "email": "bob@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Bob",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1274 @@
+"""
+Unified Services API - Single entry point for all service operations.
+
+This router consolidates:
+- Service discovery (from compose files)
+- Docker container lifecycle (start/stop/restart)
+- Configuration management (env vars, enabled state)
+- Installation management
+
+All operations go through the ServiceOrchestrator facade.
+
+Endpoint Groups:
+- Discovery:    GET /, /catalog, /by-capability/{cap}
+- Status:       GET /docker-status, /status (BEFORE /{name} to avoid shadowing)
+- Single:       GET /{name}, /{name}/status, /{name}/docker
+- Lifecycle:    POST /{name}/start, /stop, /restart; GET /{name}/logs
+- Config:       GET/PUT /{name}/enabled, /{name}/config, /{name}/env, /{name}/resolve
+- Installation: POST /{name}/install, /uninstall, /register
+"""
+
+import logging
+from typing import List, Dict, Any, Optional
+
+from fastapi import APIRouter, HTTPException, Depends, Request
+from pydantic import BaseModel, Field
+
+from src.services.service_orchestrator import get_service_orchestrator, ServiceOrchestrator
+from src.services.auth import get_current_user
+from src.services.keycloak_auth import get_current_user_hybrid
+from src.models.user import User
+from src.services.docker_manager import ServiceType, IntegrationType
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+# =============================================================================
+# Request/Response Models
+# =============================================================================
+
+class EnabledRequest(BaseModel):
+    """Request to enable/disable a service."""
+    enabled: bool
+
+
+class EnvVarConfigRequest(BaseModel):
+    """Request to configure an environment variable."""
+    name: str
+    source: str  # "setting", "new_setting", "literal", "default"
+    setting_path: Optional[str] = None
+    new_setting_path: Optional[str] = None
+    value: Optional[str] = None
+
+
+class EnvConfigUpdateRequest(BaseModel):
+    """Request to update all env var configs for a service."""
+    env_vars: List[EnvVarConfigRequest]
+
+
+class ServiceEndpointRequest(BaseModel):
+    """Service endpoint information."""
+    url: str
+    integration_type: str = "rest"
+    health_check_path: Optional[str] = None
+    requires_auth: bool = False
+    auth_type: Optional[str] = None
+
+
+class RegisterServiceRequest(BaseModel):
+    """Request to register a dynamic service."""
+    service_name: str = Field(..., description="Unique service name")
+    description: str = ""
+    service_type: str = "application"
+    endpoints: List[ServiceEndpointRequest] = []
+    user_controllable: bool = True
+    compose_file: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class ActionResponse(BaseModel):
+    """Standard action response."""
+    success: bool
+    message: str
+
+
+class LogsResponse(BaseModel):
+    """Service logs response."""
+    success: bool
+    logs: str
+
+
+class PortConflictInfo(BaseModel):
+    """Information about a port conflict."""
+    port: int
+    env_var: Optional[str] = None
+    used_by: str
+    suggested_port: int
+
+
+class PreflightCheckResponse(BaseModel):
+    """Response from pre-start checks."""
+    can_start: bool
+    port_conflicts: List[PortConflictInfo] = []
+    message: Optional[str] = None
+
+
+class PortOverrideRequest(BaseModel):
+    """Request to override a service's port."""
+    env_var: str = Field(..., description="Environment variable name (e.g., CHRONICLE_PORT)")
+    port: int = Field(..., ge=1, le=65535, description="New port number")
+
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+
+def get_orchestrator() -> ServiceOrchestrator:
+    """Dependency to get the service orchestrator."""
+    return get_service_orchestrator()
+
+
+# =============================================================================
+# Discovery Endpoints
+# =============================================================================
+
+@router.get("/")
+async def list_services(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> List[Dict[str, Any]]:
+    """
+    List all installed services.
+
+    Returns services that are in default_services or user-added,
+    with their current docker status.
+    """
+    return await orchestrator.list_installed_services()
+
+
+@router.get("/catalog")
+async def list_catalog(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> List[Dict[str, Any]]:
+    """
+    List all available services (catalog).
+
+    Returns all discovered services regardless of installation status.
+    Each service includes an 'installed' flag.
+    """
+    return await orchestrator.list_catalog()
+
+
+@router.get("/by-capability/{capability}")
+async def get_services_by_capability(
+    capability: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> List[Dict[str, Any]]:
+    """
+    Get all services that require a specific capability.
+
+    Args:
+        capability: Capability name (e.g., 'llm', 'transcription')
+    """
+    return await orchestrator.get_services_by_capability(capability)
+
+
+# =============================================================================
+# Status Endpoints (MUST come before /{name} to avoid route shadowing)
+# =============================================================================
+
+@router.get("/docker-status")
+async def get_docker_status(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> Dict[str, Any]:
+    """Check if Docker daemon is available."""
+    return orchestrator.get_docker_status()
+
+
+@router.get("/status")
+async def get_all_statuses(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Get lightweight status for all services.
+
+    Returns only name, status, and health - optimized for polling.
+    """
+    return await orchestrator.get_all_statuses()
+
+
+# =============================================================================
+# Single Service Endpoints
+# =============================================================================
+
+@router.get("/{name}")
+async def get_service(
+    name: str,
+    include_env: bool = False,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get details for a specific service.
+
+    Args:
+        name: Service name (e.g., 'chronicle')
+        include_env: Include environment variable definitions
+    """
+    service = await orchestrator.get_service(name, include_env=include_env)
+    if not service:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return service
+
+
+@router.get("/{name}/status")
+async def get_service_status(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> Dict[str, Any]:
+    """Get status for a single service."""
+    status = await orchestrator.get_service_status(name)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return status
+
+
+@router.get("/{name}/docker")
+async def get_docker_details(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> Dict[str, Any]:
+    """
+    Get Docker container details for a service.
+
+    Returns container_id, status, image, ports, health, endpoints, etc.
+    """
+    details = await orchestrator.get_docker_details(name)
+    if details is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return details.to_dict()
+
+
+# =============================================================================
+# Lifecycle Endpoints
+# =============================================================================
+
+@router.get("/{name}/preflight", response_model=PreflightCheckResponse)
+async def preflight_check(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> PreflightCheckResponse:
+    """
+    Pre-start checks for a service.
+
+    Checks for port conflicts before attempting to start a service.
+    If conflicts are found, returns suggested alternative ports.
+    """
+    from src.services.docker_manager import get_docker_manager
+
+    docker_mgr = get_docker_manager()
+
+    # Check if service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Check for port conflicts
+    conflicts = docker_mgr.check_port_conflicts(name)
+
+    if conflicts:
+        return PreflightCheckResponse(
+            can_start=False,
+            port_conflicts=[
+                PortConflictInfo(
+                    port=c.port,
+                    env_var=c.env_var,
+                    used_by=c.used_by,
+                    suggested_port=c.suggested_port
+                )
+                for c in conflicts
+            ],
+            message=f"Port conflict: {conflicts[0].port} is in use by {conflicts[0].used_by}"
+        )
+
+    return PreflightCheckResponse(can_start=True)
+
+
+@router.post("/{name}/port-override", response_model=ActionResponse)
+async def set_port_override(
+    name: str,
+    request: PortOverrideRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> ActionResponse:
+    """
+    Set a port override for a service.
+
+    This saves the port to service_preferences and sets the environment variable
+    so that subsequent service starts will use the new port.
+    """
+    from src.services.docker_manager import get_docker_manager, check_port_in_use
+    from src.config import get_settings
+
+    docker_mgr = get_docker_manager()
+
+    # Validate service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Check that the new port is available
+    conflict = check_port_in_use(request.port)
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Port {request.port} is already in use by {conflict}"
+        )
+
+    # Save the port override simply as services.{name}.ports.{ENV_VAR}
+    settings = get_settings()
+    # Normalize service name for config key (replace - with _)
+    config_key = name.replace("-", "_")
+    await settings.update({
+        f"services.{config_key}.ports.{request.env_var}": request.port
+    })
+
+    # Also set the environment variable for immediate use
+    import os
+    os.environ[request.env_var] = str(request.port)
+
+    logger.info(f"Set port override: services.{config_key}.ports.{request.env_var}={request.port}")
+
+    return ActionResponse(
+        success=True,
+        message=f"Port {request.port} configured for {name}"
+    )
+
+
+@router.get("/{name}/connection-info")
+async def get_service_connection_info(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get connection info for a service with both proxy and direct URLs.
+
+    Returns TWO connection patterns for flexible service integration:
+
+    1. proxy_url (Recommended for REST APIs):
+       - Goes through ushadow backend proxy (/api/services/{name}/proxy/*)
+       - Unified authentication (single JWT)
+       - No CORS issues
+       - Centralized logging/monitoring
+
+    2. direct_url (For WebSocket/Streaming):
+       - Direct connection to service (http://localhost:{port})
+       - Low latency for real-time data
+       - Use for: WebSocket, SSE, audio streaming (ws_pcm)
+
+    Example:
+        const info = await api.get('/api/services/chronicle-backend/connection-info')
+
+        // For REST APIs (conversations, queue, config)
+        axios.get(`${info.proxy_url}/api/conversations`)  // -> /api/services/chronicle-backend/proxy/api/conversations
+
+        // For WebSocket streaming (ws_pcm)
+        new WebSocket(`ws://localhost:${info.port}/ws_pcm`)  // -> ws://localhost:8082/ws_pcm
+    """
+    import httpx
+    import os
+    from src.services.docker_manager import get_docker_manager
+    from src.services.deployment_manager import get_deployment_manager
+
+    docker_mgr = get_docker_manager()
+    deployment_mgr = get_deployment_manager()
+
+    container_name = None
+    internal_port = 8000
+    port = None
+    env_var = None
+    default_port = None
+
+    # First check deployments (user-deployed services override infrastructure)
+    all_deployments = await deployment_mgr.list_deployments()
+
+    # Find deployment matching service name
+    matching_deployment = None
+    for deployment in all_deployments:
+        if deployment.service_id == name:
+            # Prefer running deployments
+            if deployment.status == "running":
+                matching_deployment = deployment
+                break
+            elif not matching_deployment:
+                matching_deployment = deployment
+
+    if matching_deployment:
+        # Use deployment's container name and port
+        container_name = matching_deployment.container_name
+
+        # Get external port from deployment
+        port = matching_deployment.exposed_port
+
+        # Parse internal port from deployed_config
+        internal_port = 8000  # default
+        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
+            ports_list = matching_deployment.deployed_config["ports"]
+            if ports_list and len(ports_list) > 0:
+                # Parse first port mapping: "8081:8000" -> container port is 8000
+                first_port = ports_list[0]
+                if ":" in first_port:
+                    _, container_port = first_port.split(":", 1)
+                    internal_port = int(container_port)
+                else:
+                    internal_port = int(first_port)
+
+        # For deployments, we don't have env_var/default_port metadata
+        env_var = None
+        default_port = None
+
+        logger.info(f"[CONNECTION-INFO] Using deployment: {container_name}:{internal_port}, exposed port: {port}")
+
+    elif name in docker_mgr.MANAGEABLE_SERVICES:
+        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        ports_info = docker_mgr.get_service_ports(name)
+
+        if not ports_info:
+            return {
+                "service": name,
+                "proxy_url": None,
+                "direct_url": None,
+                "internal_url": None,
+                "available": False,
+                "message": "Service has no exposed ports"
+            }
+
+        # Use the first port (primary port)
+        primary_port = ports_info[0]
+        port = primary_port.get("port") or primary_port.get("default_port")
+        internal_port = primary_port.get("container_port", 8000)
+        env_var = primary_port.get("env_var")
+        default_port = primary_port.get("default_port")
+
+        # Build container name with project prefix
+        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+        container_name = f"{project_name}-{name}"
+
+        logger.info(f"[CONNECTION-INFO] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}, exposed port: {port}")
+
+    else:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    # Import URL utilities
+    from src.utils.service_urls import get_internal_proxy_url, get_relative_proxy_url
+
+    # Proxy URL (for frontend REST API access through ushadow)
+    proxy_url = get_relative_proxy_url(name)
+
+    # Direct container URL (for health checks only - not exposed in API)
+    direct_container_url = f"http://{container_name}:{internal_port}"
+
+    # Internal URL (for backend-to-service communication)
+    # Use proxy with full backend hostname for stable service discovery
+    internal_url = get_internal_proxy_url(name)
+
+    # Direct URL (for frontend WebSocket/streaming access)
+    # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
+    # WebSocket routes like /ws_pcm are configured in Tailscale Serve
+    direct_url = None
+    try:
+        from src.utils.tailscale_serve import get_tailscale_status
+        ts_status = get_tailscale_status()
+        if ts_status.hostname:
+            # Use HTTPS (Tailscale Serve provides TLS)
+            direct_url = f"https://{ts_status.hostname}"
+    except Exception as e:
+        logger.warning(f"Could not get Tailscale hostname for direct_url: {e}")
+        # Fallback to localhost (for development)
+        direct_url = f"http://localhost:{port}" if port else None
+
+    # Check if service is available via health endpoint
+    # Use direct container URL to avoid circular proxy calls
+    available = False
+    if direct_container_url:
+        # Backend checks health using direct container URL (not proxy)
+        for health_path in ["/health", "/readiness", "/api/health", "/"]:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    response = await client.get(f"{direct_container_url}{health_path}")
+                    if response.status_code == 200:
+                        available = True
+                        break
+            except Exception:
+                continue
+
+    return {
+        "service": name,
+        # Two-tier architecture URLs
+        "proxy_url": proxy_url,  # REST APIs → /api/services/chronicle-backend/proxy/*
+        "direct_url": direct_url,  # WebSocket/Streaming → wss://red.spangled-kettle.ts.net
+        "internal_url": internal_url,  # Backend only → http://chronicle-backend:8000
+        # Port information
+        "port": port,  # External port (for direct connections, mainly for mobile/desktop apps)
+        "env_var": env_var,
+        "default_port": default_port,
+        # Status
+        "available": available,
+        # Usage hints for frontend
+        "usage": {
+            "rest_api": f"Use proxy_url: axios.get('{proxy_url}/api/endpoint')",
+            "websocket": f"Use direct_url with path: new WebSocket(direct_url.replace('https', 'wss') + '/ws_pcm')",
+            "streaming": f"Use direct_url with path: EventSource('{direct_url}/stream')"
+        }
+    }
+
+
+@router.api_route("/{name}/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def proxy_service_request(
+    name: str,
+    path: str,
+    request: Request,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+):
+    """
+    Generic proxy endpoint for service REST APIs.
+
+    Routes frontend requests to managed services (MANAGEABLE_SERVICES) or deployed services.
+    This provides:
+    - Unified authentication (JWT forwarded to service)
+    - No CORS issues
+    - Centralized logging/monitoring
+    - Service discovery (no hardcoded ports)
+    - Support for both local and remote deployments
+
+    Usage:
+        Frontend: axios.get('/api/services/chronicle-backend/proxy/api/conversations')
+        Backend: Forwards to http://chronicle-backend-abc123:8000/api/conversations
+
+    For WebSocket/streaming, use direct_url from connection-info instead.
+    """
+    import httpx
+    import os
+    from src.services.docker_manager import get_docker_manager
+    from src.services.deployment_manager import get_deployment_manager
+
+    docker_mgr = get_docker_manager()
+    deployment_mgr = get_deployment_manager()
+
+    container_name = None
+    internal_port = 8000
+    is_remote = False
+    remote_url = None
+
+    # First check deployments (user-deployed services override infrastructure)
+    all_deployments = await deployment_mgr.list_deployments()
+
+    # Find deployment matching service name
+    matching_deployment = None
+    for deployment in all_deployments:
+        # Match by service_id (now just the service name, e.g., "chronicle-backend")
+        if deployment.service_id == name:
+            # Prefer running deployments
+            if deployment.status == "running":
+                matching_deployment = deployment
+                break
+            elif not matching_deployment:
+                matching_deployment = deployment
+
+    if matching_deployment:
+        # Extract container details from deployment
+        container_name = matching_deployment.container_name
+
+        # Verify the container actually exists and is running
+        try:
+            container = docker_mgr._client.containers.get(container_name)
+            if container.status != "running":
+                logger.warning(f"[PROXY] Deployment container {container_name} exists but is not running (status: {container.status}), ignoring deployment")
+                matching_deployment = None
+        except Exception as e:
+            logger.warning(f"[PROXY] Deployment container {container_name} not found: {e}, ignoring deployment")
+            matching_deployment = None
+
+    if matching_deployment:
+        # For Docker networking, we need the CONTAINER port, not the host port
+        # Parse from deployed_config ports if available
+        internal_port = 8000  # default
+        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
+            ports = matching_deployment.deployed_config["ports"]
+            if ports and len(ports) > 0:
+                # Parse first port mapping: "8081:8000" -> container port is 8000
+                first_port = ports[0]
+                if ":" in first_port:
+                    _, container_port = first_port.split(":", 1)
+                    internal_port = int(container_port)
+                else:
+                    internal_port = int(first_port)
+
+        # Check if remote deployment
+        # Get current hostname from ENV_NAME, COMPOSE_PROJECT_NAME, or UNODE_HOSTNAME
+        current_hostname = (
+            os.getenv("ENV_NAME") or
+            os.getenv("COMPOSE_PROJECT_NAME", "").replace("ushadow-", "") or
+            os.getenv("UNODE_HOSTNAME", "local")
+        )
+
+        # Normalize both to compare - remove ushadow- prefix if present
+        deployment_host_normalized = (matching_deployment.unode_hostname or "").replace("ushadow-", "")
+        current_host_normalized = current_hostname.replace("ushadow-", "")
+
+        logger.info(f"[PROXY] Deployment check: deployment={deployment_host_normalized}, current={current_host_normalized}")
+        is_remote = deployment_host_normalized and deployment_host_normalized != current_host_normalized
+
+        if is_remote:
+            # For remote deployments, proxy through the remote unode manager
+            # TODO: Implement remote proxy via unode manager API
+            raise HTTPException(
+                status_code=501,
+                detail=f"Remote service proxy not yet implemented for {name} on {matching_deployment.unode_hostname}"
+            )
+
+        logger.info(f"[PROXY] Using deployed service: {container_name}:{internal_port} (deployment_id={matching_deployment.id})")
+
+    elif name in docker_mgr.MANAGEABLE_SERVICES:
+        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        # Use get_service_info to find the actual running container
+        service_info = docker_mgr.get_service_info(name)
+
+        if service_info.status != "running":
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' is not running (status: {service_info.status})"
+            )
+
+        if service_info.error:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' error: {service_info.error}"
+            )
+
+        ports = docker_mgr.get_service_ports(name)
+        if ports:
+            primary_port = ports[0]
+            container_port = primary_port.get("container_port", 8000)
+            # Convert to int if it's a string
+            if isinstance(container_port, str):
+                try:
+                    internal_port = int(container_port)
+                except ValueError:
+                    logger.warning(f"[PROXY] Invalid container_port '{container_port}' for {name}, using default 8000")
+                    internal_port = 8000
+            else:
+                internal_port = container_port or 8000
+
+        # Use the actual container name found by get_service_info
+        # This will be something like "ushadow-orange-chronicle-backend"
+        from src.services.docker_manager import ServiceStatus
+        try:
+            # Get container object to extract name
+            container = docker_mgr._client.containers.get(service_info.container_id)
+            container_name = container.name
+            logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}")
+        except Exception as e:
+            target_url = f"http://{container_name if 'container_name' in locals() else 'unknown'}:{internal_port}"
+            logger.error(f"[PROXY] Failed to get container details for {name}: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' is not reachable (trying {target_url})"
+            )
+
+    else:
+        # Service not found anywhere
+        raise HTTPException(
+            status_code=404,
+            detail=f"Service '{name}' not found in deployments or MANAGEABLE_SERVICES"
+        )
+
+    internal_url = f"http://{container_name}:{internal_port}"
+
+    # Log the exact URL we're going to proxy to
+    logger.info(f"[PROXY DEBUG] Container: {container_name}, Internal Port: {internal_port}, Full URL: {internal_url}")
+    if matching_deployment:
+        logger.info(f"[PROXY DEBUG] Deployment ID: {matching_deployment.id}, deployed_config ports: {matching_deployment.deployed_config.get('ports') if matching_deployment.deployed_config else 'None'}")
+
+    # Extract token from query params for audio/media requests
+    # We'll move it to Authorization header
+    query_params = dict(request.query_params)
+    extracted_token = None
+    if ('audio' in path or 'media' in path) and 'token' in query_params:
+        extracted_token = query_params.pop('token')
+        logger.info(f"[PROXY] Extracted token from query param for audio request")
+
+    # Build target URL (without token in query string if extracted)
+    target_url = f"{internal_url}/{path}"
+    if query_params:
+        # Rebuild query string without token
+        from urllib.parse import urlencode
+        query_string = urlencode(query_params)
+        if query_string:
+            target_url = f"{target_url}?{query_string}"
+    elif request.url.query and not extracted_token:
+        # Use original query string if we didn't extract token
+        target_url = f"{target_url}?{request.url.query}"
+
+    logger.info(f"Proxying {request.method} {request.url.path} -> {target_url}")
+
+    # Forward request headers (including auth)
+    headers = dict(request.headers)
+
+    # Add extracted token to Authorization header
+    if extracted_token and not headers.get("authorization"):
+        headers["authorization"] = f"Bearer {extracted_token}"
+        logger.info(f"[PROXY] Added Authorization header from extracted token")
+
+    # Log auth header for debugging (masked)
+    auth_header = headers.get("authorization", "")
+    if auth_header:
+        # Show token type and first few chars
+        token_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
+        logger.info(f"[PROXY] Forwarding auth: {token_preview}")
+
+        # Decode token without verification to see payload (for debugging)
+        try:
+            import jwt
+            token = auth_header.replace("Bearer ", "")
+            payload = jwt.decode(token, options={"verify_signature": False})
+            logger.info(f"[PROXY] Token payload: iss={payload.get('iss')}, aud={payload.get('aud')}, sub={payload.get('sub')}")
+        except Exception as e:
+            logger.debug(f"[PROXY] Could not decode token: {e}")
+    else:
+        logger.warning(f"[PROXY] No Authorization header in request to {name}")
+
+    # Remove host header (will be set by httpx)
+    headers.pop("host", None)
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Forward the request
+            if request.method in ["POST", "PUT", "PATCH"]:
+                body = await request.body()
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body
+                )
+            else:
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers
+                )
+
+            # Log the response from Chronicle
+            logger.info(f"[PROXY] Chronicle response: {response.status_code}")
+            if response.status_code == 206:
+                logger.info(f"[PROXY] Partial content response - Content-Range: {response.headers.get('content-range')}, Content-Type: {response.headers.get('content-type')}")
+            if response.status_code not in [200, 206]:
+                logger.warning(f"[PROXY] Chronicle error body: {response.text[:500]}")
+
+            # Forward response headers
+            response_headers = dict(response.headers)
+            # Remove hop-by-hop headers
+            for header in ["connection", "keep-alive", "transfer-encoding"]:
+                response_headers.pop(header, None)
+
+            # Fix Content-Disposition for audio/media files
+            # Change "attachment" to "inline" so browsers play instead of download
+            if 'audio' in path or 'media' in path:
+                content_disp = response_headers.get('content-disposition', '')
+                if 'attachment' in content_disp:
+                    # Change attachment to inline
+                    response_headers['content-disposition'] = content_disp.replace('attachment', 'inline')
+                    logger.info(f"[PROXY] Changed Content-Disposition from attachment to inline")
+
+                # Add CORS headers for audio playback
+                response_headers['access-control-allow-origin'] = '*'
+                response_headers['access-control-expose-headers'] = 'Content-Range, Content-Length, Accept-Ranges'
+
+                logger.info(f"[PROXY] Audio response headers: Content-Type={response_headers.get('content-type')}, Content-Length={response_headers.get('content-length')}, Accept-Ranges={response_headers.get('accept-ranges')}")
+
+            # Return proxied response
+            from fastapi.responses import Response
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=response_headers
+            )
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"Service '{name}' request timed out (trying {target_url})")
+    except httpx.ConnectError as e:
+        logger.error(f"[PROXY] Connection failed to {target_url}: {e}")
+        raise HTTPException(status_code=503, detail=f"Service '{name}' is not reachable (trying {target_url})")
+    except Exception as e:
+        logger.error(f"Proxy error for {name} at {target_url}: {e}")
+        raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)} (trying {target_url})")
+
+
+@router.get("/debug/docker-ports")
+async def debug_docker_ports(
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> Dict[str, Any]:
+    """
+    Debug endpoint to show all Docker container port bindings.
+    """
+    from src.services.docker_manager import debug_list_docker_ports
+
+    ports = debug_list_docker_ports()
+    return {
+        "containers": ports,
+        "total_containers": len(ports)
+    }
+
+
+@router.post("/{name}/start", response_model=ActionResponse)
+async def start_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> ActionResponse:
+    """Start a service container."""
+    logger.info(f"POST /services/{name}/start - starting service")
+
+    # For wiring-aware env resolution, we need the full service ID (compose_file:service_name)
+    # Look up the service in the compose registry to get its full ID
+    from src.services.compose_registry import get_compose_registry
+    registry = get_compose_registry()
+    discovered = registry.get_service_by_name(name)
+    service_id = discovered.service_id if discovered else name
+
+    # Pass full service_id as config_id to enable wiring-aware env resolution
+    result = await orchestrator.start_service(name, config_id=service_id)
+
+    if not result.success and result.message in ["Service not found", "Operation not permitted"]:
+        raise HTTPException(status_code=403, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)
+
+
+@router.post("/{name}/stop", response_model=ActionResponse)
+async def stop_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> ActionResponse:
+    """Stop a service container."""
+    result = orchestrator.stop_service(name)
+
+    if not result.success and result.message in ["Service not found", "Operation not permitted"]:
+        raise HTTPException(status_code=403, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)
+
+
+@router.post("/{name}/restart", response_model=ActionResponse)
+async def restart_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> ActionResponse:
+    """Restart a service container."""
+    result = orchestrator.restart_service(name)
+
+    if not result.success and result.message in ["Service not found", "Operation not permitted"]:
+        raise HTTPException(status_code=403, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)
+
+
+@router.get("/{name}/logs", response_model=LogsResponse)
+async def get_service_logs(
+    name: str,
+    tail: int = 100,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> LogsResponse:
+    """
+    Get logs from a service container.
+
+    Args:
+        name: Service name
+        tail: Number of lines to retrieve (default 100)
+    """
+    result = orchestrator.get_service_logs(name, tail=tail)
+
+    if not result.success:
+        raise HTTPException(status_code=404, detail="Service not found or logs unavailable")
+
+    return LogsResponse(success=result.success, logs=result.logs)
+
+
+@router.get("/{name}/container-env")
+async def get_container_environment(
+    name: str,
+    unmask: bool = False,
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get actual environment variables from the running container.
+
+    Unlike /resolve which shows configured values, this endpoint inspects
+    the actual container to verify what was deployed. Useful for:
+    - Testing that configured env vars are actually passed to containers
+    - Debugging deployment issues
+    - Verifying the configuration hierarchy works correctly
+
+    Args:
+        name: Service name
+        unmask: If True, return actual values without masking (for testing)
+
+    Returns:
+        success: Whether the container was found and inspected
+        env_vars: Dict of env var name -> value (sensitive values masked unless unmask=True)
+        container_found: Whether a container exists for this service
+    """
+    from src.services.docker_manager import get_docker_manager
+
+    docker_mgr = get_docker_manager()
+
+    # Validate service exists
+    if name not in docker_mgr.MANAGEABLE_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+
+    success, result = docker_mgr.get_container_environment(name)
+
+    if not success:
+        return {
+            "success": False,
+            "env_vars": {},
+            "container_found": False,
+            "message": result  # Error message
+        }
+
+    # Return unmasked if requested (for testing)
+    if unmask:
+        return {
+            "success": True,
+            "env_vars": result,
+            "container_found": True,
+            "total_vars": len(result)
+        }
+
+    # Mask sensitive values
+    masked_env = {}
+    for key, value in result.items():
+        if any(kw in key.upper() for kw in ["KEY", "SECRET", "PASSWORD", "TOKEN", "CREDENTIAL"]):
+            if len(value) > 4:
+                masked_env[key] = f"***{value[-4:]}"
+            else:
+                masked_env[key] = "****"
+        else:
+            masked_env[key] = value
+
+    return {
+        "success": True,
+        "env_vars": masked_env,
+        "container_found": True,
+        "total_vars": len(result)
+    }
+
+
+# =============================================================================
+# Configuration Endpoints
+# =============================================================================
+
+@router.get("/{name}/enabled")
+async def get_enabled_state(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """Get enabled state for a service."""
+    result = await orchestrator.get_enabled_state(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.put("/{name}/enabled")
+async def set_enabled_state(
+    name: str,
+    request: EnabledRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """Enable or disable a service."""
+    result = await orchestrator.set_enabled_state(name, request.enabled)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.get("/{name}/config")
+async def get_service_config(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get full service configuration.
+
+    Returns enabled state, env config, and preferences.
+    """
+    result = await orchestrator.get_service_config(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.get("/{name}/env")
+async def get_env_config(
+    name: str,
+    deploy_target: Optional[str] = None,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Get environment variable configuration for a service.
+
+    Returns the env schema with current configuration and suggested settings.
+
+    Args:
+        name: Service name
+        deploy_target: Optional deployment target (unode hostname or cluster ID)
+                      to include deploy_env layer in resolution
+    """
+    result = await orchestrator.get_env_config(name, deploy_target=deploy_target)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.put("/{name}/env")
+async def update_env_config(
+    name: str,
+    request: EnvConfigUpdateRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Save environment variable configuration for a service.
+
+    Source types:
+    - "setting": Use value from an existing settings path
+    - "new_setting": Create a new setting and map to it
+    - "literal": Use a directly entered value
+    - "default": Use the compose file's default
+    """
+    env_vars = [ev.model_dump() for ev in request.env_vars]
+    result = await orchestrator.update_env_config(name, env_vars)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.get("/{name}/resolve")
+async def resolve_env_vars(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Resolve environment variables for runtime injection.
+
+    Returns the actual values that would be passed to docker compose.
+    Sensitive values are masked in the response.
+    """
+    result = await orchestrator.resolve_env_vars(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.get("/{name}/env-export")
+async def export_env_vars(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> Dict[str, Any]:
+    """
+    Export environment variables for local development.
+
+    Returns unmasked values suitable for running services locally.
+    Use env_content for .env file format or env_vars for dict.
+
+    Example usage:
+        curl -H "Authorization: Bearer $TOKEN" \\
+            http://localhost:8050/api/services/chronicle-backend/env-export \\
+            | jq -r '.env_content' > .env.chronicle
+    """
+    result = await orchestrator.export_env_vars(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+# =============================================================================
+# Installation Endpoints
+# =============================================================================
+
+@router.post("/{name}/install")
+async def install_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Install a service (add to installed services list).
+
+    This marks the service as user-added, overriding default_services.
+    """
+    result = await orchestrator.install_service(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.post("/{name}/uninstall")
+async def uninstall_service(
+    name: str,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
+) -> Dict[str, Any]:
+    """
+    Uninstall a service (remove from installed services list).
+
+    This marks the service as removed, overriding default_services.
+    """
+    result = await orchestrator.uninstall_service(name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    return result
+
+
+@router.post("/mycelia/generate-token")
+async def generate_mycelia_token(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
+    """
+    Generate Mycelia authentication token by running the token-create command
+    inside the running container.
+
+    Returns:
+        Dictionary with 'token' and 'client_id' fields
+    """
+    import subprocess
+    import re
+    from src.services.docker_manager import get_docker_manager
+    from src.services.compose_registry import get_compose_registry
+
+    service_name = "mycelia-backend"
+
+    try:
+        # Find the actual running container
+        docker_mgr = get_docker_manager()
+        compose_registry = get_compose_registry()
+
+        # Try to get service info - check if it's in MANAGEABLE_SERVICES or discovered
+        container_name = None
+
+        # First check if service is in MANAGEABLE_SERVICES
+        if service_name in docker_mgr.MANAGEABLE_SERVICES:
+            service_info = docker_mgr.get_service_info(service_name)
+
+            if service_info.status != "running":
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Mycelia service is not running. Please start it first using the Services page."
+                )
+
+            if service_info.container_id:
+                container = docker_mgr._client.containers.get(service_info.container_id)
+                container_name = container.name
+
+        # If not in MANAGEABLE_SERVICES, search via compose registry
+        if not container_name:
+            discovered_service = compose_registry.get_service_by_name(service_name)
+
+            if not discovered_service:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Mycelia service not found. Please ensure mycelia-compose.yml is loaded."
+                )
+
+            # Search for running container by compose label
+            containers = docker_mgr._client.containers.list(
+                all=False,  # Only running
+                filters={"label": f"com.docker.compose.service={service_name}"}
+            )
+
+            if not containers:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Mycelia service is not running. Please start it first using the Services page."
+                )
+
+            # Use first running container
+            container_name = containers[0].name
+            logger.info(f"[MYCELIA-TOKEN] Found container via compose label: {container_name}")
+
+        if not container_name:
+            raise HTTPException(
+                status_code=503,
+                detail="Could not find running Mycelia container"
+            )
+
+        logger.info(f"[MYCELIA-TOKEN] Using container: {container_name}")
+
+        # Execute token-create command inside the running container
+        result = subprocess.run(
+            [
+                "docker", "exec", container_name,
+                "deno", "run", "-A", "server.ts", "token-create"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Failed to generate Mycelia token: {result.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate token: {result.stderr}"
+            )
+
+        # Parse output to extract token and client_id
+        # Expected format:
+        # MYCELIA_TOKEN=mycelia_...
+        # MYCELIA_CLIENT_ID=...
+        output = result.stdout
+        token_match = re.search(r'MYCELIA_TOKEN=(\S+)', output)
+        client_id_match = re.search(r'MYCELIA_CLIENT_ID=(\S+)', output)
+
+        if not token_match or not client_id_match:
+            logger.error(f"Failed to parse token from output: {output}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to parse token from output"
+            )
+
+        return {
+            "token": token_match.group(1),
+            "client_id": client_id_match.group(1)
+        }
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Token generation timed out")
+    except Exception as e:
+        logger.error(f"Error generating Mycelia token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/register", response_model=ActionResponse)
+async def register_dynamic_service(
+    request: RegisterServiceRequest,
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: dict = Depends(get_current_user_hybrid)
+) -> ActionResponse:
+    """
+    Register a dynamic service (e.g., Pieces app, custom integration).
+
+    This allows runtime registration of new services.
+    """
+    config = {
+        "service_name": request.service_name,
+        "description": request.description,
+        "service_type": request.service_type,
+        "endpoints": [ep.model_dump() for ep in request.endpoints],
+        "user_controllable": request.user_controllable,
+        "compose_file": request.compose_file,
+        "metadata": request.metadata,
+    }
+
+    result = await orchestrator.register_dynamic_service(config)
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.message)
+
+    return ActionResponse(success=result.success, message=result.message)

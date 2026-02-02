@@ -8,12 +8,8 @@ import {
   ChevronRight,
   ChevronLeft,
   Settings,
-  Key,
   Check,
   AlertCircle,
-  Server,
-  Eye,
-  EyeOff,
   RefreshCw,
   Box,
   Plus,
@@ -29,6 +25,8 @@ import {
   PortConfig,
   VolumeConfig,
 } from '../services/api'
+import CapabilitySelector from './CapabilitySelector'
+import EnvVarListEditor, { EnvVarItem } from './EnvVarListEditor'
 
 interface ImportFromGitHubModalProps {
   isOpen: boolean
@@ -80,8 +78,7 @@ export default function ImportFromGitHubModal({
     header_value: '',
     route_path: '',
   })
-  const [envVars, setEnvVars] = useState<EnvVarConfigItem[]>([])
-  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
+  const [envVars, setEnvVars] = useState<EnvVarItem[]>([])
 
   // Docker Hub specific config
   const [ports, setPorts] = useState<PortConfig[]>([])
@@ -90,20 +87,8 @@ export default function ImportFromGitHubModal({
   // Capabilities this service provides
   const [capabilities, setCapabilities] = useState<string[]>([])
 
-  // Env template paste
-  const [showEnvPaste, setShowEnvPaste] = useState(false)
-  const [envPasteText, setEnvPasteText] = useState('')
-
-  // Common capability options
-  const CAPABILITY_OPTIONS = [
-    { id: 'llm', label: 'LLM', description: 'Language model inference' },
-    { id: 'tts', label: 'TTS', description: 'Text to speech' },
-    { id: 'stt', label: 'STT', description: 'Speech to text' },
-    { id: 'embedding', label: 'Embedding', description: 'Text embeddings' },
-    { id: 'memory', label: 'Memory', description: 'Persistent memory storage' },
-    { id: 'vision', label: 'Vision', description: 'Image understanding' },
-    { id: 'image_gen', label: 'Image Gen', description: 'Image generation' },
-  ]
+  // Capabilities this service requires (dependencies)
+  const [requiredCapabilities, setRequiredCapabilities] = useState<string[]>([])
 
   // Reset state when modal opens/closes
   useEffect(() => {
@@ -133,8 +118,7 @@ export default function ImportFromGitHubModal({
       setPorts([])
       setVolumes([])
       setCapabilities([])
-      setShowEnvPaste(false)
-      setEnvPasteText('')
+      setRequiredCapabilities([])
       setError(null)
     }
   }, [isOpen])
@@ -313,80 +297,25 @@ export default function ImportFromGitHubModal({
     })
 
     // Combine env vars from all selected services (deduplicated)
-    const allEnvVars = new Map<string, EnvVarConfigItem>()
+    const allEnvVars = new Map<string, EnvVarItem>()
     for (const service of selectedServices) {
       for (const env of service.environment) {
         if (!allEnvVars.has(env.name)) {
+          const lowerName = env.name.toLowerCase()
           allEnvVars.set(env.name, {
             name: env.name,
             source: env.has_default ? 'default' : 'literal',
             value: env.default_value || '',
-            is_secret: env.name.toLowerCase().includes('key') ||
-                       env.name.toLowerCase().includes('secret') ||
-                       env.name.toLowerCase().includes('password') ||
-                       env.name.toLowerCase().includes('token'),
+            is_secret: lowerName.includes('key') ||
+                       lowerName.includes('secret') ||
+                       lowerName.includes('password') ||
+                       lowerName.includes('token'),
           })
         }
       }
     }
     setEnvVars(Array.from(allEnvVars.values()))
     setStep('config')
-  }
-
-  // Update environment variable
-  const updateEnvVar = (index: number, updates: Partial<EnvVarConfigItem>) => {
-    setEnvVars((prev) =>
-      prev.map((ev, i) => (i === index ? { ...ev, ...updates } : ev))
-    )
-  }
-
-  // Add new env var
-  const addEnvVar = () => {
-    setEnvVars((prev) => [...prev, { name: '', source: 'literal', value: '', is_secret: false }])
-  }
-
-  // Remove env var
-  const removeEnvVar = (index: number) => {
-    setEnvVars((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  // Parse env template (KEY=value format, one per line)
-  const parseEnvTemplate = () => {
-    const lines = envPasteText.split('\n')
-    const newEnvVars: EnvVarConfigItem[] = []
-
-    for (const line of lines) {
-      const trimmed = line.trim()
-      // Skip empty lines and comments
-      if (!trimmed || trimmed.startsWith('#')) continue
-
-      // Parse KEY=value or KEY= or just KEY
-      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$/)
-      if (match) {
-        const name = match[1]
-        const value = match[2] ?? ''
-
-        // Check if already exists
-        const exists = envVars.some((e) => e.name === name)
-        if (!exists) {
-          newEnvVars.push({
-            name,
-            source: 'literal',
-            value,
-            is_secret: name.toLowerCase().includes('key') ||
-                       name.toLowerCase().includes('secret') ||
-                       name.toLowerCase().includes('password') ||
-                       name.toLowerCase().includes('token'),
-          })
-        }
-      }
-    }
-
-    if (newEnvVars.length > 0) {
-      setEnvVars((prev) => [...prev, ...newEnvVars])
-    }
-    setEnvPasteText('')
-    setShowEnvPaste(false)
   }
 
   // Add port
@@ -441,6 +370,7 @@ export default function ImportFromGitHubModal({
           shadow_header_value: shadowHeader.header_value || serviceName,
           route_path: shadowHeader.route_path || `/${serviceName}`,
           capabilities: capabilities.length > 0 ? capabilities : undefined,
+          requires: requiredCapabilities.length > 0 ? requiredCapabilities : undefined,
         })
 
         const data = response.data
@@ -482,6 +412,7 @@ export default function ImportFromGitHubModal({
                 env_vars: envVars,
                 enabled: true,
                 capabilities: capabilities.length > 0 ? capabilities : undefined,
+                requires: requiredCapabilities.length > 0 ? requiredCapabilities : undefined,
               },
             })
 
@@ -510,6 +441,8 @@ export default function ImportFromGitHubModal({
         // Proceed to complete (even with partial success)
       }
 
+      // Trigger immediate refresh of parent data
+      onServiceImported()
       setStep('complete')
     } catch (err: any) {
       setError(extractErrorMessage(err, 'Failed to import service'))
@@ -816,42 +749,24 @@ export default function ImportFromGitHubModal({
         </div>
       </div>
 
-      {/* Capabilities */}
-      <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-        <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
-          <Server className="w-4 h-4" />
-          Capabilities Provided
-        </h4>
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Select the capabilities this service provides (optional)
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {CAPABILITY_OPTIONS.map((cap) => (
-            <button
-              key={cap.id}
-              onClick={() => {
-                if (capabilities.includes(cap.id)) {
-                  setCapabilities(capabilities.filter((c) => c !== cap.id))
-                } else {
-                  setCapabilities([...capabilities, cap.id])
-                }
-              }}
-              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                capabilities.includes(cap.id)
-                  ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 border-2 border-primary-500'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-2 border-transparent hover:border-gray-300 dark:hover:border-gray-600'
-              }`}
-              title={cap.description}
-            >
-              {cap.label}
-            </button>
-          ))}
-        </div>
-        {capabilities.length > 0 && (
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            Selected: {capabilities.join(', ')}
-          </p>
-        )}
+      {/* Capabilities Provided */}
+      <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+        <CapabilitySelector
+          selected={capabilities}
+          onChange={setCapabilities}
+          mode="provides"
+          testIdPrefix="import"
+        />
+      </div>
+
+      {/* Capabilities Required */}
+      <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+        <CapabilitySelector
+          selected={requiredCapabilities}
+          onChange={setRequiredCapabilities}
+          mode="requires"
+          testIdPrefix="import"
+        />
       </div>
 
       {/* Ports (Docker Hub) */}
@@ -1001,164 +916,13 @@ export default function ImportFromGitHubModal({
       </div>
 
       {/* Environment Variables */}
-      <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-        <div className="flex items-center justify-between">
-          <h4 className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
-            <Key className="w-4 h-4" />
-            Environment Variables ({envVars.length})
-          </h4>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowEnvPaste(!showEnvPaste)}
-              className="text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1"
-            >
-              <FileCode className="w-4 h-4" /> Paste Template
-            </button>
-            <button
-              onClick={addEnvVar}
-              className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-            >
-              <Plus className="w-4 h-4" /> Add Variable
-            </button>
-          </div>
-        </div>
-
-        {/* Env Template Paste Area */}
-        {showEnvPaste && (
-          <div className="p-3 rounded-lg border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-              Paste environment variables (KEY=value format, one per line):
-            </p>
-            <textarea
-              value={envPasteText}
-              onChange={(e) => setEnvPasteText(e.target.value)}
-              placeholder={`# Example:\nAPI_KEY=your-key-here\nDATABASE_URL=postgres://...\nDEBUG=true`}
-              rows={5}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
-            />
-            <div className="flex justify-end gap-2 mt-2">
-              <button
-                onClick={() => {
-                  setEnvPasteText('')
-                  setShowEnvPaste(false)
-                }}
-                className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={parseEnvTemplate}
-                disabled={!envPasteText.trim()}
-                className="px-3 py-1 text-sm bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
-              >
-                Add Variables
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="space-y-3">
-          {envVars.map((env, index) => {
-            // Find original env across all selected services
-            const originalEnv = selectedServices
-              .flatMap((s) => s.environment)
-              .find((e) => e.name === env.name)
-            return (
-              <div
-                key={index}
-                className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  {dockerHubInfo ? (
-                    <input
-                      type="text"
-                      value={env.name}
-                      onChange={(e) => updateEnvVar(index, { name: e.target.value.toUpperCase() })}
-                      placeholder="VAR_NAME"
-                      className="font-mono text-sm text-gray-900 dark:text-white bg-transparent border-none p-0 focus:ring-0"
-                    />
-                  ) : (
-                    <span className="font-mono text-sm text-gray-900 dark:text-white">
-                      {env.name}
-                    </span>
-                  )}
-                  <div className="flex items-center gap-2">
-                    {originalEnv?.is_required && (
-                      <span className="text-xs text-red-500">Required</span>
-                    )}
-                    {env.is_secret && (
-                      <span className="text-xs text-amber-500">Secret</span>
-                    )}
-                    {dockerHubInfo && (
-                      <button
-                        onClick={() => removeEnvVar(index)}
-                        className="p-1 text-gray-400 hover:text-red-500"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={env.source}
-                    onChange={(e) =>
-                      updateEnvVar(index, {
-                        source: e.target.value as 'literal' | 'setting' | 'default',
-                      })
-                    }
-                    className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="literal">Set Value</option>
-                    <option value="default">Use Default</option>
-                    <option value="setting">From Settings</option>
-                  </select>
-                  {env.source === 'literal' && (
-                    <div className="flex-1 flex items-center gap-2">
-                      <input
-                        type={env.is_secret && !showSecrets[env.name] ? 'password' : 'text'}
-                        value={env.value || ''}
-                        onChange={(e) => updateEnvVar(index, { value: e.target.value })}
-                        placeholder={originalEnv?.default_value || 'Enter value'}
-                        className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      />
-                      {env.is_secret && (
-                        <button
-                          onClick={() =>
-                            setShowSecrets((prev) => ({
-                              ...prev,
-                              [env.name]: !prev[env.name],
-                            }))
-                          }
-                          className="p-1 text-gray-400 hover:text-gray-600"
-                        >
-                          {showSecrets[env.name] ? (
-                            <EyeOff className="w-4 h-4" />
-                          ) : (
-                            <Eye className="w-4 h-4" />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {env.source === 'default' && originalEnv?.default_value && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      Default: {originalEnv.default_value}
-                    </span>
-                  )}
-                  {env.source === 'setting' && (
-                    <input
-                      type="text"
-                      value={env.setting_path || ''}
-                      onChange={(e) => updateEnvVar(index, { setting_path: e.target.value })}
-                      placeholder="api_keys.my_key"
-                      className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    />
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+      <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+        <EnvVarListEditor
+          envVars={envVars}
+          onChange={setEnvVars}
+          allowNameEdit={!!dockerHubInfo}
+          testIdPrefix="import-env"
+        />
       </div>
     </div>
   )

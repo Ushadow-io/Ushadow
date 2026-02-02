@@ -1,0 +1,186 @@
+# Mycelia - AI Memory and Timeline
+# Self-hosted voice memo transcription, timeline, and memory system
+#
+# Usage:
+#   docker compose -f compose/mycelia-compose.yml up -d
+#
+# Access:
+#   - Web UI: http://localhost:${MYCELIA_FRONTEND_PORT:-8080}
+#   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-8888}
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  namespace: mycelia
+  # Infra services to start before this compose (from docker-compose.infra.yml)
+  infra_services: ["mongo", "redis"]
+  mycelia-backend:
+    display_name: "Mycelia"
+    description: "Self-hosted AI memory and timeline - capture ideas via voice, screenshots, or text"
+    requires: ["llm", "transcription"]
+    provides: memory  # Primary capability (timeline, transcription are secondary)
+    tags: ["ai", "memory", "voice", "transcription", "timeline"]
+    wizard: "mycelia"  # ID of the setup wizard
+    exposes:
+      - name: audio_intake
+        type: audio
+        path: /ws/audio
+        port: 8888
+        metadata:
+          protocol: wyoming
+          formats: [pcm, opus]  # Unified endpoint auto-detects format
+      - name: http_api
+        type: http
+        path: /
+        port: 8888
+      - name: health
+        type: health
+        path: /health
+        port: 8888
+  mycelia-frontend:
+    display_name: "Mycelia Frontend"
+    description: "Mycelia web interface"
+  mycelia-python-worker:
+    display_name: "Mycelia Python Worker"
+    description: "Audio processing worker"
+
+services:
+  mycelia-frontend:
+    build:
+      context: ${PROJECT_ROOT:-..}/mycelia
+      dockerfile: ./frontend/Dockerfile.${MYCELIA_FRONTEND_MODE:-dev}
+    image: mycelia-frontend:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-frontend
+    ports:
+      - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
+    volumes:
+      - ${PROJECT_ROOT:-..}/mycelia/frontend:/app
+      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/app/myceliasdk
+    environment:
+      - MYCELIA_FRONTEND_MODE=dev  
+    networks:
+      - ushadow-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  mycelia-backend:
+    build:
+      context: ${PROJECT_ROOT:-..}/mycelia
+      dockerfile: ./backend/Dockerfile
+    image: mycelia-backend:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
+    ports:
+      - "${MYCELIA_BACKEND_PORT:-8888}:8888"
+    command: deno task dev
+    environment:
+      # Application URLs
+      - MYCELIA_URL=${MYCELIA_URL:-http://localhost:8888}
+      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://localhost:8888}
+      - MYCELIA_FRONTEND_HOST=${MYCELIA_FRONTEND_HOST:-http://mycelia-frontend:8080}
+
+      # Authentication (optional - configured via wizard on first start)
+      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
+      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
+      - SECRET_KEY=${AUTH_SECRET_KEY:-}
+
+      # Database Configuration - uses shared mongo from infra
+      - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
+      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia?directConnection=true}
+
+      # Redis Configuration - uses shared redis from infra
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+
+      # Python Worker
+      - PYTHON_WORKER_URL=${PYTHON_WORKER_URL:-http://mycelia-python-worker:8000}
+
+      # LLM Provider Configuration (optional - uses inference.mycelia.tech if not set)
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - BASE_MODEL=${BASE_MODEL:-gpt-4o-mini}
+
+      # Transcription Provider Configuration (optional - uses inference.mycelia.tech if not set)
+      - TRANSCRIPTION_BASE_URL=${TRANSCRIPTION_BASE_URL:-}
+      - TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY:-}
+      - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
+
+      # OpenTelemetry
+      - OTEL_DENO=${MYCELIA_OTEL_DENO:-false}
+      - OTEL_SERVICE_NAME=mycelia
+      - OTEL_SERVICE_VERSION=1.0.0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${MYCELIA_OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318}
+
+      # Application Config
+      - LOG_LEVEL=${MYCELIA_LOG_LEVEL:-INFO}
+      - NODE_ENV=${NODE_ENV:-production}
+      - JOB_TRIGGERS_FAST=${JOB_TRIGGERS_FAST:-true}
+    volumes:
+      - ${PROJECT_ROOT:-..}/mycelia/backend:/app
+      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/myceliasdk
+    networks:
+      - ushadow-network
+    healthcheck:
+      test: ["CMD", "deno", "eval", "const res = await fetch('http://localhost:8888/health'); Deno.exit(res.ok ? 0 : 1);"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.2'
+          memory: 1G
+    restart: unless-stopped
+
+  mycelia-python-worker:
+    build:
+      context: ${PROJECT_ROOT:-..}/mycelia
+      dockerfile: ./python/Dockerfile
+    image: mycelia-python:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-python-worker
+    environment:
+      - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:8888}
+      - SECRET_KEY=${AUTH_SECRET_KEY:-}
+    volumes:
+      - ${PROJECT_ROOT:-..}/mycelia/python:/app
+      - mycelia_worker_data:/root/.cache
+    networks:
+      - ushadow-network
+    depends_on:
+      mycelia-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    restart: unless-stopped
+
+networks:
+  ushadow-network:
+    name: ushadow-network
+    external: true
+
+volumes:
+  mycelia_worker_data:
+    driver: local

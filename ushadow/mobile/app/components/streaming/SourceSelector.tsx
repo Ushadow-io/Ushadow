@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
-import { SavedOmiDevice } from '../../utils/omiDeviceStorage';
+import { SavedOmiDevice } from '../../_utils/omiDeviceStorage';
 
 // Discriminated union for stream source
 export type StreamSource =

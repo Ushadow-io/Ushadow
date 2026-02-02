@@ -7,7 +7,7 @@ Simple endpoints to verify feature flags are working.
 from fastapi import APIRouter, Depends
 from typing import Optional
 from src.services.feature_flags import get_feature_flag_service
-from src.services.auth import get_current_user
+from src.services.keycloak_auth import get_current_user_hybrid
 
 router = APIRouter(prefix="/api/feature-flags", tags=["feature-flags"])
 
@@ -52,7 +52,7 @@ async def get_feature_flags_status():
 
 
 @router.get("/check/{flag_name}")
-async def check_feature_flag(flag_name: str, user=Depends(get_current_user)):
+async def check_feature_flag(flag_name: str, user=Depends(get_current_user_hybrid)):
     """
     Check if a specific feature flag is enabled for the current user.
 
@@ -79,7 +79,7 @@ async def check_feature_flag(flag_name: str, user=Depends(get_current_user)):
 
 
 @router.post("/toggle/{flag_name}")
-async def toggle_feature_flag(flag_name: str, user=Depends(get_current_user)):
+async def toggle_feature_flag(flag_name: str, user=Depends(get_current_user_hybrid)):
     """
     Toggle a feature flag's enabled state.
 

@@ -19,8 +19,9 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from src.services.auth import get_current_user, generate_jwt_for_service
+from src.services.keycloak_auth import get_current_user_hybrid
 from src.models.user import User
-from src.config.omegaconf_settings import get_settings_store
+from src.config import get_settings_store as get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
 
@@ -163,7 +164,7 @@ class EnvironmentInfo(BaseModel):
 
 @router.get("/environment", response_model=EnvironmentInfo)
 async def get_environment_info(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> EnvironmentInfo:
     """Get current environment information for Tailscale setup"""
     return EnvironmentInfo(
@@ -180,7 +181,7 @@ async def get_environment_info(
 
 @router.get("/platform", response_model=PlatformInfo)
 async def detect_platform(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> PlatformInfo:
     """Detect the current platform and system information"""
     try:
@@ -225,7 +226,7 @@ async def detect_platform(
 @router.get("/installation-guide", response_model=InstallationGuide)
 async def get_installation_guide(
     os_type: str,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> InstallationGuide:
     """Get platform-specific Tailscale installation instructions"""
 
@@ -334,7 +335,7 @@ def _read_config() -> Optional[TailscaleConfig]:
 
 @router.get("/config", response_model=Optional[TailscaleConfig])
 async def get_config(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Optional[TailscaleConfig]:
     """Get current Tailscale configuration"""
     return _read_config()
@@ -343,7 +344,7 @@ async def get_config(
 @router.post("/config", response_model=TailscaleConfig)
 async def save_config(
     config: TailscaleConfig,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> TailscaleConfig:
     """Save Tailscale configuration"""
 
@@ -379,7 +380,7 @@ PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "/app"))
 @router.post("/generate-config")
 async def generate_tailscale_config(
     config: TailscaleConfig,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, str]:
     """Generate Tailscale serve configuration or Caddyfile based on deployment mode"""
 
@@ -500,7 +501,7 @@ async def generate_caddyfile(config: TailscaleConfig) -> Dict[str, str]:
 
 @router.get("/access-urls", response_model=AccessUrls)
 async def get_access_urls(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> AccessUrls:
     """Get access URLs for all configured services"""
 
@@ -545,7 +546,7 @@ async def get_access_urls(
 @router.post("/test-connection")
 async def test_connection(
     url: str,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Test connection to a specific URL"""
 
@@ -632,7 +633,7 @@ async def exec_in_container(command: str) -> tuple[int, str, str]:
 
 @router.get("/container/status", response_model=ContainerStatus)
 async def get_container_status(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> ContainerStatus:
     """Get Tailscale container status"""
     try:
@@ -658,7 +659,7 @@ async def get_container_status(
 
 @router.get("/mobile/connect-qr", response_model=MobileConnectionQR)
 async def get_mobile_connection_qr(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> MobileConnectionQR:
     """Generate QR code for mobile app to connect to this leader.
 
@@ -695,7 +696,7 @@ async def get_mobile_connection_qr(
                 detail="Could not get Tailscale connection details. Please try again."
             )
 
-        config = get_settings_store()
+        config = get_settings()
         api_port = config.get_sync("network.backend_public_port") or 8000
 
         # Build full API URL for leader info endpoint
@@ -759,7 +760,7 @@ async def get_mobile_connection_qr(
 
 @router.post("/container/clear-auth")
 async def clear_tailscale_auth(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, str]:
     """Clear local Tailscale authentication state.
 
@@ -801,7 +802,7 @@ async def clear_tailscale_auth(
 
 @router.post("/container/reset")
 async def reset_tailscale(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Complete Tailscale reset - returns everything to defaults.
 
@@ -957,7 +958,7 @@ async def reset_tailscale(
 
 @router.post("/container/start")
 async def start_tailscale_container(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, str]:
     """Start or create Tailscale container using Docker SDK.
 
@@ -989,23 +990,15 @@ async def start_tailscale_container(
             # Container doesn't exist - create it using Docker SDK
             logger.info(f"Creating Tailscale container '{container_name}' for environment '{env_name}'...")
 
-            # Ensure infra network exists
+            # Ensure ushadow-network exists
             try:
-                infra_network = _get_docker_client().networks.get("infra-network")
+                ushadow_network = _get_docker_client().networks.get("ushadow-network")
+                logger.info(f"Found ushadow-network")
             except docker.errors.NotFound:
                 raise HTTPException(
                     status_code=400,
-                    detail="infra-network not found. Please start infrastructure first."
+                    detail="ushadow-network not found. Please start infrastructure first."
                 )
-
-            # Get environment's compose network if it exists
-            env_network_name = f"{env_name}_default"
-            env_network = None
-            try:
-                env_network = _get_docker_client().networks.get(env_network_name)
-                logger.info(f"Connecting to environment network: {env_network_name}")
-            except docker.errors.NotFound:
-                logger.debug(f"Environment network '{env_network_name}' not found - using infra-network only")
 
             # Create volume if it doesn't exist (per-environment)
             try:
@@ -1044,18 +1037,10 @@ async def start_tailscale_container(
                     f"{PROJECT_ROOT}/config": {"bind": "/config", "mode": "ro"},
                 },
                 cap_add=["NET_ADMIN", "NET_RAW"],
-                network="infra-network",
+                network="ushadow-network",  # All app containers and infrastructure on this network
                 restart_policy={"Name": "unless-stopped"},
                 command="sh -c 'tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity'"
             )
-
-            # Connect to environment's compose network for routing to backend/frontend
-            if env_network:
-                try:
-                    env_network.connect(container)
-                    logger.info(f"Connected Tailscale container to environment network '{env_network_name}'")
-                except Exception as e:
-                    logger.warning(f"Failed to connect to environment network: {e}")
 
             logger.info(f"Tailscale container '{container_name}' created with hostname '{ts_hostname}': {container.id}")
 
@@ -1087,7 +1072,7 @@ async def start_tailscale_container(
 
 @router.post("/container/start-with-caddy")
 async def start_tailscale_with_caddy(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Start both Tailscale and Caddy containers, then configure routing.
 
@@ -1212,7 +1197,7 @@ async def start_caddy_container() -> Dict[str, str]:
 
 @router.get("/caddy/status")
 async def get_caddy_status(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Get Caddy container status."""
     try:
@@ -1234,7 +1219,7 @@ async def get_caddy_status(
 
 @router.get("/container/auth-url", response_model=AuthUrlResponse)
 async def get_auth_url(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_hybrid),
     regenerate: bool = False
 ) -> AuthUrlResponse:
     """Get Tailscale authentication URL with QR code.
@@ -1255,7 +1240,7 @@ async def get_auth_url(
 
 @router.get("/container/tailnet-settings")
 async def get_tailnet_settings(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Check Tailscale tailnet settings like MagicDNS and HTTPS.
 
@@ -1282,7 +1267,7 @@ async def get_tailnet_settings(
 
 @router.post("/container/enable-https")
 async def enable_https_provisioning(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Enable HTTPS provisioning in Tailscale.
 
@@ -1319,7 +1304,7 @@ async def enable_https_provisioning(
 @router.post("/container/provision-cert")
 async def provision_cert_in_container(
     hostname: str,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> CertificateStatus:
     """Provision certificate via Tailscale container"""
     try:
@@ -1345,7 +1330,7 @@ async def provision_cert_in_container(
 @router.post("/configure-serve")
 async def configure_tailscale_serve(
     config: TailscaleConfig,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Configure Tailscale serve for routing.
 
@@ -1397,7 +1382,7 @@ async def configure_tailscale_serve(
 
 @router.post("/complete")
 async def complete_setup(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, str]:
     """Mark Tailscale setup as complete"""
 
@@ -1438,7 +1423,7 @@ class UpdateCorsRequest(BaseModel):
 @router.post("/update-cors")
 async def update_cors_origins(
     request: UpdateCorsRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, str]:
     """Add Tailscale hostname to CORS allowed origins.
 
@@ -1449,7 +1434,7 @@ async def update_cors_origins(
     needed for the new origin to take effect.
     """
     try:
-        settings = get_settings_store()
+        settings = get_settings()
 
         # Build the origin URL
         origin = f"https://{request.hostname}"
@@ -1499,7 +1484,7 @@ async def update_cors_origins(
 
 @router.get("/serve-status")
 async def get_serve_status(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_hybrid)
 ) -> Dict[str, Any]:
     """Get current Tailscale serve routes configuration.
 

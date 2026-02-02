@@ -11,6 +11,9 @@ export type { UseAudioStreamer } from './useAudioStreamer';
 export { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
 export type { UsePhoneAudioRecorder } from './usePhoneAudioRecorder';
 
+export { useSpeechToText } from './useSpeechToText';
+export type { UseSpeechToTextOptions, UseSpeechToTextReturn } from './useSpeechToText';
+
 export { useStreaming } from './useStreaming';
 export type { UseStreaming } from './useStreaming';
 
@@ -20,6 +23,7 @@ export { useTailscaleDiscovery } from './useTailscaleDiscovery';
 // Bluetooth and connection hooks
 export { useBluetoothManager } from './useBluetoothManager';
 export { useConnectionLog } from './useConnectionLog';
+export { useSessionTracking } from './useSessionTracking';
 
 // OMI Device hooks (from chronicle)
 export { useDeviceConnection } from './useDeviceConnection';

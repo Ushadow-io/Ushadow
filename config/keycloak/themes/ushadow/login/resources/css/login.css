@@ -1,0 +1,365 @@
+/**
+ * Ushadow Custom Login Theme
+ *
+ * This file customizes the Keycloak login, registration, and password reset pages.
+ * Keycloak uses FreeMarker templates with specific CSS classes.
+ *
+ * Key selectors:
+ * - .login-pf-page: Page wrapper
+ * - .card-pf: Login/register card
+ * - .btn-primary: Primary action buttons
+ * - .form-group: Form fields
+ * - .alert: Error/success messages
+ * - .kc-social-links: Social login buttons
+ */
+
+/* ============================================
+   USHADOW BRAND COLORS
+   ============================================
+   Extracted from design/ColorSystemPreview.tsx
+   Primary: Green (#4ade80) | Accent: Purple (#a855f7)
+   Dark theme optimized with gradient accents
+   ============================================ */
+
+:root {
+  /* Primary brand color - Vibrant Green */
+  --ushadow-primary: #4ade80;      /* Green-400 from design system */
+  --ushadow-primary-hover: #86efac; /* Green-300 (lighter on hover) */
+  --ushadow-primary-active: #22c55e; /* Green-500 (darker when pressed) */
+
+  /* Accent brand color - Vibrant Purple */
+  --ushadow-accent: #a855f7;       /* Purple-500 from design system */
+  --ushadow-accent-hover: #c084fc; /* Purple-400 */
+
+  /* Background colors - Dark theme */
+  --ushadow-bg-page: #0f0f13;      /* Page background (zinc-900) */
+  --ushadow-bg-card: #1a1a21;      /* Card background (zinc-800) */
+  --ushadow-bg-input: #252530;     /* Input background (zinc-700) */
+  --ushadow-bg-hover: #2d2d3a;     /* Hover state background */
+
+  /* Text colors */
+  --ushadow-text-primary: #f4f4f5;  /* Zinc-100 - Main text */
+  --ushadow-text-secondary: #a1a1aa; /* Zinc-400 - Secondary text */
+  --ushadow-text-muted: #71717a;    /* Zinc-500 - Muted/disabled */
+
+  /* Border colors */
+  --ushadow-border: #3d3d4a;       /* Zinc-500 subtle borders */
+  --ushadow-border-focus: #4ade80;  /* Primary green for focus */
+
+  /* Status colors */
+  --ushadow-error: #f87171;        /* Red-400 - Error messages */
+  --ushadow-success: #4ade80;      /* Green-400 - Success (matches primary) */
+  --ushadow-warning: #fbbf24;      /* Amber-400 - Warnings */
+  --ushadow-info: #60a5fa;         /* Blue-400 - Info */
+}
+
+/* ============================================
+   Page Layout
+   ============================================ */
+
+.login-pf-page {
+  background-color: var(--ushadow-bg-page);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+.card-pf {
+  background-color: var(--ushadow-bg-card);
+  border: 1px solid var(--ushadow-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  padding: 2.5rem;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+/* ============================================
+   Logo and Branding
+   ============================================ */
+
+#kc-header-wrapper {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+/* Ushadow logo - square format (1024x1024) */
+#kc-header-wrapper::before {
+  content: '';
+  display: block;
+  width: 80px;    /* Square logo, smaller size */
+  height: 80px;
+  margin: 0 auto 1.5rem;
+  background: url('../img/logo.png') center no-repeat;
+  background-size: contain;
+  border-radius: 12px; /* Subtle rounding */
+  box-shadow: 0 4px 12px rgba(74, 222, 128, 0.2), 0 4px 12px rgba(168, 85, 247, 0.2);
+}
+
+/* Fallback text if no logo */
+#kc-header {
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: var(--ushadow-text-primary);
+  margin-bottom: 0.5rem;
+}
+
+/* ============================================
+   Form Styling
+   ============================================ */
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ushadow-text-primary);
+  margin-bottom: 0.5rem;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+  width: 100%;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.9375rem;
+  border: 1px solid var(--ushadow-border);
+  border-radius: 6px;
+  background-color: #ffffff;
+  color: var(--ushadow-text-primary);
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus {
+  outline: none;
+  border-color: var(--ushadow-border-focus);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* ============================================
+   Buttons
+   ============================================ */
+
+.btn-primary {
+  width: 100%;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #0f0f13;  /* Dark text on bright green button */
+  background-color: var(--ushadow-primary);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+
+.btn-primary:hover {
+  background-color: var(--ushadow-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(74, 222, 128, 0.3);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  background-color: var(--ushadow-primary-active);
+}
+
+/* Optional: Gradient variant for special CTAs */
+.btn-gradient {
+  background-image: linear-gradient(135deg, #4ade80 0%, #a855f7 100%);
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.2), 0 0 40px rgba(168, 85, 247, 0.2);
+}
+
+.btn-gradient:hover {
+  background-image: linear-gradient(135deg, #86efac 0%, #c084fc 100%);
+  box-shadow: 0 0 30px rgba(74, 222, 128, 0.3), 0 0 60px rgba(168, 85, 247, 0.3);
+}
+
+/* ============================================
+   Social Login Buttons
+   ============================================ */
+
+#kc-social-providers {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--ushadow-border);
+}
+
+#kc-social-providers ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#kc-social-providers li {
+  margin-bottom: 0.75rem;
+}
+
+.kc-social-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  border: 1px solid var(--ushadow-border);
+  border-radius: 6px;
+  background-color: #ffffff;
+  color: var(--ushadow-text-primary);
+  text-decoration: none;
+  transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
+}
+
+.kc-social-link:hover {
+  background-color: #f9fafb;
+  border-color: var(--ushadow-primary);
+}
+
+/* Social provider icons */
+.kc-social-icon-text {
+  margin-left: 0.5rem;
+}
+
+/* Google button styling - matches your design system */
+.kc-social-link-google {
+  background-color: #ffffff;
+  color: #171717;
+  border-color: var(--ushadow-border);
+}
+
+.kc-social-link-google:hover {
+  background-color: var(--ushadow-bg-hover);
+  border-color: var(--ushadow-primary);
+  color: var(--ushadow-text-primary);
+}
+
+/* GitHub button styling - uses purple accent */
+.kc-social-link-github {
+  background-color: var(--ushadow-accent);
+  color: #ffffff;
+  border: none;
+}
+
+.kc-social-link-github:hover {
+  background-color: var(--ushadow-accent-hover);
+  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
+}
+
+/* ============================================
+   Links and Secondary Actions
+   ============================================ */
+
+#kc-registration {
+  text-align: center;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--ushadow-border);
+}
+
+#kc-registration a {
+  color: var(--ushadow-primary);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.9375rem;
+}
+
+#kc-registration a:hover {
+  text-decoration: underline;
+}
+
+.kc-login-tooltip {
+  text-align: right;
+  margin-top: 0.5rem;
+}
+
+.kc-login-tooltip a {
+  color: var(--ushadow-text-secondary);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+
+.kc-login-tooltip a:hover {
+  color: var(--ushadow-primary);
+  text-decoration: underline;
+}
+
+/* ============================================
+   Alerts and Messages
+   ============================================ */
+
+.alert {
+  padding: 0.875rem 1rem;
+  margin-bottom: 1.5rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+}
+
+.alert-error {
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.alert-success {
+  background-color: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.alert-warning {
+  background-color: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
+.alert-info {
+  background-color: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+/* ============================================
+   Responsive Design
+   ============================================ */
+
+@media (max-width: 640px) {
+  .card-pf {
+    padding: 1.5rem;
+    border-radius: 8px;
+  }
+
+  #kc-header {
+    font-size: 1.5rem;
+  }
+
+  .btn-primary,
+  .kc-social-link {
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* ============================================
+   Remember Me Checkbox
+   ============================================ */
+
+#kc-form-options {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+#kc-form-options input[type="checkbox"] {
+  width: auto;
+  margin-right: 0.5rem;
+}
+
+#kc-form-options label {
+  margin-bottom: 0;
+  font-weight: normal;
+  font-size: 0.875rem;
+}

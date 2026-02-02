@@ -172,8 +172,32 @@ class DockerDeploymentBackend(DeploymentBackend):
             return deployment
 
         except docker.errors.ImageNotFound as e:
-            logger.error(f"Image not found: {resolved_service.image}")
-            raise ValueError(f"Docker image not found: {resolved_service.image}")
+            logger.warning(f"Image not found locally: {resolved_service.image}, attempting to pull...")
+
+            try:
+                # Attempt to pull the image
+                logger.info(f"Pulling image: {resolved_service.image}")
+                docker_client.images.pull(resolved_service.image)
+                logger.info(f"✅ Successfully pulled image: {resolved_service.image}")
+
+                # Retry deployment after successful pull
+                logger.info(f"Retrying deployment after image pull...")
+                return await self._deploy_local(
+                    unode,
+                    resolved_service,
+                    deployment_id,
+                    container_name
+                )
+
+            except docker.errors.ImageNotFound as pull_error:
+                logger.error(f"Image not found in registry: {resolved_service.image}")
+                raise ValueError(f"Docker image not found: {resolved_service.image}. Image does not exist in registry.")
+            except docker.errors.APIError as pull_error:
+                logger.error(f"Failed to pull image: {pull_error}")
+                raise ValueError(f"Failed to pull Docker image {resolved_service.image}: {str(pull_error)}")
+            except Exception as pull_error:
+                logger.error(f"Error pulling image: {pull_error}")
+                raise ValueError(f"Failed to pull Docker image {resolved_service.image}: {str(pull_error)}")
         except docker.errors.APIError as e:
             logger.error(f"Docker API error: {e}")
             raise ValueError(f"Docker deployment failed: {str(e)}")

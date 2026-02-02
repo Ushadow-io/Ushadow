@@ -35,15 +35,21 @@ export class ChronicleWebSocketAdapter {
       const { backendUrl, token, deviceName = 'webui-dual-stream' } = this.config
 
       // Build WebSocket URL
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      // Determine protocol from the backend URL, not the current page
       let wsUrl: string
 
       if (backendUrl && backendUrl.startsWith('http')) {
+        // Extract protocol from backendUrl (https:// -> wss://, http:// -> ws://)
+        const protocol = backendUrl.startsWith('https://') ? 'wss:' : 'ws:'
         const host = backendUrl.replace(/^https?:\/\//, '')
         wsUrl = `${protocol}//${host}/ws_pcm?token=${token}&device_name=${deviceName}`
       } else if (backendUrl && backendUrl !== '') {
+        // Relative URL - use current page's protocol
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
         wsUrl = `${protocol}//${window.location.host}${backendUrl}/ws_pcm?token=${token}&device_name=${deviceName}`
       } else {
+        // Fallback to current page
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
         wsUrl = `${protocol}//${window.location.host}/ws_pcm?token=${token}&device_name=${deviceName}`
       }
 
@@ -107,8 +113,10 @@ export class ChronicleWebSocketAdapter {
    * Send audio chunk (Wyoming protocol)
    */
   async sendAudioChunk(chunk: AudioChunk): Promise<void> {
+    console.log('🔧 sendAudioChunk called, isConnected:', this.isConnected, 'ws state:', this.ws?.readyState)
+
     if (!this.isConnected || !this.ws) {
-      console.warn('⚠️  WebSocket not connected, queuing chunk')
+      console.warn('⚠️  WebSocket not connected, chunk NOT queued (would be lost)')
       return
     }
 
@@ -134,6 +142,8 @@ export class ChronicleWebSocketAdapter {
     this.send(
       new Uint8Array(chunk.data.buffer, chunk.data.byteOffset, chunk.data.byteLength)
     )
+
+    console.log('✅ Chunk sent to Chronicle:', chunk.data.byteLength, 'bytes')
   }
 
   /**

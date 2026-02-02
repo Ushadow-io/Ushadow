@@ -62,41 +62,128 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(getStorageKey('token'))
+  // Check for legacy token first (for backwards compatibility)
+  const legacyToken = localStorage.getItem(getStorageKey('token'))
+
+  // Check for Keycloak token (takes precedence if both exist)
+  const keycloakToken = sessionStorage.getItem('kc_access_token')
+
+  const token = keycloakToken || legacyToken
+
+  // Debug logging for wiring requests
+  const url = config.url || ''
+  if (url.includes('/api/svc-configs/wiring')) {
+    console.log('[API] Wiring request:', {
+      url,
+      hasKeycloakToken: !!keycloakToken,
+      hasLegacyToken: !!legacyToken,
+      tokenPreview: token ? token.substring(0, 20) + '...' : 'none'
+    })
+  }
+
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
 
+// Track if we're currently refreshing to avoid multiple refresh requests
+let isRefreshing = false
+let refreshSubscribers: Array<(token: string) => void> = []
+
+function subscribeTokenRefresh(cb: (token: string) => void) {
+  refreshSubscribers.push(cb)
+}
+
+function onTokenRefreshed(token: string) {
+  refreshSubscribers.forEach(cb => cb(token))
+  refreshSubscribers = []
+}
+
 // Add response interceptor to handle auth errors
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    // Only clear token and redirect on actual 401 responses, not on timeouts
-    if (error.response?.status === 401) {
+  async (error) => {
+    // Log all errors for debugging
+    if (error.response) {
+      console.log(`🔍 API Error: ${error.response.status} ${error.config?.url}`)
+    }
+
+    const originalRequest = error.config
+
+    // Handle 401 errors by attempting token refresh
+    if (error.response?.status === 401 && !originalRequest._retry) {
       const url = error.config?.url || ''
 
-      // Don't logout on 401s from proxied services (Chronicle, etc.)
-      // These services may have their own auth issues that shouldn't affect ushadow login
-      const isServiceProxy = url.includes('/api/services/') && url.includes('/proxy/')
-
-      if (isServiceProxy) {
-        console.warn('🔐 API: 401 from proxied service - not logging out:', url)
-        // Let the component handle the service-specific auth error
-      } else {
-        // Token expired or invalid on core ushadow endpoints, redirect to login
-        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
-        localStorage.removeItem(getStorageKey('token'))
-        window.location.href = '/login'
+      // Don't try to refresh on auth endpoints
+      if (url.includes('/api/auth/')) {
+        console.warn('🔐 API: 401 on auth endpoint:', url)
+        return Promise.reject(error)
       }
-    } else if (error.code === 'ECONNABORTED') {
-      // Request timeout - don't logout, just log it
+
+      // Check if we have a Keycloak refresh token
+      const keycloakRefreshToken = sessionStorage.getItem('kc_refresh_token')
+      if (!keycloakRefreshToken) {
+        console.warn('🔐 API: 401 Unauthorized on:', url)
+        console.warn('💡 No refresh token available - session may have expired')
+        return Promise.reject(error)
+      }
+
+      originalRequest._retry = true
+
+      if (isRefreshing) {
+        // Wait for the ongoing refresh to complete
+        return new Promise((resolve) => {
+          subscribeTokenRefresh((token: string) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`
+            resolve(api(originalRequest))
+          })
+        })
+      }
+
+      isRefreshing = true
+
+      try {
+        console.log('[API] 🔄 Attempting to refresh token...')
+        const { TokenManager } = await import('../auth/TokenManager')
+        const { backendConfig } = await import('../auth/config')
+
+        const newTokens = await TokenManager.refreshAccessToken(backendConfig.url)
+        TokenManager.storeTokens(newTokens)
+
+        console.log('[API] ✅ Token refreshed successfully')
+
+        // Update the failed request with new token
+        const newToken = newTokens.access_token
+        originalRequest.headers.Authorization = `Bearer ${newToken}`
+
+        // Notify all waiting requests
+        onTokenRefreshed(newToken)
+        isRefreshing = false
+
+        // Retry the original request
+        return api(originalRequest)
+      } catch (refreshError) {
+        console.error('[API] ❌ Token refresh failed:', refreshError)
+        isRefreshing = false
+        refreshSubscribers = []
+
+        // Token refresh failed - let the error propagate
+        // The KeycloakAuthContext will detect expired token and handle logout
+        return Promise.reject(error)
+      }
+    }
+
+    // Handle other error types
+    if (error.code === 'ECONNABORTED') {
       console.warn('⏱️ API: Request timeout - server may be busy')
     } else if (!error.response) {
-      // Network error - don't logout
       console.warn('🌐 API: Network error - server may be unreachable')
+    } else if (error.response?.status >= 500) {
+      console.error('🔥 API: Server error:', error.response.status, error.config?.url)
     }
+
+    // Always reject so components can handle the error
     return Promise.reject(error)
   }
 )
@@ -156,6 +243,9 @@ export const settingsApi = {
   syncEnv: () => api.post('/api/settings/sync-env'),
   reset: () => api.post('/api/settings/reset'),
   refresh: () => api.post('/api/settings/refresh'),
+
+  /** Get unmasked secret value by path (server-side only) */
+  getSecret: (keyPath: string) => api.get<{ value: string }>(`/api/settings/secret/${keyPath}`),
 
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
@@ -265,14 +355,14 @@ export const servicesApi = {
   getConfig: (name: string) => api.get(`/api/services/${name}/config`),
 
   /** Get environment variable configuration with suggestions */
-  getEnvConfig: (name: string) => api.get<{
+  getEnvConfig: (name: string, deployTarget?: string) => api.get<{
     service_id: string
     service_name: string
     compose_file: string
     requires: string[]
     required_env_vars: EnvVarInfo[]
     optional_env_vars: EnvVarInfo[]
-  }>(`/api/services/${name}/env`),
+  }>(`/api/services/${name}/env${deployTarget ? `?deploy_target=${encodeURIComponent(deployTarget)}` : ''}`),
 
   /** Save environment variable configuration */
   updateEnvConfig: (name: string, envVars: EnvVarConfig[]) =>
@@ -313,15 +403,20 @@ export const servicesApi = {
     compose_file?: string
     metadata?: Record<string, any>
   }) => api.post<{ success: boolean; message: string }>('/api/services/register', config),
+
+  /** Generate Mycelia authentication token */
+  generateMyceliaToken: () => api.post<{ token: string; client_id: string }>('/api/services/mycelia/generate-token'),
 }
 
 // Compose service configuration endpoints
 export interface EnvVarConfig {
   name: string
-  source: 'setting' | 'new_setting' | 'literal' | 'default'
+  // Old sources: 'setting' | 'new_setting' | 'literal' | 'default'
+  // New v2 sources: 'config_default' | 'compose_default' | 'env_file' | 'capability' | 'deploy_env' | 'user_override' | 'not_found'
+  source: string
   setting_path?: string      // For source='setting' - existing setting to map
   new_setting_path?: string  // For source='new_setting' - new setting path to create
-  value?: string             // For source='literal' or 'new_setting'
+  value?: string             // For source='literal' or 'new_setting', or resolved value
   locked?: boolean           // For provider-supplied values that cannot be edited
   provider_name?: string     // Name of the provider supplying this value
 }
@@ -338,13 +433,12 @@ export interface EnvVarSuggestion {
 export interface EnvVarInfo {
   name: string
   is_required: boolean
-  has_default: boolean
-  default_value?: string
   source: string
   setting_path?: string
-  value?: string
   resolved_value?: string
   suggestions: EnvVarSuggestion[]
+  locked?: boolean
+  provider_name?: string
 }
 
 /** Missing key that needs to be configured for a provider */
@@ -405,6 +499,7 @@ export interface ComposeService {
   status?: string      // Container status (running, stopped, etc.)
   health?: string      // Container health (healthy, unhealthy, etc.)
   profiles?: string[]  // Docker compose profiles
+  wizard?: string      // ID of setup wizard if available (e.g., "mycelia")
 }
 
 // Quickstart wizard endpoints (kept separate from services)
@@ -549,6 +644,7 @@ export interface KubernetesCluster {
   namespace: string
   labels: Record<string, string>
   infra_scans?: Record<string, any>
+  deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
 }
 
 export const kubernetesApi = {
@@ -640,7 +736,34 @@ export interface Deployment {
   exposed_port?: number
 }
 
+export interface DeployTarget {
+  // Core identity fields (always present)
+  id: string  // deployment_target_id format: {identifier}.{type}.{environment}
+  type: 'docker' | 'k8s'
+  name: string  // Human-readable name
+  identifier: string  // hostname (docker) or cluster_id (k8s)
+  environment: string  // e.g., 'purple', 'production'
+
+  // Status and health
+  status: string  // online/offline/healthy/unknown
+
+  // Platform-specific fields (optional)
+  namespace?: string  // K8s namespace (k8s only)
+  infrastructure?: Record<string, any>  // Infrastructure scan data (k8s only)
+
+  // Common metadata
+  provider?: string  // local/remote/eks/gke/aks
+  region?: string  // Region or location
+  is_leader?: boolean  // Is this the leader node (docker only)
+
+  // Raw data for advanced use cases
+  raw_metadata: Record<string, any>  // Original UNode or KubernetesCluster data
+}
+
 export const deploymentsApi = {
+  // Deployment targets (unified)
+  listTargets: () => api.get<DeployTarget[]>('/api/deployments/targets'),
+
   // Service definitions
   createService: (data: Omit<ServiceDefinition, 'created_at' | 'updated_at' | 'created_by'>) =>
     api.post('/api/deployments/services', data),
@@ -651,16 +774,33 @@ export const deploymentsApi = {
   deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
 
   // Deployments
-  deploy: (serviceId: string, unodeHostname: string) =>
-    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname }),
+  deploy: (serviceId: string, unodeHostname: string, configId?: string) =>
+    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId }),
   listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
   stopDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/stop`),
   restartDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/restart`),
+  updateDeployment: (deploymentId: string, envVars: Record<string, string>) =>
+    api.put<Deployment>(`/api/deployments/${deploymentId}`, { env_vars: envVars }),
   removeDeployment: (deploymentId: string) => api.delete(`/api/deployments/${deploymentId}`),
   getDeploymentLogs: (deploymentId: string, tail?: number) =>
     api.get<{ logs: string }>(`/api/deployments/${deploymentId}/logs`, { params: { tail: tail || 100 } }),
+
+  // Exposed URLs for service discovery
+  getExposedUrls: (params?: { type?: string; name?: string }) =>
+    api.get<ExposedUrl[]>('/api/deployments/exposed-urls', { params }),
+}
+
+// Exposed URL types (for service discovery)
+export interface ExposedUrl {
+  instance_id: string
+  instance_name: string
+  url: string
+  type: string  // e.g., "audio", "http", etc.
+  name: string  // e.g., "audio_intake"
+  metadata: Record<string, any>
+  status: string  // e.g., "running"
 }
 
 // Tailscale Setup Wizard types
@@ -925,9 +1065,39 @@ const adaptMemoryItem = (item: ApiMemoryItem): Memory => {
   }
 }
 
+export type MemorySource = 'openmemory' | 'mycelia'
+
 export const memoriesApi = {
-  /** Get OpenMemory server URL from settings or use default */
-  getServerUrl: async (): Promise<string> => {
+  /** Get memory server URL based on selected source */
+  getServerUrl: async (source: MemorySource = 'openmemory'): Promise<string> => {
+    if (source === 'mycelia') {
+      try {
+        // Get connection info from mycelia service
+        const response = await servicesApi.getConnectionInfo('mycelia')
+        // Use proxy_url for REST API access through backend (uses Docker service name internally)
+        if (response.data?.proxy_url) {
+          return response.data.proxy_url
+        }
+      } catch (err) {
+        console.warn('Failed to get mycelia connection info:', err)
+        throw new Error('Mycelia service not available')
+      }
+    }
+
+    // OpenMemory (mem0) - check for mem0 service first, then fallback to settings
+    if (source === 'openmemory') {
+      try {
+        // Try to get connection info from mem0 service (uses Docker service name internally)
+        const response = await servicesApi.getConnectionInfo('mem0')
+        if (response.data?.proxy_url) {
+          return response.data.proxy_url
+        }
+      } catch (err) {
+        console.warn('mem0 service not found via connection-info, trying settings/localhost')
+      }
+    }
+
+    // Final fallback - use settings or default localhost
     try {
       const response = await settingsApi.getConfig()
       return response.data?.infrastructure?.openmemory_server_url || 'http://localhost:8765'
@@ -942,9 +1112,10 @@ export const memoriesApi = {
     query?: string,
     page: number = 1,
     size: number = 10,
-    filters?: MemoryFilters
+    filters?: MemoryFilters,
+    source: MemorySource = 'openmemory'
   ): Promise<{ memories: Memory[]; total: number; pages: number }> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const response = await axios.post<MemoriesApiResponse>(
       `${serverUrl}/api/v1/memories/filter`,
       {
@@ -967,8 +1138,8 @@ export const memoriesApi = {
   },
 
   /** Get a single memory by ID */
-  getMemory: async (userId: string, memoryId: string): Promise<Memory> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+  getMemory: async (userId: string, memoryId: string, source: MemorySource = 'openmemory'): Promise<Memory> => {
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const response = await axios.get<ApiMemoryItem>(
       `${serverUrl}/api/v1/memories/${memoryId}?user_id=${userId}`
     )
@@ -1056,10 +1227,10 @@ export const memoriesApi = {
     return response.data
   },
 
-  /** Check if OpenMemory server is available */
-  healthCheck: async (): Promise<boolean> => {
+  /** Check if memory server is available */
+  healthCheck: async (source: MemorySource = 'openmemory'): Promise<boolean> => {
     try {
-      const serverUrl = await memoriesApi.getServerUrl()
+      const serverUrl = await memoriesApi.getServerUrl(source)
       await axios.get(`${serverUrl}/docs`, { timeout: 5000 })
       return true
     } catch {
@@ -1105,8 +1276,8 @@ export interface Template {
   icon?: string
   tags: string[]
   configured: boolean  // Whether required config fields are set (for providers)
-  available: boolean   // Whether local service is running (for local providers)
-  installed: boolean   // Whether service is installed (for compose services)
+  running: boolean     // Whether local service is running (Docker container up)
+  installed: boolean   // Whether user has added this from the registry
 }
 
 /** ServiceConfig config values */
@@ -1170,6 +1341,24 @@ export interface Wiring {
   created_at?: string
 }
 
+/** Output wiring - connects service outputs to env vars of other services */
+export interface OutputWiring {
+  id: string
+  source_instance_id: string
+  source_output_key: string  // "access_url" | "env_vars.XXX" | "capability_values.XXX"
+  target_instance_id: string
+  target_env_var: string     // The env var key on the target service
+  created_at?: string
+}
+
+/** Request to create output wiring */
+export interface OutputWiringCreateRequest {
+  source_instance_id: string
+  source_output_key: string
+  target_instance_id: string
+  target_env_var: string
+}
+
 /** Request to create an instance */
 export interface ServiceConfigCreateRequest {
   id: string
@@ -1205,6 +1394,10 @@ export const svcConfigsApi = {
   /** Get a template by ID */
   getTemplate: (templateId: string) =>
     api.get<Template>(`/api/svc-configs/templates/${templateId}`),
+
+  /** Get env var config with suggestions for a template (same process as services) */
+  getTemplateEnvConfig: (templateId: string) =>
+    api.get<EnvVarInfo[]>(`/api/svc-configs/templates/${templateId}/env`),
 
   // ServiceConfigs
   /** List all instances */
@@ -1259,15 +1452,28 @@ export const svcConfigsApi = {
   /** Get wiring for a specific instance */
   getServiceConfigWiring: (instanceId: string) =>
     api.get<Wiring[]>(`/api/svc-configs/${instanceId}/wiring`),
+  // Output Wiring - connects service outputs to env vars
+  /** List all output wiring connections */
+  getOutputWiring: () =>
+    api.get<OutputWiring[]>('/api/instances/output-wiring/all'),
+
+  /** Create an output wiring connection */
+  createOutputWiring: (data: OutputWiringCreateRequest) =>
+    api.post<OutputWiring>('/api/instances/output-wiring', data),
+
+  /** Delete an output wiring connection */
+  deleteOutputWiring: (wiringId: string) =>
+    api.delete(`/api/instances/output-wiring/${wiringId}`),
 }
 
 export const graphApi = {
   /** Fetch graph data for visualization */
   fetchGraphData: async (
     userId?: string,
-    limit: number = 100
+    limit: number = 100,
+    source: MemorySource = 'openmemory'
   ): Promise<GraphData> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string | number> = { limit }
     if (userId) params.user_id = userId
 
@@ -1279,8 +1485,8 @@ export const graphApi = {
   },
 
   /** Fetch graph statistics */
-  fetchGraphStats: async (userId?: string): Promise<GraphStats> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+  fetchGraphStats: async (userId?: string, source: MemorySource = 'openmemory'): Promise<GraphStats> => {
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string> = {}
     if (userId) params.user_id = userId
 
@@ -1295,9 +1501,10 @@ export const graphApi = {
   searchGraph: async (
     query: string,
     userId?: string,
-    limit: number = 50
+    limit: number = 50,
+    source: MemorySource = 'openmemory'
   ): Promise<GraphData> => {
-    const serverUrl = await memoriesApi.getServerUrl()
+    const serverUrl = await memoriesApi.getServerUrl(source)
     const params: Record<string, string | number> = { query, limit }
     if (userId) params.user_id = userId
 
@@ -1665,6 +1872,40 @@ export interface DockerHubRegisterRequest {
   shadow_header_value?: string
   route_path?: string
   capabilities?: string[]  // Capabilities this service provides
+}
+
+// =============================================================================
+// Audio Provider API - Wired audio destinations
+// =============================================================================
+
+export interface AudioDestination {
+  consumer_id: string
+  consumer_name: string
+  websocket_url: string
+  protocol: string
+  format: string
+}
+
+export interface WiredDestinationsResponse {
+  has_destinations: boolean
+  destinations: AudioDestination[]
+  // Relay mode: frontend connects to relay_url, backend fans out to destinations
+  use_relay: boolean
+  relay_url: string | null  // e.g., wss://hostname/ws/audio/relay
+}
+
+export const audioApi = {
+  /** Get wired audio destinations based on wiring configuration */
+  getWiredDestinations: () =>
+    api.get<WiredDestinationsResponse>('/api/providers/audio_consumer/wired-destinations'),
+
+  /** Get active audio consumer configuration */
+  getActiveConsumer: () =>
+    api.get('/api/providers/audio_consumer/active'),
+
+  /** Get available audio consumers */
+  getAvailableConsumers: () =>
+    api.get('/api/providers/audio_consumer/available'),
 }
 
 export const githubImportApi = {

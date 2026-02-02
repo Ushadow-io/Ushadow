@@ -37,8 +37,8 @@ import {
   updateUnodeStreamConfig,
   updateUnodeUrls,
   parseStreamUrl,
-} from './utils/unodeStorage';
-import { getAuthToken, saveAuthToken } from './utils/authStorage';
+} from './_utils/unodeStorage';
+import { getAuthToken, saveAuthToken } from './_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from './services/chronicleApi';
@@ -358,7 +358,7 @@ export default function UNodeDetailsPage() {
 
     // Update the existing node with new connection info
     const existingNode = unodes.find(n => n.id === rescanNodeId);
-    const savedNode = await saveUnode({
+    await saveUnode({
       id: rescanNodeId!, // Keep same ID
       name: existingNode?.name || result.leader.hostname.split('.')[0] || 'UNode',
       apiUrl: result.leader.apiUrl,
@@ -368,17 +368,17 @@ export default function UNodeDetailsPage() {
       authToken: data.auth_token,
     });
 
-    // Reload and refresh status
-    const updatedUnodes = await getUnodes();
-    setUnodes(updatedUnodes);
+    // Reload unodes
+    await getUnodes();
     setRescanNodeId(null);
 
     if (data.auth_token) {
       // Save token globally so other pages can use it
       await saveAuthToken(data.auth_token);
-      setAuthToken(data.auth_token);
-      checkNodeStatus(savedNode, data.auth_token);
     }
+
+    // Navigate back to the main page so user can start streaming
+    router.replace('/');
   };
 
   // Handle UNode found from discovery (for adding new nodes)
@@ -471,8 +471,9 @@ export default function UNodeDetailsPage() {
     };
 
     // Determine overall status for collapsed view
-    const isConnected = status.ushadow === 'connected' && status.chronicle === 'connected';
-    const hasError = status.ushadow === 'error' || status.chronicle === 'error';
+    // Only ushadow connection is required (chronicle is optional)
+    const isConnected = status.ushadow === 'connected';
+    const hasError = status.ushadow === 'error'; // Only fail on ushadow error
     const isChecking = status.ushadow === 'checking' || status.chronicle === 'checking';
 
     return (
@@ -523,7 +524,26 @@ export default function UNodeDetailsPage() {
           />
         </TouchableOpacity>
 
-        {/* Expanded Content */}
+        {/* Actions - Always visible below header */}
+        <View style={styles.actionsSection}>
+          <TouchableOpacity
+            style={styles.removeButton}
+            onPress={() => handleRemoveNode(selectedNode)}
+          >
+            <Ionicons name="trash-outline" size={18} color="#fff" />
+            <Text style={styles.removeButtonText}>Remove</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.rescanButton}
+            onPress={() => handleRescanNode(selectedNode)}
+            testID="rescan-qr-button"
+          >
+            <Ionicons name="qr-code-outline" size={18} color="#fff" />
+            <Text style={styles.rescanButtonText}>Rescan</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Expanded Content - Advanced details */}
         {cardExpanded && (
           <>
             {/* URL Configuration - Hidden behind edit button */}
@@ -713,25 +733,6 @@ export default function UNodeDetailsPage() {
                 </View>
               )}
             </View>
-
-            {/* Actions */}
-            <View style={styles.actionsSection}>
-              <TouchableOpacity
-                style={styles.removeButton}
-                onPress={() => handleRemoveNode(selectedNode)}
-              >
-                <Ionicons name="trash-outline" size={18} color="#fff" />
-                <Text style={styles.removeButtonText}>Remove</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.rescanButton}
-                onPress={() => handleRescanNode(selectedNode)}
-                testID="rescan-qr-button"
-              >
-                <Ionicons name="qr-code-outline" size={18} color="#fff" />
-                <Text style={styles.rescanButtonText}>Rescan</Text>
-              </TouchableOpacity>
-            </View>
           </>
         )}
       </View>
@@ -741,8 +742,9 @@ export default function UNodeDetailsPage() {
   // Render other node item
   const renderOtherNode = (node: UNode) => {
     const status = statuses[node.id];
-    const isConnected = status?.ushadow === 'connected' && status?.chronicle === 'connected';
-    const hasError = status?.ushadow === 'error' || status?.chronicle === 'error';
+    // Only ushadow connection is required (chronicle is optional)
+    const isConnected = status?.ushadow === 'connected';
+    const hasError = status?.ushadow === 'error'; // Only fail on ushadow error
 
     return (
       <TouchableOpacity
@@ -808,6 +810,35 @@ export default function UNodeDetailsPage() {
               {otherNodes.map(renderOtherNode)}
             </View>
           </>
+        )}
+
+        {/* Test Audio Discovery */}
+        {selectedNode && authToken && (
+          <TouchableOpacity
+            style={[styles.addNodeButton, { backgroundColor: '#FFF3E0' }]}
+            onPress={async () => {
+              try {
+                const { getAvailableAudioDestinations, buildRelayUrl } = await import('./services/audioProviderApi');
+                console.log('[Test] Querying audio destinations...');
+                const destinations = await getAvailableAudioDestinations(selectedNode.apiUrl, authToken);
+                console.log('[Test] Found destinations:', destinations);
+                Alert.alert(
+                  '✅ Audio Discovery Success',
+                  `Found ${destinations.length} destination(s):\n\n${destinations.map(d => `• ${d.instance_name} (${d.status})`).join('\n')}`
+                );
+                if (destinations.length > 0) {
+                  const relayUrl = buildRelayUrl(selectedNode.apiUrl, authToken, destinations);
+                  console.log('[Test] Relay URL:', relayUrl);
+                }
+              } catch (err) {
+                console.error('[Test] Failed:', err);
+                Alert.alert('❌ Test Failed', err instanceof Error ? err.message : 'Unknown error');
+              }
+            }}
+          >
+            <Ionicons name="radio-outline" size={24} color="#F57C00" />
+            <Text style={[styles.addNodeText, { color: '#F57C00' }]}>🧪 Test Audio Discovery</Text>
+          </TouchableOpacity>
         )}
 
         {/* Add Button */}
@@ -1173,7 +1204,9 @@ const styles = StyleSheet.create({
   actionsSection: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: spacing.lg,
+    padding: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
   },
   removeButton: {
     flexDirection: 'row',

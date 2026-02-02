@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
-import { Mic, MicOff, Loader2, Zap, Archive, AlertCircle, Monitor } from 'lucide-react'
-import { ChronicleRecordingReturn, RecordingStep } from '../../hooks/useChronicleRecording'
+import { Mic, MicOff, Loader2, Zap, Archive, AlertCircle, Monitor, Info } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { WebRecordingReturn, RecordingStep } from '../../hooks/useWebRecording'
 
 interface ChronicleRecordingProps {
   onAuthRequired?: () => void
-  recording: ChronicleRecordingReturn
+  recording: WebRecordingReturn
 }
 
 const getStepText = (step: RecordingStep): string => {
@@ -12,7 +13,7 @@ const getStepText = (step: RecordingStep): string => {
     case 'idle': return 'Ready to Record'
     case 'mic': return 'Getting Microphone Access...'
     case 'display': return 'Requesting Tab/Screen Audio...'
-    case 'websocket': return 'Connecting to Chronicle...'
+    case 'websocket': return 'Connecting to Audio Services...'
     case 'audio-start': return 'Initializing Audio Session...'
     case 'streaming': return 'Starting Audio Stream...'
     case 'stopping': return 'Stopping Recording...'
@@ -90,10 +91,110 @@ export default function ChronicleRecording({ onAuthRequired, recording }: Chroni
     }
   }, [recording.error, onAuthRequired])
 
-  const startButtonDisabled = !recording.canAccessMicrophone || isProcessing(recording.currentStep) || recording.isRecording
+  const startButtonDisabled =
+    !recording.canAccessMicrophone ||
+    isProcessing(recording.currentStep) ||
+    recording.isRecording ||
+    recording.selectedDestinationIds.length === 0
 
   return (
     <div className="space-y-6" data-testid="chronicle-recording">
+      {/* Audio Source Selection */}
+      {recording.availableAudioDevices.length > 0 && (
+        <div className="card p-4" data-testid="audio-source-selection">
+          <h3 className="font-medium text-neutral-900 dark:text-neutral-100 mb-3">Audio Source</h3>
+          <select
+            value={recording.selectedAudioDeviceId || ''}
+            onChange={(e) => recording.setSelectedAudioDevice(e.target.value)}
+            disabled={recording.isRecording}
+            className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="audio-device-select"
+          >
+            {recording.availableAudioDevices.map(device => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Microphone ${device.deviceId.substring(0, 8)}`}
+              </option>
+            ))}
+          </select>
+          {recording.isOmiDevice && (
+            <p className="mt-2 text-sm text-purple-600 dark:text-purple-400">
+              🎤 OMI device detected - using Opus format (/ws_omi)
+            </p>
+          )}
+          {!recording.isOmiDevice && recording.selectedAudioDeviceId && (
+            <p className="mt-2 text-sm text-blue-600 dark:text-blue-400">
+              🎤 Phone microphone - using PCM format (/ws_pcm)
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Destination Selection */}
+      <div className="card p-4" data-testid="destination-selection">
+        <h3 className="font-medium text-neutral-900 dark:text-neutral-100 mb-3">Audio Destinations</h3>
+
+        {recording.availableDestinations.length > 0 ? (
+          <>
+            <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-3">
+              Select where to send audio (multi-select):
+            </p>
+            <div className="space-y-2">
+              {recording.availableDestinations.map(dest => (
+                <label
+                  key={dest.instance_id}
+                  className="flex items-center gap-3 p-2 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                  data-testid={`destination-${dest.instance_id}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={recording.selectedDestinationIds.includes(dest.instance_id)}
+                    onChange={() => recording.toggleDestination(dest.instance_id)}
+                    disabled={recording.isRecording}
+                    className="w-4 h-4 text-primary-600 rounded focus:ring-2 focus:ring-primary-500"
+                  />
+                  <span className="text-neutral-900 dark:text-neutral-100 font-medium">
+                    {dest.instance_name}
+                  </span>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                    ({dest.metadata?.protocol || 'unknown'} • {dest.metadata?.data || 'unknown'})
+                  </span>
+                  {dest.status === 'running' && (
+                    <span className="text-xs text-green-600 dark:text-green-400">●</span>
+                  )}
+                </label>
+              ))}
+            </div>
+            {recording.selectedDestinationIds.length === 0 && (
+              <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+                ⚠️ Select at least one destination to record
+              </p>
+            )}
+          </>
+        ) : (
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4" data-testid="no-destinations-info">
+            <div className="flex items-start space-x-3">
+              <Info className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-2">
+                  No Audio Destinations Available
+                </h4>
+                <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
+                  No running services are currently exposing audio intake endpoints. To record audio, you need to deploy and start an audio consumer service like Chronicle or Mycelia.
+                </p>
+                <div className="space-y-2">
+                  <p className="text-sm text-blue-700 dark:text-blue-300 font-medium">Quick Setup:</p>
+                  <ol className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-decimal list-inside">
+                    <li>Go to <Link to="/services" className="underline hover:text-blue-800 dark:hover:text-blue-200">Services</Link> and install Chronicle or Mycelia</li>
+                    <li>Make sure the service is deployed and running (status: "running")</li>
+                    <li>Return to this page to select the audio destination</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Mode Toggle */}
       <div className="card p-4" data-testid="recording-mode-toggle">
         <div className="flex items-center justify-between flex-wrap gap-2">

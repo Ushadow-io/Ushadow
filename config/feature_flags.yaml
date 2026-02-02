@@ -57,7 +57,8 @@ flags:
   # Speaker Recognition - Speaker identification and diarization
   speaker_recognition:
     enabled: false
-    description: "Speaker Recognition - Identify and track speakers in conversations (not implemented)"
+    description: "Speaker Recognition - Identify and track speakers in conversations
+      (not implemented)"
     type: release
 
   # Notifications - User notification system
@@ -72,11 +73,25 @@ flags:
     description: "Show Memories page in navigation with list view and knowledge graph"
     type: release
 
+  # Timeline - visualize memories on an interactive timeline
+  timeline:
+    enabled: false
+    description: "Timeline - Visualize memories with time ranges on Gantt charts and
+      D3 timelines (requires mycelia image rebuild)"
+    type: release
+
   # ServiceConfigs Management - Service instance deployment and wiring
   instances_management:
-    enabled: false
+    enabled: true
     description: "ServiceConfigs page - Deploy and wire service instances with capability
       resolution"
+    type: release
+
+  # Service Configs - Show custom service instance configurations
+  service_configs:
+    enabled: true
+    description: "Show custom service config instances in the Services tab (multi-instance
+      per template)"
     type: release
 
   # Add your feature flags here following this format:

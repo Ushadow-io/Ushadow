@@ -22,6 +22,7 @@ from docker.errors import DockerException, NotFound, APIError
 
 from src.config.secrets import mask_if_secret
 from src.services.compose_registry import get_compose_registry
+from src.utils.environment import get_compose_project_name
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,7 @@ class ServiceInfo:
 
     name: str
     container_id: Optional[str]
+    container_name: Optional[str]  # Actual Docker container name
     status: ServiceStatus
     service_type: ServiceType
     image: Optional[str]
@@ -548,6 +550,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.UNKNOWN,
                 service_type=ServiceType.APPLICATION,
                 image=None,
@@ -564,6 +567,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.UNKNOWN,
                 service_type=service_config["service_type"],
                 image=None,
@@ -588,8 +592,7 @@ class DockerManager:
             except NotFound:
                 # Container name may have project prefix (e.g., "ushadow-wiz-frame-chronicle-backend")
                 # Search by compose service label, preferring declared namespace
-                import os
-                current_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+                current_project = get_compose_project_name()
 
                 # Use declared namespace from x-ushadow, fall back to current project
                 service_namespace = service_config.get("namespace")
@@ -601,13 +604,21 @@ class DockerManager:
                 logger.debug(f"[get_service_info] Searching by label, target_projects: {target_projects}")
 
                 containers = self._client.containers.list(
-                    all=True,
+                    all=False,  # Only search running containers
                     filters={"label": f"com.docker.compose.service={docker_container_name}"}
                 )
-                logger.debug(f"[get_service_info] Found {len(containers)} containers with label com.docker.compose.service={docker_container_name}")
+                logger.debug(f"[get_service_info] Found {len(containers)} RUNNING containers with label com.docker.compose.service={docker_container_name}")
                 for c in containers:
                     logger.debug(f"[get_service_info]   - {c.name}, project: {c.labels.get('com.docker.compose.project', 'unknown')}, status: {c.status}")
                 if containers:
+                    # Check if multiple running containers exist
+                    if len(containers) > 1:
+                        running_projects = [c.labels.get('com.docker.compose.project', 'unknown') for c in containers]
+                        logger.warning(
+                            f"[get_service_info] Multiple RUNNING containers found for {docker_container_name}: {running_projects}. "
+                            f"Will use container from {target_projects[0] if target_projects else 'first match'}"
+                        )
+
                     # Match containers from declared namespace or current project
                     for target_project in target_projects:
                         for c in containers:
@@ -623,10 +634,12 @@ class DockerManager:
                     if not container:
                         # Log what we found but didn't match
                         found_projects = [c.labels.get('com.docker.compose.project', 'unknown') for c in containers]
-                        logger.info(
-                            f"[get_service_info] Found {len(containers)} containers for {docker_container_name} "
-                            f"but none in projects {target_projects}. Found in: {found_projects}"
+                        logger.warning(
+                            f"[get_service_info] Found {len(containers)} RUNNING containers for {docker_container_name} "
+                            f"but none in target projects {target_projects}. Found in: {found_projects}. Using first container."
                         )
+                        # Use the first running container as fallback
+                        container = containers[0]
 
             if not container:
                 raise NotFound(f"Container not found: {docker_container_name}")
@@ -649,6 +662,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=container.id[:12],
+                container_name=container.name,
                 status=ServiceStatus(container.status.lower()) if container.status.lower() in [s.value for s in ServiceStatus] else ServiceStatus.UNKNOWN,
                 service_type=service_config["service_type"],
                 image=container.image.tags[0] if container.image.tags else container.image.short_id,
@@ -664,6 +678,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.NOT_FOUND,
                 service_type=service_config["service_type"],
                 image=None,
@@ -680,6 +695,7 @@ class DockerManager:
             return ServiceInfo(
                 name=service_name,
                 container_id=None,
+                container_name=None,
                 status=ServiceStatus.UNKNOWN,
                 service_type=service_config["service_type"],
                 image=None,
@@ -731,7 +747,7 @@ class DockerManager:
         Returns:
             List of port configurations with 'port', 'env_var', and 'source' keys
         """
-        from src.config.omegaconf_settings import get_settings_store
+        from src.config import get_settings
 
         service_config = self.MANAGEABLE_SERVICES.get(service_name, {})
         ports = service_config.get('ports', [])
@@ -740,7 +756,7 @@ class DockerManager:
             ports = metadata.get('ports', [])
 
         # Load port overrides from services.{name}.ports
-        settings = get_settings_store()
+        settings = get_settings()
         config_key = service_name.replace("-", "_")
         port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
 
@@ -811,7 +827,7 @@ class DockerManager:
 
         # Build the full container name pattern to exclude (only OUR environment's container)
         # Container names follow pattern: {COMPOSE_PROJECT_NAME}-{service_name}
-        compose_project = os.environ.get("COMPOSE_PROJECT_NAME", "ushadow")
+        compose_project = get_compose_project_name()
         exclude_pattern = f"{compose_project}-{service_name}"
         logger.debug(f"Exclude pattern for self-check: {exclude_pattern}")
 
@@ -908,9 +924,11 @@ class DockerManager:
         """
         Build environment variables from user's saved compose configuration.
 
-        For compose-discovered services, users configure env vars via the
-        /api/compose/services/{id}/env endpoint. This method resolves those
-        configurations to actual values.
+        Uses the entity-based Settings API (v2) to resolve values from all sources:
+        - Service-specific config
+        - Capability providers
+        - Global settings
+        - Defaults
 
         Args:
             service_name: Name of the service (docker_service_name)
@@ -918,9 +936,9 @@ class DockerManager:
         Returns:
             Dict of env var name -> resolved value
         """
-        from src.config.omegaconf_settings import get_settings_store
+        from src.config import get_settings
 
-        settings = get_settings_store()
+        settings = get_settings()
         compose_registry = get_compose_registry()
 
         # Find the service in compose registry
@@ -928,39 +946,31 @@ class DockerManager:
         if not service:
             return {}
 
-        # Load saved configuration
-        config_key = f"service_env_config.{service.service_id.replace(':', '_')}"
-        saved_config = await settings.get(config_key)
-        saved_config = saved_config or {}
+        # Use entity-based Settings API to resolve all env vars
+        # This automatically checks: service config, capabilities, providers, settings, defaults
+        resolutions = await settings.for_service(service.service_id)
 
         resolved = {}
 
+        # Get provider registry for suggestions
+        from src.services.provider_registry import get_provider_registry
+        provider_registry = get_provider_registry()
+
         for env_var in service.all_env_vars:
-            config = saved_config.get(env_var.name, {})
-            source = config.get("source", "default")
-            setting_path = config.get("setting_path")
-            literal_value = config.get("value")
+            resolution = resolutions.get(env_var.name)
 
-            # Use settings.resolve_env_value as single source of truth
-            # This ensures UI display and container startup use identical resolution
-            value = await settings.resolve_env_value(
-                source=source,
-                setting_path=setting_path,
-                literal_value=literal_value,
-                default_value=env_var.default_value,
-                env_name=env_var.name
-            )
-
-            if value:
-                resolved[env_var.name] = str(value)
-            elif env_var.is_required and source != "default":
+            if resolution and resolution.found and resolution.value:
+                resolved[env_var.name] = str(resolution.value)
+                logger.debug(
+                    f"Resolved {env_var.name} from {resolution.source.value}: {mask_if_secret(env_var.name, str(resolution.value))}"
+                )
+            elif env_var.is_required:
                 logger.warning(
-                    f"Service {service_name}: env var {env_var.name} "
-                    f"has no value for source={source}"
+                    f"Service {service_name}: required env var {env_var.name} has no value"
                 )
 
         logger.info(
-            f"Resolved {len(resolved)} env vars for {service_name} from compose config"
+            f"Resolved {len(resolved)} env vars for {service_name} using Settings API v2"
         )
         return resolved
 
@@ -997,6 +1007,17 @@ class DockerManager:
             try:
                 container_env = await self._build_env_vars_from_compose_config(service_name)
                 subprocess_env.update(container_env)
+
+                # Add WELL_KNOWN_ENV_MAPPINGS to subprocess_env for Docker Compose variable substitution
+                # This allows compose files to use ${AUTH_SECRET_KEY} which gets substituted by Docker
+                from src.services.service_orchestrator import WELL_KNOWN_ENV_MAPPINGS
+                from src.config import get_settings_store
+                settings_store = get_settings_store()
+                for env_name, settings_path in WELL_KNOWN_ENV_MAPPINGS.items():
+                    if env_name not in subprocess_env:  # Don't override already-set values
+                        value = await settings_store.get(settings_path)
+                        if value:
+                            subprocess_env[env_name] = str(value)
 
                 # Also try CapabilityResolver for any capabilities declared in x-ushadow
                 requires = service_config.get("metadata", {}).get("requires", [])
@@ -1046,8 +1067,8 @@ class DockerManager:
                             # Handle _from_setting references
                             if isinstance(value, dict) and '_from_setting' in value:
                                 # Resolve the setting path
-                                from src.config.omegaconf_settings import get_settings_store
-                                settings = get_settings_store()
+                                from src.config import get_settings
+                                settings = get_settings()
                                 setting_path = value['_from_setting']
                                 resolved_value = await settings.get(setting_path)
                                 if resolved_value:
@@ -1067,8 +1088,8 @@ class DockerManager:
                             subprocess_env[key] = str(value)
 
                 # Apply port overrides from services.{name}.ports
-                from src.config.omegaconf_settings import get_settings_store
-                settings = get_settings_store()
+                from src.config import get_settings
+                settings = get_settings()
                 config_key = service_name.replace("-", "_")
                 port_overrides = settings.get_sync(f"services.{config_key}.ports") or {}
                 for env_var, port in port_overrides.items():
@@ -1251,7 +1272,7 @@ class DockerManager:
             # Use declared namespace from x-ushadow, fall back to COMPOSE_PROJECT_NAME
             project_name = discovered.namespace if discovered else None
             if not project_name:
-                project_name = os.environ.get("COMPOSE_PROJECT_NAME")
+                project_name = get_compose_project_name()
             if not project_name:
                 # Fallback for infra services or if env not set
                 if "infra" in str(compose_path):
@@ -1266,6 +1287,7 @@ class DockerManager:
 
             # Get docker service name from the discovered service
             docker_service_name = discovered.service_name if discovered else service_name
+            logger.info(f"[DEBUG] Deploying service_name={service_name} -> docker_service_name={docker_service_name}, discovered={discovered.service_id if discovered else None}")
 
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution
@@ -1274,6 +1296,17 @@ class DockerManager:
             # Suppress orphan warnings when running services from different compose files
             # in the same project namespace (e.g., chronicle + main backend share auth)
             subprocess_env["COMPOSE_IGNORE_ORPHANS"] = "true"
+
+            # Ensure PROJECT_ROOT is set for volume mount substitution
+            if "PROJECT_ROOT" not in subprocess_env:
+                project_root = os.environ.get("PROJECT_ROOT")
+                if project_root:
+                    subprocess_env["PROJECT_ROOT"] = project_root
+                    logger.info(f"[FIX] Added PROJECT_ROOT to subprocess_env: {project_root}")
+                else:
+                    logger.warning("[FIX] PROJECT_ROOT not found in environment!")
+            else:
+                logger.info(f"[DEBUG] PROJECT_ROOT already in subprocess_env: {subprocess_env['PROJECT_ROOT']}")
 
             logger.info(f"━━━ Starting {service_name} with {len(container_env)} environment variables ━━━")
 
@@ -1297,7 +1330,7 @@ class DockerManager:
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=180  # Increased to 3 minutes for services that need building
             )
 
             if result.returncode == 0:

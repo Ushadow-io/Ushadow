@@ -21,3 +21,32 @@ export { useGraphApi } from './useGraphApi';
 // Generic QR code hook (mobile, Tailscale auth, etc.)
 export { useQrCode, useMobileQrCode } from './useQrCode';
 export type { QrCodeData, UseQrCodeOptions } from './useQrCode';
+
+// Provider configuration and wiring hooks
+export { useProviderConfigs } from './useProviderConfigs';
+export type {
+  ProviderOption,
+  GroupedProviders,
+  CreateConfigData,
+  UseProviderConfigsResult,
+} from './useProviderConfigs';
+
+export { useServiceHierarchy, useInstalledServices, useServiceCards } from './useServiceHierarchy';
+export type {
+  ServiceGroup,
+  ServiceHierarchyResult,
+  ServiceCardInfo,
+} from './useServiceHierarchy';
+
+export { useWiringActions } from './useWiringActions';
+export type { WiringConnection, UseWiringActionsResult } from './useWiringActions';
+
+// Service configuration page data hooks
+export { useServiceConfigData } from './useServiceConfigData';
+export type { ServiceConfigData, UseServiceConfigDataResult } from './useServiceConfigData';
+
+export { useServiceCatalog } from './useServiceCatalog';
+export type { UseServiceCatalogResult } from './useServiceCatalog';
+
+export { useDeploymentActions } from './useDeploymentActions';
+export type { UseDeploymentActionsResult } from './useDeploymentActions';

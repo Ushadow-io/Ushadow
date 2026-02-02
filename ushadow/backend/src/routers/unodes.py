@@ -22,6 +22,7 @@ from src.models.unode import (
 )
 from src.services.unode_manager import get_unode_manager
 from src.services.auth import get_current_user
+from src.services.keycloak_auth import get_current_user_hybrid
 from src.utils.tailscale_serve import get_tailscale_status
 from src.models.user import User
 
@@ -167,7 +168,7 @@ async def unode_heartbeat(heartbeat: UNodeHeartbeat):
 async def list_unodes(
     status: Optional[UNodeStatus] = None,
     role: Optional[UNodeRole] = None,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     List all u-nodes in the cluster.
@@ -180,7 +181,7 @@ async def list_unodes(
 
 @router.get("/discover/peers", response_model=dict)
 async def discover_peers(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Discover all Tailscale peers on the network.
@@ -214,7 +215,7 @@ async def discover_peers(
 @router.post("/claim", response_model=UNodeRegistrationResponse)
 async def claim_node(
     request: dict,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Claim an available u-node by registering it to this leader.
@@ -267,7 +268,7 @@ class ManagerVersionsResponse(BaseModel):
 
 @router.get("/versions", response_model=ManagerVersionsResponse)
 async def get_manager_versions(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Get available ushadow-manager versions from the container registry.
@@ -527,7 +528,7 @@ async def get_leader_info():
 @router.get("/{hostname}", response_model=UNode)
 async def get_unode(
     hostname: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Get details of a specific u-node.
@@ -544,7 +545,7 @@ async def get_unode(
 @router.post("/tokens", response_model=JoinTokenResponse)
 async def create_join_token(
     request: JoinTokenCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Create a join token for new u-nodes.
@@ -562,7 +563,7 @@ async def create_join_token(
 @router.delete("/{hostname}", response_model=UNodeActionResponse)
 async def remove_unode(
     hostname: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Remove a u-node from the cluster.
@@ -588,7 +589,7 @@ async def remove_unode(
 @router.post("/{hostname}/release", response_model=UNodeActionResponse)
 async def release_unode(
     hostname: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Release a u-node so it can be claimed by another leader.
@@ -611,7 +612,7 @@ async def release_unode(
 async def update_unode_status(
     hostname: str,
     status: UNodeStatus,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Manually update a u-node's status.
@@ -651,7 +652,7 @@ class UpgradeResponse(BaseModel):
 async def upgrade_unode(
     hostname: str,
     request: UpgradeRequest = UpgradeRequest(),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Upgrade a u-node's manager to a new version.
@@ -701,7 +702,7 @@ async def upgrade_unode(
 @router.post("/upgrade-all", response_model=dict)
 async def upgrade_all_unodes(
     request: UpgradeRequest = UpgradeRequest(),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_hybrid)
 ):
     """
     Upgrade all online worker u-nodes to a new manager version.

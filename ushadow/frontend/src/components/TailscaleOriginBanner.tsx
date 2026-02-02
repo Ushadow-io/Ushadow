@@ -16,9 +16,12 @@ export default function TailscaleOriginBanner() {
   const [tailscaleHostname, setTailscaleHostname] = useState<string | null>(null)
   const [dismissed, setDismissed] = useState(false)
 
-  useEffect(() => {
-    checkOriginMismatch()
-  }, [])
+  // Disabled: Don't auto-check Tailscale on mount to avoid unnecessary 401s
+  // Only check when explicitly needed
+  // useEffect(() => {
+  //   const timer = setTimeout(() => checkOriginMismatch(), 1000)
+  //   return () => clearTimeout(timer)
+  // }, [])
 
   const checkOriginMismatch = async () => {
     // Check if user dismissed this session

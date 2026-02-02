@@ -17,6 +17,18 @@ auth:
   admin_email: admin@example.com
   admin_name: admin
 
+# Keycloak Configuration (non-sensitive)
+# Secrets (passwords, client secrets) go in secrets.yaml
+keycloak:
+  enabled: true  # Set to false to use legacy auth, true for Keycloak (runs alongside existing auth during migration)
+  url: http://keycloak:8080  # Internal Docker network URL
+  public_url: http://localhost:8081  # External URL (for browser redirects)
+  realm: ushadow
+  backend_client_id: ushadow-backend
+  frontend_client_id: ushadow-frontend
+  # Client secrets are in secrets.yaml
+  admin_user: admin  # Bootstrap admin (change in secrets.yaml)
+
 # Speech Detection Settings
 speech_detection:
   min_words: 5
@@ -62,6 +74,8 @@ transcription:
 
 # Service-Specific Preferences (not shared across services)
 service_preferences:
+  chronicle:
+    database: ushadow
   openmemory:
     enable_graph: false
     neo4j_password: null
@@ -80,7 +94,7 @@ security:
 # Infrastructure Services
 infrastructure:
   mongodb_uri: mongodb://mongo:27017
-  # mongodb_database set by MONGODB_DATABASE env var
+  mongodb_database: ushadow  # Default database name (NOT a URI!)
   redis_url: redis://redis:6379/0
   
   qdrant_base_url: qdrant
@@ -110,9 +124,9 @@ wizard:
 # Selected Providers per Capability
 # Services declare `uses: [{capability: llm}]` and get the selected provider's env vars.
 selected_providers:
-  llm: openai              # openai | anthropic | ollama | openai-compatible
-  transcription: deepgram  # deepgram | mistral-voxtral | whisper-local | parakeet
-  memory: openmemory       # openmemory | cognee | mem0-cloud
+  llm: openai                   # openai | anthropic | ollama | openai-compatible
+  transcription: deepgram       # deepgram | mistral-voxtral | whisper-local | parakeet
+  memory: openmemory            # openmemory | cognee | mem0-cloud
 
 # Default Services to Install
 # These are installed by default in quickstart mode. User modifications

@@ -1,0 +1,13 @@
+# DEPRECATED: Keycloak has been moved to docker-compose.infra.yml
+#
+# This file is kept for reference only.
+#
+# To start Keycloak, use:
+#   docker compose -f compose/docker-compose.infra.yml --profile postgres up -d
+#   docker compose -f compose/docker-compose.infra.yml --profile keycloak up -d
+#   python scripts/setup_keycloak.py
+#
+# Or start all infrastructure at once:
+#   docker compose -f compose/docker-compose.infra.yml --profile infra --profile postgres up -d
+#
+# See: compose/docker-compose.infra.yml for the current Keycloak configuration

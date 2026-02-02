@@ -1,14 +1,10 @@
 import { useState, useEffect } from 'react'
-import { X, Download, FolderOpen, GitBranch, Flame, Package } from 'lucide-react'
-
-type CreateMode = 'clone' | 'link' | 'worktree'
-type ServerMode = 'dev' | 'prod'
+import { X, GitBranch } from 'lucide-react'
 
 interface NewEnvironmentDialogProps {
   isOpen: boolean
   projectRoot: string
   onClose: () => void
-  onClone: (name: string, serverMode: ServerMode) => void
   onLink: (name: string, path: string) => void
   onWorktree: (name: string, branch: string) => void
 }
@@ -17,33 +13,18 @@ export function NewEnvironmentDialog({
   isOpen,
   projectRoot,
   onClose,
-  onClone,
-  onLink,
   onWorktree,
 }: NewEnvironmentDialogProps) {
   const [name, setName] = useState('')
-  const [mode, setMode] = useState<CreateMode>('clone')
-  const [serverMode, setServerMode] = useState<ServerMode>('dev')
-  const [linkPath, setLinkPath] = useState('')
   const [branch, setBranch] = useState('')
-
-  // Set default link path when mode changes to 'link'
-  useEffect(() => {
-    if (mode === 'link' && !linkPath && projectRoot) {
-      // Default to parent directory + /ushadow (sibling to current repo)
-      const parentDir = projectRoot.split('/').slice(0, -1).join('/')
-      setLinkPath(parentDir ? `${parentDir}/ushadow` : '')
-    }
-  }, [mode, projectRoot, linkPath])
+  const [baseBranch, setBaseBranch] = useState<'main' | 'dev'>('main')
 
   // Reset form when dialog closes
   useEffect(() => {
     if (!isOpen) {
       setName('')
-      setLinkPath('')
       setBranch('')
-      setMode('clone')
-      setServerMode('dev')
+      setBaseBranch('main')
     }
   }, [isOpen])
 
@@ -51,27 +32,15 @@ export function NewEnvironmentDialog({
 
   const handleSubmit = () => {
     if (!name.trim()) return
-
-    switch (mode) {
-      case 'clone':
-        onClone(name.trim(), serverMode)
-        break
-      case 'link':
-        onLink(name.trim(), linkPath.trim())
-        break
-      case 'worktree':
-        onWorktree(name.trim(), branch.trim() || name.trim())
-        break
-    }
-
-    // Reset form
-    setName('')
-    setLinkPath('')
-    setBranch('')
-    setServerMode('dev')
+    // Branch name format: envname/branchname-basebranch
+    // Example: rouge/myfeature-dev or staging/hotfix-main
+    const envName = name.trim()
+    const branchSuffix = branch.trim() || 'base'
+    const branchName = `${envName}/${branchSuffix}-${baseBranch}`
+    onWorktree(envName, branchName)
   }
 
-  const isValid = name.trim() && (mode !== 'link' || linkPath.trim())
+  const isValid = name.trim()
 
   return (
     <div
@@ -81,7 +50,10 @@ export function NewEnvironmentDialog({
       <div className="bg-surface-800 rounded-xl p-6 w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">New Environment</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <GitBranch className="w-5 h-5 text-primary-400" />
+            New Environment
+          </h2>
           <button
             onClick={onClose}
             className="p-1 rounded hover:bg-surface-700 transition-colors"
@@ -105,119 +77,79 @@ export function NewEnvironmentDialog({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && isValid && handleSubmit()}
             className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-            placeholder="e.g., dev, staging, feature-x"
-            autoFocus
+            placeholder="e.g., staging, feature-x, my-env"
             data-testid="env-name-input"
+            autoFocus
           />
+          <p className="text-xs text-text-muted mt-1">
+            Choose a name for your new environment
+          </p>
         </div>
 
-        {/* Mode Selection */}
+        {/* Branch Name */}
         <div className="mb-4">
           <label className="block text-sm text-text-secondary mb-2">
-            Setup Method
+            Branch Name <span className="text-text-muted">(optional)</span>
           </label>
-          <div className="grid grid-cols-3 gap-2">
-            <ModeButton
-              icon={Download}
-              label="Clone"
-              active={mode === 'clone'}
-              onClick={() => setMode('clone')}
-            />
-            <ModeButton
-              icon={FolderOpen}
-              label="Link"
-              active={mode === 'link'}
-              onClick={() => setMode('link')}
-            />
-            <ModeButton
-              icon={GitBranch}
-              label="Worktree"
-              active={mode === 'worktree'}
-              onClick={() => setMode('worktree')}
-            />
-          </div>
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && isValid && handleSubmit()}
+            className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
+            placeholder="e.g., myfeature, auth, bugfix-123"
+            data-testid="branch-name-input"
+          />
+          <p className="text-xs text-text-muted mt-1">
+            {branch.trim() && name.trim()
+              ? `Will create: ${name.trim()}/${branch.trim()}-${baseBranch}`
+              : name.trim()
+                ? `Will create: ${name.trim()}/base-${baseBranch}`
+                : `Enter environment name first`}
+          </p>
         </div>
 
-        {/* Server Mode - only for clone */}
-        {mode === 'clone' && (
-          <div className="mb-4">
-            <label className="block text-sm text-text-secondary mb-2">
-              Server Mode
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setServerMode('dev')}
-                className={`flex items-center gap-2 p-3 rounded-lg transition-all ${
-                  serverMode === 'dev'
-                    ? 'bg-primary-500/20 border-2 border-primary-500'
-                    : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-                }`}
-                data-testid="server-mode-dev"
-              >
-                <Flame className={`w-5 h-5 ${serverMode === 'dev' ? 'text-orange-400' : 'text-text-muted'}`} />
-                <div className="text-left">
-                  <p className={`text-sm font-medium ${serverMode === 'dev' ? 'text-primary-400' : ''}`}>Hot Reload</p>
-                  <p className="text-xs text-text-muted">Development server</p>
-                </div>
-              </button>
-              <button
-                onClick={() => setServerMode('prod')}
-                className={`flex items-center gap-2 p-3 rounded-lg transition-all ${
-                  serverMode === 'prod'
-                    ? 'bg-primary-500/20 border-2 border-primary-500'
-                    : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-                }`}
-                data-testid="server-mode-prod"
-              >
-                <Package className={`w-5 h-5 ${serverMode === 'prod' ? 'text-green-400' : 'text-text-muted'}`} />
-                <div className="text-left">
-                  <p className={`text-sm font-medium ${serverMode === 'prod' ? 'text-primary-400' : ''}`}>Production</p>
-                  <p className="text-xs text-text-muted">Nginx build</p>
-                </div>
-              </button>
-            </div>
+        {/* Base Branch Selection */}
+        <div className="mb-4">
+          <label className="block text-sm text-text-secondary mb-2">
+            Base Branch
+          </label>
+          <div className="flex rounded-lg bg-surface-700 p-1">
+            <button
+              type="button"
+              onClick={() => setBaseBranch('main')}
+              className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                baseBranch === 'main'
+                  ? 'bg-gradient-brand text-white'
+                  : 'text-text-secondary hover:bg-surface-600'
+              }`}
+              data-testid="base-branch-main"
+            >
+              Main
+            </button>
+            <button
+              type="button"
+              onClick={() => setBaseBranch('dev')}
+              className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                baseBranch === 'dev'
+                  ? 'bg-gradient-brand text-white'
+                  : 'text-text-secondary hover:bg-surface-600'
+              }`}
+              data-testid="base-branch-dev"
+            >
+              Dev
+            </button>
           </div>
-        )}
-
-        {/* Mode-specific inputs */}
-        {mode === 'link' && (
-          <div className="mb-4">
-            <label className="block text-sm text-text-secondary mb-2">
-              Existing Folder Path
-            </label>
-            <input
-              type="text"
-              value={linkPath}
-              onChange={(e) => setLinkPath(e.target.value)}
-              className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-              placeholder="/path/to/existing/ushadow"
-              data-testid="link-path-input"
-            />
-          </div>
-        )}
-
-        {mode === 'worktree' && (
-          <div className="mb-4">
-            <label className="block text-sm text-text-secondary mb-2">
-              Branch Name <span className="text-text-muted">(optional, defaults to env name)</span>
-            </label>
-            <input
-              type="text"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-              placeholder={name || 'feature/my-branch'}
-              data-testid="branch-input"
-            />
-          </div>
-        )}
+          <p className="text-xs text-text-muted mt-1">
+            Creates worktree from origin/{baseBranch}
+          </p>
+        </div>
 
         {/* Helper text */}
         <p className="text-xs text-text-muted mb-4">
-          {mode === 'clone' && 'Creates a fresh clone of the repository'}
-          {mode === 'link' && 'Links to an existing Ushadow folder'}
-          {mode === 'worktree' && 'Creates a git worktree for parallel development'}
+          Creates a git worktree with branch name: envname/branchname-{baseBranch} from origin/{baseBranch}
         </p>
 
         {/* Actions */}
@@ -234,36 +166,10 @@ export function NewEnvironmentDialog({
             className="flex-1 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-medium"
             data-testid="create-env-submit"
           >
-            Create
+            Create Worktree
           </button>
         </div>
       </div>
     </div>
-  )
-}
-
-function ModeButton({
-  icon: Icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: typeof Download
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`p-3 rounded-lg text-center transition-all ${
-        active
-          ? 'bg-primary-500/20 border-2 border-primary-500'
-          : 'bg-surface-700 border-2 border-transparent hover:bg-surface-600'
-      }`}
-    >
-      <Icon className={`w-5 h-5 mx-auto mb-1 ${active ? 'text-primary-400' : 'text-text-muted'}`} />
-      <p className="text-xs font-medium">{label}</p>
-    </button>
   )
 }

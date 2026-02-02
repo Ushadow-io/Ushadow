@@ -72,11 +72,11 @@ class Template(BaseModel):
     # Configuration status (for providers - whether required keys are set)
     configured: bool = Field(default=True, description="Whether required config is present")
 
-    # Availability status (for local providers - whether service is running)
-    available: bool = Field(default=True, description="Whether local service is running/reachable")
+    # Runtime status (for local services - whether Docker container is up)
+    running: bool = Field(default=True, description="Whether local service is running/reachable")
 
-    # Installation status (for compose services - whether service is installed)
-    installed: bool = Field(default=True, description="Whether service is installed (default or user-added)")
+    # Installation status (whether user has added from registry)
+    installed: bool = Field(default=False, description="Whether user has added this from the registry")
 
 
 class ConfigValues(BaseModel):
@@ -116,59 +116,32 @@ class ServiceOutputs(BaseModel):
 
 class ServiceConfig(BaseModel):
     """
-    An service configuration of a template with configuration applied.
+    Configuration mappings for a service (reusable across deployments).
 
-    ServiceConfig = Template + Config Set + Deployment Target
+    ServiceConfig = Template + Configuration Mappings
 
-    ServiceConfigs have inputs (config values, capability requirements)
-    and outputs (resolved config + access URL after deployment).
+    Stores ONLY configuration (@settings.path mappings or literal values).
+    Does NOT store deployment state - see Deployment model for runtime state.
     """
-    id: str = Field(..., description="Unique instance identifier (e.g., 'openmemory-prod')")
+    id: str = Field(..., description="Unique config identifier (e.g., 'chronicle-prod-config')")
     template_id: str = Field(..., description="Reference to the template")
-    name: str = Field(..., description="Display name for this instance")
-    description: Optional[str] = Field(None, description="ServiceConfig description")
+    name: str = Field(..., description="Display name for this config")
+    description: Optional[str] = Field(None, description="Config description")
 
-    # Configuration
+    # Configuration mappings (@settings.path or literals)
     config: ConfigValues = Field(default_factory=ConfigValues, description="Config values")
 
-    # Deployment
-    deployment_target: Optional[str] = Field(
-        None,
-        description="Deployment target: None=local docker, hostname=u-node, 'cloud'=no deployment"
-    )
-    status: ServiceConfigStatus = Field(default=ServiceConfigStatus.PENDING, description="Current status")
-
-    # Outputs (populated after deployment or for cloud providers)
-    outputs: ServiceOutputs = Field(default_factory=ServiceOutputs, description="ServiceConfig outputs")
-
-    # Deployment tracking
-    container_id: Optional[str] = Field(None, description="Docker container ID when deployed")
-    container_name: Optional[str] = Field(None, description="Container name")
-    deployment_id: Optional[str] = Field(None, description="Reference to Deployment record if remote")
-
-    # Timestamps
+    # Timestamps (for config tracking)
     created_at: Optional[datetime] = None
-    deployed_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    # Error tracking
-    error: Optional[str] = None
-
-    # Integration-specific fields (null for non-integrations)
+    # Integration-specific configuration (null for non-integrations)
     integration_type: Optional[IntegrationType] = Field(
         None,
         description="Integration type (filesystem, rest, graphql) - null for non-integrations"
     )
-    sync_enabled: Optional[bool] = Field(None, description="Whether auto-sync is enabled")
-    sync_interval: Optional[int] = Field(None, description="Sync interval in seconds (e.g., 21600 for 6 hours)")
-    last_sync_at: Optional[datetime] = Field(None, description="Timestamp of last successful sync")
-    last_sync_status: Optional[str] = Field(
-        None,
-        description="Status of last sync: 'success', 'error', 'in_progress', 'never'"
-    )
-    last_sync_items_count: Optional[int] = Field(None, description="Number of items synced in last sync")
-    last_sync_error: Optional[str] = Field(None, description="Error message from last failed sync")
-    next_sync_at: Optional[datetime] = Field(None, description="Computed timestamp of next scheduled sync")
+    sync_enabled: Optional[bool] = Field(None, description="Whether auto-sync is enabled (config)")
+    sync_interval: Optional[int] = Field(None, description="Sync interval in seconds (config, e.g., 21600 for 6 hours)")
 
     model_config = {"use_enum_values": True}
 
@@ -198,21 +171,19 @@ class Wiring(BaseModel):
 # API Request/Response Models
 
 class ServiceConfigCreate(BaseModel):
-    """Request to create a new instance."""
+    """Request to create a new service configuration."""
     id: str = Field(..., min_length=1, max_length=100, pattern=r'^[a-z0-9-]+$')
     template_id: str = Field(..., description="Template to instantiate")
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     config: Dict[str, Any] = Field(default_factory=dict, description="Config values")
-    deployment_target: Optional[str] = Field(None, description="Where to deploy")
 
 
 class ServiceConfigUpdate(BaseModel):
-    """Request to update an instance."""
+    """Request to update a service configuration."""
     name: Optional[str] = None
     description: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
-    deployment_target: Optional[str] = None
 
 
 class WiringCreate(BaseModel):
@@ -224,13 +195,9 @@ class WiringCreate(BaseModel):
 
 
 class ServiceConfigSummary(BaseModel):
-    """Lightweight instance info for listings."""
+    """Lightweight config info for listings."""
     id: str
     template_id: str
     name: str
-    status: ServiceConfigStatus
     provides: Optional[str] = None
-    deployment_target: Optional[str] = None
-    access_url: Optional[str] = None
-
-    model_config = {"use_enum_values": True}
+    description: Optional[str] = None

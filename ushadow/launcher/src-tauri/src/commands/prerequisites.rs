@@ -1,5 +1,11 @@
 use crate::models::PrerequisiteStatus;
 use super::utils::{silent_command, shell_command};
+use std::env;
+
+/// Check if we're in mock mode (for testing)
+fn is_mock_mode() -> bool {
+    env::var("MOCK_PREREQUISITES").is_ok()
+}
 
 /// Check if Docker is installed and running
 /// Tries login shell first, then falls back to known paths
@@ -262,6 +268,56 @@ pub fn check_homebrew() -> (bool, Option<String>) {
     (false, None) // Homebrew not applicable on non-macOS
 }
 
+/// Check if workmux is installed
+pub fn check_workmux() -> (bool, Option<String>) {
+    // Mock mode for testing
+    if is_mock_mode() {
+        let installed = env::var("MOCK_WORKMUX_INSTALLED").unwrap_or_default() == "true";
+        let version = if installed {
+            Some("workmux 0.1.1 (MOCKED)".to_string())
+        } else {
+            None
+        };
+        return (installed, version);
+    }
+
+    let version_output = shell_command("workmux --version")
+        .output();
+
+    match version_output {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (true, Some(version))
+        }
+        _ => (false, None),
+    }
+}
+
+/// Check if tmux is installed
+pub fn check_tmux() -> (bool, Option<String>) {
+    // Mock mode for testing
+    if is_mock_mode() {
+        let installed = env::var("MOCK_TMUX_INSTALLED").unwrap_or_default() == "true";
+        let version = if installed {
+            Some("tmux 3.3a (MOCKED)".to_string())
+        } else {
+            None
+        };
+        return (installed, version);
+    }
+
+    let version_output = shell_command("tmux -V")
+        .output();
+
+    match version_output {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (true, Some(version))
+        }
+        _ => (false, None),
+    }
+}
+
 /// Get full prerequisite status
 #[tauri::command]
 pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
@@ -271,6 +327,8 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
     let (git_installed, git_version) = check_git();
     let (python_installed, python_version) = check_python();
     let (uv_installed, uv_version) = check_uv();
+    let (workmux_installed, workmux_version) = check_workmux();
+    let (tmux_installed, tmux_version) = check_tmux();
 
     Ok(PrerequisiteStatus {
         homebrew_installed,
@@ -281,12 +339,16 @@ pub fn check_prerequisites() -> Result<PrerequisiteStatus, String> {
         git_installed,
         python_installed,
         uv_installed,
+        workmux_installed,
+        tmux_installed,
         homebrew_version,
         docker_version,
         tailscale_version,
         git_version,
         python_version,
         uv_version,
+        workmux_version,
+        tmux_version,
     })
 }
 

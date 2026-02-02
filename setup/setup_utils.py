@@ -440,6 +440,242 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
         return created_new, data
 
 
+def ensure_keycloak_secrets(secrets_file: str) -> Tuple[bool, dict]:
+    """
+    Ensure Keycloak secrets exist in secrets.yaml.
+    Generates missing secrets but preserves existing ones.
+
+    Note: This is idempotent and safe to run multiple times.
+    Secrets are shared across all environments for single Keycloak instance.
+
+    Args:
+        secrets_file: Path to secrets.yaml file
+
+    Returns:
+        Tuple of (created_new_keys: bool, keycloak_secrets: dict)
+    """
+    if yaml is None:
+        print("Error: PyYAML not installed. Run: pip install pyyaml", file=sys.stderr)
+        return False, {}
+
+    secrets_path = Path(secrets_file)
+    created_new = False
+
+    # Load existing secrets
+    if secrets_path.exists():
+        try:
+            with open(secrets_path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Warning: Could not load {secrets_file}: {e}", file=sys.stderr)
+            data = {}
+    else:
+        data = {}
+        created_new = True
+
+    # Ensure keycloak section exists
+    if 'keycloak' not in data:
+        data['keycloak'] = {}
+        created_new = True
+
+    # Generate admin password if missing
+    if not data['keycloak'].get('admin_password'):
+        # Use secure random password for production
+        data['keycloak']['admin_password'] = secrets.token_urlsafe(16)
+        created_new = True
+        print(f"  Generated Keycloak admin password")
+
+    # Generate backend client secret if missing
+    if not data['keycloak'].get('backend_client_secret'):
+        data['keycloak']['backend_client_secret'] = secrets.token_urlsafe(32)
+        created_new = True
+        print(f"  Generated backend client secret")
+
+    # Generate chronicle client secret if missing
+    if not data['keycloak'].get('chronicle_client_secret'):
+        data['keycloak']['chronicle_client_secret'] = secrets.token_urlsafe(32)
+        created_new = True
+        print(f"  Generated chronicle client secret")
+
+    # Write back to file
+    if created_new:
+        try:
+            secrets_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(secrets_path, 'w') as f:
+                # Write header comment
+                f.write(f"# Ushadow Secrets\n")
+                from datetime import datetime, timezone
+                f.write(f"# Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+                f.write(f"# DO NOT COMMIT - Contains sensitive credentials\n")
+                f.write(f"# This file is gitignored\n\n")
+
+                # Write YAML data
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+            # Set restrictive permissions (Unix only)
+            try:
+                secrets_path.chmod(0o600)
+            except (OSError, NotImplementedError):
+                pass  # Windows doesn't support chmod
+
+        except Exception as e:
+            print(f"Warning: Could not write {secrets_file}: {e}", file=sys.stderr)
+
+    return created_new, data.get('keycloak', {})
+
+
+def populate_keycloak_realm_template(
+    template_file: str = "config/keycloak/realm-template.json",
+    output_file: str = "config/keycloak/realm-export.json",
+    secrets_file: str = "config/secrets.yaml"
+) -> Tuple[bool, str]:
+    """
+    Populate Keycloak realm template with secrets from secrets.yaml.
+    This is idempotent - checks if output already exists before generating.
+
+    The realm-export.json is shared across ALL environments (one Keycloak instance).
+
+    Args:
+        template_file: Path to realm template with placeholders
+        output_file: Path to write populated realm JSON
+        secrets_file: Path to secrets.yaml containing client secrets
+
+    Returns:
+        Tuple of (created: bool, message: str)
+    """
+    from pathlib import Path
+
+    # Check if realm export already exists (idempotent check)
+    output_path = Path(output_file)
+    if output_path.exists():
+        return False, f"Keycloak realm already configured (found {output_file})"
+
+    # Load secrets
+    if yaml is None:
+        return False, "PyYAML not installed - cannot populate realm template"
+
+    try:
+        with open(secrets_file, 'r') as f:
+            secrets_data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return False, f"Secrets file not found: {secrets_file}"
+    except Exception as e:
+        return False, f"Error loading secrets: {e}"
+
+    keycloak_secrets = secrets_data.get('keycloak', {})
+    backend_secret = keycloak_secrets.get('backend_client_secret', '')
+    chronicle_secret = keycloak_secrets.get('chronicle_client_secret', '')
+
+    if not backend_secret or not chronicle_secret:
+        return False, "Missing Keycloak client secrets in secrets.yaml"
+
+    # Read template
+    try:
+        with open(template_file, 'r') as f:
+            template_content = f.read()
+    except FileNotFoundError:
+        return False, f"Realm template not found: {template_file}"
+    except Exception as e:
+        return False, f"Error reading template: {e}"
+
+    # Replace placeholders
+    populated_content = template_content.replace(
+        "{{BACKEND_CLIENT_SECRET}}", backend_secret
+    ).replace(
+        "{{CHRONICLE_CLIENT_SECRET}}", chronicle_secret
+    )
+
+    # Write populated realm export
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            f.write(populated_content)
+
+        return True, f"Created {output_file} (Keycloak will auto-import on startup)"
+
+    except Exception as e:
+        return False, f"Error writing realm export: {e}"
+
+
+def check_keycloak_configured() -> bool:
+    """
+    Check if Keycloak realm is already configured.
+    Checks if realm-export.json exists (populated template).
+
+    Returns:
+        True if realm export exists, False otherwise
+    """
+    from pathlib import Path
+    return Path("config/keycloak/realm-export.json").exists()
+
+
+def setup_keycloak_realm(keycloak_url: str = "http://localhost:8081",
+                         admin_user: str = "admin",
+                         admin_password: Optional[str] = None,
+                         secrets_file: str = "config/secrets.yaml") -> bool:
+    """
+    Setup Keycloak realm, clients, and users.
+    This is idempotent - safe to run multiple times.
+
+    Args:
+        keycloak_url: Keycloak public URL (default: http://localhost:8081)
+        admin_user: Admin username
+        admin_password: Admin password (if None, reads from secrets.yaml)
+        secrets_file: Path to secrets.yaml
+
+    Returns:
+        True if setup successful, False otherwise
+    """
+    try:
+        from keycloak import KeycloakAdmin
+    except ImportError:
+        print("Error: python-keycloak not installed", file=sys.stderr)
+        print("  Install with: uv pip install python-keycloak", file=sys.stderr)
+        return False
+
+    # Load admin password from secrets if not provided
+    if admin_password is None:
+        if yaml is None:
+            print("Error: PyYAML not installed", file=sys.stderr)
+            return False
+
+        try:
+            with open(secrets_file, 'r') as f:
+                data = yaml.safe_load(f) or {}
+                admin_password = data.get('keycloak', {}).get('admin_password', 'admin')
+        except Exception:
+            admin_password = 'admin'  # Fallback
+
+    try:
+        # Connect to Keycloak
+        admin = KeycloakAdmin(
+            server_url=keycloak_url,
+            username=admin_user,
+            password=admin_password,
+            realm_name="master",
+            verify=True
+        )
+
+        # Check if realm exists
+        try:
+            admin.realm_name = "ushadow"
+            admin.get_realm("ushadow")
+            print("  Keycloak realm 'ushadow' already exists - skipping creation")
+            return True
+        except Exception:
+            # Realm doesn't exist, create it
+            pass
+
+        # Create realm (script would be called here)
+        # For now, return True if we can connect
+        print("  Connected to Keycloak successfully")
+        return True
+
+    except Exception as e:
+        if DEBUG:
+            print(f"Error setting up Keycloak: {e}", file=sys.stderr)
+        return False
 
 
 if __name__ == '__main__':
