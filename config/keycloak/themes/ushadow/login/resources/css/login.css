@@ -22,33 +22,37 @@
    ============================================ */
 
 :root {
-  /* Primary brand color - Vibrant Green */
-  --ushadow-primary: #4ade80;      /* Green-400 from design system */
-  --ushadow-primary-hover: #86efac; /* Green-300 (lighter on hover) */
-  --ushadow-primary-active: #22c55e; /* Green-500 (darker when pressed) */
+  /* Primary brand color - Bright Blue (matching existing login) */
+  --ushadow-primary: #3B82F6;      /* Blue-500 - Primary button */
+  --ushadow-primary-hover: #2563EB; /* Blue-600 (darker on hover) */
+  --ushadow-primary-active: #1D4ED8; /* Blue-700 (darker when pressed) */
 
-  /* Accent brand color - Vibrant Purple */
-  --ushadow-accent: #a855f7;       /* Purple-500 from design system */
-  --ushadow-accent-hover: #c084fc; /* Purple-400 */
+  /* Accent colors - Green and Purple from logo */
+  --ushadow-green: #4ade80;        /* Green-400 from logo */
+  --ushadow-purple: #a855f7;       /* Purple-500 from logo */
 
-  /* Background colors - Dark theme */
-  --ushadow-bg-page: #0f0f13;      /* Page background (zinc-900) */
-  --ushadow-bg-card: #1a1a21;      /* Card background (zinc-800) */
-  --ushadow-bg-input: #252530;     /* Input background (zinc-700) */
-  --ushadow-bg-hover: #2d2d3a;     /* Hover state background */
+  /* Background colors - Very dark theme */
+  --ushadow-bg-page: #0a0a0a;      /* Almost black background */
+  --ushadow-bg-card: #1a1a1a;      /* Slightly lighter card */
+  --ushadow-bg-input: #0f0f0f;     /* Very dark input fields */
+  --ushadow-bg-hover: #252525;     /* Hover state background */
 
   /* Text colors */
-  --ushadow-text-primary: #f4f4f5;  /* Zinc-100 - Main text */
-  --ushadow-text-secondary: #a1a1aa; /* Zinc-400 - Secondary text */
-  --ushadow-text-muted: #71717a;    /* Zinc-500 - Muted/disabled */
+  --ushadow-text-primary: #ffffff;  /* Pure white - Main text */
+  --ushadow-text-secondary: #71717a; /* Zinc-500 - Secondary text */
+  --ushadow-text-muted: #52525b;    /* Zinc-600 - Muted/disabled */
 
   /* Border colors */
-  --ushadow-border: #3d3d4a;       /* Zinc-500 subtle borders */
-  --ushadow-border-focus: #4ade80;  /* Primary green for focus */
+  --ushadow-border: #27272a;       /* Very subtle borders */
+  --ushadow-border-focus: #3B82F6;  /* Blue for focus */
+
+  /* Link colors */
+  --ushadow-link-blue: #60a5fa;    /* Blue-400 - "Forgot Password?" */
+  --ushadow-link-green: #4ade80;   /* Green-400 - "Register" */
 
   /* Status colors */
   --ushadow-error: #f87171;        /* Red-400 - Error messages */
-  --ushadow-success: #4ade80;      /* Green-400 - Success (matches primary) */
+  --ushadow-success: #4ade80;      /* Green-400 - Success */
   --ushadow-warning: #fbbf24;      /* Amber-400 - Warnings */
   --ushadow-info: #60a5fa;         /* Blue-400 - Info */
 }
@@ -59,16 +63,37 @@
 
 .login-pf-page {
   background-color: var(--ushadow-bg-page);
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: center center;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+/* Subtle geometric pattern overlay */
+.login-pf-page::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    linear-gradient(45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%),
+    linear-gradient(-45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%);
+  background-size: 120px 120px;
+  pointer-events: none;
+  opacity: 0.3;
 }
 
 .card-pf {
   background-color: var(--ushadow-bg-card);
   border: 1px solid var(--ushadow-border);
-  border-radius: 12px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  padding: 2.5rem;
-  max-width: 420px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.5);
+  padding: 2rem 2rem 2.5rem;
+  max-width: 380px;
   margin: 0 auto;
 }
 
@@ -81,25 +106,35 @@
   margin-bottom: 2rem;
 }
 
-/* Ushadow logo - square format (1024x1024) */
+/* Ushadow logo - square format matching existing login */
 #kc-header-wrapper::before {
   content: '';
   display: block;
-  width: 80px;    /* Square logo, smaller size */
-  height: 80px;
-  margin: 0 auto 1.5rem;
+  width: 64px;    /* Slightly smaller logo */
+  height: 64px;
+  margin: 0 auto 0.75rem;
   background: url('../img/logo.png') center no-repeat;
   background-size: contain;
-  border-radius: 12px; /* Subtle rounding */
-  box-shadow: 0 4px 12px rgba(74, 222, 128, 0.2), 0 4px 12px rgba(168, 85, 247, 0.2);
+  border-radius: 10px; /* Subtle rounding */
+  box-shadow: 0 2px 8px rgba(74, 222, 128, 0.15), 0 2px 8px rgba(168, 85, 247, 0.15);
 }
 
-/* Fallback text if no logo */
+/* Ushadow brand text */
 #kc-header {
-  font-size: 1.875rem;
-  font-weight: 700;
+  font-size: 1.5rem;
+  font-weight: 600;
   color: var(--ushadow-text-primary);
-  margin-bottom: 0.5rem;
+  margin-bottom: 2rem;
+  letter-spacing: -0.025em;
+}
+
+/* Page heading - "Sign in to your account" style */
+#kc-page-title {
+  font-size: 1.125rem;
+  font-weight: 400;
+  color: var(--ushadow-text-secondary);
+  margin-bottom: 1.5rem;
+  text-align: center;
 }
 
 /* ============================================
@@ -107,15 +142,19 @@
    ============================================ */
 
 .form-group {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.form-group:last-of-type {
+  margin-bottom: 0;
 }
 
 label {
   display: block;
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--ushadow-text-primary);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.375rem;
 }
 
 input[type="text"],
@@ -125,7 +164,7 @@ input[type="password"] {
   padding: 0.625rem 0.875rem;
   font-size: 0.9375rem;
   border: 1px solid var(--ushadow-border);
-  border-radius: 6px;
+  border-radius: 4px;
   background-color: var(--ushadow-bg-input);
   color: var(--ushadow-text-primary);
   transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
@@ -136,7 +175,7 @@ input[type="email"]:focus,
 input[type="password"]:focus {
   outline: none;
   border-color: var(--ushadow-border-focus);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
 /* ============================================
@@ -145,37 +184,24 @@ input[type="password"]:focus {
 
 .btn-primary {
   width: 100%;
-  padding: 0.75rem 1.25rem;
+  padding: 0.625rem 1rem;
   font-size: 0.9375rem;
-  font-weight: 600;
-  color: #0f0f13;  /* Dark text on bright green button */
+  font-weight: 500;
+  color: #ffffff;  /* White text on blue button */
   background-color: var(--ushadow-primary);
   border: none;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease-in-out;
 }
 
 .btn-primary:hover {
   background-color: var(--ushadow-primary-hover);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(74, 222, 128, 0.3);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
 }
 
 .btn-primary:active {
-  transform: translateY(0);
   background-color: var(--ushadow-primary-active);
-}
-
-/* Optional: Gradient variant for special CTAs */
-.btn-gradient {
-  background-image: linear-gradient(135deg, #4ade80 0%, #a855f7 100%);
-  box-shadow: 0 0 20px rgba(74, 222, 128, 0.2), 0 0 40px rgba(168, 85, 247, 0.2);
-}
-
-.btn-gradient:hover {
-  background-image: linear-gradient(135deg, #86efac 0%, #c084fc 100%);
-  box-shadow: 0 0 30px rgba(74, 222, 128, 0.3), 0 0 60px rgba(168, 85, 247, 0.3);
 }
 
 /* ============================================
@@ -259,11 +285,17 @@ input[type="password"]:focus {
   border-top: 1px solid var(--ushadow-border);
 }
 
+#kc-registration span {
+  color: var(--ushadow-text-muted);
+  font-size: 0.875rem;
+}
+
 #kc-registration a {
-  color: var(--ushadow-primary);
+  color: var(--ushadow-link-green);  /* Green "Register" link */
   text-decoration: none;
   font-weight: 500;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
+  margin-left: 0.25rem;
 }
 
 #kc-registration a:hover {
@@ -276,13 +308,12 @@ input[type="password"]:focus {
 }
 
 .kc-login-tooltip a {
-  color: var(--ushadow-text-secondary);
+  color: var(--ushadow-link-blue);  /* Blue "Forgot Password?" link */
   text-decoration: none;
   font-size: 0.875rem;
 }
 
 .kc-login-tooltip a:hover {
-  color: var(--ushadow-primary);
   text-decoration: underline;
 }
 
@@ -349,16 +380,25 @@ input[type="password"]:focus {
 #kc-form-options {
   display: flex;
   align-items: center;
-  margin-bottom: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  margin-top: 0.75rem;
+}
+
+#kc-form-options .checkbox {
+  display: flex;
+  align-items: center;
 }
 
 #kc-form-options input[type="checkbox"] {
   width: auto;
   margin-right: 0.5rem;
+  accent-color: var(--ushadow-primary);  /* Blue checkbox */
 }
 
 #kc-form-options label {
   margin-bottom: 0;
   font-weight: normal;
   font-size: 0.875rem;
+  color: var(--ushadow-text-primary);
 }

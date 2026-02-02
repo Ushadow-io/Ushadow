@@ -67,27 +67,37 @@ The theme matches your main app's design system:
 ### Color Variables
 ```css
 :root {
-  /* Brand Colors */
-  --ushadow-primary: #4ade80;      /* Green-400 */
-  --ushadow-accent: #a855f7;       /* Purple-500 */
+  /* Primary Color - Bright Blue */
+  --ushadow-primary: #3B82F6;      /* Blue-500 - Buttons */
+
+  /* Accent Colors - Logo colors */
+  --ushadow-green: #4ade80;        /* Green-400 - Register link */
+  --ushadow-purple: #a855f7;       /* Purple-500 - Logo */
 
   /* Dark Theme Backgrounds */
-  --ushadow-bg-page: #0f0f13;      /* Zinc-900 */
-  --ushadow-bg-card: #1a1a21;      /* Zinc-800 */
-  --ushadow-bg-input: #252530;     /* Zinc-700 */
+  --ushadow-bg-page: #0a0a0a;      /* Almost black */
+  --ushadow-bg-card: #1a1a1a;      /* Card background */
+  --ushadow-bg-input: #0f0f0f;     /* Input fields */
 
   /* Text Colors */
-  --ushadow-text-primary: #f4f4f5;  /* Zinc-100 */
-  --ushadow-text-secondary: #a1a1aa; /* Zinc-400 */
+  --ushadow-text-primary: #ffffff;  /* Pure white */
+  --ushadow-text-secondary: #71717a; /* Zinc-500 */
+
+  /* Link Colors */
+  --ushadow-link-blue: #60a5fa;    /* Blue-400 - "Forgot Password?" */
+  --ushadow-link-green: #4ade80;   /* Green-400 - "Register" */
 }
 ```
 
 ### UI Elements
-- **Inputs**: Dark zinc backgrounds with green focus rings
-- **Primary Button**: Bright green (#4ade80) with hover effects
-- **Social Buttons**: Outlined with zinc borders, purple GitHub button
-- **Cards**: Zinc-800 background with subtle borders
-- **Logo**: Square format (80x80) with rounded corners and glow
+- **Inputs**: Very dark backgrounds (#0f0f0f) with blue focus rings
+- **Primary Button**: Bright blue (#3B82F6) with white text and hover effects
+- **Social Buttons**: Dark backgrounds with subtle borders
+- **Cards**: Dark (#1a1a1a) background with minimal borders
+- **Logo**: Square format (64x64) with rounded corners and subtle glow
+- **Links**: Blue "Forgot Password?" and green "Register" links
+- **Checkbox**: Blue accent color for "Remember me"
+- **Background**: Geometric grid pattern overlay
 
 ## Applying the Theme
 
@@ -171,11 +181,13 @@ http://localhost:8081/realms/ushadow/protocol/openid-connect/auth?client_id=usha
 ```
 
 You should see:
-- ✅ Dark background (zinc-900)
-- ✅ Ushadow logo at top
-- ✅ Green primary button
-- ✅ Dark input fields
-- ✅ Consistent styling with main app
+- ✅ Very dark background with geometric pattern
+- ✅ Ushadow logo (green/purple U) at top
+- ✅ Bright blue primary button
+- ✅ Very dark input fields
+- ✅ Blue "Forgot Password?" and green "Register" links
+- ✅ Blue checkbox accent color
+- ✅ Consistent styling matching the main login page
 
 ## Related Files
 
