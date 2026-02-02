@@ -201,8 +201,14 @@ label,
   width: 100% !important;
 }
 
-/* Required field indicator */
+/* Label text wrapper - keep inline with asterisk */
+.pf-c-form__label-text {
+  display: inline !important;
+}
+
+/* Required field indicator - inline with label */
 .pf-c-form__label-required {
+  display: inline !important;
   color: #f87171 !important;  /* Red asterisk */
   margin-left: 0.25rem !important;
 }
