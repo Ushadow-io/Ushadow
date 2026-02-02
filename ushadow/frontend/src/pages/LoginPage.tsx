@@ -1,7 +1,6 @@
 import React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
-import { LogIn, UserPlus } from 'lucide-react'
 import AuthHeader from '../components/auth/AuthHeader'
 
 export default function LoginPage() {
@@ -87,108 +86,172 @@ export default function LoginPage() {
   return (
     <div
       className="flex-1 flex flex-col relative overflow-hidden"
-      style={{ backgroundColor: 'var(--surface-900)' }}
+      style={{ backgroundColor: '#0a0a0a' }}
       data-testid="login-page"
     >
-      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8">
-        {/* Decorative background blur circles - brand green and purple */}
-        <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div
-            className="absolute -top-40 -right-40 w-96 h-96 rounded-full blur-3xl"
-            style={{ backgroundColor: 'rgba(168, 85, 247, 0.15)' }}
-          ></div>
-          <div
-            className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full blur-3xl"
-            style={{ backgroundColor: 'rgba(74, 222, 128, 0.15)' }}
-          ></div>
-        </div>
+      {/* Geometric grid background pattern */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px)
+          `,
+          backgroundSize: '80px 80px',
+        }}
+      />
 
-        <div className="max-w-md w-full space-y-3 relative z-10">
+      {/* Diagonal cross pattern overlay */}
+      <div
+        className="fixed inset-0 pointer-events-none opacity-30"
+        style={{
+          background: `
+            linear-gradient(45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%),
+            linear-gradient(-45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%)
+          `,
+          backgroundSize: '120px 120px',
+        }}
+      />
+
+      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8 relative z-10">
+        <div className="max-w-md w-full space-y-3">
           <AuthHeader subtitle="Sign in to your account" />
 
-          {/* Login/Registration Options */}
+          {/* Login Form Card */}
           <div
-            className="rounded-xl shadow-xl backdrop-blur-sm p-6 space-y-4 animate-slide-up"
+            className="rounded-lg shadow-xl p-8 space-y-5 animate-slide-up"
             style={{
-              backgroundColor: 'var(--surface-800)',
-              border: '1px solid var(--surface-500)',
+              backgroundColor: '#1a1a1a',
+              border: '1px solid #27272a',
             }}
           >
-            <div className="space-y-4">
-              {/* Login Button */}
-              <button
-                onClick={handleLogin}
-                className="w-full py-3 px-4 text-base font-semibold rounded-lg shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center space-x-2"
-                style={{
-                  backgroundColor: '#4ade80',
-                  color: 'var(--surface-900)',
-                  boxShadow: '0 0 20px rgba(74, 222, 128, 0.2)',
-                }}
-                data-testid="login-button"
-              >
-                <LogIn className="h-5 w-5" />
-                <span>Sign In</span>
-              </button>
+            <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+              {/* Email Field */}
+              <div>
+                <label
+                  htmlFor="email"
+                  className="block text-sm font-normal mb-1.5"
+                  style={{ color: '#ffffff' }}
+                >
+                  Email
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="admin@example.com"
+                  className="w-full px-3.5 py-2.5 text-base rounded border transition-all focus:outline-none focus:ring-2"
+                  style={{
+                    backgroundColor: '#0f0f0f',
+                    color: '#ffffff',
+                    borderColor: '#27272a',
+                  }}
+                  data-testid="login-field-email"
+                />
+              </div>
 
-              {/* Divider */}
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t" style={{ borderColor: 'var(--surface-500)' }}></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span
-                    className="px-2 text-xs"
+              {/* Password Field */}
+              <div>
+                <label
+                  htmlFor="password"
+                  className="block text-sm font-normal mb-1.5"
+                  style={{ color: '#ffffff' }}
+                >
+                  Password
+                </label>
+                <div className="relative">
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2.5 text-base rounded border transition-all focus:outline-none focus:ring-2 pr-10"
                     style={{
-                      backgroundColor: 'var(--surface-800)',
-                      color: 'var(--text-muted)',
+                      backgroundColor: '#0f0f0f',
+                      color: '#ffffff',
+                      borderColor: '#27272a',
                     }}
+                    data-testid="login-field-password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded"
+                    style={{ color: '#71717a' }}
+                    aria-label="Toggle password visibility"
                   >
-                    New to Ushadow?
-                  </span>
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
                 </div>
               </div>
 
-              {/* Register Button */}
-              <button
-                onClick={handleRegister}
-                className="w-full py-3 px-4 text-base font-semibold rounded-lg shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center space-x-2"
-                style={{
-                  backgroundColor: 'transparent',
-                  color: '#a855f7',
-                  border: '2px solid #a855f7',
-                  boxShadow: '0 0 20px rgba(168, 85, 247, 0.2)',
-                }}
-                data-testid="register-button"
-              >
-                <UserPlus className="h-5 w-5" />
-                <span>Create Account</span>
-              </button>
-            </div>
+              {/* Remember me and Forgot password */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <input
+                    id="remember-me"
+                    name="remember-me"
+                    type="checkbox"
+                    className="h-4 w-4 rounded"
+                    style={{ accentColor: '#3B82F6' }}
+                    data-testid="login-remember-me"
+                  />
+                  <label
+                    htmlFor="remember-me"
+                    className="ml-2 text-sm"
+                    style={{ color: '#ffffff' }}
+                  >
+                    Remember me
+                  </label>
+                </div>
+                <a
+                  href="#"
+                  className="text-sm hover:underline"
+                  style={{ color: '#60a5fa' }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    // TODO: Implement forgot password flow
+                  }}
+                >
+                  Forgot Password?
+                </a>
+              </div>
 
-            {/* Info Box */}
+              {/* Sign In Button */}
+              <button
+                type="submit"
+                className="w-full py-2.5 px-4 text-base font-medium rounded shadow-md hover:shadow-lg transition-all"
+                style={{
+                  backgroundColor: '#3B82F6',
+                  color: '#ffffff',
+                }}
+                data-testid="login-submit"
+              >
+                Sign In
+              </button>
+            </form>
+
+            {/* Register Link */}
             <div
-              className="mt-6 p-4 rounded-lg"
+              className="pt-5 text-center text-sm"
               style={{
-                backgroundColor: 'var(--surface-700)',
-                border: '1px solid var(--surface-500)',
+                borderTop: '1px solid #27272a',
               }}
             >
-              <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
-                Secure Authentication
-              </h3>
-              <ul className="text-xs space-y-1" style={{ color: 'var(--text-secondary)' }}>
-                <li>• Enterprise-grade security with Keycloak</li>
-                <li>• Works across all Ushadow environments</li>
-                <li>• Password reset and account management included</li>
-              </ul>
+              <span style={{ color: '#52525b' }}>New user? </span>
+              <button
+                onClick={handleRegister}
+                className="font-medium hover:underline"
+                style={{ color: '#4ade80' }}
+                data-testid="login-register-link"
+              >
+                Register
+              </button>
             </div>
-
-            <p
-              className="text-center text-xs pt-2"
-              style={{ color: 'var(--text-muted)' }}
-            >
-              Ushadow Dashboard v0.1.0
-            </p>
           </div>
         </div>
       </div>
