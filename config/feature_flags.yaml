@@ -92,6 +92,12 @@ flags:
     description: "Show custom service config instances in the Services tab (multi-instance per template)"
     type: release
 
+  # Split Services View - Organize services into API/Workers and UI tabs
+  split_services:
+    enabled: false
+    description: "Split services into API & Workers and UI Services tabs with automatic worker grouping"
+    type: release
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false
