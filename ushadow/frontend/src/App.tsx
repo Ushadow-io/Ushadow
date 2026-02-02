@@ -31,6 +31,8 @@ import ErrorPage from './pages/ErrorPage'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import ChroniclePage from './pages/ChroniclePage'
+import ConversationsPage from './pages/ConversationsPage'
+import ConversationDetailPage from './pages/ConversationDetailPage'
 import RecordingPage from './pages/RecordingPage'
 import MCPPage from './pages/MCPPage'
 import AgentZeroPage from './pages/AgentZeroPage'
@@ -40,6 +42,7 @@ import SettingsPage from './pages/SettingsPage'
 import ServiceConfigsPage from './pages/ServiceConfigsPage'
 import InterfacesPage from './pages/InterfacesPage'
 import MemoriesPage from './pages/MemoriesPage'
+import MemoryDetailPage from './pages/MemoryDetailPage'
 import ClusterPage from './pages/ClusterPage'
 import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
 import ChatPage from './pages/ChatPage'
@@ -117,6 +120,8 @@ function AppContent() {
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="wizard/mycelia" element={<MyceliaWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="conversations" element={<ConversationsPage />} />
+                <Route path="conversations/:id" element={<ConversationDetailPage />} />
                 <Route path="recording" element={<RecordingPage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
@@ -127,6 +132,7 @@ function AppContent() {
                 <Route path="interfaces" element={<InterfacesPage />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
+                <Route path="memories/:id" element={<MemoryDetailPage />} />
                 <Route path="timeline" element={<FeatureRoute featureFlag="timeline"><TimelinePage /></FeatureRoute>} />
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />

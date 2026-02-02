@@ -1287,6 +1287,7 @@ class DockerManager:
 
             # Get docker service name from the discovered service
             docker_service_name = discovered.service_name if discovered else service_name
+            logger.info(f"[DEBUG] Deploying service_name={service_name} -> docker_service_name={docker_service_name}, discovered={discovered.service_id if discovered else None}")
 
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution

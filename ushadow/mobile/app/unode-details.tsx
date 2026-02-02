@@ -471,8 +471,9 @@ export default function UNodeDetailsPage() {
     };
 
     // Determine overall status for collapsed view
-    const isConnected = status.ushadow === 'connected' && status.chronicle === 'connected';
-    const hasError = status.ushadow === 'error' || status.chronicle === 'error';
+    // Only ushadow connection is required (chronicle is optional)
+    const isConnected = status.ushadow === 'connected';
+    const hasError = status.ushadow === 'error'; // Only fail on ushadow error
     const isChecking = status.ushadow === 'checking' || status.chronicle === 'checking';
 
     return (
@@ -741,8 +742,9 @@ export default function UNodeDetailsPage() {
   // Render other node item
   const renderOtherNode = (node: UNode) => {
     const status = statuses[node.id];
-    const isConnected = status?.ushadow === 'connected' && status?.chronicle === 'connected';
-    const hasError = status?.ushadow === 'error' || status?.chronicle === 'error';
+    // Only ushadow connection is required (chronicle is optional)
+    const isConnected = status?.ushadow === 'connected';
+    const hasError = status?.ushadow === 'error'; // Only fail on ushadow error
 
     return (
       <TouchableOpacity

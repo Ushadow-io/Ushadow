@@ -131,13 +131,13 @@ export function buildAudioStreamUrl(
  * // This API tells it WHERE to send audio (the consumer)
  *
  * const consumer = await getActiveAudioConsumer('https://ushadow.ts.net', jwtToken);
- * // Returns: { provider_id: "chronicle", websocket_url: "ws://chronicle:5001/chronicle/ws_pcm", ... }
+ * // Returns: { provider_id: "chronicle", websocket_url: "wss://host/ws/audio/relay", ... }
  *
  * const wsUrl = buildAudioStreamUrl(consumer, jwtToken);
- * // Result: "ws://chronicle:5001/chronicle/ws_pcm?token=JWT"
+ * // Result: "wss://host/ws/audio/relay?destinations=[...]&token=JWT"
  *
  * await audioStreamer.startStreaming(wsUrl, 'streaming');
- * // Mobile mic → Chronicle
+ * // Mobile mic → Audio Relay → Chronicle/Mycelia
  */
 
 // =============================================================================

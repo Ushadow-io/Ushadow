@@ -15,11 +15,17 @@ interface UseDeviceConnection {
   connectedDeviceId: string | null;
 }
 
+interface UseDeviceConnectionOptions {
+  onDisconnect?: () => void; // Callback for when disconnection happens
+  onConnect?: () => void; // Callback for when connection happens
+  onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+}
+
 export const useDeviceConnection = (
   omiConnection: OmiConnection,
-  onDisconnect?: () => void, // Callback for when disconnection happens, e.g., to stop audio listener
-  onConnect?: () => void // Callback for when connection happens
+  options?: UseDeviceConnectionOptions
 ): UseDeviceConnection => {
+  const { onDisconnect, onConnect, onLog } = options || {};
   const [connectedDevice, setConnectedDevice] = useState<OmiDevice | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -35,6 +41,7 @@ export const useDeviceConnection = (
     if (isNowConnected) {
         setConnectedDeviceId(id);
         setConnectionError(null); // Clear any previous error on successful connection
+        onLog?.('connected', 'OMI device connected', `Device ID: ${id}`);
         // Potentially fetch the device details from omiConnection if needed to set connectedDevice
         // For now, we'll assume the app manages the full OmiDevice object elsewhere or doesn't need it here.
         if (onConnect) onConnect();
@@ -43,9 +50,10 @@ export const useDeviceConnection = (
         setConnectedDevice(null);
         setCurrentCodec(null);
         setBatteryLevel(-1);
+        onLog?.('disconnected', 'OMI device disconnected', `Device ID: ${id}`);
         if (onDisconnect) onDisconnect();
     }
-  }, [onDisconnect, onConnect]);
+  }, [onDisconnect, onConnect, onLog]);
 
   const connectToDevice = useCallback(async (deviceId: string) => {
     if (connectedDeviceId && connectedDeviceId !== deviceId) {
@@ -62,6 +70,7 @@ export const useDeviceConnection = (
     setConnectedDevice(null); // Clear previous device details
     setCurrentCodec(null);
     setBatteryLevel(-1);
+    onLog?.('connecting', 'Connecting to OMI device', `Device ID: ${deviceId}`);
 
     try {
       const success = await omiConnection.connect(deviceId, handleConnectionStateChange);
@@ -72,6 +81,7 @@ export const useDeviceConnection = (
         setIsConnecting(false);
         const errorMsg = 'Could not connect to the device. Please try again.';
         setConnectionError(errorMsg);
+        onLog?.('error', 'Failed to connect to OMI device', errorMsg);
         Alert.alert('Connection Failed', errorMsg);
       }
     } catch (error) {
@@ -81,13 +91,15 @@ export const useDeviceConnection = (
       setConnectedDeviceId(null);
       const errorMsg = String(error);
       setConnectionError(errorMsg);
+      onLog?.('error', 'OMI connection error', errorMsg);
       Alert.alert('Connection Error', errorMsg);
     }
-  }, [omiConnection, handleConnectionStateChange, connectedDeviceId]);
+  }, [omiConnection, handleConnectionStateChange, connectedDeviceId, onLog]);
 
   const disconnectFromDevice = useCallback(async () => {
     console.log('Attempting to disconnect...');
     setIsConnecting(false); // No longer attempting to connect if we are disconnecting
+    onLog?.('disconnected', 'Disconnecting from OMI device');
     try {
       if (onDisconnect) {
         await onDisconnect(); // Call pre-disconnect cleanup (e.g., stop audio)
@@ -101,6 +113,7 @@ export const useDeviceConnection = (
       // The handleConnectionStateChange should also be triggered by the SDK upon disconnection
     } catch (error) {
       console.error('Disconnect error:', error);
+      onLog?.('error', 'OMI disconnect error', String(error));
       Alert.alert('Disconnect Error', String(error));
       // Even if disconnect fails, reset state as we intend to be disconnected
       setConnectedDevice(null);
@@ -108,7 +121,7 @@ export const useDeviceConnection = (
       setCurrentCodec(null);
       setBatteryLevel(-1);
     }
-  }, [omiConnection, onDisconnect]);
+  }, [omiConnection, onDisconnect, onLog]);
 
   const getAudioCodec = useCallback(async () => {
     if (!omiConnection.isConnected() || !connectedDeviceId) {

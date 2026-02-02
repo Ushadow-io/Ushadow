@@ -106,6 +106,7 @@ export default function Layout() {
     { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/recording', label: 'Recording', icon: Radio },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
+    { path: '/conversations', label: 'Conversations', icon: Archive },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },

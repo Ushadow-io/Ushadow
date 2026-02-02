@@ -20,11 +20,13 @@ def get_internal_proxy_url(service_name: str) -> str:
         service_name: Service name (e.g., "mem0", "chronicle-backend")
 
     Returns:
-        Internal proxy URL (e.g., "http://ushadow-orange-backend:8360/api/services/mem0/proxy")
+        Internal proxy URL (e.g., "http://ushadow-orange-backend:8000/api/services/mem0/proxy")
     """
-    backend_port = os.getenv("BACKEND_PORT", "8001")
+    # Backend always listens on port 8000 internally (container port)
+    # BACKEND_PORT is the external/host port which varies by environment
+    backend_internal_port = "8000"
     project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-    return f"http://{project_name}-backend:{backend_port}/api/services/{service_name}/proxy"
+    return f"http://{project_name}-backend:{backend_internal_port}/api/services/{service_name}/proxy"
 
 
 def get_relative_proxy_url(service_name: str) -> str:

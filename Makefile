@@ -7,6 +7,7 @@
         go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
+        chronicle-push mycelia-push openmemory-push \
         release
 
 # Read .env for display purposes only (actual logic is in run.py)
@@ -43,6 +44,11 @@ help:
 	@echo "  make chronicle-up-local     - Run Chronicle with local build"
 	@echo "  make chronicle-down-local   - Stop local Chronicle"
 	@echo "  make chronicle-dev          - Build + run (full dev cycle)"
+	@echo ""
+	@echo "Build & Push to GHCR:"
+	@echo "  make chronicle-push [TAG=latest]   - Build and push Chronicle (backend+workers+webui)"
+	@echo "  make mycelia-push [TAG=latest]     - Build and push Mycelia backend"
+	@echo "  make openmemory-push [TAG=latest]  - Build and push OpenMemory server"
 	@echo ""
 	@echo "Service management:"
 	@echo "  make rebuild <service>  - Rebuild service from compose/<service>-compose.yml"
@@ -193,6 +199,24 @@ chronicle-down-local:
 # Full local development cycle: build and run
 chronicle-dev: chronicle-build-local chronicle-up-local
 	@echo "🎉 Chronicle dev environment ready"
+
+# =============================================================================
+# Build & Push to GHCR
+# =============================================================================
+# Build and push multi-arch images to GitHub Container Registry
+# Requires: docker login ghcr.io -u USERNAME --password-stdin
+
+# Chronicle - Build and push backend + webui
+chronicle-push:
+	@./scripts/build-push-images.sh chronicle $(TAG)
+
+# Mycelia - Build and push backend
+mycelia-push:
+	@./scripts/build-push-images.sh mycelia $(TAG)
+
+# OpenMemory - Build and push server
+openmemory-push:
+	@./scripts/build-push-images.sh openmemory $(TAG)
 
 # =============================================================================
 # Service Management (via ushadow API)

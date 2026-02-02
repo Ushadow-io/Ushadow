@@ -126,6 +126,32 @@ export const chronicleApi = {
   getConversation: (id: string) => api.get(`/api/chronicle/conversations/${id}`),
 }
 
+// Mycelia integration endpoints
+// Mycelia service name constant - ensures consistency
+const MYCELIA_SERVICE = 'mycelia-backend'
+
+export const myceliaApi = {
+  // Connection info for service discovery
+  getConnectionInfo: () => api.get(`/api/services/${MYCELIA_SERVICE}/connection-info`),
+
+  getStatus: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/health`),
+
+  // Conversations
+  getConversations: (params?: { limit?: number; skip?: number; start?: string; end?: string }) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations`, { params }),
+  getConversation: (id: string) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/${id}`),
+  getConversationStats: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/stats`),
+
+  // Audio Timeline Data
+  getAudioItems: (params: { start: string; end: string; resolution?: string }) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/audio/items`, { params }),
+
+  // Generic Resource Access (for MCP-style resources)
+  callResource: (resourceName: string, body: any) =>
+    api.post(`/api/services/${MYCELIA_SERVICE}/proxy/api/resource/${resourceName}`, body),
+}
+
 // MCP integration endpoints
 export const mcpApi = {
   getStatus: () => api.get('/api/mcp/status'),
@@ -1819,6 +1845,39 @@ export const audioApi = {
   /** Get available audio consumers */
   getAvailableConsumers: () =>
     api.get('/api/providers/audio_consumer/available'),
+}
+
+// =============================================================================
+// Unified Memories API - Cross-source memory retrieval
+// =============================================================================
+
+export interface ConversationMemory {
+  id: string
+  content: string
+  created_at: string
+  metadata: Record<string, any>
+  source: 'openmemory' | 'mycelia' | 'chronicle'
+  score?: number
+}
+
+export interface ConversationMemoriesResponse {
+  conversation_id: string
+  conversation_source: 'chronicle' | 'mycelia'
+  memories: ConversationMemory[]
+  count: number
+  sources_queried: string[]
+}
+
+export const unifiedMemoriesApi = {
+  /** Get all memories for a conversation across all sources (OpenMemory + native backend) */
+  getConversationMemories: (conversationId: string, source: 'chronicle' | 'mycelia') =>
+    api.get<ConversationMemoriesResponse>(`/api/memories/by-conversation/${conversationId}`, {
+      params: { conversation_source: source }
+    }),
+
+  /** Get a single memory by ID from any memory source */
+  getMemoryById: (memoryId: string) =>
+    api.get<ConversationMemory>(`/api/memories/${memoryId}`),
 }
 
 export const githubImportApi = {

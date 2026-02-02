@@ -1,4 +1,4 @@
-# Chronicle backend service definition with sidecar workers
+# Chronicle backend service definition with separate workers
 # Environment variables are passed directly via docker compose subprocess env
 # No .env files needed - CapabilityResolver provides all values
 
@@ -8,26 +8,20 @@
 x-ushadow:
   # Services share namespace with main ushadow for unified auth (AUTH_SECRET_KEY)
   chronicle-backend:
-    display_name: "Chronicle"
+    display_name: "Chronicle api"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
     requires: [llm, transcription]
     optional: [memory]  # Uses memory if available, works without it
-    route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
+    # route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
     exposes:
       - name: audio_intake
         type: audio
-        path: /ws_pcm
+        path: /ws
         port: 8000  # Internal container port
         metadata:
           protocol: wyoming
-          formats: [pcm]
-      - name: audio_intake_opus
-        type: audio
-        path: /ws_omi
-        port: 8000  # Internal container port
-        metadata:
-          protocol: wyoming
-          formats: [opus]
+          formats: [pcm, opus]
+          codec_param: true  # Clients specify codec via ?codec=pcm or ?codec=opus
       - name: http_api
         type: http
         path: /
@@ -36,6 +30,10 @@ x-ushadow:
         type: health
         path: /health
         port: 8000
+  chronicle-workers:
+    display_name: "Chronicle Workers"
+    description: "Background workers for Chronicle (transcription, memory, audio processing)"
+    requires: [llm, transcription]
   chronicle-webui:
     display_name: "Chronicle Web UI"
     description: "Web interface for Chronicle voice journal"
@@ -43,20 +41,15 @@ x-ushadow:
 
 services:
   chronicle-backend:
-    image: ghcr.io/ushadow-io/chronicle/backend:latest
+    build:
+      context: ../chronicle/backends/advanced
+      dockerfile: Dockerfile
+      target: dev
+    # image: ghcr.io/ushadow-io/chronicle/backend:latest
+    image: chronicle-backend:latest
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
-    # Sidecar mode: Run both workers and backend in same container
-    command:
-      - /bin/bash
-      - -c
-      - |
-        echo "🚀 Starting Chronicle with sidecar workers..."
-        ./start-workers.sh &
-        sleep 3
-        echo "🌐 Starting FastAPI backend..."
-        exec uv run --extra deepgram python src/advanced_omi_backend/main.py
     ports:
-      - "${CHRONICLE_PORT:-8080}:8000"
+      - "${CHRONICLE_BACKEND_PORT:-8090}:8000"
     environment:
       # Infrastructure connections (from CapabilityResolver or defaults)
       - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
@@ -76,6 +69,7 @@ services:
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
       # Memory capability (optional, from selected provider)
       - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
+      - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 
       # Security (from settings) - AUTH_SECRET_KEY is required for JWT auth
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
@@ -84,16 +78,17 @@ services:
       # CORS
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
 
+      
+
     volumes:
       # Data persistence
       - chronicle_audio:/app/audio_chunks
       - chronicle_data:/app/data
       - chronicle_debug:/app/debug_dir
 
-      # Model registry - defines available LLMs, embeddings, STT, TTS
-      # Use PROJECT_ROOT for absolute host paths (relative paths don't work from backend container)
-      - ${PROJECT_ROOT}/config/config.yml:/app/config/config.yml:ro
-      - ${PROJECT_ROOT}/config/defaults.yml:/app/config/defaults.yml:ro
+      # Config directory - contains config files, feature flags, secrets, etc.
+      # Mount entire ushadow config directory to override built-in configs
+      - ${PROJECT_ROOT}/config:/app/config:ro
 
     networks:
       - ushadow-network
@@ -118,14 +113,68 @@ services:
         reservations:
           memory: 2G
 
+  chronicle-workers:
+    # image: ghcr.io/ushadow-io/chronicle/backend:latest
+    image: chronicle-wworkers:latest
+    build:
+      context: ../chronicle/backends/advanced
+      dockerfile: Dockerfile
+      target: prod
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-workers
+    command: ["uv", "run", "python", "worker_orchestrator.py"]
+    environment:
+      # Infrastructure connections
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
+      - MONGODB_DATABASE=${MONGODB_DATABASE}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
+      - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+
+      # LLM capability
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+
+      # Transcription capability
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      # - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+      - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
+
+      # Worker orchestrator configuration
+      - WORKER_CHECK_INTERVAL=${WORKER_CHECK_INTERVAL:-10}
+      - MIN_RQ_WORKERS=${MIN_RQ_WORKERS:-6}
+      - WORKER_STARTUP_GRACE_PERIOD=${WORKER_STARTUP_GRACE_PERIOD:-30}
+      - WORKER_SHUTDOWN_TIMEOUT=${WORKER_SHUTDOWN_TIMEOUT:-30}
+
+    volumes:
+      # Data persistence (shared with backend)
+      - chronicle_audio:/app/audio_chunks
+      - chronicle_data:/app/data
+      - chronicle_debug:/app/debug_dir
+
+      # Config directory
+      - ${PROJECT_ROOT}/config:/app/config:ro
+
+    networks:
+      - ushadow-network
+
+    restart: unless-stopped
+
   chronicle-webui:
-    image: ghcr.io/ushadow-io/chronicle/webui:nodeps2
+    # image: ghcr.io/ushadow-io/chronicle/webui:nodeps2
+    image: chronicle-webui:latest
+    build:
+      context: ../chronicle/backends/advanced/webui
+      dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-webui
     ports:
       - "${CHRONICLE_WEBUI_PORT:-3080}:80"
     environment:
-      - VITE_BACKEND_URL=http://localhost:${CHRONICLE_PORT:-8080}
-      - BACKEND_URL=${CHRONICLE_BACKEND_URL:-http://chronicle-backend:8080}
+      - VITE_BACKEND_URL=http://localhost:${CHRONICLE_PORT:-8090}
+      - BACKEND_URL=${CHRONICLE_BACKEND_URL:-http://chronicle-backend:8000}
     networks:
       - ushadow-network
     depends_on:

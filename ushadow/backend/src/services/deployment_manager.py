@@ -176,10 +176,14 @@ class DeploymentManager:
 
         compose_registry = get_compose_registry()
 
+        logger.info(f"[DEBUG resolve_service_for_deployment] Called with service_id={service_id}, config_id={config_id}")
+
         # Get service from compose registry
         service = compose_registry.get_service(service_id)
         if not service:
             raise ValueError(f"Service not found: {service_id}")
+
+        logger.info(f"[DEBUG resolve_service_for_deployment] Found service: service_id={service.service_id}, service_name={service.service_name}")
 
         # Use new Settings API to resolve environment variables
         from src.config import get_settings
@@ -356,6 +360,7 @@ class DeploymentManager:
                 network = None
 
             # Create ResolvedServiceDefinition
+            logger.info(f"[DEBUG resolve_service_for_deployment] Creating ResolvedServiceDefinition with service_id={service_id}, service_name={service.service_name}")
             resolved = ResolvedServiceDefinition(
                 service_id=service_id,
                 name=service.service_name,
@@ -506,6 +511,8 @@ class DeploymentManager:
             config_id: ServiceConfig ID or Template ID (required) - references config to use
             namespace: Optional K8s namespace (only used for K8s deployments)
         """
+        logger.info(f"[DEBUG deploy_service] Called with service_id={service_id}, config_id={config_id}")
+
         # Resolve service with all variables substituted
         try:
             resolved_service = await self.resolve_service_for_deployment(
@@ -513,6 +520,7 @@ class DeploymentManager:
                 deploy_target=unode_hostname,
                 config_id=config_id
             )
+            logger.info(f"[DEBUG deploy_service] Resolved service has service_id={resolved_service.service_id}, name={resolved_service.name}")
         except ValueError as e:
             logger.error(f"Failed to resolve service {service_id}: {e}")
             raise ValueError(f"Service resolution failed: {e}")

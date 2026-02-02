@@ -23,7 +23,7 @@ import {
   LoginScreen,
   UnifiedStreamingPage,
 } from '../components';
-import { useConnectionLog } from '../hooks';
+import { useConnectionLog, useSessionTracking } from '../hooks';
 import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../theme';
 import {
   getAuthToken,
@@ -49,7 +49,10 @@ export default function HomeScreen() {
   );
 
   // Connection logging hook
-  const { entries: logEntries, logEvent, clearLogs } = useConnectionLog();
+  const { entries: logEntries, connectionState: logConnectionState, logEvent, clearLogs, clearLogsByType } = useConnectionLog();
+
+  // Session tracking hook
+  const { sessions, startSession, updateSessionStatus, endSession, clearAllSessions } = useSessionTracking();
 
   // Load auth state on mount
   useEffect(() => {
@@ -186,6 +189,11 @@ export default function HomeScreen() {
         <UnifiedStreamingPage
           authToken={authToken}
           onAuthRequired={() => setShowLoginScreen(true)}
+          onWebSocketLog={(status, message, details) => logEvent('websocket', status, message, details)}
+          onBluetoothLog={(status, message, details) => logEvent('bluetooth', status, message, details)}
+          onSessionStart={startSession}
+          onSessionUpdate={updateSessionStatus}
+          onSessionEnd={endSession}
           testID="unified-streaming"
         />
       </View>
@@ -202,8 +210,11 @@ export default function HomeScreen() {
         visible={showLogViewer}
         onClose={() => setShowLogViewer(false)}
         entries={logEntries}
-        connectionState={connectionState}
+        connectionState={logConnectionState}
+        sessions={sessions}
         onClearLogs={clearLogs}
+        onClearLogsByType={clearLogsByType}
+        onClearSessions={clearAllSessions}
       />
     </SafeAreaView>
   );

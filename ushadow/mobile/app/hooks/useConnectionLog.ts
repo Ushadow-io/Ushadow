@@ -27,6 +27,7 @@ interface UseConnectionLogReturn {
     metadata?: Record<string, unknown>
   ) => void;
   clearLogs: () => void;
+  clearLogsByType: (type: ConnectionType) => void;
 
   // Loading state
   isLoading: boolean;
@@ -164,11 +165,22 @@ export const useConnectionLog = (): UseConnectionLogReturn => {
     }
   }, []);
 
+  // Clear logs for a specific connection type
+  const clearLogsByType = useCallback(async (type: ConnectionType) => {
+    setEntries(prev => prev.filter(entry => entry.type !== type));
+    setConnectionState(prev => ({
+      ...prev,
+      [type]: 'unknown',
+    }));
+    // Storage will be updated automatically via the useEffect
+  }, []);
+
   return {
     entries,
     connectionState,
     logEvent,
     clearLogs,
+    clearLogsByType,
     isLoading,
   };
 };
