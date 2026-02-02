@@ -413,6 +413,15 @@ export async function getChronicleAudioUrl(conversationId: string, cropped: bool
   return url
 }
 
+/**
+ * Get memories associated with a conversation
+ */
+export async function getConversationMemories(conversationId: string) {
+  const proxyUrl = await getChronicleProxyUrl()
+  const response = await api.get(`${proxyUrl}/api/conversations/${conversationId}/memories`)
+  return response.data
+}
+
 // =============================================================================
 // Legacy compatibility exports
 // =============================================================================
