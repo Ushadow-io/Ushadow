@@ -1,78 +1,42 @@
 /**
- * Ushadow Custom Login Theme
- *
- * This file customizes the Keycloak login, registration, and password reset pages.
- * Keycloak uses FreeMarker templates with specific CSS classes.
- *
- * Key selectors:
- * - .login-pf-page: Page wrapper
- * - .card-pf: Login/register card
- * - .btn-primary: Primary action buttons
- * - .form-group: Form fields
- * - .alert: Error/success messages
- * - .kc-social-links: Social login buttons
+ * Ushadow Keycloak Login Theme
+ * Matches the frontend login design with green button and geometric background
  */
 
 /* ============================================
-   USHADOW BRAND COLORS
-   ============================================
-   Extracted from design/ColorSystemPreview.tsx
-   Primary: Green (#4ade80) | Accent: Purple (#a855f7)
-   Dark theme optimized with gradient accents
+   GLOBAL STYLES & PAGE BACKGROUND
    ============================================ */
 
-:root {
-  /* Primary brand color - Bright Blue (matching existing login) */
-  --ushadow-primary: #3B82F6;      /* Blue-500 - Primary button */
-  --ushadow-primary-hover: #2563EB; /* Blue-600 (darker on hover) */
-  --ushadow-primary-active: #1D4ED8; /* Blue-700 (darker when pressed) */
-
-  /* Accent colors - Green and Purple from logo */
-  --ushadow-green: #4ade80;        /* Green-400 from logo */
-  --ushadow-purple: #a855f7;       /* Purple-500 from logo */
-
-  /* Background colors - Very dark theme */
-  --ushadow-bg-page: #0a0a0a;      /* Almost black background */
-  --ushadow-bg-card: #1a1a1a;      /* Slightly lighter card */
-  --ushadow-bg-input: #0f0f0f;     /* Very dark input fields */
-  --ushadow-bg-hover: #252525;     /* Hover state background */
-
-  /* Text colors */
-  --ushadow-text-primary: #ffffff;  /* Pure white - Main text */
-  --ushadow-text-secondary: #71717a; /* Zinc-500 - Secondary text */
-  --ushadow-text-muted: #52525b;    /* Zinc-600 - Muted/disabled */
-
-  /* Border colors */
-  --ushadow-border: #27272a;       /* Very subtle borders */
-  --ushadow-border-focus: #3B82F6;  /* Blue for focus */
-
-  /* Link colors */
-  --ushadow-link-blue: #60a5fa;    /* Blue-400 - "Forgot Password?" */
-  --ushadow-link-green: #4ade80;   /* Green-400 - "Register" */
-
-  /* Status colors */
-  --ushadow-error: #f87171;        /* Red-400 - Error messages */
-  --ushadow-success: #4ade80;      /* Green-400 - Success */
-  --ushadow-warning: #fbbf24;      /* Amber-400 - Warnings */
-  --ushadow-info: #60a5fa;         /* Blue-400 - Info */
+body,
+html,
+.login-pf-page {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
+  background-color: #0a0a0a !important;
+  color: #ffffff !important;
 }
 
-/* ============================================
-   Page Layout
-   ============================================ */
-
-.login-pf-page {
-  background-color: var(--ushadow-bg-page);
+/* Geometric grid background */
+body::before,
+.login-pf-page::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
   background-size: 80px 80px;
-  background-position: center center;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  pointer-events: none;
+  z-index: 0;
 }
 
-/* Subtle geometric pattern overlay */
-.login-pf-page::before {
+/* Diagonal cross pattern overlay */
+body::after,
+.login-pf-page::after {
   content: '';
   position: fixed;
   top: 0;
@@ -85,320 +49,342 @@
   background-size: 120px 120px;
   pointer-events: none;
   opacity: 0.3;
-}
-
-.card-pf {
-  background-color: var(--ushadow-bg-card);
-  border: 1px solid var(--ushadow-border);
-  border-radius: 8px;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.5);
-  padding: 2rem 2rem 2.5rem;
-  max-width: 380px;
-  margin: 0 auto;
+  z-index: 0;
 }
 
 /* ============================================
-   Logo and Branding
+   LOGO & HEADER
    ============================================ */
 
+/* Make logo MUCH bigger */
 #kc-header-wrapper {
   text-align: center;
   margin-bottom: 2rem;
+  position: relative;
+  z-index: 10;
 }
 
-/* Ushadow logo - square format matching existing login */
+/* Logo image - make it significantly larger */
 #kc-header-wrapper::before {
   content: '';
   display: block;
-  width: 64px;    /* Slightly smaller logo */
-  height: 64px;
-  margin: 0 auto 0.75rem;
+  width: 180px !important;     /* Much bigger - was 64px */
+  height: 180px !important;
+  margin: 0 auto 1.5rem;
   background: url('../img/logo.png') center no-repeat;
   background-size: contain;
-  border-radius: 10px; /* Subtle rounding */
-  box-shadow: 0 2px 8px rgba(74, 222, 128, 0.15), 0 2px 8px rgba(168, 85, 247, 0.15);
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(74, 222, 128, 0.2), 0 4px 16px rgba(168, 85, 247, 0.2);
 }
 
-/* Ushadow brand text */
+/* Ushadow brand text - larger and with gradient */
 #kc-header {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--ushadow-text-primary);
-  margin-bottom: 2rem;
-  letter-spacing: -0.025em;
+  font-size: 3rem !important;  /* Much bigger */
+  font-weight: 700 !important;
+  background: linear-gradient(135deg, #4ade80 0%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 0.5rem !important;
+  letter-spacing: -0.02em;
 }
 
-/* Page heading - "Sign in to your account" style */
-#kc-page-title {
-  font-size: 1.125rem;
+/* Add "AI Orchestration Platform" subtitle */
+#kc-header::after {
+  content: 'AI Orchestration Platform';
+  display: block;
+  font-size: 1rem;
   font-weight: 400;
-  color: var(--ushadow-text-secondary);
-  margin-bottom: 1.5rem;
-  text-align: center;
+  color: #71717a;
+  margin-top: 0.5rem;
+  background: none;
+  -webkit-text-fill-color: #71717a;
 }
 
 /* ============================================
-   Form Styling
+   LOGIN CARD
+   ============================================ */
+
+#kc-content-wrapper,
+#kc-content {
+  position: relative;
+  z-index: 10;
+}
+
+.card-pf {
+  background-color: #1a1a1a !important;
+  border: 1px solid #27272a !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+  padding: 2.5rem !important;
+  max-width: 420px !important;
+  margin: 0 auto !important;
+}
+
+/* ============================================
+   PAGE TITLE - "Sign in to your account"
+   ============================================ */
+
+#kc-page-title,
+.instruction {
+  font-size: 1rem !important;
+  font-weight: 400 !important;
+  color: #a1a1aa !important;  /* Much lighter - better contrast */
+  margin-bottom: 1.5rem !important;
+  text-align: center !important;
+}
+
+/* ============================================
+   FORM ELEMENTS
    ============================================ */
 
 .form-group {
-  margin-bottom: 1.25rem;
-}
-
-.form-group:last-of-type {
-  margin-bottom: 0;
+  margin-bottom: 1.25rem !important;
 }
 
 label {
-  display: block;
-  font-size: 0.875rem;
-  font-weight: 400;
-  color: var(--ushadow-text-primary);
-  margin-bottom: 0.375rem;
+  display: block !important;
+  font-size: 0.875rem !important;
+  font-weight: 400 !important;
+  color: #ffffff !important;  /* White labels for good contrast */
+  margin-bottom: 0.5rem !important;
 }
 
+/* Input fields */
 input[type="text"],
 input[type="email"],
-input[type="password"] {
-  width: 100%;
-  padding: 0.625rem 0.875rem;
-  font-size: 0.9375rem;
-  border: 1px solid var(--ushadow-border);
-  border-radius: 4px;
-  background-color: var(--ushadow-bg-input);
-  color: var(--ushadow-text-primary);
-  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+input[type="password"],
+input.pf-c-form-control {
+  width: 100% !important;
+  padding: 0.75rem 1rem !important;
+  font-size: 1rem !important;
+  border: 1px solid #27272a !important;
+  border-radius: 6px !important;
+  background-color: #0f0f0f !important;
+  color: #ffffff !important;
+  transition: all 0.15s ease-in-out !important;
+  box-sizing: border-box !important;
 }
 
 input[type="text"]:focus,
 input[type="email"]:focus,
-input[type="password"]:focus {
-  outline: none;
-  border-color: var(--ushadow-border-focus);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+input[type="password"]:focus,
+input.pf-c-form-control:focus {
+  outline: none !important;
+  border-color: #4ade80 !important;  /* Green focus ring */
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.15) !important;
+}
+
+input::placeholder {
+  color: #52525b !important;
+}
+
+/* Password visibility toggle - fix white background */
+.pf-c-button.pf-m-control,
+button[type="button"].pf-c-button {
+  background-color: transparent !important;
+  border: none !important;
+  color: #71717a !important;
+  padding: 0.5rem !important;
+}
+
+.pf-c-button.pf-m-control:hover {
+  background-color: #27272a !important;
+  color: #ffffff !important;
 }
 
 /* ============================================
-   Buttons
-   ============================================ */
-
-.btn-primary {
-  width: 100%;
-  padding: 0.625rem 1rem;
-  font-size: 0.9375rem;
-  font-weight: 500;
-  color: #ffffff;  /* White text on blue button */
-  background-color: var(--ushadow-primary);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.15s ease-in-out;
-}
-
-.btn-primary:hover {
-  background-color: var(--ushadow-primary-hover);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
-}
-
-.btn-primary:active {
-  background-color: var(--ushadow-primary-active);
-}
-
-/* ============================================
-   Social Login Buttons
-   ============================================ */
-
-#kc-social-providers {
-  margin-top: 2rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--ushadow-border);
-}
-
-#kc-social-providers ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-#kc-social-providers li {
-  margin-bottom: 0.75rem;
-}
-
-.kc-social-link {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  padding: 0.75rem 1.25rem;
-  font-size: 0.9375rem;
-  font-weight: 500;
-  border: 1px solid var(--ushadow-border);
-  border-radius: 6px;
-  background-color: var(--ushadow-bg-input);
-  color: var(--ushadow-text-primary);
-  text-decoration: none;
-  transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
-}
-
-.kc-social-link:hover {
-  background-color: var(--ushadow-bg-hover);
-  border-color: var(--ushadow-primary);
-}
-
-/* Social provider icons */
-.kc-social-icon-text {
-  margin-left: 0.5rem;
-}
-
-/* Google button styling - matches your design system */
-.kc-social-link-google {
-  background-color: var(--ushadow-bg-input);
-  color: var(--ushadow-text-primary);
-  border-color: var(--ushadow-border);
-}
-
-.kc-social-link-google:hover {
-  background-color: var(--ushadow-bg-hover);
-  border-color: var(--ushadow-primary);
-}
-
-/* GitHub button styling - uses purple accent */
-.kc-social-link-github {
-  background-color: var(--ushadow-accent);
-  color: #ffffff;
-  border: none;
-}
-
-.kc-social-link-github:hover {
-  background-color: var(--ushadow-accent-hover);
-  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
-}
-
-/* ============================================
-   Links and Secondary Actions
-   ============================================ */
-
-#kc-registration {
-  text-align: center;
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--ushadow-border);
-}
-
-#kc-registration span {
-  color: var(--ushadow-text-muted);
-  font-size: 0.875rem;
-}
-
-#kc-registration a {
-  color: var(--ushadow-link-green);  /* Green "Register" link */
-  text-decoration: none;
-  font-weight: 500;
-  font-size: 0.875rem;
-  margin-left: 0.25rem;
-}
-
-#kc-registration a:hover {
-  text-decoration: underline;
-}
-
-.kc-login-tooltip {
-  text-align: right;
-  margin-top: 0.5rem;
-}
-
-.kc-login-tooltip a {
-  color: var(--ushadow-link-blue);  /* Blue "Forgot Password?" link */
-  text-decoration: none;
-  font-size: 0.875rem;
-}
-
-.kc-login-tooltip a:hover {
-  text-decoration: underline;
-}
-
-/* ============================================
-   Alerts and Messages
-   ============================================ */
-
-.alert {
-  padding: 0.875rem 1rem;
-  margin-bottom: 1.5rem;
-  border-radius: 6px;
-  font-size: 0.875rem;
-}
-
-.alert-error {
-  background-color: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
-}
-
-.alert-success {
-  background-color: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  color: #166534;
-}
-
-.alert-warning {
-  background-color: #fffbeb;
-  border: 1px solid #fde68a;
-  color: #92400e;
-}
-
-.alert-info {
-  background-color: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #1e40af;
-}
-
-/* ============================================
-   Responsive Design
-   ============================================ */
-
-@media (max-width: 640px) {
-  .card-pf {
-    padding: 1.5rem;
-    border-radius: 8px;
-  }
-
-  #kc-header {
-    font-size: 1.5rem;
-  }
-
-  .btn-primary,
-  .kc-social-link {
-    padding: 0.625rem 1rem;
-    font-size: 0.875rem;
-  }
-}
-
-/* ============================================
-   Remember Me Checkbox
+   CHECKBOX & LINKS
    ============================================ */
 
 #kc-form-options {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1.5rem;
-  margin-top: 0.75rem;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin: 1rem 0 1.5rem 0 !important;
 }
 
-#kc-form-options .checkbox {
-  display: flex;
-  align-items: center;
+.checkbox,
+.pf-c-check {
+  display: flex !important;
+  align-items: center !important;
 }
 
-#kc-form-options input[type="checkbox"] {
-  width: auto;
-  margin-right: 0.5rem;
-  accent-color: var(--ushadow-primary);  /* Blue checkbox */
+input[type="checkbox"] {
+  width: auto !important;
+  height: 1rem !important;
+  margin-right: 0.5rem !important;
+  accent-color: #4ade80 !important;  /* Green checkbox */
+  cursor: pointer !important;
 }
 
-#kc-form-options label {
-  margin-bottom: 0;
-  font-weight: normal;
-  font-size: 0.875rem;
-  color: var(--ushadow-text-primary);
+.checkbox label,
+.pf-c-check__label {
+  margin-bottom: 0 !important;
+  font-size: 0.875rem !important;
+  color: #ffffff !important;
+  cursor: pointer !important;
+}
+
+/* Links */
+a {
+  color: #60a5fa !important;  /* Blue links */
+  text-decoration: none !important;
+  font-size: 0.875rem !important;
+}
+
+a:hover {
+  text-decoration: underline !important;
+  color: #93c5fd !important;
+}
+
+/* ============================================
+   BUTTONS
+   ============================================ */
+
+/* Primary button - GREEN like reference */
+.btn-primary,
+button[type="submit"],
+input[type="submit"],
+.pf-c-button.pf-m-primary {
+  width: 100% !important;
+  padding: 0.75rem 1.5rem !important;
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+  color: #0a0a0a !important;  /* Dark text on green button */
+  background-color: #4ade80 !important;  /* GREEN button */
+  background-image: none !important;
+  border: none !important;
+  border-radius: 8px !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease-in-out !important;
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.3) !important;
+  text-transform: none !important;
+}
+
+.btn-primary:hover,
+button[type="submit"]:hover,
+.pf-c-button.pf-m-primary:hover {
+  background-color: #86efac !important;  /* Lighter green on hover */
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 24px rgba(74, 222, 128, 0.4) !important;
+}
+
+.btn-primary:active,
+button[type="submit"]:active {
+  transform: translateY(0) !important;
+  background-color: #22c55e !important;
+}
+
+/* ============================================
+   REGISTRATION LINK
+   ============================================ */
+
+#kc-registration {
+  text-align: center !important;
+  margin-top: 1.5rem !important;
+  padding-top: 1.5rem !important;
+  border-top: 1px solid #27272a !important;
+}
+
+#kc-registration span {
+  color: #52525b !important;
+  font-size: 0.875rem !important;
+}
+
+#kc-registration a {
+  color: #4ade80 !important;  /* Green register link */
+  font-weight: 500 !important;
+  margin-left: 0.25rem !important;
+}
+
+#kc-registration a:hover {
+  color: #86efac !important;
+  text-decoration: underline !important;
+}
+
+/* ============================================
+   ALERTS & MESSAGES
+   ============================================ */
+
+.alert {
+  padding: 0.75rem 1rem !important;
+  border-radius: 6px !important;
+  margin-bottom: 1rem !important;
+  font-size: 0.875rem !important;
+}
+
+.alert-error,
+.pf-c-alert.pf-m-danger {
+  background-color: rgba(248, 113, 113, 0.1) !important;
+  border: 1px solid #f87171 !important;
+  color: #fca5a5 !important;
+}
+
+.alert-success,
+.pf-c-alert.pf-m-success {
+  background-color: rgba(74, 222, 128, 0.1) !important;
+  border: 1px solid #4ade80 !important;
+  color: #86efac !important;
+}
+
+.alert-warning,
+.pf-c-alert.pf-m-warning {
+  background-color: rgba(251, 191, 36, 0.1) !important;
+  border: 1px solid #fbbf24 !important;
+  color: #fcd34d !important;
+}
+
+.alert-info,
+.pf-c-alert.pf-m-info {
+  background-color: rgba(96, 165, 250, 0.1) !important;
+  border: 1px solid #60a5fa !important;
+  color: #93c5fd !important;
+}
+
+/* ============================================
+   SOCIAL LOGIN (if enabled)
+   ============================================ */
+
+.kc-social-links {
+  margin-top: 1.5rem !important;
+}
+
+.kc-social-link {
+  display: flex !important;
+  align-items: center !important;
+  padding: 0.75rem 1rem !important;
+  margin-bottom: 0.75rem !important;
+  background-color: #0f0f0f !important;
+  border: 1px solid #27272a !important;
+  border-radius: 6px !important;
+  color: #ffffff !important;
+  text-decoration: none !important;
+  transition: all 0.15s ease-in-out !important;
+}
+
+.kc-social-link:hover {
+  background-color: #1a1a1a !important;
+  border-color: #3f3f46 !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ============================================
+   RESPONSIVE
+   ============================================ */
+
+@media (max-width: 768px) {
+  #kc-header-wrapper::before {
+    width: 140px !important;
+    height: 140px !important;
+  }
+
+  #kc-header {
+    font-size: 2.5rem !important;
+  }
+
+  .card-pf {
+    padding: 1.5rem !important;
+    margin: 1rem !important;
+  }
 }
