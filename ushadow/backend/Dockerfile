@@ -8,14 +8,24 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install uv for fast Python package management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# Install build dependencies for Python packages (gcc, python3-dev, libyaml-dev)
+# Install system dependencies, build tools, Docker CLI, Tailscale, and uv
 RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
     libyaml-dev \
+    curl \
+    ca-certificates \
+    gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli docker-compose-plugin \
+    && curl -fsSL https://tailscale.com/install.sh | sh \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
+    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
@@ -32,10 +42,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install uv for running the app
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# Install only runtime dependencies (curl for healthcheck, docker-cli for volume cleanup, tailscale)
+# Install runtime dependencies (curl for healthcheck and uv install, docker-cli for volume cleanup, tailscale)
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -48,6 +55,12 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y docker-ce-cli \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv for running the app
+# Using official installation script (recommended method)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    ln -s /root/.local/bin/uv /usr/local/bin/uv && \
+    ln -s /root/.local/bin/uvx /usr/local/bin/uvx
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv

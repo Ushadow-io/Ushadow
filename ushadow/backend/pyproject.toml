@@ -22,6 +22,7 @@ dependencies = [
     "pymongo>=4.9.0,<4.10",  # Motor 3.6.0 requires pymongo<4.10
     "motor>=3.6.0",
     "redis>=5.2.0",
+    "neo4j>=5.26.0",  # Neo4j driver with bearer_auth support
 
     # Authentication & Security
     "fastapi-users[beanie]>=14.0.1",
@@ -89,8 +90,61 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
-ignore = ["E501"]
+# Enable comprehensive linting for backend excellence
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "C90", # mccabe complexity
+    "N",   # pep8-naming
+    "UP",  # pyupgrade (modern Python idioms)
+    "B",   # flake8-bugbear (bug patterns)
+    "A",   # flake8-builtins (shadowing built-ins)
+    "COM", # flake8-commas
+    "DTZ", # flake8-datetimez (timezone-aware datetimes)
+    "ISC", # flake8-implicit-str-concat
+    "PIE", # flake8-pie (misc lints)
+    "PT",  # flake8-pytest-style
+    "RET", # flake8-return (return statement improvements)
+    "SIM", # flake8-simplify
+    "ARG", # flake8-unused-arguments
+]
+
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "COM812", # Trailing comma (handled by formatter)
+    "ISC001", # Implicit string concatenation (conflicts with formatter)
+]
+
+[tool.ruff.lint.mccabe]
+# Force extraction of complex functions (backend excellence)
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+# Enforce good practices (backend excellence)
+max-args = 5           # Force use of Pydantic models for many params
+max-branches = 12      # Prevent overly complex branching
+max-statements = 50    # Force function extraction
+max-returns = 6        # Simplify return logic
+
+[tool.ruff.lint.per-file-ignores]
+# Allow unused imports in __init__.py (re-exports)
+"__init__.py" = ["F401", "F403"]
+# Allow print statements in scripts
+"scripts/*" = ["T201"]
+# Allow assert in tests
+"tests/*" = ["S101", "PLR2004"]
+
+[tool.ruff.lint.isort]
+# Organize imports for readability
+known-first-party = ["src"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+# Use double quotes and trailing commas
+quote-style = "double"
+indent-style = "space"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

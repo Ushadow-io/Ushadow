@@ -330,9 +330,9 @@ def generate_compose_from_dockerhub(
             }
         },
         'networks': {
-            'infra-network': {
+            'ushadow-network': {
                 'external': True,
-                'name': 'infra-network'
+                'name': 'ushadow-network'
             }
         }
     }
@@ -385,7 +385,7 @@ def generate_compose_from_dockerhub(
             compose_data['volumes'] = volume_definitions
 
     # Add network
-    service_config['networks'] = ['infra-network']
+    service_config['networks'] = ['ushadow-network']
 
     # Add extra_hosts for host.docker.internal
     service_config['extra_hosts'] = ['host.docker.internal:host-gateway']
@@ -638,7 +638,7 @@ async def register_imported_service(
                 f.write('\n'.join(env_file_content) + '\n')
 
         # Save service configuration to settings
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         service_config_key = f"imported_services.{safe_name}"
@@ -661,12 +661,13 @@ async def register_imported_service(
         registry = get_compose_registry()
         registry.refresh()
 
-        # Auto-install the service (mark as added so it shows in installed services)
-        installed_key = f"installed_services.{request.service_name}"
-        await settings.update({
-            f"{installed_key}.added": True,
-            f"{installed_key}.enabled": True
-        })
+        # Auto-install the service (add to installed list)
+        installed_services = await settings.get("installed_services") or []
+        if request.service_name not in installed_services:
+            installed_services.append(request.service_name)
+            await settings.update({
+                "installed_services": installed_services
+            })
 
         logger.info(f"Imported and installed service '{request.service_name}' from GitHub: {request.github_url}")
 
@@ -692,7 +693,7 @@ async def list_imported_services(
 ) -> List[Dict[str, Any]]:
     """List all imported services from GitHub."""
     try:
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         imported = settings.get("imported_services", {})
@@ -716,7 +717,7 @@ async def delete_imported_service(
 ) -> Dict[str, Any]:
     """Delete an imported service."""
     try:
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         imported = settings.get("imported_services", {})
@@ -765,7 +766,7 @@ async def update_imported_service_config(
 ) -> Dict[str, Any]:
     """Update configuration for an imported service."""
     try:
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         imported = settings.get("imported_services", {})
@@ -985,7 +986,7 @@ async def register_dockerhub_service(
                 f.write('\n'.join(env_file_content) + '\n')
 
         # Save service configuration to settings
-        from src.config.omegaconf_settings import get_settings
+        from src.config import get_settings
         settings = get_settings()
 
         service_config_key = f"imported_services.{safe_name}"
@@ -1011,12 +1012,13 @@ async def register_dockerhub_service(
         registry = get_compose_registry()
         registry.refresh()
 
-        # Auto-install the service (mark as added so it shows in installed services)
-        installed_key = f"installed_services.{service_name}"
-        await settings.update({
-            f"{installed_key}.added": True,
-            f"{installed_key}.enabled": True
-        })
+        # Auto-install the service (add to installed list)
+        installed_services = await settings.get("installed_services") or []
+        if service_name not in installed_services:
+            installed_services.append(service_name)
+            await settings.update({
+                "installed_services": installed_services
+            })
 
         logger.info(f"Imported and installed service '{service_name}' from Docker Hub: {image_info.full_image_name}")
 

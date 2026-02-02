@@ -1,13 +1,14 @@
-import { Link, useLocation, Outlet } from 'react-router-dom'
+import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
-import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar } from 'lucide-react'
-import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles } from 'lucide-react'
+import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
+import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
 import { useMobileQrCode } from '../../hooks/useQrCode'
+import { svcConfigsApi } from '../../services/api'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
 import { StatusBadge, type BadgeVariant } from '../StatusBadge'
 import Modal from '../Modal'
@@ -26,15 +27,17 @@ interface NavigationItem {
 
 export default function Layout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { user, logout, isAdmin } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
-  const { getSetupLabel } = useWizard()
-  const { isConnected: isChronicleConnected, recording } = useChronicle()
+  const { getSetupLabel, isFirstTimeUser } = useWizard()
+  const { isConnected: isChronicleConnected, isCheckingConnection: isChronicleChecking, connectionError: chronicleError, recording } = useChronicle()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
+  const [isDesktopMicWired, setIsDesktopMicWired] = useState(false)
 
   // QR code hook
   const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
@@ -43,6 +46,25 @@ export default function Layout() {
   const wizardLabel = getSetupLabel()
   // Helper to check if recording is in a processing state
   const isRecordingProcessing = ['mic', 'websocket', 'audio-start', 'streaming', 'stopping'].includes(recording.currentStep)
+
+  // Redirect first-time users to wizard ONLY if they just came from login/register
+  // This prevents redirect loops when accessing the app directly
+  useEffect(() => {
+    // Check sessionStorage for registration hard-reload case (cleared after reading)
+    const sessionFromAuth = sessionStorage.getItem('fromAuth') === 'true'
+    if (sessionFromAuth) {
+      sessionStorage.removeItem('fromAuth')
+    }
+    const fromAuth = location.state?.from === '/login' ||
+                     location.state?.from === '/register' ||
+                     location.state?.fromAuth === true ||
+                     sessionFromAuth
+
+    if (isFirstTimeUser() && fromAuth && !location.pathname.startsWith('/wizard')) {
+      const { path } = getSetupLabel()
+      navigate(path, { replace: true })
+    }
+  }, [location, isFirstTimeUser, getSetupLabel, navigate])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -55,18 +77,42 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Check if desktop-mic (or any audio_input provider) is wired
+  useEffect(() => {
+    const checkAudioWiring = async () => {
+      try {
+        const wiringRes = await svcConfigsApi.getWiring()
+        // Check if any audio_input provider is wired
+        const hasAudioWiring = wiringRes.data.some(
+          (w: any) => w.source_capability === 'audio_input' ||
+                      w.source_config_id?.includes('desktop-mic') ||
+                      w.source_config_id?.includes('mobile-app')
+        )
+        setIsDesktopMicWired(hasAudioWiring)
+      } catch (err) {
+        // Silently fail - user might not be logged in yet
+      }
+    }
+    checkAudioWiring()
+    // Re-check periodically (every 30 seconds)
+    const interval = setInterval(checkAudioWiring, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
   // Define navigation items with optional feature flag requirements
   const allNavigationItems: NavigationItem[] = [
     // Separator after wizard section
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
+    { path: '/recording', label: 'Recording', icon: Radio },
     { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
+    { path: '/conversations', label: 'Conversations', icon: Archive },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
     { path: '/services', label: 'Services', icon: Server },
-    { path: '/instances', label: 'ServiceConfigs', icon: Layers, featureFlag: 'instances_management' },
+    { path: '/instances', label: 'Services', icon: Layers, badgeVariant: 'beta', featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),

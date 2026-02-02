@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Animated } from 'react-native';
+import { View, Text, StyleSheet, Animated, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
@@ -17,6 +17,8 @@ interface StreamingDisplayProps {
   startTime?: Date;
   sourceType?: 'microphone' | 'omi'; // Determines waveform type
   testID?: string;
+  onStopPress?: () => void; // Stop button handler
+  children?: React.ReactNode; // For overlaying start button
 }
 
 const WAVEFORM_BARS = 32;
@@ -31,6 +33,8 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
   startTime,
   sourceType = 'microphone',
   testID = 'streaming-display',
+  onStopPress,
+  children,
 }) => {
   const [duration, setDuration] = useState<number>(0);
   const [waveformData, setWaveformData] = useState<number[]>(Array(WAVEFORM_BARS).fill(0.1));
@@ -184,6 +188,20 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
               {statusText}
             </Text>
           </View>
+
+          {/* Stop button - centered when streaming */}
+          {isStreaming && onStopPress && (
+            <TouchableOpacity
+              style={styles.stopButton}
+              onPress={onStopPress}
+              activeOpacity={0.7}
+              testID={`${testID}-stop-button`}
+            >
+              <Ionicons name="stop" size={18} color="#fff" />
+              <Text style={styles.stopButtonText}>Stop</Text>
+            </TouchableOpacity>
+          )}
+
           <View style={styles.durationContainer}>
             <Ionicons name="time-outline" size={14} color={theme.textSecondary} />
             <Text style={styles.durationText}>{formatDuration(duration)}</Text>
@@ -191,7 +209,9 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
         </View>
       )}
 
-      {/* Waveform Visualization - Phone Mic or OMI */}
+      {/* Waveform Visualization Container with Overlay */}
+      <View style={styles.waveformWrapper}>
+        {/* Waveform Visualization - Phone Mic or OMI */}
       {sourceType === 'microphone' ? (
         // Phone Mic: Animated waveform bars
         <View style={styles.waveformContainer} testID="streaming-waveform">
@@ -246,6 +266,14 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
           <View style={styles.monitorBaseline} />
         </View>
       )}
+
+        {/* Overlay for start button */}
+        {children && (
+          <View style={styles.overlayContainer}>
+            {children}
+          </View>
+        )}
+      </View>
 
       {/* Audio Level Indicator with dB - only show when streaming */}
       {isStreaming && (
@@ -313,13 +341,47 @@ const styles = StyleSheet.create({
     color: theme.textPrimary,
     fontFamily: 'monospace',
   },
+  stopButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.error.default,
+    borderRadius: borderRadius.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  stopButtonText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: '#fff',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  waveformWrapper: {
+    position: 'relative',
+    marginBottom: spacing.md,
+  },
   waveformContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     height: 60,
     gap: 2,
-    marginBottom: spacing.md,
+  },
+  overlayContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'box-none',
   },
   waveformBar: {
     flex: 1,
@@ -328,7 +390,6 @@ const styles = StyleSheet.create({
   },
   monitorContainer: {
     height: 60,
-    marginBottom: spacing.md,
     position: 'relative',
     overflow: 'hidden',
   },

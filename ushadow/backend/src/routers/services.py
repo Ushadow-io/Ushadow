@@ -300,7 +300,7 @@ async def set_port_override(
     so that subsequent service starts will use the new port.
     """
     from src.services.docker_manager import get_docker_manager, check_port_in_use
-    from src.config.omegaconf_settings import get_settings
+    from src.config import get_settings
 
     docker_mgr = get_docker_manager()
 
@@ -367,35 +367,101 @@ async def get_service_connection_info(
         new WebSocket(`ws://localhost:${info.port}/ws_pcm`)  // -> ws://localhost:8082/ws_pcm
     """
     import httpx
+    import os
     from src.services.docker_manager import get_docker_manager
+    from src.services.deployment_manager import get_deployment_manager
 
     docker_mgr = get_docker_manager()
+    deployment_mgr = get_deployment_manager()
 
-    # Validate service exists
-    if name not in docker_mgr.MANAGEABLE_SERVICES:
+    container_name = None
+    internal_port = 8000
+    port = None
+    env_var = None
+    default_port = None
+
+    # First check deployments (user-deployed services override infrastructure)
+    all_deployments = await deployment_mgr.list_deployments()
+
+    # Find deployment matching service name
+    matching_deployment = None
+    for deployment in all_deployments:
+        if deployment.service_id == name:
+            # Prefer running deployments
+            if deployment.status == "running":
+                matching_deployment = deployment
+                break
+            elif not matching_deployment:
+                matching_deployment = deployment
+
+    if matching_deployment:
+        # Use deployment's container name and port
+        container_name = matching_deployment.container_name
+
+        # Get external port from deployment
+        port = matching_deployment.exposed_port
+
+        # Parse internal port from deployed_config
+        internal_port = 8000  # default
+        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
+            ports_list = matching_deployment.deployed_config["ports"]
+            if ports_list and len(ports_list) > 0:
+                # Parse first port mapping: "8081:8000" -> container port is 8000
+                first_port = ports_list[0]
+                if ":" in first_port:
+                    _, container_port = first_port.split(":", 1)
+                    internal_port = int(container_port)
+                else:
+                    internal_port = int(first_port)
+
+        # For deployments, we don't have env_var/default_port metadata
+        env_var = None
+        default_port = None
+
+        logger.info(f"[CONNECTION-INFO] Using deployment: {container_name}:{internal_port}, exposed port: {port}")
+
+    elif name in docker_mgr.MANAGEABLE_SERVICES:
+        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        ports_info = docker_mgr.get_service_ports(name)
+
+        if not ports_info:
+            return {
+                "service": name,
+                "proxy_url": None,
+                "direct_url": None,
+                "internal_url": None,
+                "available": False,
+                "message": "Service has no exposed ports"
+            }
+
+        # Use the first port (primary port)
+        primary_port = ports_info[0]
+        port = primary_port.get("port") or primary_port.get("default_port")
+        internal_port = primary_port.get("container_port", 8000)
+        env_var = primary_port.get("env_var")
+        default_port = primary_port.get("default_port")
+
+        # Build container name with project prefix
+        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+        container_name = f"{project_name}-{name}"
+
+        logger.info(f"[CONNECTION-INFO] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}, exposed port: {port}")
+
+    else:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
 
-    # Get resolved ports (respects user overrides)
-    ports = docker_mgr.get_service_ports(name)
+    # Import URL utilities
+    from src.utils.service_urls import get_internal_proxy_url, get_relative_proxy_url
 
-    if not ports:
-        return {
-            "service": name,
-            "proxy_url": None,
-            "direct_url": None,
-            "internal_url": None,
-            "available": False,
-            "message": "Service has no exposed ports"
-        }
+    # Proxy URL (for frontend REST API access through ushadow)
+    proxy_url = get_relative_proxy_url(name)
 
-    # Use the first port (primary port)
-    primary_port = ports[0]
-    port = primary_port.get("port") or primary_port.get("default_port")
+    # Direct container URL (for health checks only - not exposed in API)
+    direct_container_url = f"http://{container_name}:{internal_port}"
 
-    # Internal URL (for backend-to-service communication only)
-    # Backend uses Docker network, not localhost
-    internal_port = primary_port.get("container_port", 8000)
-    internal_url = f"http://{name}:{internal_port}"
+    # Internal URL (for backend-to-service communication)
+    # Use proxy with full backend hostname for stable service discovery
+    internal_url = get_internal_proxy_url(name)
 
     # Direct URL (for frontend WebSocket/streaming access)
     # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
@@ -412,18 +478,15 @@ async def get_service_connection_info(
         # Fallback to localhost (for development)
         direct_url = f"http://localhost:{port}" if port else None
 
-    # Proxy URL (for frontend REST API access through ushadow)
-    # Relative URL that goes through this backend
-    proxy_url = f"/api/services/{name}/proxy"
-
     # Check if service is available via health endpoint
+    # Use direct container URL to avoid circular proxy calls
     available = False
-    if internal_url:
-        # Backend checks health using internal Docker network URL
+    if direct_container_url:
+        # Backend checks health using direct container URL (not proxy)
         for health_path in ["/health", "/readiness", "/api/health", "/"]:
             try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
-                    response = await client.get(f"{internal_url}{health_path}")
+                    response = await client.get(f"{direct_container_url}{health_path}")
                     if response.status_code == 200:
                         available = True
                         break
@@ -438,8 +501,8 @@ async def get_service_connection_info(
         "internal_url": internal_url,  # Backend only → http://chronicle-backend:8000
         # Port information
         "port": port,  # External port (for direct connections, mainly for mobile/desktop apps)
-        "env_var": primary_port.get("env_var"),
-        "default_port": primary_port.get("default_port"),
+        "env_var": env_var,
+        "default_port": default_port,
         # Status
         "available": available,
         # Usage hints for frontend
@@ -461,41 +524,162 @@ async def proxy_service_request(
     """
     Generic proxy endpoint for service REST APIs.
 
-    Routes frontend requests through ushadow backend to any managed service.
+    Routes frontend requests to managed services (MANAGEABLE_SERVICES) or deployed services.
     This provides:
     - Unified authentication (JWT forwarded to service)
     - No CORS issues
     - Centralized logging/monitoring
     - Service discovery (no hardcoded ports)
+    - Support for both local and remote deployments
 
     Usage:
         Frontend: axios.get('/api/services/chronicle-backend/proxy/api/conversations')
-        Backend: Forwards to http://chronicle-backend:8000/api/conversations
+        Backend: Forwards to http://chronicle-backend-abc123:8000/api/conversations
 
     For WebSocket/streaming, use direct_url from connection-info instead.
     """
     import httpx
+    import os
     from src.services.docker_manager import get_docker_manager
+    from src.services.deployment_manager import get_deployment_manager
 
     docker_mgr = get_docker_manager()
+    deployment_mgr = get_deployment_manager()
 
-    # Validate service exists
-    if name not in docker_mgr.MANAGEABLE_SERVICES:
-        raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
+    container_name = None
+    internal_port = 8000
+    is_remote = False
+    remote_url = None
 
-    # Get internal URL (Docker network)
-    ports = docker_mgr.get_service_ports(name)
-    if not ports:
-        raise HTTPException(status_code=503, detail=f"Service '{name}' has no ports configured")
+    # First check deployments (user-deployed services override infrastructure)
+    all_deployments = await deployment_mgr.list_deployments()
 
-    primary_port = ports[0]
-    internal_port = primary_port.get("container_port", 8000)
+    # Find deployment matching service name
+    matching_deployment = None
+    for deployment in all_deployments:
+        # Match by service_id (now just the service name, e.g., "chronicle-backend")
+        if deployment.service_id == name:
+            # Prefer running deployments
+            if deployment.status == "running":
+                matching_deployment = deployment
+                break
+            elif not matching_deployment:
+                matching_deployment = deployment
 
-    # Build container name with project prefix (e.g., ushadow-red-chronicle-backend)
-    import os
-    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-    container_name = f"{project_name}-{name}"
+    if matching_deployment:
+        # Extract container details from deployment
+        container_name = matching_deployment.container_name
+
+        # Verify the container actually exists and is running
+        try:
+            container = docker_mgr._client.containers.get(container_name)
+            if container.status != "running":
+                logger.warning(f"[PROXY] Deployment container {container_name} exists but is not running (status: {container.status}), ignoring deployment")
+                matching_deployment = None
+        except Exception as e:
+            logger.warning(f"[PROXY] Deployment container {container_name} not found: {e}, ignoring deployment")
+            matching_deployment = None
+
+    if matching_deployment:
+        # For Docker networking, we need the CONTAINER port, not the host port
+        # Parse from deployed_config ports if available
+        internal_port = 8000  # default
+        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
+            ports = matching_deployment.deployed_config["ports"]
+            if ports and len(ports) > 0:
+                # Parse first port mapping: "8081:8000" -> container port is 8000
+                first_port = ports[0]
+                if ":" in first_port:
+                    _, container_port = first_port.split(":", 1)
+                    internal_port = int(container_port)
+                else:
+                    internal_port = int(first_port)
+
+        # Check if remote deployment
+        # Get current hostname from ENV_NAME, COMPOSE_PROJECT_NAME, or UNODE_HOSTNAME
+        current_hostname = (
+            os.getenv("ENV_NAME") or
+            os.getenv("COMPOSE_PROJECT_NAME", "").replace("ushadow-", "") or
+            os.getenv("UNODE_HOSTNAME", "local")
+        )
+
+        # Normalize both to compare - remove ushadow- prefix if present
+        deployment_host_normalized = (matching_deployment.unode_hostname or "").replace("ushadow-", "")
+        current_host_normalized = current_hostname.replace("ushadow-", "")
+
+        logger.info(f"[PROXY] Deployment check: deployment={deployment_host_normalized}, current={current_host_normalized}")
+        is_remote = deployment_host_normalized and deployment_host_normalized != current_host_normalized
+
+        if is_remote:
+            # For remote deployments, proxy through the remote unode manager
+            # TODO: Implement remote proxy via unode manager API
+            raise HTTPException(
+                status_code=501,
+                detail=f"Remote service proxy not yet implemented for {name} on {matching_deployment.unode_hostname}"
+            )
+
+        logger.info(f"[PROXY] Using deployed service: {container_name}:{internal_port} (deployment_id={matching_deployment.id})")
+
+    elif name in docker_mgr.MANAGEABLE_SERVICES:
+        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
+        # Use get_service_info to find the actual running container
+        service_info = docker_mgr.get_service_info(name)
+
+        if service_info.status != "running":
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' is not running (status: {service_info.status})"
+            )
+
+        if service_info.error:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' error: {service_info.error}"
+            )
+
+        ports = docker_mgr.get_service_ports(name)
+        if ports:
+            primary_port = ports[0]
+            container_port = primary_port.get("container_port", 8000)
+            # Convert to int if it's a string
+            if isinstance(container_port, str):
+                try:
+                    internal_port = int(container_port)
+                except ValueError:
+                    logger.warning(f"[PROXY] Invalid container_port '{container_port}' for {name}, using default 8000")
+                    internal_port = 8000
+            else:
+                internal_port = container_port or 8000
+
+        # Use the actual container name found by get_service_info
+        # This will be something like "ushadow-orange-chronicle-backend"
+        from src.services.docker_manager import ServiceStatus
+        try:
+            # Get container object to extract name
+            container = docker_mgr._client.containers.get(service_info.container_id)
+            container_name = container.name
+            logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}")
+        except Exception as e:
+            target_url = f"http://{container_name if 'container_name' in locals() else 'unknown'}:{internal_port}"
+            logger.error(f"[PROXY] Failed to get container details for {name}: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service '{name}' is not reachable (trying {target_url})"
+            )
+
+    else:
+        # Service not found anywhere
+        raise HTTPException(
+            status_code=404,
+            detail=f"Service '{name}' not found in deployments or MANAGEABLE_SERVICES"
+        )
+
     internal_url = f"http://{container_name}:{internal_port}"
+
+    # Log the exact URL we're going to proxy to
+    logger.info(f"[PROXY DEBUG] Container: {container_name}, Internal Port: {internal_port}, Full URL: {internal_url}")
+    if matching_deployment:
+        logger.info(f"[PROXY DEBUG] Deployment ID: {matching_deployment.id}, deployed_config ports: {matching_deployment.deployed_config.get('ports') if matching_deployment.deployed_config else 'None'}")
 
     # Extract token from query params for audio/media requests
     # We'll move it to Authorization header
@@ -533,6 +717,15 @@ async def proxy_service_request(
         # Show token type and first few chars
         token_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
         logger.info(f"[PROXY] Forwarding auth: {token_preview}")
+
+        # Decode token without verification to see payload (for debugging)
+        try:
+            import jwt
+            token = auth_header.replace("Bearer ", "")
+            payload = jwt.decode(token, options={"verify_signature": False})
+            logger.info(f"[PROXY] Token payload: iss={payload.get('iss')}, aud={payload.get('aud')}, sub={payload.get('sub')}")
+        except Exception as e:
+            logger.debug(f"[PROXY] Could not decode token: {e}")
     else:
         logger.warning(f"[PROXY] No Authorization header in request to {name}")
 
@@ -594,12 +787,13 @@ async def proxy_service_request(
             )
 
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail=f"Service '{name}' request timed out")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=503, detail=f"Service '{name}' is not reachable")
+        raise HTTPException(status_code=504, detail=f"Service '{name}' request timed out (trying {target_url})")
+    except httpx.ConnectError as e:
+        logger.error(f"[PROXY] Connection failed to {target_url}: {e}")
+        raise HTTPException(status_code=503, detail=f"Service '{name}' is not reachable (trying {target_url})")
     except Exception as e:
-        logger.error(f"Proxy error for {name}: {e}")
-        raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+        logger.error(f"Proxy error for {name} at {target_url}: {e}")
+        raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)} (trying {target_url})")
 
 
 @router.get("/debug/docker-ports")
@@ -928,6 +1122,126 @@ async def uninstall_service(
     if result is None:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     return result
+
+
+@router.post("/mycelia/generate-token")
+async def generate_mycelia_token(
+    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, str]:
+    """
+    Generate Mycelia authentication token by running the token-create command
+    inside the running container.
+
+    Returns:
+        Dictionary with 'token' and 'client_id' fields
+    """
+    import subprocess
+    import re
+    from src.services.docker_manager import get_docker_manager
+    from src.services.compose_registry import get_compose_registry
+
+    service_name = "mycelia-backend"
+
+    try:
+        # Find the actual running container
+        docker_mgr = get_docker_manager()
+        compose_registry = get_compose_registry()
+
+        # Try to get service info - check if it's in MANAGEABLE_SERVICES or discovered
+        container_name = None
+
+        # First check if service is in MANAGEABLE_SERVICES
+        if service_name in docker_mgr.MANAGEABLE_SERVICES:
+            service_info = docker_mgr.get_service_info(service_name)
+
+            if service_info.status != "running":
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Mycelia service is not running. Please start it first using the Services page."
+                )
+
+            if service_info.container_id:
+                container = docker_mgr._client.containers.get(service_info.container_id)
+                container_name = container.name
+
+        # If not in MANAGEABLE_SERVICES, search via compose registry
+        if not container_name:
+            discovered_service = compose_registry.get_service_by_name(service_name)
+
+            if not discovered_service:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Mycelia service not found. Please ensure mycelia-compose.yml is loaded."
+                )
+
+            # Search for running container by compose label
+            containers = docker_mgr._client.containers.list(
+                all=False,  # Only running
+                filters={"label": f"com.docker.compose.service={service_name}"}
+            )
+
+            if not containers:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Mycelia service is not running. Please start it first using the Services page."
+                )
+
+            # Use first running container
+            container_name = containers[0].name
+            logger.info(f"[MYCELIA-TOKEN] Found container via compose label: {container_name}")
+
+        if not container_name:
+            raise HTTPException(
+                status_code=503,
+                detail="Could not find running Mycelia container"
+            )
+
+        logger.info(f"[MYCELIA-TOKEN] Using container: {container_name}")
+
+        # Execute token-create command inside the running container
+        result = subprocess.run(
+            [
+                "docker", "exec", container_name,
+                "deno", "run", "-A", "server.ts", "token-create"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Failed to generate Mycelia token: {result.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate token: {result.stderr}"
+            )
+
+        # Parse output to extract token and client_id
+        # Expected format:
+        # MYCELIA_TOKEN=mycelia_...
+        # MYCELIA_CLIENT_ID=...
+        output = result.stdout
+        token_match = re.search(r'MYCELIA_TOKEN=(\S+)', output)
+        client_id_match = re.search(r'MYCELIA_CLIENT_ID=(\S+)', output)
+
+        if not token_match or not client_id_match:
+            logger.error(f"Failed to parse token from output: {output}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to parse token from output"
+            )
+
+        return {
+            "token": token_match.group(1),
+            "client_id": client_id_match.group(1)
+        }
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Token generation timed out")
+    except Exception as e:
+        logger.error(f"Error generating Mycelia token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/register", response_model=ActionResponse)

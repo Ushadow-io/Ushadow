@@ -4,7 +4,7 @@
  * API client for fetching conversations and memories from the Chronicle backend.
  */
 
-import { getAuthToken, getApiUrl } from '../_utils/authStorage';
+import { getAuthToken, getApiUrl, getDefaultServerUrl } from '../_utils/authStorage';
 import { getActiveUnode } from '../_utils/unodeStorage';
 
 // Types matching Chronicle backend responses
@@ -101,10 +101,11 @@ async function getChronicleApiUrl(): Promise<string> {
     return chronicleUrl;
   }
 
-  // Default fallback
-  console.log('[ChronicleAPI] Using default Chronicle generic proxy');
-  return 'https://blue.spangled-kettle.ts.net/api/services/chronicle-backend/proxy';
-}
+  // Default fallback - use configured default server URL
+  const defaultUrl = await getDefaultServerUrl();
+  console.log(`[ChronicleAPI] Using default Chronicle generic proxy: ${defaultUrl}`);
+  return `${defaultUrl}/api/services/chronicle-backend/proxy`;
+e}
 
 /**
  * Get the auth token from active UNode or global storage.
@@ -291,19 +292,25 @@ export async function verifyUnodeAuth(
     const chronicleOk = chronicleResponse.ok;
     console.log(`[ChronicleAPI] Chronicle auth: ${chronicleResponse.status}`);
 
-    // Both must be OK for full auth
-    if (ushadowOk && chronicleOk) {
-      console.log('[ChronicleAPI] Auth verified successfully (both services)');
-      return { valid: true, ushadowOk: true, chronicleOk: true };
+    // Only ushadow auth is required for overall success
+    // Chronicle is optional since multiple audio sources are available
+    if (ushadowOk) {
+      if (chronicleOk) {
+        console.log('[ChronicleAPI] Auth verified successfully (both services)');
+        return { valid: true, ushadowOk: true, chronicleOk: true };
+      } else {
+        console.log('[ChronicleAPI] Auth verified (ushadow only, chronicle unavailable)');
+        return { valid: true, ushadowOk: true, chronicleOk: false };
+      }
     }
 
-    // Build error message based on what failed
+    // Build error message - only fail if ushadow failed
     const errors: string[] = [];
     if (!ushadowOk) {
       errors.push(`ushadow: ${ushadowResponse.status}`);
     }
     if (!chronicleOk) {
-      errors.push(`chronicle: ${chronicleResponse.status}`);
+      errors.push(`chronicle: ${chronicleResponse.status} (optional)`);
     }
 
     console.log(`[ChronicleAPI] Auth failed: ${errors.join(', ')}`);

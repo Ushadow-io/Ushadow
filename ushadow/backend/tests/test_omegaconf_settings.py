@@ -12,19 +12,15 @@ import asyncio
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from config.omegaconf_settings import (
+from src.config import (
     SettingsStore,
     get_settings_store,
-    # Backward compatibility aliases (tested separately)
-    OmegaConfSettingsManager,
-    get_omegaconf_settings,
-    # Helpers
     SettingSuggestion,
     infer_setting_type,
     categorize_setting,
-    mask_secret_value,
     env_var_matches_setting,
 )
+from src.config.secrets import mask_secret_value
 from omegaconf import OmegaConf
 
 
@@ -388,7 +384,7 @@ class TestGetSettingsStore:
     def test_returns_store_instance(self):
         """Function returns SettingsStore instance."""
         # Reset global
-        import config.omegaconf_settings as module
+        import src.config.store as module
         module._settings_store = None
 
         store = get_settings_store()
@@ -396,23 +392,13 @@ class TestGetSettingsStore:
 
     def test_returns_singleton(self):
         """Function returns same instance on multiple calls."""
-        import config.omegaconf_settings as module
+        import src.config.store as module
         module._settings_store = None
 
         store1 = get_settings_store()
         store2 = get_settings_store()
 
         assert store1 is store2
-
-    def test_backward_compat_aliases(self):
-        """Backward compatibility aliases work correctly."""
-        import config.omegaconf_settings as module
-        module._settings_store = None
-
-        # Old names should still work
-        manager = get_omegaconf_settings()
-        assert isinstance(manager, OmegaConfSettingsManager)
-        assert OmegaConfSettingsManager is SettingsStore
 
 
 class TestServiceDefaults:

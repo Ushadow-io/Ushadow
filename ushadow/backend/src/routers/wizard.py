@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.config.omegaconf_settings import get_settings
+from src.config import get_settings
 from src.services.capability_resolver import get_capability_resolver
 from src.services.compose_registry import get_compose_registry
 

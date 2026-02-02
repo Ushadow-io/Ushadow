@@ -20,18 +20,21 @@ import {
   List,
   Share2,
   Loader2,
+  Database,
 } from 'lucide-react'
 import { MemoryTable } from '../components/memories/MemoryTable'
 import { GraphVisualization } from '../components/memories/GraphVisualization'
 import { useMemories } from '../hooks/useMemories'
 import { useGraphApi } from '../hooks/useGraphApi'
 import { useMemoriesStore } from '../stores/memoriesStore'
+import type { MemorySource } from '../services/api'
 
 type Tab = 'list' | 'graph'
 
 export default function MemoriesPage() {
   const [activeTab, setActiveTab] = useState<Tab>('list')
   const [graphLimit, setGraphLimit] = useState(100)
+  const [memorySource, setMemorySource] = useState<MemorySource>('openmemory')
 
   const {
     searchQuery,
@@ -62,7 +65,7 @@ export default function MemoriesPage() {
     isUpdating,
     isDeleting,
     refetch: refetchMemories,
-  } = useMemories()
+  } = useMemories(memorySource)
 
   const {
     graphData,
@@ -72,7 +75,7 @@ export default function MemoriesPage() {
     error: graphError,
     searchGraph,
     refetch: refetchGraph,
-  } = useGraphApi(graphLimit)
+  } = useGraphApi(graphLimit, memorySource)
 
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newMemoryText, setNewMemoryText] = useState('')
@@ -137,13 +140,28 @@ export default function MemoriesPage() {
           <div>
             <h1 className="text-2xl font-bold text-white">Memories</h1>
             <p className="text-sm text-zinc-400">
-              Manage your OpenMemory knowledge base
+              Manage your knowledge base
             </p>
           </div>
         </div>
 
-        {/* Server status */}
+        {/* Memory Source Toggle & Server Status */}
         <div className="flex items-center gap-4">
+          {/* Source selector */}
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-zinc-400" />
+            <select
+              value={memorySource}
+              onChange={(e) => setMemorySource(e.target.value as MemorySource)}
+              className="px-3 py-2 border border-zinc-600 rounded-lg bg-zinc-800 text-sm text-white"
+              data-testid="memories-source-select"
+            >
+              <option value="openmemory">OpenMemory</option>
+              <option value="mycelia">Mycelia</option>
+            </select>
+          </div>
+
+          {/* Server status */}
           {isCheckingHealth ? (
             <span className="text-sm text-zinc-400">Checking server...</span>
           ) : isServerAvailable ? (
@@ -237,8 +255,7 @@ export default function MemoriesPage() {
               <button
                 data-testid="create-memory-btn"
                 onClick={() => setShowCreateDialog(true)}
-                disabled={!isServerAvailable}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
                 <Plus className="w-4 h-4" />
                 Add Memory
@@ -268,7 +285,6 @@ export default function MemoriesPage() {
               {!searchQuery && (
                 <button
                   onClick={() => setShowCreateDialog(true)}
-                  disabled={!isServerAvailable}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
                   Create Memory

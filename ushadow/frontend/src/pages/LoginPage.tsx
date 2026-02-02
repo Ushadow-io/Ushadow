@@ -1,33 +1,70 @@
-import React, { useState, useEffect } from 'react'
-import { useNavigate, Navigate, useLocation } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
-import { Eye, EyeOff } from 'lucide-react'
+import React from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 import AuthHeader from '../components/auth/AuthHeader'
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState('')
   const navigate = useNavigate()
   const location = useLocation()
-
-  const { user, login, setupRequired, isLoading: authLoading } = useAuth()
+  const { isAuthenticated, isLoading, login } = useKeycloakAuth()
 
   // Get the intended destination from router state (set by ProtectedRoute)
   const from = (location.state as { from?: string })?.from || '/'
 
   // After successful login, redirect to intended destination
-  useEffect(() => {
-    if (user) {
+  React.useEffect(() => {
+    if (isAuthenticated) {
       console.log('Login successful, redirecting to:', from)
       navigate(from, { replace: true, state: { fromAuth: true } })
     }
-  }, [user, navigate, from])
+  }, [isAuthenticated, navigate, from])
 
-  // Show loading while checking setup status
-  if (setupRequired === null || authLoading) {
+  const handleLogin = () => {
+    // Redirect to Keycloak login page
+    login(from)
+  }
+
+  const handleRegister = async () => {
+    // Save return URL
+    sessionStorage.setItem('login_return_url', from)
+
+    // Generate CSRF state
+    const state = Math.random().toString(36).substring(2, 15) +
+                  Math.random().toString(36).substring(2, 15)
+    sessionStorage.setItem('oauth_state', state)
+
+    // Import TokenManager for PKCE support
+    const { TokenManager } = await import('../auth/TokenManager')
+    const keycloakConfig = {
+      url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8081',
+      realm: import.meta.env.VITE_KEYCLOAK_REALM || 'ushadow',
+      clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'ushadow-frontend',
+    }
+
+    // Build login URL with PKCE (includes code_challenge and code_challenge_method)
+    const loginUrl = await TokenManager.buildLoginUrl({
+      keycloakUrl: keycloakConfig.url,
+      realm: keycloakConfig.realm,
+      clientId: keycloakConfig.clientId,
+      redirectUri: `${window.location.origin}/oauth/callback`,
+      state,
+    })
+
+    console.log('[REGISTER] Login URL generated:', loginUrl)
+
+    // Keycloak registration: Add kc_action=register parameter to the auth URL
+    // This tells Keycloak to show the registration form instead of login
+    const registrationUrl = loginUrl + '&kc_action=register'
+
+    console.log('[REGISTER] Registration URL:', registrationUrl)
+    console.log('[REGISTER] URL includes code_challenge_method:', registrationUrl.includes('code_challenge_method'))
+
+    // Redirect to Keycloak registration
+    window.location.href = registrationUrl
+  }
+
+  // Show loading while checking authentication
+  if (isLoading) {
     return (
       <div
         className="flex-1 flex flex-col"
@@ -39,102 +76,87 @@ export default function LoginPage() {
               className="animate-spin rounded-full h-8 w-8 border-b-2"
               style={{ borderColor: 'var(--primary-400)' }}
             ></div>
-            <span style={{ color: 'var(--text-secondary)' }}>Checking setup status...</span>
+            <span style={{ color: 'var(--text-secondary)' }}>Checking authentication...</span>
           </div>
         </div>
       </div>
     )
   }
 
-  // Redirect to registration if required
-  // IMPORTANT: This must be after all hooks to follow Rules of Hooks
-  if (setupRequired === true) {
-    return <Navigate to="/register" replace />
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
-    setError('')
-
-    const result = await login(email, password)
-    if (!result.success) {
-      // Show specific error message based on error type
-      if (result.errorType === 'connection_failure') {
-        setError('Unable to connect to server. Please check your connection and try again.')
-      } else if (result.errorType === 'authentication_failure') {
-        setError('Invalid email or password')
-      } else {
-        setError(result.error || 'Login failed. Please try again.')
-      }
-    }
-    setIsLoading(false)
-  }
-
   return (
     <div
       className="flex-1 flex flex-col relative overflow-hidden"
-      style={{ backgroundColor: 'var(--surface-900)' }}
+      style={{ backgroundColor: '#0a0a0a' }}
       data-testid="login-page"
     >
-      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8">
-        {/* Decorative background blur circles - brand green and purple */}
-        {/* Using fixed positioning so glows extend to viewport edges, not container edges */}
-        <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div
-            className="absolute -top-40 -right-40 w-96 h-96 rounded-full blur-3xl"
-            style={{ backgroundColor: 'rgba(168, 85, 247, 0.15)' }}
-          ></div>
-          <div
-            className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full blur-3xl"
-            style={{ backgroundColor: 'rgba(74, 222, 128, 0.15)' }}
-          ></div>
-        </div>
+      {/* Geometric grid background pattern */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px)
+          `,
+          backgroundSize: '80px 80px',
+        }}
+      />
 
-        <div className="max-w-md w-full space-y-3 relative z-10">
+      {/* Diagonal cross pattern overlay */}
+      <div
+        className="fixed inset-0 pointer-events-none opacity-30"
+        style={{
+          background: `
+            linear-gradient(45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%),
+            linear-gradient(-45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%)
+          `,
+          backgroundSize: '120px 120px',
+        }}
+      />
+
+      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8 relative z-10">
+        <div className="max-w-md w-full space-y-3">
           <AuthHeader subtitle="Sign in to your account" />
 
-          {/* Login Form */}
+          {/* Login Form Card */}
           <div
-            className="rounded-xl shadow-xl backdrop-blur-sm p-6 space-y-4 animate-slide-up"
+            className="rounded-lg shadow-xl p-8 space-y-5 animate-slide-up"
             style={{
-              backgroundColor: 'var(--surface-800)',
-              border: '1px solid var(--surface-500)',
+              backgroundColor: '#1a1a1a',
+              border: '1px solid #27272a',
             }}
           >
-            <form className="space-y-4" onSubmit={handleSubmit}>
-              <div className="space-y-2">
+            <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+              {/* Email Field */}
+              <div>
                 <label
                   htmlFor="email"
-                  className="block text-sm font-medium"
-                  style={{ color: 'var(--text-secondary)' }}
+                  className="block text-sm font-normal mb-1.5"
+                  style={{ color: '#ffffff' }}
                 >
-                  Email address
+                  Email
                 </label>
                 <input
                   id="email"
                   name="email"
                   type="email"
                   autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="appearance-none block w-full px-4 py-3 rounded-lg transition-all sm:text-sm focus:outline-none focus:ring-1"
+                  placeholder="admin@example.com"
+                  className="w-full px-3.5 py-2.5 text-base rounded border transition-all focus:outline-none focus:ring-2"
                   style={{
-                    backgroundColor: 'var(--surface-700)',
-                    border: '1px solid var(--surface-400)',
-                    color: 'var(--text-primary)',
+                    backgroundColor: '#0f0f0f',
+                    color: '#ffffff',
+                    borderColor: '#27272a',
                   }}
-                  placeholder="your@email.com"
-                  data-testid="login-email-input"
+                  data-testid="login-field-email"
                 />
               </div>
 
-              <div className="space-y-2">
+              {/* Password Field */}
+              <div>
                 <label
                   htmlFor="password"
-                  className="block text-sm font-medium"
-                  style={{ color: 'var(--text-secondary)' }}
+                  className="block text-sm font-normal mb-1.5"
+                  style={{ color: '#ffffff' }}
                 >
                   Password
                 </label>
@@ -142,82 +164,94 @@ export default function LoginPage() {
                   <input
                     id="password"
                     name="password"
-                    type={showPassword ? 'text' : 'password'}
+                    type="password"
                     autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="appearance-none block w-full px-4 py-3 pr-12 rounded-lg transition-all sm:text-sm focus:outline-none focus:ring-1"
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2.5 text-base rounded border transition-all focus:outline-none focus:ring-2 pr-10"
                     style={{
-                      backgroundColor: 'var(--surface-700)',
-                      border: '1px solid var(--surface-400)',
-                      color: 'var(--text-primary)',
+                      backgroundColor: '#0f0f0f',
+                      color: '#ffffff',
+                      borderColor: '#27272a',
                     }}
-                    placeholder="Enter your password"
-                    data-testid="login-password-input"
+                    data-testid="login-field-password"
                   />
                   <button
                     type="button"
-                    className="absolute inset-y-0 right-0 pr-4 flex items-center transition-colors"
-                    style={{ color: 'var(--text-muted)' }}
-                    onClick={() => setShowPassword(!showPassword)}
-                    data-testid="toggle-password-visibility"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded"
+                    style={{ color: '#71717a' }}
+                    aria-label="Toggle password visibility"
                   >
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" />
-                    ) : (
-                      <Eye className="h-5 w-5" />
-                    )}
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
                   </button>
                 </div>
               </div>
 
-              {error && (
-                <div
-                  className="rounded-lg p-4"
-                  style={{
-                    backgroundColor: 'rgba(248, 113, 113, 0.1)',
-                    border: '1px solid rgba(248, 113, 113, 0.3)',
-                  }}
-                  data-testid="login-error"
-                >
-                  <p className="text-sm" style={{ color: 'var(--error-400)' }}>{error}</p>
+              {/* Remember me and Forgot password */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <input
+                    id="remember-me"
+                    name="remember-me"
+                    type="checkbox"
+                    className="h-4 w-4 rounded"
+                    style={{ accentColor: '#3B82F6' }}
+                    data-testid="login-remember-me"
+                  />
+                  <label
+                    htmlFor="remember-me"
+                    className="ml-2 text-sm"
+                    style={{ color: '#ffffff' }}
+                  >
+                    Remember me
+                  </label>
                 </div>
-              )}
-
-              <div>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full py-3 px-4 text-base font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98]"
-                  style={{
-                    backgroundColor: '#4ade80',
-                    color: 'var(--surface-900)',
-                    boxShadow: '0 0 20px rgba(74, 222, 128, 0.2)',
+                <a
+                  href="#"
+                  className="text-sm hover:underline"
+                  style={{ color: '#60a5fa' }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    // TODO: Implement forgot password flow
                   }}
-                  data-testid="login-submit-button"
                 >
-                  {isLoading ? (
-                    <div className="flex items-center justify-center space-x-2">
-                      <div
-                        className="animate-spin rounded-full h-5 w-5 border-2 border-t-transparent"
-                        style={{ borderColor: 'var(--surface-900)' }}
-                      ></div>
-                      <span>Signing in...</span>
-                    </div>
-                  ) : (
-                    'Sign in'
-                  )}
-                </button>
+                  Forgot Password?
+                </a>
               </div>
+
+              {/* Sign In Button */}
+              <button
+                type="submit"
+                className="w-full py-2.5 px-4 text-base font-medium rounded shadow-md hover:shadow-lg transition-all"
+                style={{
+                  backgroundColor: '#3B82F6',
+                  color: '#ffffff',
+                }}
+                data-testid="login-submit"
+              >
+                Sign In
+              </button>
             </form>
 
-            <p
-              className="text-center text-xs pt-2"
-              style={{ color: 'var(--text-muted)' }}
+            {/* Register Link */}
+            <div
+              className="pt-5 text-center text-sm"
+              style={{
+                borderTop: '1px solid #27272a',
+              }}
             >
-              Ushadow Dashboard v0.1.0
-            </p>
+              <span style={{ color: '#52525b' }}>New user? </span>
+              <button
+                onClick={handleRegister}
+                className="font-medium hover:underline"
+                style={{ color: '#4ade80' }}
+                data-testid="login-register-link"
+              >
+                Register
+              </button>
+            </div>
           </div>
         </div>
       </div>

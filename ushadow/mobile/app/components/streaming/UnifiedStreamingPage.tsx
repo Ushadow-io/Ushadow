@@ -17,6 +17,7 @@ import {
   Modal,
   SafeAreaView,
   Alert,
+  TouchableOpacity,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
@@ -25,7 +26,7 @@ import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 import { SourceSelector, StreamSource } from './SourceSelector';
 import { DestinationSelector, AuthStatus } from './DestinationSelector';
 import { StreamingDisplay } from './StreamingDisplay';
-import { StreamingButton } from './StreamingButton';
+import { CompactStreamingButton } from './CompactStreamingButton';
 import { GettingStartedCard } from './GettingStartedCard';
 import { OmiDeviceScanner } from '../OmiDeviceScanner';
 import { LeaderDiscovery } from '../LeaderDiscovery';
@@ -56,16 +57,31 @@ import { appendTokenToUrl, saveAuthToken } from '../../_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from '../../services/chronicleApi';
+import { AudioDestination } from '../../services/audioProviderApi';
+
+// Types
+import { SessionSource as SessionSourceType } from '../../types/streamingSession';
+import { RelayStatus } from '../../hooks/useAudioStreamer';
 
 interface UnifiedStreamingPageProps {
   authToken: string | null;
   onAuthRequired?: () => void;
+  onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onBluetoothLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onSessionStart?: (source: SessionSourceType, codec: 'pcm' | 'opus') => Promise<string>;
+  onSessionUpdate?: (sessionId: string, relayStatus: RelayStatus) => void;
+  onSessionEnd?: (sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout') => void;
   testID?: string;
 }
 
 export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   authToken,
   onAuthRequired,
+  onWebSocketLog,
+  onBluetoothLog,
+  onSessionStart,
+  onSessionUpdate,
+  onSessionEnd,
   testID = 'unified-streaming',
 }) => {
   // Source state
@@ -75,6 +91,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Destination state
   const [selectedUnodeId, setSelectedUnodeId] = useState<string | null>(null);
   const [unodes, setUnodes] = useState<UNode[]>([]);
+
+  // Audio destination state (discovered services)
+  const [availableDestinations, setAvailableDestinations] = useState<AudioDestination[]>([]);
+  const [selectedDestinationIds, setSelectedDestinationIds] = useState<string[]>([]);
+  const [isDiscoveringDestinations, setIsDiscoveringDestinations] = useState(false);
 
   // Auth state
   const [authStatus, setAuthStatus] = useState<AuthStatus>('unknown');
@@ -88,13 +109,16 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   const streamingStartTime = useRef<Date | null>(null);
   const [startTime, setStartTime] = useState<Date | undefined>(undefined);
 
+  // Session tracking
+  const currentSessionIdRef = useRef<string | null>(null);
+
   // OMI connection context
   const omiConnection = useOmiConnection();
 
   // Phone microphone streaming hook
   const phoneStreaming = useStreaming();
 
-  // OMI device connection
+  // OMI device connection with bluetooth logging
   const {
     connectedDeviceId,
     isConnecting: isOmiConnecting,
@@ -102,7 +126,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     disconnectFromDevice: disconnectOmiDevice,
     batteryLevel,
     getBatteryLevel,
-  } = useDeviceConnection(omiConnection);
+    currentCodec, // BROKEN: codec detection unreliable, so we hardcode Opus for all OMI devices
+  } = useDeviceConnection(omiConnection, {
+    onLog: onBluetoothLog,
+  });
 
   // Derive OMI connection status for SourceSelector
   const omiConnectionStatus: 'disconnected' | 'connecting' | 'connected' =
@@ -123,7 +150,14 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   } = useAudioListener(omiConnection, isOmiConnected);
 
   // WebSocket streamer for OMI
-  const omiStreamer = useAudioStreamer();
+  const omiStreamer = useAudioStreamer({
+    onLog: onWebSocketLog,
+    onRelayStatus: (status) => {
+      if (currentSessionIdRef.current && onSessionUpdate) {
+        onSessionUpdate(currentSessionIdRef.current, status);
+      }
+    },
+  });
 
   // Combined state
   const isStreaming = selectedSource.type === 'microphone'
@@ -141,6 +175,30 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       isListeningAudio,
     });
   }, [selectedSource.type, isStreaming, phoneStreaming.isStreaming, phoneStreaming.isRecording, omiStreamer.isStreaming, isListeningAudio]);
+
+  // Monitor for permanent connection failures (when reconnection attempts exhausted)
+  useEffect(() => {
+    const currentError = selectedSource.type === 'microphone' ? phoneStreaming.error : omiStreamer.error;
+    const currentRetrying = selectedSource.type === 'microphone' ? phoneStreaming.isRetrying : omiStreamer.isRetrying;
+    const wasStreaming = selectedSource.type === 'microphone' ? phoneStreaming.isStreaming : omiStreamer.isStreaming;
+
+    // If there's an error, not retrying anymore, and we have an active session, it means connection failed permanently
+    if (currentError && !currentRetrying && !wasStreaming && currentSessionIdRef.current && onSessionEnd) {
+      console.log('[UnifiedStreaming] Connection failed permanently, ending session');
+      const endReason = currentError.toLowerCase().includes('timeout') ? 'timeout' : 'connection_lost';
+      onSessionEnd(currentSessionIdRef.current, currentError, endReason);
+      currentSessionIdRef.current = null;
+    }
+  }, [
+    selectedSource.type,
+    phoneStreaming.error,
+    phoneStreaming.isRetrying,
+    phoneStreaming.isStreaming,
+    omiStreamer.error,
+    omiStreamer.isRetrying,
+    omiStreamer.isStreaming,
+    onSessionEnd,
+  ]);
 
   const isConnecting = selectedSource.type === 'microphone'
     ? phoneStreaming.isConnecting
@@ -299,44 +357,83 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Get selected UNode
   const selectedUNode = unodes.find(u => u.id === selectedUnodeId);
 
-  // Build stream URL from apiUrl + stored config (protocol + path)
-  // This handles cases where the stored streamUrl has malformed hostname
-  const getStreamUrl = useCallback((): string | null => {
-    if (!selectedUNode?.apiUrl) return null;
-
-    // Get the stored config (protocol + path) or use defaults
-    const storedConfig = selectedUNode.streamUrl
-      ? parseStreamUrl(selectedUNode.streamUrl)
-      : { protocol: 'wss' as const, path: '/chronicle/ws_pcm' };
-
-    // Extract host from apiUrl (strip protocol)
-    const host = selectedUNode.apiUrl.replace('https://', '').replace('http://', '');
-
-    // Determine endpoint based on source type
-    let path = storedConfig.path;
-    if (selectedSource.type === 'microphone') {
-      // Phone microphone - use ws_pcm
-      if (!path.includes('ws_pcm')) {
-        path = path.replace('ws_omi', 'ws_pcm');
-      }
-    } else {
-      // OMI device - use ws_omi
-      if (!path.includes('ws_omi')) {
-        path = path.replace('ws_pcm', 'ws_omi');
-      }
+  // Discover available audio destinations
+  const discoverDestinations = useCallback(async () => {
+    if (!selectedUNode?.apiUrl || !authToken) {
+      setAvailableDestinations([]);
+      return;
     }
 
-    // Use stored protocol (user can toggle between ws and wss)
-    let url = `${storedConfig.protocol}://${host}${path}`;
+    setIsDiscoveringDestinations(true);
+    try {
+      const { getAvailableAudioDestinations } = await import('../../services/audioProviderApi');
 
-    console.log('[UnifiedStreamingPage] Built stream URL:', url);
+      // Determine audio format based on source type
+      // Phone microphone sends PCM (16-bit), OMI device sends Opus frames
+      const audioFormat = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
+      console.log(`[UnifiedStreaming] Querying audio destinations for format: ${audioFormat}...`);
 
-    // Add auth token
-    if (authToken) {
-      return appendTokenToUrl(url, authToken);
+      const destinations = await getAvailableAudioDestinations(
+        selectedUNode.apiUrl,
+        authToken,
+        audioFormat
+      );
+      setAvailableDestinations(destinations);
+
+      console.log(`[UnifiedStreaming] Found ${destinations.length} destination(s) supporting ${audioFormat}:`,
+        destinations.map(d => d.instance_name));
+
+      if (destinations.length === 0) {
+        Alert.alert(
+          'No Compatible Destinations',
+          `No running audio services found that support ${audioFormat} format. Please check service configuration.`
+        );
+      }
+    } catch (err) {
+      console.error('[UnifiedStreaming] Failed to discover destinations:', err);
+      Alert.alert('Discovery Failed', err instanceof Error ? err.message : 'Failed to discover audio destinations');
+      setAvailableDestinations([]);
+    } finally {
+      setIsDiscoveringDestinations(false);
     }
-    return url;
-  }, [selectedUNode, selectedSource, authToken]);
+  }, [selectedUNode, authToken, selectedSource.type]);
+
+  // Discover destinations when UNode, auth, or source type changes
+  useEffect(() => {
+    discoverDestinations();
+  }, [discoverDestinations]);
+
+  // Build stream URL using selected destinations
+  const getStreamUrl = useCallback(async (): Promise<string | null> => {
+    if (!selectedUNode?.apiUrl || !authToken) return null;
+
+    try {
+      // Filter to only selected destinations
+      const selectedDestinations = availableDestinations.filter(
+        dest => selectedDestinationIds.includes(dest.instance_id)
+      );
+
+      if (selectedDestinations.length === 0) {
+        console.warn('[UnifiedStreaming] No destinations selected');
+        Alert.alert('No Destinations Selected', 'Please select at least one audio destination.');
+        return null;
+      }
+
+      const { buildRelayUrl } = await import('../../services/audioProviderApi');
+
+      // Always use relay URL (even for single destination)
+      // Mobile can't connect directly to internal Docker container names like "chronicle:5001"
+      // The relay handles forwarding to internal services
+      const streamUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, selectedDestinations);
+      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s):', streamUrl);
+
+      return streamUrl;
+    } catch (err) {
+      console.error('[UnifiedStreaming] Failed to build stream URL:', err);
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to build stream URL');
+      return null;
+    }
+  }, [selectedUNode, authToken, availableDestinations, selectedDestinationIds]);
 
   // Handle source change
   const handleSourceChange = useCallback(async (source: StreamSource) => {
@@ -378,15 +475,39 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
   // Start streaming
   const handleStartStreaming = useCallback(async () => {
-    const streamUrl = getStreamUrl();
+    console.log('[UnifiedStreaming] Start button pressed');
+    console.log('[UnifiedStreaming] Can stream:', {
+      selectedUnodeId,
+      authStatus,
+      selectedDestinationIds: selectedDestinationIds.length,
+      canStream,
+    });
+
+    const streamUrl = await getStreamUrl();
     if (!streamUrl) {
-      Alert.alert('No Destination', 'Please select a destination UNode.');
+      // Error alert already shown by getStreamUrl if needed
+      console.log('[UnifiedStreaming] No stream URL - cannot start');
       return;
+    }
+
+    console.log('[UnifiedStreaming] Starting stream to:', streamUrl);
+
+    // Start session tracking
+    if (onSessionStart) {
+      const sessionSource: SessionSourceType = selectedSource.type === 'omi' && selectedSource.deviceId
+        ? { type: 'omi', deviceId: selectedSource.deviceId, deviceName: selectedSource.deviceName }
+        : { type: 'microphone' };
+
+      const codec = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
+      const sessionId = await onSessionStart(sessionSource, codec);
+      currentSessionIdRef.current = sessionId;
+      console.log('[UnifiedStreaming] Session started:', sessionId);
     }
 
     try {
       if (selectedSource.type === 'microphone') {
-        await phoneStreaming.startStreaming(streamUrl);
+        // Phone microphone uses PCM
+        await phoneStreaming.startStreaming(streamUrl, 'streaming', 'pcm');
       } else {
         // OMI streaming
         if (!connectedDeviceId || connectedDeviceId !== selectedSource.deviceId) {
@@ -394,8 +515,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           await connectOmiDevice(selectedSource.deviceId);
         }
 
-        // Start WebSocket
-        await omiStreamer.startStreaming(streamUrl);
+        // OMI devices always use Opus codec 21
+        const codec = 'opus';
+        console.log('[UnifiedStreaming] OMI device - using Opus codec');
+
+        // Start WebSocket with codec
+        await omiStreamer.startStreaming(streamUrl, 'streaming', codec);
 
         // Start OMI audio listener
         await startAudioListener(async (audioBytes: Uint8Array) => {
@@ -405,8 +530,15 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         });
       }
     } catch (err) {
+      const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[UnifiedStreaming] Failed to start streaming:', err);
-      Alert.alert('Streaming Error', (err as Error).message || 'Failed to start streaming');
+      Alert.alert('Streaming Error', errorMessage);
+
+      // End session with error
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
+        currentSessionIdRef.current = null;
+      }
     }
   }, [
     selectedSource,
@@ -416,6 +548,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     connectOmiDevice,
     omiStreamer,
     startAudioListener,
+    onSessionStart,
+    onSessionEnd,
   ]);
 
   // Stop streaming
@@ -427,10 +561,23 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         await stopAudioListener();
         omiStreamer.stopStreaming();
       }
+
+      // End session (clean stop via user button)
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, undefined, 'manual_stop');
+        currentSessionIdRef.current = null;
+      }
     } catch (err) {
+      const errorMessage = (err as Error).message || 'Failed to stop streaming';
       console.error('[UnifiedStreaming] Failed to stop streaming:', err);
+
+      // End session with error
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
+        currentSessionIdRef.current = null;
+      }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer]);
+  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, onSessionEnd]);
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {
@@ -514,8 +661,19 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
   }, [onAuthRequired]);
 
-  // Can stream check - also require valid auth
-  const canStream = selectedUnodeId !== null && authStatus === 'authenticated';
+  // Can stream check - require UNode, auth, and at least one destination
+  const canStream =
+    selectedUnodeId !== null &&
+    authStatus === 'authenticated' &&
+    selectedDestinationIds.length > 0;
+
+  // Helper message for why button is disabled
+  const getDisabledReason = (): string | undefined => {
+    if (!selectedUnodeId) return 'Add a UNode first';
+    if (authStatus !== 'authenticated') return 'Sign in required';
+    if (selectedDestinationIds.length === 0) return 'Select a service';
+    return undefined;
+  };
 
   return (
     <View style={styles.container} testID={testID}>
@@ -545,7 +703,50 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           testID={`${testID}-source`}
         />
 
-        {/* Destination Selector - navigates to /unode-details on tap */}
+        {/* Streaming Card */}
+        <View style={styles.streamingCard}>
+          {/* Waveform Display with overlaid button */}
+          <StreamingDisplay
+            isStreaming={isStreaming}
+            isConnecting={isConnecting}
+            audioLevel={audioLevel}
+            startTime={startTime}
+            sourceType={selectedSource.type === 'microphone' ? 'microphone' : 'omi'}
+            onStopPress={handleStopStreaming}
+            testID={`${testID}-display`}
+          >
+            {/* Compact start button overlaid on waveform */}
+            {!isStreaming && (
+              <CompactStreamingButton
+                isInitializing={isInitializing}
+                isConnecting={isConnecting}
+                isDisabled={!canStream}
+                error={error}
+                onPress={handleStartStreaming}
+                disabledReason={getDisabledReason()}
+                testID={`${testID}-start-button`}
+              />
+            )}
+          </StreamingDisplay>
+
+          {/* Retry controls if retrying */}
+          {isRetrying && (
+            <View style={styles.retryContainer}>
+              <Text style={styles.retryText}>
+                Retrying... ({retryCount}/{maxRetries})
+              </Text>
+              <TouchableOpacity
+                style={styles.cancelRetryButton}
+                onPress={handleCancelRetry}
+                testID={`${testID}-cancel-retry`}
+              >
+                <Text style={styles.cancelRetryText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Destination Selector - navigates to /unode-details on tap, shows audio destinations inline */}
         <DestinationSelector
           selectedUNodeId={selectedUnodeId}
           unodes={unodes}
@@ -554,36 +755,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           onReauthenticate={handleReauthenticate}
           disabled={isStreaming}
           testID={`${testID}-destination`}
+          availableDestinations={availableDestinations}
+          selectedDestinationIds={selectedDestinationIds}
+          onDestinationSelectionChange={setSelectedDestinationIds}
+          isLoadingDestinations={isDiscoveringDestinations}
         />
-
-        {/* Streaming Card */}
-        <View style={styles.streamingCard}>
-          {/* Waveform Display */}
-          <StreamingDisplay
-            isStreaming={isStreaming}
-            isConnecting={isConnecting}
-            audioLevel={audioLevel}
-            startTime={startTime}
-            sourceType={selectedSource.type === 'microphone' ? 'microphone' : 'omi'}
-            testID={`${testID}-display`}
-          />
-
-          {/* Stream Button */}
-          <StreamingButton
-            isRecording={isStreaming}
-            isInitializing={isInitializing}
-            isConnecting={isConnecting}
-            isRetrying={isRetrying}
-            retryCount={retryCount}
-            maxRetries={maxRetries}
-            isDisabled={!canStream}
-            audioLevel={audioLevel / 100}
-            error={error}
-            onPress={handleStreamingPress}
-            onCancelRetry={handleCancelRetry}
-            testID={`${testID}-button`}
-          />
-        </View>
       </ScrollView>
 
       {/* OMI Scanner Modal */}
@@ -639,6 +815,31 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     marginBottom: spacing.lg,
+  },
+  retryContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.md,
+    padding: spacing.sm,
+    backgroundColor: colors.warning.bg,
+    borderRadius: borderRadius.md,
+  },
+  retryText: {
+    fontSize: fontSize.sm,
+    color: colors.warning.default,
+    fontWeight: '500',
+  },
+  cancelRetryButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    backgroundColor: theme.backgroundCard,
+    borderRadius: borderRadius.sm,
+  },
+  cancelRetryText: {
+    fontSize: fontSize.sm,
+    color: colors.warning.default,
+    fontWeight: '600',
   },
   modalContainer: {
     flex: 1,

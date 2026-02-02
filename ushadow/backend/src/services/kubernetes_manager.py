@@ -34,10 +34,7 @@ class KubernetesManager:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.clusters_collection = db.kubernetes_clusters
-
-        # Use CONFIG_DIR if set (for tests), otherwise use /config
-        config_dir = os.environ.get("CONFIG_DIR", "/config")
-        self._kubeconfig_dir = Path(config_dir) / "kubeconfigs"
+        self._kubeconfig_dir = Path("/config/kubeconfigs")
         self._kubeconfig_dir.mkdir(parents=True, exist_ok=True)
         # Initialize encryption for kubeconfig files
         self._fernet = self._init_fernet()
@@ -531,7 +528,8 @@ class KubernetesManager:
 
                     elif is_named_volume:
                         # Named volume - create PVC for persistent storage
-                        volume_name = source.replace("_", "-")
+                        # Sanitize volume name: replace dots, underscores with hyphens (K8s requirement)
+                        volume_name = source.replace("_", "-").replace(".", "-")
 
                         # Only add PVC if not already added
                         if not any(v.get("name") == volume_name for v in k8s_volumes):
@@ -559,7 +557,9 @@ class KubernetesManager:
                     elif source_path.is_dir() or not source_path.exists():
                         # Directory or non-existent path - use emptyDir (non-persistent scratch)
                         # Note: Named volumes are handled above and create PVCs
-                        volume_name = source_path.name.replace("_", "-") if source_path.name else "data"
+                        # Sanitize volume name: replace dots, underscores with hyphens (K8s requirement)
+                        raw_name = source_path.name if source_path.name else "data"
+                        volume_name = raw_name.replace("_", "-").replace(".", "-")
 
                         if not any(v.get("name") == volume_name for v in k8s_volumes):
                             k8s_volumes.append({

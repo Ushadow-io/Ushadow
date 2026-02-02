@@ -1,22 +1,21 @@
 import { useState, useEffect } from 'react'
-import { MessageSquare, ListTodo, Settings, Radio, RefreshCw, WifiOff } from 'lucide-react'
+import { MessageSquare, ListTodo, Settings, RefreshCw, WifiOff } from 'lucide-react'
 import { isChronicleAvailable, getChronicleConnectionInfo } from '../services/chronicleApi'
 import ChronicleConversations from '../components/chronicle/ChronicleConversations'
 import ChronicleQueue from '../components/chronicle/ChronicleQueue'
-import ChronicleRecording from '../components/chronicle/ChronicleRecording'
 import { useChronicle } from '../contexts/ChronicleContext'
 
-type TabType = 'recording' | 'conversations' | 'queue'
+type TabType = 'conversations' | 'queue'
 type ConnectionState = 'loading' | 'connected' | 'unavailable'
 
 export default function ChroniclePage() {
-  const [activeTab, setActiveTab] = useState<TabType>('recording')
+  const [activeTab, setActiveTab] = useState<TabType>('conversations')
   const [connectionState, setConnectionState] = useState<ConnectionState>('loading')
   const [showSettings, setShowSettings] = useState(false)
   const [chronicleInfo, setChronicleInfo] = useState<any>(null)
 
-  // Get recording from context (shared with Layout header button)
-  const { recording, checkConnection } = useChronicle()
+  // Get context methods
+  const { checkConnection } = useChronicle()
 
   useEffect(() => {
     checkChronicleStatus()
@@ -187,18 +186,6 @@ export default function ChroniclePage() {
       <div className="border-b border-neutral-200 dark:border-neutral-700" data-testid="chronicle-tabs">
         <nav className="-mb-px flex space-x-8">
           <button
-            onClick={() => setActiveTab('recording')}
-            className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors ${
-              activeTab === 'recording'
-                ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                : 'border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-300 dark:text-neutral-400 dark:hover:text-neutral-300'
-            }`}
-            data-testid="tab-recording"
-          >
-            <Radio className="h-4 w-4" />
-            <span>Record</span>
-          </button>
-          <button
             onClick={() => setActiveTab('conversations')}
             className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors ${
               activeTab === 'conversations'
@@ -227,9 +214,6 @@ export default function ChroniclePage() {
 
       {/* Tab Content */}
       <div data-testid="chronicle-tab-content">
-        {activeTab === 'recording' && (
-          <ChronicleRecording recording={recording} />
-        )}
         {activeTab === 'conversations' && (
           <ChronicleConversations />
         )}

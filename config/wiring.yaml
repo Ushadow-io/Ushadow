@@ -1,0 +1,37 @@
+defaults: {}
+wiring:
+- id: c1dc203f
+  source_config_id: ollama
+  source_capability: llm
+  target_config_id: openmemory-compose:mem0
+  target_capability: llm
+- id: 949345a6
+  source_config_id: deepgram
+  source_capability: transcription
+  target_config_id: chronicle-compose:chronicle-backend
+  target_capability: transcription
+- id: 8700a2bc
+  source_config_id: openai
+  source_capability: llm
+  target_config_id: chronicle-compose:chronicle-backend
+  target_capability: llm
+- id: 16bc88f1
+  source_config_id: openai
+  source_capability: llm
+  target_config_id: chronicle-compose-chronicle-backend-ushadow-purple--leader-
+  target_capability: llm
+- id: e9f54191
+  source_config_id: deepgram
+  source_capability: transcription
+  target_config_id: chronicle-compose-chronicle-backend-ushadow-purple--leader-
+  target_capability: transcription
+- id: 86a370fa
+  source_config_id: openai
+  source_capability: llm
+  target_config_id: chronicle-backend-ushadow-purple--leader-
+  target_capability: llm
+- id: 6e6887b5
+  source_config_id: deepgram
+  source_capability: transcription
+  target_config_id: chronicle-backend-ushadow-purple--leader-
+  target_capability: transcription

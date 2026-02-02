@@ -18,7 +18,6 @@ import litellm
 from litellm import acompletion
 
 from src.services.provider_registry import get_provider_registry
-from src.config.omegaconf_settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,7 @@ class LLMClient:
     """
 
     def __init__(self):
+        from src.config import get_settings
         self._settings = get_settings()
         self._provider_registry = get_provider_registry()
 

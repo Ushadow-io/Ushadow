@@ -79,7 +79,7 @@ class Provider(BaseModel):
     id: str = Field(..., description="Provider identifier (e.g., 'openai', 'ollama')")
     name: str = Field(..., description="Display name")
     capability: str = Field(..., description="Which capability this implements")
-    mode: Literal["cloud", "local"] = Field(..., description="Deployment mode")
+    mode: Literal["cloud", "local", "client", "relay", "webhook", "custom", "upload", "remote"] = Field(..., description="Deployment mode")
     description: Optional[str] = None
 
     # Environment variable mappings (capability keys → env vars)

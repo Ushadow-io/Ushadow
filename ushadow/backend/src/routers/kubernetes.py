@@ -296,6 +296,7 @@ async def deploy_service_to_cluster(
     try:
         resolved_service = await deployment_manager.resolve_service_for_deployment(
             request.service_id,
+            deploy_target=cluster_id,
             config_id=request.config_id
         )
     except ValueError as e:
@@ -312,14 +313,8 @@ async def deploy_service_to_cluster(
         "volumes": resolved_service.volumes,  # Volume mounts for config files
     }
 
-    # Update ServiceConfig status to DEPLOYING if config_id provided
-    if request.config_id:
-        from src.services.service_config_manager import get_service_config_manager
-        from src.models.service_config import ServiceConfigStatus
-
-        sc_manager = get_service_config_manager()
-        sc_manager.update_instance_status(request.config_id, ServiceConfigStatus.DEPLOYING)
-        logger.info(f"Updated ServiceConfig {request.config_id} status to DEPLOYING")
+    # TODO: Track deployment status in Deployment record, not ServiceConfig
+    # ServiceConfig no longer tracks deployment state (removed in architecture refactor)
 
     # Add node selector if node_name specified
     k8s_spec = request.k8s_spec or KubernetesDeploymentSpec()
@@ -339,39 +334,15 @@ async def deploy_service_to_cluster(
     )
 
     if not success:
-        # Update ServiceConfig status to ERROR if deployment failed
-        if request.config_id:
-            from src.services.service_config_manager import get_service_config_manager
-            from src.models.service_config import ServiceConfigStatus
-
-            sc_manager = get_service_config_manager()
-            sc_manager.update_instance_status(
-                request.config_id,
-                ServiceConfigStatus.ERROR,
-                error=message
-            )
-            logger.error(f"Updated ServiceConfig {request.config_id} status to ERROR: {message}")
-
+        # TODO: Track deployment errors in Deployment record
+        logger.error(f"K8s deployment failed for config {request.config_id}: {message}")
         raise HTTPException(status_code=500, detail=message)
 
-    # Update ServiceConfig status if config_id was provided
+    # TODO: Track deployment success and access URL in Deployment record
     if request.config_id:
-        from src.services.service_config_manager import get_service_config_manager
-        from src.models.service_config import ServiceConfigStatus
-
-        sc_manager = get_service_config_manager()
-
-        # Build access URL (use service name if available)
         service_name = resolved_service.name
         access_url = f"http://{service_name}.{request.namespace}.svc.cluster.local"
-
-        # Update status to RUNNING after successful deployment
-        sc_manager.update_instance_status(
-            request.config_id,
-            ServiceConfigStatus.RUNNING,
-            access_url=access_url
-        )
-        logger.info(f"Updated ServiceConfig {request.config_id} status to RUNNING")
+        logger.info(f"K8s deployment successful for config {request.config_id}, access URL: {access_url}")
 
     return {
         "success": True,

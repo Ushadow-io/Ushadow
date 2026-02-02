@@ -61,6 +61,7 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
   const mountedRef = useRef<boolean>(true);
   const audioLevelIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioLevelRef = useRef<number>(0); // Store latest audio level in ref
+  const partialChunkBuffer = useRef<Uint8Array>(new Uint8Array(0)); // Buffer for partial samples
 
   // Safe state setter
   const setStateSafe = useCallback(<T,>(setter: (v: T) => void, val: T) => {
@@ -135,12 +136,40 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
           console.log(`[PhoneAudioRecorder] First chunk decoded: ${bytes.length} bytes PCM`);
         }
 
-        // Send real audio data to WebSocket
-        onAudioDataRef.current(bytes);
+        // Align audio data to 2-byte boundaries (16-bit PCM)
+        // If we have a partial sample from last chunk, prepend it
+        let combinedBytes: Uint8Array;
+        if (partialChunkBuffer.current.length > 0) {
+          combinedBytes = new Uint8Array(partialChunkBuffer.current.length + bytes.length);
+          combinedBytes.set(partialChunkBuffer.current, 0);
+          combinedBytes.set(bytes, partialChunkBuffer.current.length);
+        } else {
+          combinedBytes = bytes;
+        }
 
-        // Calculate and update audio level for visualization
-        const level = calculateAudioLevel(bytes);
-        audioLevelRef.current = level;
+        // Calculate aligned length (must be even for 16-bit PCM)
+        const alignedLength = Math.floor(combinedBytes.length / 2) * 2;
+        const remainder = combinedBytes.length - alignedLength;
+
+        // Send aligned portion
+        const alignedBytes = combinedBytes.slice(0, alignedLength);
+        if (alignedBytes.length > 0) {
+          onAudioDataRef.current(alignedBytes);
+
+          // Calculate and update audio level for visualization
+          const level = calculateAudioLevel(alignedBytes);
+          audioLevelRef.current = level;
+        }
+
+        // Store remainder for next chunk
+        if (remainder > 0) {
+          partialChunkBuffer.current = combinedBytes.slice(alignedLength);
+          if (chunkCount <= 5) {
+            console.log(`[PhoneAudioRecorder] Buffered ${remainder} partial bytes for next chunk`);
+          }
+        } else {
+          partialChunkBuffer.current = new Uint8Array(0);
+        }
       } catch (err) {
         console.error('[PhoneAudioRecorder] Error processing audio data:', err);
       }
@@ -171,6 +200,9 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
       }
 
       console.log('[PhoneAudioRecorder] Starting audio recording...');
+
+      // Clear partial chunk buffer from previous session
+      partialChunkBuffer.current = new Uint8Array(0);
 
       // Initialize recorder with callback
       initializeRecorder();
@@ -209,6 +241,7 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
 
     onAudioDataRef.current = null;
     audioLevelRef.current = 0;
+    partialChunkBuffer.current = new Uint8Array(0); // Clear partial chunk buffer
     setStateSafe(setAudioLevel, 0);
 
     if (!isRecording) {

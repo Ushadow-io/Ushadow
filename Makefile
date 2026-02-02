@@ -2,9 +2,12 @@
 # Quick commands for development and deployment
 # All compose operations delegate to setup/run.py for single source of truth
 
-.PHONY: help up down restart logs build clean test test-integration test-tdd test-all test-robot test-robot-api test-robot-features test-robot-quick test-robot-critical test-report go install status health dev prod \
+.PHONY: help up down restart logs build clean test test-integration test-tdd test-all \
+        test-robot test-robot-api test-robot-features test-robot-quick test-robot-critical test-report \
+        go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
+        chronicle-push mycelia-push openmemory-push \
         release
 
 # Read .env for display purposes only (actual logic is in run.py)
@@ -42,16 +45,18 @@ help:
 	@echo "  make chronicle-down-local   - Stop local Chronicle"
 	@echo "  make chronicle-dev          - Build + run (full dev cycle)"
 	@echo ""
-	@echo "Service management (via ushadow API):"
+	@echo "Build & Push to GHCR:"
+	@echo "  make chronicle-push [TAG=latest]   - Build and push Chronicle (backend+workers+webui)"
+	@echo "  make mycelia-push [TAG=latest]     - Build and push Mycelia backend"
+	@echo "  make openmemory-push [TAG=latest]  - Build and push OpenMemory server"
+	@echo ""
+	@echo "Service management:"
+	@echo "  make rebuild <service>  - Rebuild service from compose/<service>-compose.yml"
+	@echo "                            (e.g., make rebuild mycelia, make rebuild chronicle)"
 	@echo "  make svc-list           - List all services and their status"
 	@echo "  make restart-<service>  - Restart a service (e.g., make restart-chronicle)"
 	@echo "  make svc-start SVC=x    - Start a service"
 	@echo "  make svc-stop SVC=x     - Stop a service"
-	@echo ""
-	@echo "Development commands:"
-	@echo "  make install            - Install Python dependencies"
-	@echo "  make lint               - Run linters"
-	@echo "  make format             - Format code"
 	@echo ""
 	@echo "Testing commands (Pyramid approach):"
 	@echo "  Backend (pytest):"
@@ -59,14 +64,18 @@ help:
 	@echo "    make test-integration - Integration tests (need services running)"
 	@echo "    make test-all         - All backend tests (unit + integration)"
 	@echo "    make test-tdd         - TDD tests (expected failures)"
-	@echo ""
-	@echo "  API/E2E (Robot Framework):"
+	@echo "  Robot Framework (API/E2E):"
 	@echo "    make test-robot-quick    - Quick smoke tests (~30s)"
 	@echo "    make test-robot-critical - Critical path tests only"
 	@echo "    make test-robot-api      - All API integration tests"
 	@echo "    make test-robot-features - Feature-level tests"
 	@echo "    make test-robot          - All Robot tests (full suite)"
 	@echo "    make test-report         - View last test report in browser"
+	@echo ""
+	@echo "Development commands:"
+	@echo "  make install      - Install Python dependencies"
+	@echo "  make lint         - Run linters"
+	@echo "  make format       - Format code"
 	@echo ""
 	@echo "Cleanup commands:"
 	@echo "  make clean-logs   - Remove log files"
@@ -192,6 +201,24 @@ chronicle-dev: chronicle-build-local chronicle-up-local
 	@echo "🎉 Chronicle dev environment ready"
 
 # =============================================================================
+# Build & Push to GHCR
+# =============================================================================
+# Build and push multi-arch images to GitHub Container Registry
+# Requires: docker login ghcr.io -u USERNAME --password-stdin
+
+# Chronicle - Build and push backend + webui
+chronicle-push:
+	@./scripts/build-push-images.sh chronicle $(TAG)
+
+# Mycelia - Build and push backend
+mycelia-push:
+	@./scripts/build-push-images.sh mycelia $(TAG)
+
+# OpenMemory - Build and push server
+openmemory-push:
+	@./scripts/build-push-images.sh openmemory $(TAG)
+
+# =============================================================================
 # Service Management (via ushadow API)
 # =============================================================================
 # These commands use the ushadow API to manage services, ensuring env vars
@@ -220,6 +247,40 @@ svc-status:
 # e.g., make restart-chronicle, make restart-speaker
 restart-%:
 	@python3 scripts/ushadow_client.py service restart $*
+
+# =============================================================================
+# Service Rebuild Command
+# =============================================================================
+# Rebuild service image: make rebuild <service>
+# Usage: make rebuild mycelia, make rebuild chronicle
+# Only builds the image, does not stop or start containers
+# Assumes compose file exists at: compose/<service>-compose.yml or .yaml
+
+rebuild:
+	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
+		echo "Usage: make rebuild <service>"; \
+		echo "Example: make rebuild mycelia"; \
+		exit 1; \
+	fi
+	@SERVICE=$(filter-out $@,$(MAKECMDGOALS)); \
+	if [ -f compose/$$SERVICE-compose.yml ]; then \
+		echo "🔨 Building $$SERVICE..."; \
+		docker compose -f compose/$$SERVICE-compose.yml build && \
+		echo "✅ $$SERVICE image built (use 'docker compose -f compose/$$SERVICE-compose.yml up -d' to start)"; \
+	elif [ -f compose/$$SERVICE-compose.yaml ]; then \
+		echo "🔨 Building $$SERVICE..."; \
+		docker compose -f compose/$$SERVICE-compose.yaml build && \
+		echo "✅ $$SERVICE image built (use 'docker compose -f compose/$$SERVICE-compose.yaml up -d' to start)"; \
+	else \
+		echo "❌ Compose file not found: compose/$$SERVICE-compose.yml or compose/$$SERVICE-compose.yaml"; \
+		echo "Available services:"; \
+		ls compose/*-compose.y*l 2>/dev/null | xargs -n1 basename | sed 's/-compose\.y.*$$//' | sed 's/^/  - /'; \
+		exit 1; \
+	fi
+
+# Allow service name to be passed as argument without error
+%:
+	@:
 
 # Status and health
 status:
@@ -301,6 +362,7 @@ test-robot-api:
 	@echo "🤖 Running all API tests..."
 	@cd ushadow/backend && source .venv/bin/activate && \
 		robot --outputdir ../../robot_results \
+		      --exclude wip \
 		      ../../robot_tests/api/
 
 # Feature-level tests (memory feedback, etc.)
@@ -308,6 +370,7 @@ test-robot-features:
 	@echo "🤖 Running feature tests..."
 	@cd ushadow/backend && source .venv/bin/activate && \
 		robot --outputdir ../../robot_results \
+		      --exclude wip \
 		      ../../robot_tests/features/
 
 # All Robot tests (full suite) - may take several minutes
@@ -315,12 +378,13 @@ test-robot:
 	@echo "🤖 Running full Robot test suite..."
 	@cd ushadow/backend && source .venv/bin/activate && \
 		robot --outputdir ../../robot_results \
+		      --exclude wip \
 		      ../../robot_tests/
 
 # View last test report in browser
 test-report:
 	@echo "📊 Opening test report..."
-	@open robot_results/report.html || xdg-open robot_results/report.html 2>/dev/null || echo "Report at: robot_results/report.html"
+	@open robot_results/report.html 2>/dev/null || xdg-open robot_results/report.html 2>/dev/null || echo "Report at: robot_results/report.html"
 
 lint:
 	cd ushadow/backend && ruff check .

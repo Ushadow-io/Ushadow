@@ -178,4 +178,14 @@ tests/
 
 # Compose overrides
 compose/speaker-compose.yaml
-robot_results
+config/tailscale-serve.json
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# Robot Framework test results (but keep test source files)
+robot_results/
+output.xml
+log.html
+report.html

@@ -94,3 +94,4 @@ capabilities:
       sync_interval:
         type: integer
         description: "Auto-sync interval in seconds"
+

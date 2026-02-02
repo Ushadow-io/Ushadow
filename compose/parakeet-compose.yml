@@ -58,5 +58,5 @@ services:
 # Shared network for cross-project communication
 networks:
   default:
-    name: infra-network
+    name: ushadow-network
     external: true

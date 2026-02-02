@@ -1,20 +1,17 @@
 """Unified deployment target identifier utilities."""
 
-import os
 from typing import Literal
+from src.utils.environment import get_env_name
 
 
 def get_environment_name() -> str:
-    """Get the current environment name from ENV_NAME or COMPOSE_PROJECT_NAME."""
-    env_name = os.getenv("ENV_NAME")
-    if env_name:
-        return env_name
+    """
+    Get the current environment name.
 
-    # Fallback to extracting from COMPOSE_PROJECT_NAME (e.g., "ushadow-purple" -> "purple")
-    compose_project = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-    if "-" in compose_project:
-        return compose_project.split("-", 1)[1]
-    return compose_project
+    DEPRECATED: Use src.utils.environment.get_env_name() directly.
+    This function is kept for backwards compatibility.
+    """
+    return get_env_name()
 
 
 def make_deployment_target_id(

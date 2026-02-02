@@ -21,7 +21,7 @@ export interface UseStreaming {
   audioLevel: number;
 
   // Actions
-  startStreaming: (streamUrl: string, mode?: 'batch' | 'streaming') => Promise<void>;
+  startStreaming: (streamUrl: string, mode?: 'batch' | 'streaming', codec?: 'pcm' | 'opus') => Promise<void>;
   stopStreaming: () => Promise<void>;
   cancelRetry: () => void;
 }
@@ -61,13 +61,17 @@ export const useStreaming = (): UseStreaming => {
   const isStreaming = wsStreaming && isRecording;
 
   // Start streaming: connect WebSocket, then start recording
-  const startStreamingCombined = useCallback(async (streamUrl: string, mode: 'batch' | 'streaming' = 'streaming') => {
+  const startStreamingCombined = useCallback(async (
+    streamUrl: string,
+    mode: 'batch' | 'streaming' = 'streaming',
+    codec: 'pcm' | 'opus' = 'pcm'
+  ) => {
     setCombinedError(null);
     streamUrlRef.current = streamUrl;
 
     try {
-      console.log(`[Streaming] Starting WebSocket connection (mode: ${mode})...`);
-      await wsStart(streamUrl, mode);
+      console.log(`[Streaming] Starting WebSocket connection (mode: ${mode}, codec: ${codec})...`);
+      await wsStart(streamUrl, mode, codec);
 
       console.log('[Streaming] WebSocket connected, starting audio recording...');
       await startRecording((pcmBuffer: Uint8Array) => {
