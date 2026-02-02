@@ -8,41 +8,67 @@
    ============================================ */
 
 body,
+html {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow-x: hidden !important;
+}
+
+body,
 html,
 .login-pf-page {
-  margin: 0;
-  padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
   background-color: #18181b !important;  /* Dark purple-black like reference */
   color: #ffffff !important;
 }
 
+/* Make the page wrapper full height */
+.login-pf-page {
+  min-height: 100vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative !important;
+}
+
+.login-pf,
+.login-pf-page .login-pf {
+  width: 100% !important;
+  max-width: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 2rem 1rem !important;
+}
+
 /* Purple glow top-right */
-body::before,
-.login-pf-page::before {
-  content: '';
-  position: fixed;
-  top: -200px;
-  right: -200px;
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
+body::before {
+  content: '' !important;
+  position: fixed !important;
+  top: -200px !important;
+  right: -200px !important;
+  width: 600px !important;
+  height: 600px !important;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, transparent 70%) !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
 }
 
 /* Green glow bottom-left */
-body::after,
-.login-pf-page::after {
-  content: '';
-  position: fixed;
-  bottom: -200px;
-  left: -200px;
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(74, 222, 128, 0.12) 0%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
+body::after {
+  content: '' !important;
+  position: fixed !important;
+  bottom: -200px !important;
+  left: -200px !important;
+  width: 600px !important;
+  height: 600px !important;
+  background: radial-gradient(circle, rgba(74, 222, 128, 0.12) 0%, transparent 70%) !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
 }
 
 /* ============================================
@@ -50,10 +76,14 @@ body::after,
    ============================================ */
 
 #kc-header-wrapper {
-  text-align: center;
-  margin-bottom: 2rem;
-  position: relative;
-  z-index: 10;
+  width: 100% !important;
+  text-align: center !important;
+  margin: 0 auto 2rem auto !important;
+  position: relative !important;
+  z-index: 10 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
 }
 
 /* Logo image - large 3D U */
@@ -69,16 +99,19 @@ body::after,
 }
 
 /* Ushadow brand text - GRADIENT green to purple */
-#kc-header {
+#kc-header,
+#kc-header-wrapper h1 {
   font-size: 2.75rem !important;
   font-weight: 600 !important;
   background: linear-gradient(90deg, #4ade80 0%, #a855f7 100%) !important;
   -webkit-background-clip: text !important;
   -webkit-text-fill-color: transparent !important;
   background-clip: text !important;
-  margin-bottom: 0.5rem !important;
+  margin: 0 auto 0.5rem auto !important;
   letter-spacing: -0.03em !important;
   display: inline-block !important;
+  text-align: center !important;
+  width: auto !important;
 }
 
 /* "AI Orchestration Platform" subtitle */
@@ -101,8 +134,18 @@ body::after,
 
 #kc-content-wrapper,
 #kc-content {
-  position: relative;
-  z-index: 10;
+  position: relative !important;
+  z-index: 10 !important;
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+}
+
+#kc-form,
+.login-pf form {
+  width: 100% !important;
+  max-width: 420px !important;
 }
 
 .card-pf {
@@ -112,6 +155,7 @@ body::after,
   border-radius: 16px !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
   padding: 2.5rem !important;
+  width: 100% !important;
   max-width: 420px !important;
   margin: 0 auto !important;
 }
@@ -155,10 +199,18 @@ input.pf-c-form-control {
   font-size: 0.9375rem !important;
   border: 1px solid rgba(63, 63, 70, 0.6) !important;  /* Subtle border */
   border-radius: 10px !important;  /* Nicely rounded like reference */
-  background-color: rgba(24, 24, 27, 0.6) !important;  /* Semi-transparent dark */
+  background-color: rgba(24, 24, 27, 0.8) !important;  /* Darker, more opaque */
+  background-image: none !important;  /* Remove any gradient overlays */
   color: #ffffff !important;
   transition: all 0.2s ease-in-out !important;
   box-sizing: border-box !important;
+}
+
+/* Aggressive override for password field specifically */
+input[type="password"] {
+  background-color: rgba(24, 24, 27, 0.8) !important;
+  background-image: none !important;
+  background: rgba(24, 24, 27, 0.8) !important;
 }
 
 input[type="text"]:focus,
