@@ -213,6 +213,27 @@ input[type="password"] {
   background: rgba(24, 24, 27, 0.8) !important;
 }
 
+/* Remove white outline/border from password field wrapper */
+.pf-c-input-group,
+.pf-c-form-control__utilities,
+div[class*="input-group"] {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Password field parent containers */
+.pf-c-input-group::before,
+.pf-c-input-group::after {
+  display: none !important;
+}
+
+/* Make sure password input doesn't have extra borders from wrapper */
+.pf-c-input-group input[type="password"] {
+  border: 1px solid rgba(63, 63, 70, 0.6) !important;
+  box-shadow: none !important;
+}
+
 input[type="text"]:focus,
 input[type="email"]:focus,
 input[type="password"]:focus,
