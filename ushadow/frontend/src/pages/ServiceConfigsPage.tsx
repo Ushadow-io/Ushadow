@@ -1396,6 +1396,7 @@ export default function ServiceConfigsPage() {
           providerTemplates={providerTemplates}
           serviceStatuses={serviceStatuses}
           deployments={filteredDeployments}
+          splitServicesEnabled={isEnabled('split_services')}
           onAddConfig={showServiceConfigs ? handleAddConfig : () => {}}
           onWiringChange={handleWiringChange}
           onWiringClear={handleWiringClear}
