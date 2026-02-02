@@ -143,3 +143,21 @@ pub struct ClaudeStatus {
     pub current_task: Option<String>,
     pub last_output: Option<String>,
 }
+
+/// Environment conflict info - when creating environment that already exists
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EnvironmentConflict {
+    pub name: String,
+    pub current_branch: String,
+    pub path: String,
+    pub is_running: bool,
+}
+
+/// Compose service definition from docker-compose.yml
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ComposeServiceDefinition {
+    pub id: String,           // Service name from compose (e.g., "postgres", "redis")
+    pub display_name: String, // Human-readable name (e.g., "PostgreSQL", "Redis")
+    pub default_port: Option<u16>, // Primary exposed port
+    pub profiles: Vec<String>, // Profiles this service belongs to
+}

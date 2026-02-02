@@ -1,4 +1,4 @@
-use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus};
+use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus, EnvironmentConflict};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -100,6 +100,32 @@ pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<
                 name,
             }));
         }
+    }
+
+    Ok(None)
+}
+
+/// Check if an environment with this name already exists and return conflict info
+#[tauri::command]
+pub async fn check_environment_conflict(
+    main_repo: String,
+    env_name: String,
+) -> Result<Option<EnvironmentConflict>, String> {
+    let env_name = env_name.to_lowercase();
+
+    // Check if a worktree with this name exists
+    let worktrees = list_worktrees(main_repo.clone()).await?;
+
+    if let Some(worktree) = worktrees.iter().find(|wt| wt.name == env_name) {
+        // Worktree exists - return conflict info
+        // Note: is_running will be set to false here, but the frontend can check
+        // the actual running status from its discovery data
+        return Ok(Some(EnvironmentConflict {
+            name: env_name,
+            current_branch: worktree.branch.clone(),
+            path: worktree.path.clone(),
+            is_running: false,  // Frontend will populate this from discovery
+        }));
     }
 
     Ok(None)
@@ -347,6 +373,37 @@ pub async fn create_worktree(
         .map_err(|e| format!("Failed to check branch: {}", e))?;
 
     let branch_exists = check_output.status.success();
+
+    // Check for branch naming conflicts (e.g., can't create test/foo if test exists, or vice versa)
+    if !branch_exists {
+        // Check if any part of the branch path conflicts with existing branches
+        let all_branches_output = silent_command("git")
+            .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+            .current_dir(&main_repo)
+            .output()
+            .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+        let all_branches = String::from_utf8_lossy(&all_branches_output.stdout);
+
+        for existing_branch in all_branches.lines() {
+            // Check if desired_branch would conflict with existing_branch
+            // Conflict cases:
+            // 1. Want to create "test/foo" but "test" exists
+            // 2. Want to create "test" but "test/foo" exists
+            if desired_branch.starts_with(&format!("{}/", existing_branch)) {
+                return Err(format!(
+                    "Cannot create branch '{}' because branch '{}' already exists. Git doesn't allow 'foo' and 'foo/bar' to both exist as branches.",
+                    desired_branch, existing_branch
+                ));
+            }
+            if existing_branch.starts_with(&format!("{}/", desired_branch)) {
+                return Err(format!(
+                    "Cannot create branch '{}' because branch '{}' already exists. Git doesn't allow 'foo' and 'foo/bar' to both exist as branches.",
+                    desired_branch, existing_branch
+                ));
+            }
+        }
+    }
 
     let (output, final_branch) = if branch_exists {
         // Branch exists - checkout directly into worktree
@@ -761,10 +818,15 @@ pub async fn create_worktree_with_workmux(
     // Use the launcher's own worktree creation logic instead of workmux
     // This ensures consistent directory structure
     let main_repo_path = PathBuf::from(&main_repo);
+
+    // Calculate worktrees directory: ../worktrees (sibling to project root)
     let worktrees_dir = main_repo_path.parent()
-        .ok_or("Could not determine worktrees directory")?
+        .ok_or("Could not determine parent directory")?
+        .join("worktrees")
         .to_string_lossy()
         .to_string();
+
+    eprintln!("[create_worktree_with_workmux] Worktrees directory: {}", worktrees_dir);
 
     // Create the worktree directly
     let worktree = create_worktree(main_repo.clone(), worktrees_dir, name.clone(), base_branch).await?;

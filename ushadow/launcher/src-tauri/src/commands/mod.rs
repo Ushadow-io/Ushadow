@@ -17,6 +17,7 @@ mod kanban;  // Kanban ticket integration
 mod config_commands;
 mod container_discovery;
 mod port_utils;
+mod env_scanner;
 
 pub use docker::*;
 pub use discovery::*;
@@ -33,3 +34,4 @@ pub use kanban::*;  // Export kanban ticket functions
 pub use config_commands::*;
 pub use container_discovery::*;
 pub use port_utils::*;
+pub use env_scanner::*;

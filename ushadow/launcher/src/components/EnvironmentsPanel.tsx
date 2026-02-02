@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, Trello } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, TRello } from 'lucide-react'
 import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
@@ -367,15 +367,40 @@ interface BrowserViewProps {
 
 function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: BrowserViewProps) {
   const colors = getColors(environment.color || environment.name)
+  const [iframeError, setIframeError] = useState(false)
+  const [iframeLoading, setIframeLoading] = useState(true)
+
   // Prefer Tailscale URL if available, otherwise use localhost
   const baseUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
   // Add launcher query param so frontend knows to hide footer
+  // Add timestamp to force reload and avoid cookie conflicts
+  const timestamp = Date.now()
   const url = baseUrl
     ? baseUrl.includes('?')
-      ? `${baseUrl}&launcher=true`
-      : `${baseUrl}?launcher=true`
+      ? `${baseUrl}&launcher=true&_t=${timestamp}`
+      : `${baseUrl}?launcher=true&_t=${timestamp}`
     : ''
   const displayUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
+
+  // Reset error state when environment changes
+  useEffect(() => {
+    setIframeError(false)
+    setIframeLoading(true)
+    console.log(`[BrowserView] Loading environment: ${environment.name}`)
+    console.log(`[BrowserView] URL: ${url}`)
+  }, [environment.name, url])
+
+  const handleIframeLoad = () => {
+    console.log(`[BrowserView] Iframe loaded successfully for ${environment.name}`)
+    setIframeLoading(false)
+    setIframeError(false)
+  }
+
+  const handleIframeError = () => {
+    console.error(`[BrowserView] Iframe failed to load for ${environment.name}`)
+    setIframeLoading(false)
+    setIframeError(true)
+  }
 
   const handleOpenVscode = () => {
     if (environment.path) {
@@ -513,12 +538,38 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
             <p className="text-sm text-text-muted">This may take a moment</p>
           </div>
         ) : (
-          <iframe
-            src={url}
-            className="absolute inset-0 w-full h-full border-0"
-            title={`${environment.name} web interface`}
-            data-testid="browser-view-iframe"
-          />
+          <>
+            {iframeLoading && !iframeError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 z-10">
+                <Loader2 className="w-16 h-16 text-primary-400 animate-spin mb-4" />
+                <p className="text-lg font-semibold text-text-primary mb-2">Loading {environment.name}...</p>
+                <p className="text-sm text-text-muted font-mono">{displayUrl}</p>
+              </div>
+            )}
+            {iframeError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 z-10">
+                <AlertCircle className="w-16 h-16 text-error-400 mb-4" />
+                <p className="text-lg font-semibold text-text-primary mb-2">Failed to load {environment.name}</p>
+                <p className="text-sm text-text-muted mb-4 font-mono">{displayUrl}</p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Reload Page
+                </button>
+              </div>
+            )}
+            <iframe
+              key={environment.name}
+              src={url}
+              className="absolute inset-0 w-full h-full border-0"
+              title={`${environment.name} web interface`}
+              data-testid="browser-view-iframe"
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
+            />
+          </>
         )}
       </div>
     </div>

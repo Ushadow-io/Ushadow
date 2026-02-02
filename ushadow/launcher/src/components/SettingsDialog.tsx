@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { X, Settings, Eye, EyeOff, Save } from 'lucide-react'
+import { X, Settings, Eye, EyeOff, Save, FolderGit2 } from 'lucide-react'
 import { tauri, type LauncherSettings } from '../hooks/useTauri'
+import { useAppStore } from '../store/appStore'
 
 interface SettingsDialogProps {
   isOpen: boolean
@@ -8,6 +9,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+  const { multiProjectMode, setMultiProjectMode } = useAppStore()
   const [settings, setSettings] = useState<LauncherSettings>({
     default_admin_email: null,
     default_admin_password: null,
@@ -145,6 +147,38 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
+            </div>
+
+            {/* Divider */}
+            <div className="my-6 border-t border-surface-700" />
+
+            {/* Multi-Project Mode Toggle */}
+            <div className="mb-6">
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <FolderGit2 className="w-4 h-4 text-primary-400" />
+                  <label className="text-sm font-medium">Multi-Project Mode</label>
+                  <span className="text-xs bg-primary-500/20 text-primary-400 px-2 py-0.5 rounded">
+                    Experimental
+                  </span>
+                </div>
+                <button
+                  onClick={() => setMultiProjectMode(!multiProjectMode)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    multiProjectMode ? 'bg-primary-500' : 'bg-surface-600'
+                  }`}
+                  data-testid="toggle-multi-project-mode"
+                >
+                  <div
+                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      multiProjectMode ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-xs text-text-muted">
+                Manage multiple codebases beyond ushadow. Each project can have its own configuration and worktrees.
+              </p>
             </div>
 
             {/* Success Message */}

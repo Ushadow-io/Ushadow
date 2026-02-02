@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { nanoid } from 'nanoid'
 import { ProjectsPanel } from './ProjectsPanel'
 import { ProjectSetupDialog } from './ProjectSetupDialog'
+import { StartupConfigPanel } from './StartupConfigPanel'
 import { useAppStore, type ProjectConfig } from '../store/appStore'
 import { tauri } from '../hooks/useTauri'
 
@@ -77,6 +78,17 @@ export function ProjectManager() {
         onSelectProject={handleSelectProject}
         onRemoveProject={handleRemoveProject}
       />
+
+      {/* Show startup configuration for active project */}
+      {activeProject && (
+        <StartupConfigPanel
+          projectRoot={activeProject.rootPath}
+          onSave={(config) => {
+            console.log('Startup config saved:', config)
+            // TODO: Save to backend
+          }}
+        />
+      )}
 
       <ProjectSetupDialog
         isOpen={showSetupDialog}
