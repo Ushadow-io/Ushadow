@@ -177,16 +177,42 @@ body::after {
    FORM ELEMENTS
    ============================================ */
 
-.form-group {
+.form-group,
+.pf-c-form__group {
   margin-bottom: 1.25rem !important;
+  display: block !important;  /* Override grid layout */
+  grid-template-columns: none !important;  /* Remove two-column layout */
 }
 
-label {
+/* Force single-column layout for registration form */
+.pf-c-form__group-label,
+.pf-c-form__group-control {
+  grid-column: auto !important;
+  max-width: 100% !important;
+}
+
+label,
+.pf-c-form__label {
   display: block !important;
   font-size: 0.875rem !important;
   font-weight: 400 !important;
   color: #d4d4d8 !important;  /* Lighter gray for labels */
   margin-bottom: 0.5rem !important;
+  width: 100% !important;
+}
+
+/* Required field indicator */
+.pf-c-form__label-required {
+  color: #f87171 !important;  /* Red asterisk */
+  margin-left: 0.25rem !important;
+}
+
+/* "Required fields" text */
+.subtitle,
+#kc-content-wrapper > p {
+  font-size: 0.75rem !important;
+  color: #71717a !important;
+  margin-bottom: 1rem !important;
 }
 
 /* Input fields - ROUNDED like reference */
