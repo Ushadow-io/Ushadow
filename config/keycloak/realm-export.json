@@ -11,7 +11,7 @@
   "duplicateEmailsAllowed": false,
   "sslRequired": "none",
   "accessTokenLifespan": 86400,
-  "loginTheme": "keycloak",
+  "loginTheme": "ushadow",
   "accountTheme": "keycloak",
   "emailTheme": "keycloak",
   "clients": [

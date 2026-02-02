@@ -126,7 +126,7 @@ input[type="password"] {
   font-size: 0.9375rem;
   border: 1px solid var(--ushadow-border);
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--ushadow-bg-input);
   color: var(--ushadow-text-primary);
   transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
 }
@@ -208,14 +208,14 @@ input[type="password"]:focus {
   font-weight: 500;
   border: 1px solid var(--ushadow-border);
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--ushadow-bg-input);
   color: var(--ushadow-text-primary);
   text-decoration: none;
   transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
 }
 
 .kc-social-link:hover {
-  background-color: #f9fafb;
+  background-color: var(--ushadow-bg-hover);
   border-color: var(--ushadow-primary);
 }
 
@@ -226,15 +226,14 @@ input[type="password"]:focus {
 
 /* Google button styling - matches your design system */
 .kc-social-link-google {
-  background-color: #ffffff;
-  color: #171717;
+  background-color: var(--ushadow-bg-input);
+  color: var(--ushadow-text-primary);
   border-color: var(--ushadow-border);
 }
 
 .kc-social-link-google:hover {
   background-color: var(--ushadow-bg-hover);
   border-color: var(--ushadow-primary);
-  color: var(--ushadow-text-primary);
 }
 
 /* GitHub button styling - uses purple accent */
