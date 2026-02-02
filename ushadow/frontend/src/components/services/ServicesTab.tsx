@@ -16,6 +16,7 @@ interface ServicesTabProps {
   providerTemplates: Template[]
   serviceStatuses: Record<string, any>
   deployments: any[]
+  splitServicesEnabled?: boolean // Feature flag for split services view
   onAddConfig: (serviceId: string) => void
   onWiringChange: (consumerId: string, capability: string, sourceConfigId: string) => Promise<void>
   onWiringClear: (consumerId: string, capability: string) => Promise<void>
@@ -42,6 +43,7 @@ export default function ServicesTab({
   providerTemplates,
   serviceStatuses,
   deployments,
+  splitServicesEnabled = false,
   onAddConfig,
   onWiringChange,
   onWiringClear,
@@ -66,6 +68,70 @@ export default function ServicesTab({
         icon={Package}
         title='No services installed yet. Click "Browse Services" to add some.'
       />
+    )
+  }
+
+  // Legacy view: show all services in a single grid
+  if (!splitServicesEnabled) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            Select providers for each service capability
+          </p>
+        </div>
+
+        {/* Service Cards Grid */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
+          {composeTemplates.map((template) => {
+            // Find ALL configs for this template
+            const templateConfigs = instances.filter((i) => i.template_id === template.id)
+            // Show the first config (or null if none)
+            const config = templateConfigs[0] || null
+            const consumerId = config?.id || template.id
+
+            // Get service status from Docker
+            const serviceName = template.id.includes(':') ? template.id.split(':').pop()! : template.id
+            const status = serviceStatuses[serviceName]
+
+            // Filter wiring for this consumer
+            const consumerWiring = wiring.filter((w) => w.target_config_id === consumerId)
+
+            // Get deployments for this service
+            const serviceDeployments = deployments.filter((d) => d.service_id === template.id)
+
+            return (
+              <FlatServiceCard
+                key={template.id}
+                template={template}
+                config={config ? { ...config, status: status?.status || config.status } : null}
+                wiring={consumerWiring}
+                providerTemplates={providerTemplates}
+                initialConfigs={templateConfigs}
+                instanceCount={templateConfigs.length}
+                deployments={serviceDeployments}
+                onStopDeployment={onStopDeployment}
+                onRestartDeployment={onRestartDeployment}
+                onRemoveDeployment={onRemoveDeployment}
+                onEditDeployment={onEditDeployment}
+                onAddConfig={() => onAddConfig(template.id)}
+                onWiringChange={(capability, sourceConfigId) =>
+                  onWiringChange(consumerId, capability, sourceConfigId)
+                }
+                onWiringClear={(capability) => onWiringClear(consumerId, capability)}
+                onConfigCreate={onConfigCreate}
+                onEditConfig={onEditConfig}
+                onDeleteConfig={onDeleteConfig}
+                onUpdateConfig={onUpdateConfig}
+                onStart={() => onStart(template.id)}
+                onStop={() => onStop(template.id)}
+                onEdit={() => onEdit(template.id)}
+                onDeploy={(target) => onDeploy(template.id, target)}
+              />
+            )
+          })}
+        </div>
+      </div>
     )
   }
 
