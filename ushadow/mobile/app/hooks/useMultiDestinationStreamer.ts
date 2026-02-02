@@ -23,7 +23,8 @@ export interface UseMultiDestinationStreamer {
   isStreaming: boolean;
   startMultiStreaming: (
     config: MultiDestinationConfig,
-    streamMode?: 'batch' | 'streaming'
+    streamMode?: 'batch' | 'streaming',
+    codec?: 'pcm' | 'opus'
   ) => Promise<void>;
   stopMultiStreaming: () => void;
   sendAudioToAll: (audioBytes: Uint8Array) => void;
@@ -39,7 +40,8 @@ export const useDirectMultiCast = (): UseMultiDestinationStreamer => {
 
   const startMultiStreaming = useCallback(async (
     config: MultiDestinationConfig,
-    streamMode: 'batch' | 'streaming' = 'streaming'
+    streamMode: 'batch' | 'streaming' = 'streaming',
+    codec: 'pcm' | 'opus' = 'pcm'
   ) => {
     // Create streamer for each destination
     const newStreamers: Record<string, any> = {};
@@ -90,7 +92,8 @@ export const useRelayStreamer = (): UseMultiDestinationStreamer => {
 
   const startMultiStreaming = useCallback(async (
     config: MultiDestinationConfig,
-    streamMode: 'batch' | 'streaming' = 'streaming'
+    streamMode: 'batch' | 'streaming' = 'streaming',
+    codec: 'pcm' | 'opus' = 'pcm'
   ) => {
     if (config.mode !== 'relay' || !config.relayUrl) {
       throw new Error('Relay mode requires relayUrl');
@@ -107,8 +110,8 @@ export const useRelayStreamer = (): UseMultiDestinationStreamer => {
 
     console.log('[RelayStreamer] Connecting to relay:', relayWsUrl);
 
-    // Connect to relay server
-    await relayStreamer.startStreaming(relayWsUrl, streamMode);
+    // Connect to relay server with specified codec
+    await relayStreamer.startStreaming(relayWsUrl, streamMode, codec);
 
     // Initialize status for all destinations
     const status: Record<string, { isStreaming: boolean; error: string | null }> = {};
@@ -147,14 +150,15 @@ export const useMultiDestinationStreamer = (): UseMultiDestinationStreamer => {
 
   const startMultiStreaming = useCallback(async (
     config: MultiDestinationConfig,
-    streamMode: 'batch' | 'streaming' = 'streaming'
+    streamMode: 'batch' | 'streaming' = 'streaming',
+    codec: 'pcm' | 'opus' = 'pcm'
   ) => {
     setCurrentMode(config.mode);
 
     if (config.mode === 'relay') {
-      return relayStreamer.startMultiStreaming(config, streamMode);
+      return relayStreamer.startMultiStreaming(config, streamMode, codec);
     } else {
-      return directStreamer.startMultiStreaming(config, streamMode);
+      return directStreamer.startMultiStreaming(config, streamMode, codec);
     }
   }, [relayStreamer, directStreamer]);
 

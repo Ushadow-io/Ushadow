@@ -174,9 +174,9 @@ models:
         interim_type: Results
         final_type: Results
         extract:
-            text: results.channels[0].alternatives[0].transcript
-            words: results.channels[0].alternatives[0].words
-            segments: results.utterances
+          text: channel.alternatives[0].transcript
+          words: channel.alternatives[0].words
+          segments: channel.alternatives[0].paragraphs.paragraphs
 
   - name: stt-parakeet-stream
     description: Parakeet streaming transcription over WebSocket
@@ -229,7 +229,7 @@ models:
 # Memory Configuration
 # ===========================
 memory:
-  provider: chronicle
+  provider: openmemory_mcp
   timeout_seconds: 1200
   extraction:
     enabled: true
@@ -240,7 +240,7 @@ memory:
 
   # OpenMemory MCP provider settings (used when provider: openmemory_mcp)
   openmemory_mcp:
-    server_url: http://localhost:8765
+    server_url:  ${oc.env:MEMORY_SERVER_URL,'http://localhost:8765'}
     client_name: chronicle
     user_id: default
     timeout: 30

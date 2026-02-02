@@ -191,6 +191,18 @@ class SettingsStore:
             Resolved value (interpolations are automatically resolved)
             Converts OmegaConf containers to regular Python dicts/lists
         """
+        # Special handling for dynamic service_urls.{service_name} pattern
+        if key_path.startswith("service_urls."):
+            service_name = key_path[len("service_urls."):]
+            try:
+                from src.utils.service_urls import get_internal_proxy_url
+                internal_url = get_internal_proxy_url(service_name)
+                logger.debug(f"Dynamically resolved {key_path} -> {internal_url}")
+                return internal_url
+            except Exception as e:
+                logger.warning(f"Failed to resolve dynamic service URL for {service_name}: {e}")
+                # Fall through to normal config lookup
+
         config = await self.load_config()
         value = OmegaConf.select(config, key_path, default=default)
 
@@ -207,6 +219,18 @@ class SettingsStore:
         Use this when you need config values at import time (e.g., SECRET_KEY).
         For async contexts, prefer the async get() method.
         """
+        # Special handling for dynamic service_urls.{service_name} pattern
+        if key_path.startswith("service_urls."):
+            service_name = key_path[len("service_urls."):]
+            try:
+                from src.utils.service_urls import get_internal_proxy_url
+                internal_url = get_internal_proxy_url(service_name)
+                logger.debug(f"Dynamically resolved {key_path} -> {internal_url}")
+                return internal_url
+            except Exception as e:
+                logger.warning(f"Failed to resolve dynamic service URL for {service_name}: {e}")
+                # Fall through to normal config lookup
+
         if self._cache is None:
             # Force sync load - _load_yaml_if_exists is already sync
             configs = []

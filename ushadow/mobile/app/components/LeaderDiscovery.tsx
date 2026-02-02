@@ -19,6 +19,7 @@ import {
 import { useTailscaleDiscovery, SavedServerConfig } from '../hooks/useTailscaleDiscovery';
 import QRScanner, { UshadowConnectionData } from './QRScanner';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
+import { useFeatureFlagContext } from '../contexts/FeatureFlagContext';
 
 interface LeaderDiscoveryProps {
   onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string) => void;
@@ -44,6 +45,9 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
     setError,
   } = useTailscaleDiscovery();
 
+  // Feature flags - refresh after QR scan to get UNode-specific flags
+  const { refreshFlags } = useFeatureFlagContext();
+
   const [showScanner, setShowScanner] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [endpoint, setEndpoint] = useState('');
@@ -55,6 +59,17 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
     // This now saves the server AND attempts to connect
     const result = await connectFromQR(data);
     if (result.success && result.leader && onLeaderFound) {
+      console.log('[LeaderDiscovery] Successfully connected to UNode, refreshing feature flags...');
+
+      // Refresh feature flags from the newly connected UNode
+      try {
+        await refreshFlags();
+        console.log('[LeaderDiscovery] Feature flags refreshed successfully');
+      } catch (err) {
+        console.error('[LeaderDiscovery] Failed to refresh feature flags:', err);
+        // Don't fail the connection if feature flags fail to load
+      }
+
       // Pass auth token from QR code if available (v3+)
       onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl);
     }

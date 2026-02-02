@@ -119,7 +119,7 @@ function AppContent() {
                 <Route path="wizard/mobile-app" element={<MobileAppWizard />} />
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="wizard/mycelia" element={<MyceliaWizard />} />
-                <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="chronicle" element={<FeatureRoute featureFlag="chronicle_page"><ChroniclePage /></FeatureRoute>} />
                 <Route path="conversations" element={<ConversationsPage />} />
                 <Route path="conversations/:id" element={<ConversationDetailPage />} />
                 <Route path="recording" element={<RecordingPage />} />
@@ -127,7 +127,7 @@ function AppContent() {
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
                 <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
-                <Route path="services" element={<ServicesPage />} />
+                <Route path="services" element={<FeatureRoute featureFlag="legacy_services_page"><ServicesPage /></FeatureRoute>} />
                 <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><ServiceConfigsPage /></FeatureRoute>} />
                 <Route path="interfaces" element={<InterfacesPage />} />
                 <Route path="chat" element={<ChatPage />} />

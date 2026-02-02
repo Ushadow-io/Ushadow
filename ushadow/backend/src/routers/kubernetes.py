@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from src.models.kubernetes import (
     KubernetesCluster,
     KubernetesClusterCreate,
+    KubernetesClusterUpdate,
     KubernetesDeploymentSpec,
     KubernetesNode,
 )
@@ -125,6 +126,33 @@ async def remove_cluster(
     return {"success": True, "message": f"Cluster {cluster_id} removed"}
 
 
+@router.patch("/{cluster_id}", response_model=KubernetesCluster)
+async def update_cluster(
+    cluster_id: str,
+    update: KubernetesClusterUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update cluster configuration settings."""
+    k8s_manager = await get_kubernetes_manager()
+
+    # Build update dict with only provided fields
+    updates = {k: v for k, v in update.model_dump().items() if v is not None}
+
+    if not updates:
+        # No fields to update
+        cluster = await k8s_manager.get_cluster(cluster_id)
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        return cluster
+
+    updated_cluster = await k8s_manager.update_cluster(cluster_id, updates)
+
+    if not updated_cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    return updated_cluster
+
+
 @router.get("/services/available")
 async def get_available_services(
     current_user: User = Depends(get_current_user)
@@ -210,6 +238,14 @@ async def scan_cluster_for_infra(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
+    # Don't allow scanning the target namespace - it contains deployed services, not infrastructure
+    if request.namespace == cluster.namespace:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot scan target namespace '{cluster.namespace}' for infrastructure. "
+                   f"This namespace contains deployed services. Scan a different namespace where infrastructure services are located."
+        )
+
     results = await k8s_manager.scan_cluster_for_infra_services(
         cluster_id,
         request.namespace
@@ -226,6 +262,41 @@ async def scan_cluster_for_infra(
         "cluster_id": cluster_id,
         "namespace": request.namespace,
         "infra_services": results
+    }
+
+
+@router.delete("/{cluster_id}/scan-infra/{namespace}")
+async def delete_infra_scan(
+    cluster_id: str,
+    namespace: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete an infrastructure scan for a specific namespace.
+
+    Useful for removing stale or incorrect scan data.
+    """
+    k8s_manager = await get_kubernetes_manager()
+
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    # Check if scan exists
+    if not cluster.infra_scans or namespace not in cluster.infra_scans:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No infrastructure scan found for namespace '{namespace}'"
+        )
+
+    # Remove the scan
+    await k8s_manager.delete_cluster_infra_scan(cluster_id, namespace)
+
+    return {
+        "cluster_id": cluster_id,
+        "namespace": namespace,
+        "message": f"Infrastructure scan for namespace '{namespace}' deleted successfully"
     }
 
 
@@ -316,8 +387,33 @@ async def deploy_service_to_cluster(
     # TODO: Track deployment status in Deployment record, not ServiceConfig
     # ServiceConfig no longer tracks deployment state (removed in architecture refactor)
 
-    # Add node selector if node_name specified
+    # Auto-populate k8s_spec with cluster ingress defaults
     k8s_spec = request.k8s_spec or KubernetesDeploymentSpec()
+
+    # Auto-configure ingress if cluster has ingress configured
+    if cluster.ingress_domain:
+        if k8s_spec.ingress is None:
+            # No ingress config from frontend - apply cluster defaults
+            if cluster.ingress_enabled_by_default:
+                # Auto-generate hostname
+                service_name = resolved_service.name.lower().replace(" ", "-").replace("_", "-")
+                hostname = f"{service_name}.{cluster.ingress_domain}"
+
+                k8s_spec.ingress = {
+                    "enabled": True,
+                    "host": hostname,
+                    "path": "/",
+                    "ingressClassName": cluster.ingress_class
+                }
+                logger.info(f"✓ Auto-configured ingress: {hostname}")
+        elif k8s_spec.ingress.get("enabled") and not k8s_spec.ingress.get("host"):
+            # Frontend enabled ingress but no hostname - auto-generate
+            service_name = resolved_service.name.lower().replace(" ", "-").replace("_", "-")
+            k8s_spec.ingress["host"] = f"{service_name}.{cluster.ingress_domain}"
+            k8s_spec.ingress["ingressClassName"] = cluster.ingress_class
+            logger.info(f"✓ Auto-generated ingress hostname: {k8s_spec.ingress['host']}")
+
+    # Add node selector if node_name specified
     if request.node_name:
         # Add node selector to ensure pod runs on specific node
         if not k8s_spec.labels:

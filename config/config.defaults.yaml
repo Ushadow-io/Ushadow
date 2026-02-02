@@ -94,6 +94,9 @@ infrastructure:
 
   ollama_base_url: http://ollama:11434
   openai_base_url: https://api.openai.com/v1
+  # DEPRECATED: This default is for local dev only. The backend should dynamically
+  # set this to the internal proxy URL when starting Chronicle.
+  # TODO: Remove this once backend sets MEMORY_SERVER_URL dynamically
   memory_server_url: http://mem0:8765
 
 # Miscellaneous Settings

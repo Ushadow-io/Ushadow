@@ -3,7 +3,6 @@ import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, typ
 import { useAppStore, type BranchType } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
-import { writeText, readText } from '@tauri-apps/api/clipboard'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
@@ -168,86 +167,8 @@ function App() {
     }
   }, [isResizing, handleMouseMove, handleMouseUp])
 
-  // Enable keyboard shortcuts for copy/paste
-  useEffect(() => {
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
-      const modifier = isMac ? e.metaKey : e.ctrlKey
-
-      // Only handle copy/paste/cut if modifier key is pressed
-      if (!modifier) return
-
-      // Get the active element
-      const target = e.target as HTMLElement
-      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
-
-      try {
-        if (e.key.toLowerCase() === 'c') {
-          // Copy: get selection from input field or window selection
-          let textToCopy = ''
-          if (isInputField && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
-            const start = target.selectionStart || 0
-            const end = target.selectionEnd || 0
-            textToCopy = target.value.substring(start, end)
-          } else {
-            const selection = window.getSelection()
-            textToCopy = selection?.toString() || ''
-          }
-
-          if (textToCopy) {
-            await writeText(textToCopy)
-            e.preventDefault()
-          }
-        } else if (e.key.toLowerCase() === 'v') {
-          // Paste: handle input fields specially, but allow pasting anywhere
-          const text = await readText()
-          if (!text) return
-
-          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-            // Paste into input/textarea
-            const start = target.selectionStart || 0
-            const end = target.selectionEnd || 0
-            const currentValue = target.value
-            target.value = currentValue.substring(0, start) + text + currentValue.substring(end)
-            target.selectionStart = target.selectionEnd = start + text.length
-
-            // Trigger input event so React state updates
-            const event = new Event('input', { bubbles: true })
-            target.dispatchEvent(event)
-            e.preventDefault()
-          } else if (target.isContentEditable) {
-            // Paste into contenteditable
-            document.execCommand('insertText', false, text)
-            e.preventDefault()
-          }
-        } else if (e.key.toLowerCase() === 'x') {
-          // Cut: only from input fields
-          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-            const start = target.selectionStart || 0
-            const end = target.selectionEnd || 0
-            const selectedText = target.value.substring(start, end)
-            if (selectedText) {
-              await writeText(selectedText)
-              const currentValue = target.value
-              target.value = currentValue.substring(0, start) + currentValue.substring(end)
-              target.selectionStart = target.selectionEnd = start
-
-              // Trigger input event so React state updates
-              const event = new Event('input', { bubbles: true })
-              target.dispatchEvent(event)
-              e.preventDefault()
-            }
-          }
-        }
-      } catch (err) {
-        // Silently fail if clipboard access is denied
-        console.warn('Clipboard access failed:', err)
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true) // Use capture phase
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [])
+  // Native keyboard shortcuts enabled (clipboard API available in Tauri webview)
+  // All standard shortcuts work: Cmd/Ctrl+C/V/X/Z/A, etc.
 
   // Apply spoofed values to prerequisites
   const getEffectivePrereqs = useCallback((real: Prerequisites | null): Prerequisites | null => {

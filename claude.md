@@ -2,6 +2,15 @@
 - There may be multiple environments running simultaneously using different worktrees. To determine the corren environment, you can get port numbers and env name from the root .env file.
 - When refactoring module names, run `grep -r "old_module_name" .` before committing to catch all remaining references (especially entry points like `main.py`). Use `__init__.py` re-exports for backward compatibility.
 
+## Doc Enforcement Plugin
+
+The `doc-enforcement` plugin (enabled in `.claude/settings.json`) enforces that AI agents read the quick reference documentation before modifying code:
+
+- **Backend files**: Must read `ushadow/backend/BACKEND_QUICK_REF.md` before editing Python code
+- **Frontend files**: Must read `ushadow/frontend/AGENT_QUICK_REF.md` before editing React/TypeScript code
+
+The plugin uses PreToolUse hooks to validate documentation has been read. If not, it blocks the edit with a clear message directing to read the docs first. This prevents code duplication and ensures architectural patterns are followed.
+
 ## Backend Development Workflow
 
 **BEFORE writing ANY backend code, follow this workflow:**

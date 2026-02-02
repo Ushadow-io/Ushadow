@@ -584,6 +584,12 @@ export interface KubernetesCluster {
   labels: Record<string, string>
   infra_scans?: Record<string, any>
   deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
+
+  // Ingress configuration
+  ingress_domain?: string
+  ingress_class?: string
+  ingress_enabled_by_default?: boolean
+  tailscale_magicdns_enabled?: boolean
 }
 
 export const kubernetesApi = {
@@ -595,6 +601,17 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
+  updateCluster: (clusterId: string, updates: {
+    name?: string
+    namespace?: string
+    infra_namespace?: string
+    labels?: Record<string, string>
+    ingress_domain?: string
+    ingress_class?: string
+    ingress_enabled_by_default?: boolean
+    tailscale_magicdns_enabled?: boolean
+  }) =>
+    api.patch<KubernetesCluster>(`/api/kubernetes/${clusterId}`, updates),
 
   // Service management
   getAvailableServices: () =>
@@ -607,6 +624,10 @@ export const kubernetesApi = {
     api.post<{ cluster_id: string; namespace: string; infra_services: Record<string, any> }>(
       `/api/kubernetes/${clusterId}/scan-infra`,
       { namespace }
+    ),
+  deleteInfraScan: (clusterId: string, namespace: string) =>
+    api.delete<{ cluster_id: string; namespace: string; message: string }>(
+      `/api/kubernetes/${clusterId}/scan-infra/${namespace}`
     ),
   createEnvmap: (clusterId: string, data: { service_name: string; namespace?: string; env_vars: Record<string, string> }) =>
     api.post<{ success: boolean; configmap: string | null; secret: string | null; namespace: string }>(

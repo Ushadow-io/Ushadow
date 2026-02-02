@@ -211,8 +211,8 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
         const wsUrl = buildOmiWebSocketUrl();
         console.log('[OmiDeviceCard] Starting OMI audio streaming to:', wsUrl);
 
-        // Start WebSocket connection
-        await audioStreamer.startStreaming(wsUrl);
+        // Start WebSocket connection (OMI uses Opus codec)
+        await audioStreamer.startStreaming(wsUrl, 'streaming', 'opus');
 
         // Start OMI audio listener
         await startAudioListener(async (audioBytes: Uint8Array) => {
