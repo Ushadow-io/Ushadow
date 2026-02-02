@@ -40,25 +40,21 @@ export class ChronicleWebSocketAdapter {
       // Check if backendUrl is already a complete WebSocket URL (relay or direct)
       if (backendUrl && (backendUrl.startsWith('ws://') || backendUrl.startsWith('wss://'))) {
         // Already a complete WebSocket URL (e.g., from relay)
-        // Add codec parameter if not present
         wsUrl = backendUrl
-        if (!wsUrl.includes('codec=')) {
-          wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'codec=pcm'
-        }
         console.log('🔗 Using pre-built WebSocket URL (relay)')
       } else if (backendUrl && backendUrl.startsWith('http')) {
         // Extract protocol from backendUrl (https:// -> wss://, http:// -> ws://)
         const protocol = backendUrl.startsWith('https://') ? 'wss:' : 'ws:'
         const host = backendUrl.replace(/^https?:\/\//, '')
-        wsUrl = `${protocol}//${host}/ws?codec=pcm&token=${token}&device_name=${deviceName}`
+        wsUrl = `${protocol}//${host}/ws_pcm?token=${token}&device_name=${deviceName}`
       } else if (backendUrl && backendUrl !== '') {
         // Relative URL - use current page's protocol
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        wsUrl = `${protocol}//${window.location.host}${backendUrl}/ws?codec=pcm&token=${token}&device_name=${deviceName}`
+        wsUrl = `${protocol}//${window.location.host}${backendUrl}/ws_pcm?token=${token}&device_name=${deviceName}`
       } else {
         // Fallback to current page
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        wsUrl = `${protocol}//${window.location.host}/ws?codec=pcm&token=${token}&device_name=${deviceName}`
+        wsUrl = `${protocol}//${window.location.host}/ws_pcm?token=${token}&device_name=${deviceName}`
       }
 
       console.log('🔗 Connecting to Chronicle WebSocket:', wsUrl.replace(/token=[^&]+/, 'token=REDACTED'))

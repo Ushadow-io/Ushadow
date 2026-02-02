@@ -261,9 +261,15 @@ export default function ChronicleRecording({ onAuthRequired, recording }: Chroni
           }
         </p>
         {recording.mode === 'dual-stream' && (
-          <p className="mt-1 text-xs text-purple-600 dark:text-purple-400">
-            You'll be prompted to select a browser tab or screen to capture audio from.
-          </p>
+          <div className="mt-2 text-xs text-purple-600 dark:text-purple-400 space-y-1">
+            <p className="font-semibold">⚠️ Important: Select "Chrome Tab" (not "Your Entire Screen")</p>
+            <ol className="list-decimal list-inside space-y-0.5 pl-2">
+              <li>Click "Chrome Tab" at the top of the picker</li>
+              <li>Select the tab with audio (YouTube, meeting, etc.)</li>
+              <li>Check "Share tab audio" at the bottom</li>
+              <li>Click Share</li>
+            </ol>
+          </div>
         )}
       </div>
 

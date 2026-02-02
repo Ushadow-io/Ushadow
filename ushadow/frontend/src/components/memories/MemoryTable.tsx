@@ -6,6 +6,7 @@
  */
 
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Edit,
   MoreHorizontal,
@@ -46,6 +47,7 @@ interface MemoryTableProps {
 }
 
 export function MemoryTable({ memories, isLoading }: MemoryTableProps) {
+  const navigate = useNavigate()
   const {
     selectedMemoryIds,
     selectMemory,
@@ -90,6 +92,19 @@ export function MemoryTable({ memories, isLoading }: MemoryTableProps) {
   const handleEditMemory = (id: string, content: string) => {
     setActionMenuId(null)
     openEditDialog(id, content)
+  }
+
+  const handleRowClick = (memoryId: string, event: React.MouseEvent) => {
+    // Don't navigate if clicking checkbox, action menu, or interactive elements
+    const target = event.target as HTMLElement
+    if (
+      target.closest('input[type="checkbox"]') ||
+      target.closest('button') ||
+      target.closest('[data-testid*="memory-actions"]')
+    ) {
+      return
+    }
+    navigate(`/memories/${memoryId}`)
   }
 
   if (isLoading) {
@@ -147,8 +162,9 @@ export function MemoryTable({ memories, isLoading }: MemoryTableProps) {
             <tr
               key={memory.id}
               data-testid={`memory-row-${memory.id}`}
+              onClick={(e) => handleRowClick(memory.id, e)}
               className={`
-                hover:bg-zinc-800/50 transition-colors
+                hover:bg-zinc-800/50 transition-colors cursor-pointer
                 ${memory.state === 'paused' || memory.state === 'archived' ? 'opacity-60' : ''}
                 ${isDeleting ? 'animate-pulse opacity-50' : ''}
               `}

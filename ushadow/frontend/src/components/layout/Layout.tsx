@@ -8,7 +8,6 @@ import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
 import { useMobileQrCode } from '../../hooks/useQrCode'
-import { svcConfigsApi } from '../../services/api'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
 import { StatusBadge, type BadgeVariant } from '../StatusBadge'
 import Modal from '../Modal'
@@ -37,7 +36,6 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
-  const [isDesktopMicWired, setIsDesktopMicWired] = useState(false)
 
   // QR code hook
   const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
@@ -75,28 +73,6 @@ export default function Layout() {
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  // Check if desktop-mic (or any audio_input provider) is wired
-  useEffect(() => {
-    const checkAudioWiring = async () => {
-      try {
-        const wiringRes = await svcConfigsApi.getWiring()
-        // Check if any audio_input provider is wired
-        const hasAudioWiring = wiringRes.data.some(
-          (w: any) => w.source_capability === 'audio_input' ||
-                      w.source_config_id?.includes('desktop-mic') ||
-                      w.source_config_id?.includes('mobile-app')
-        )
-        setIsDesktopMicWired(hasAudioWiring)
-      } catch (err) {
-        // Silently fail - user might not be logged in yet
-      }
-    }
-    checkAudioWiring()
-    // Re-check periodically (every 30 seconds)
-    const interval = setInterval(checkAudioWiring, 30000)
-    return () => clearInterval(interval)
   }, [])
 
   // Define navigation items with optional feature flag requirements
