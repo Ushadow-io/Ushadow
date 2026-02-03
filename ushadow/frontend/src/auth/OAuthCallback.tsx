@@ -45,14 +45,23 @@ export default function OAuthCallback() {
           throw new Error('Missing state parameter')
         }
 
+        console.log('[OAuthCallback] 📝 Code extracted, clearing URL to prevent reuse...')
+        // CRITICAL: Clear the URL params immediately to prevent the code from being reused
+        // if this component remounts (which can happen in React StrictMode or during navigation)
+        window.history.replaceState({}, document.title, window.location.pathname)
+
         // Exchange code for tokens (includes state verification)
         await handleCallback(code, state)
 
-        // Get return URL or default to test page (to avoid login loop)
-        const returnUrl = sessionStorage.getItem('login_return_url') || '/auth/test'
+        // Get return URL or default to dashboard
+        const returnUrl = sessionStorage.getItem('login_return_url') || '/'
         sessionStorage.removeItem('login_return_url')
 
-        console.log('OAuth callback success, redirecting to:', returnUrl)
+        console.log('[OAuthCallback] ✅ Success! Redirecting to:', returnUrl)
+
+
+        // Small delay to ensure auth state propagates through React context
+        await new Promise(resolve => setTimeout(resolve, 100))
 
         // Redirect to original page
         navigate(returnUrl, { replace: true })
