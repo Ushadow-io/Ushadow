@@ -83,6 +83,12 @@ help:
 	@echo "  make reset        - Full reset (stop all, remove volumes, clean)"
 	@echo "  make reset-tailscale - Reset Tailscale (container, state, certs)"
 	@echo ""
+	@echo "Keycloak realm management:"
+	@echo "  make keycloak-delete-realm - Delete the ushadow realm"
+	@echo "  make keycloak-create-realm - Create realm from realm-export.json"
+	@echo "  make keycloak-reset-realm  - Delete and recreate realm"
+	@echo "  make keycloak-fresh-start  - Complete fresh setup (stop, clear DB, restart, import)"
+	@echo ""
 	@echo "Launcher release:"
 	@echo "  make release VERSION=x.y.z [PLATFORMS=all] [DRAFT=true]"
 	@echo "                    - Build, commit, and trigger GitHub release workflow"
@@ -478,3 +484,54 @@ release:
 	@echo "✅ Release workflow triggered!"
 	@echo "   View progress: gh run list --workflow=launcher-release.yml"
 	@echo "   Or visit: https://github.com/$$(git config --get remote.origin.url | sed 's/.*github.com[:/]\(.*\)\.git/\1/')/actions"
+
+# Keycloak realm management
+keycloak-delete-realm:
+	@echo "🗑️  Deleting Keycloak realm 'ushadow'..."
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+		--server http://localhost:8080 \
+		--realm master \
+		--user admin \
+		--password admin > /dev/null 2>&1 || \
+		(echo "⚠️  Keycloak not running" && exit 1)
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh delete realms/ushadow 2>/dev/null || \
+		(echo "⚠️  Realm doesn't exist" && exit 1)
+	@echo "✅ Realm deleted"
+
+keycloak-create-realm:
+	@echo "📦 Creating Keycloak realm 'ushadow' from realm-export.json..."
+	@if [ ! -f config/keycloak/realm-export.json ]; then \
+		echo "❌ Error: config/keycloak/realm-export.json not found"; \
+		exit 1; \
+	fi
+	@docker cp config/keycloak/realm-export.json keycloak:/tmp/realm-import.json
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+		--server http://localhost:8080 \
+		--realm master \
+		--user admin \
+		--password admin
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh create realms \
+		-f /tmp/realm-import.json
+	@echo "✅ Realm created and configured"
+
+keycloak-reset-realm: keycloak-delete-realm keycloak-create-realm
+	@echo "✅ Realm reset complete"
+
+keycloak-fresh-start:
+	@echo "🔄 Starting fresh Keycloak setup..."
+	@echo "1. Stopping Keycloak..."
+	@docker stop keycloak 2>/dev/null || true
+	@docker rm keycloak 2>/dev/null || true
+	@echo "2. Clearing Keycloak database..."
+	@docker exec postgres psql -U ushadow -d ushadow -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
+		echo "⚠️  Database already clean or Postgres not running"
+	@echo "3. Starting Keycloak..."
+	@docker-compose -f compose/docker-compose.infra.yml --profile infra up -d keycloak
+	@echo "4. Waiting for Keycloak to start (30s)..."
+	@sleep 30
+	@echo "5. Creating realm from export..."
+	@$(MAKE) keycloak-create-realm || echo "⚠️  Realm creation failed - may need manual setup"
+	@echo "✅ Fresh Keycloak setup complete"
+	@echo "   Admin console: http://localhost:8081"
+	@echo "   Username: admin"
+	@echo "   Password: admin"
