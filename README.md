@@ -178,7 +178,7 @@ ushadow/
 ├── scripts/                 # Utility scripts
 ├── tests/                   # Test suites
 ├── docker-compose.yml       # Main application compose
-├── quickstart.sh            # Quick start script
+├── go.sh                    # Quick start script (./dev.sh for development)
 └── README.md
 ```
 
@@ -292,17 +292,17 @@ make test
 ### Start All Services
 
 ```bash
-./quickstart.sh
+./go.sh
 ```
 
 Or manually:
 
 ```bash
 # Start infrastructure
-docker compose -f deployment/docker-compose.infra.yml up -d
+docker compose -f compose/docker-compose.infra.yml up -d
 
 # Start Chronicle
-docker compose -f deployment/docker-compose.chronicle.yml up -d
+docker compose -f compose/chronicle-compose.yaml up -d
 
 # Start ushadow
 docker compose up -d
@@ -316,8 +316,8 @@ docker compose down
 
 # Stop everything
 docker compose down
-docker compose -f deployment/docker-compose.chronicle.yml down
-docker compose -f deployment/docker-compose.infra.yml down
+docker compose -f compose/chronicle-compose.yaml down
+docker compose -f compose/docker-compose.infra.yml down
 ```
 
 ### View Logs
