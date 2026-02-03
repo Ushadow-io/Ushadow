@@ -209,6 +209,22 @@ async def audio_relay_websocket(
             await websocket.close(code=1008, reason="Missing destinations or token parameter")
             return
 
+        # Bridge Keycloak token to service token for destinations
+        from src.services.token_bridge import bridge_to_service_token
+        service_token = await bridge_to_service_token(
+            token,
+            audiences=["ushadow", "chronicle", "mycelia"]
+        )
+
+        if not service_token:
+            logger.error("[AudioRelay] Token bridging failed")
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
+
+        logger.info("[AudioRelay] ✓ Token bridged successfully")
+        # Use service token for downstream connections
+        token = service_token
+
         destinations = json.loads(destinations_param)
         if not isinstance(destinations, list) or len(destinations) == 0:
             await websocket.close(code=1008, reason="destinations must be a non-empty array")
