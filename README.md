@@ -308,6 +308,21 @@ docker compose -f compose/chronicle-compose.yaml up -d
 docker compose up -d
 ```
 
+### Start infrastructure only: `make infra-up`
+
+Starts MongoDB, Redis, and Qdrant (and memory services). Use it when:
+
+- You want to run the ushadow app separately (e.g. `make up` or `./dev.sh` after infra is up)
+- Infrastructure was stopped (`make infra-down`) and you need it again
+- You're running frontend/backend manually and only need the databases
+
+**Summary:** Use `./go.sh` or `./dev.sh` for a full start (they bring up infra too). Use `make infra-up` when you only want infra or when you start the app in a separate step.
+
+```bash
+make infra-up    # Start infrastructure
+make infra-down  # Stop infrastructure
+```
+
 ### Stop Services
 
 ```bash
