@@ -703,9 +703,11 @@ async def get_mobile_connection_qr(
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match
+        from src.utils.auth_helpers import get_user_id, get_user_email
+
         auth_token = generate_jwt_for_service(
-            user_id=str(current_user.id),
-            user_email=current_user.email,
+            user_id=get_user_id(current_user),
+            user_email=get_user_email(current_user),
             audiences=["ushadow", "chronicle"]
         )
 

@@ -8,12 +8,37 @@ manual Keycloak configuration.
 
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 from .keycloak_admin import get_keycloak_admin
 from ..config.keycloak_settings import is_keycloak_enabled
+from .tailscale_manager import TailscaleManager
 
 logger = logging.getLogger(__name__)
+
+
+def get_tailscale_hostname() -> Optional[str]:
+    """
+    Get the full Tailscale hostname for the current environment.
+
+    Returns:
+        Full hostname like "orange.spangled-kettle.ts.net" or None
+    """
+    try:
+        manager = TailscaleManager()
+        tailnet_suffix = manager.get_tailnet_suffix()
+
+        if not tailnet_suffix:
+            return None
+
+        # Get environment name (e.g., "orange", "purple")
+        env_name = os.getenv("ENV_NAME", "ushadow")
+
+        # Construct full hostname: {env}.{tailnet}
+        return f"{env_name}.{tailnet_suffix}"
+    except Exception as e:
+        logger.debug(f"[KC-STARTUP] Could not get Tailscale hostname: {e}")
+        return None
 
 
 def get_current_redirect_uris() -> List[str]:
@@ -44,14 +69,15 @@ def get_current_redirect_uris() -> List[str]:
         custom_uri = f"{frontend_url.rstrip('/')}/oauth/callback"
         redirect_uris.append(custom_uri)
 
-    # Tailscale hostname (if available)
-    tailscale_hostname = os.getenv("TAILSCALE_HOSTNAME")
+    # Tailscale hostname (auto-detect using TailscaleManager)
+    tailscale_hostname = get_tailscale_hostname()
     if tailscale_hostname:
         # Support both http and https for Tailscale
         ts_uri_http = f"http://{tailscale_hostname}/oauth/callback"
         ts_uri_https = f"https://{tailscale_hostname}/oauth/callback"
         redirect_uris.append(ts_uri_http)
         redirect_uris.append(ts_uri_https)
+        logger.info(f"[KC-STARTUP] 📡 Adding Tailscale URIs: {tailscale_hostname}")
 
     return redirect_uris
 
@@ -80,8 +106,8 @@ def get_current_post_logout_uris() -> List[str]:
         post_logout_uris.append(base_url)
         post_logout_uris.append(base_url + "/")
 
-    # Tailscale hostname
-    tailscale_hostname = os.getenv("TAILSCALE_HOSTNAME")
+    # Tailscale hostname (auto-detect using TailscaleManager)
+    tailscale_hostname = get_tailscale_hostname()
     if tailscale_hostname:
         post_logout_uris.append(f"http://{tailscale_hostname}")
         post_logout_uris.append(f"http://{tailscale_hostname}/")

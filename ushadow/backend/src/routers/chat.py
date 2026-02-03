@@ -243,7 +243,8 @@ async def chat(
     tools = None
     if chat_request.use_memory:
         # Use authenticated user's email as user_id (same as memories router)
-        user_id = chat_request.user_id or current_user.email
+        from src.utils.auth_helpers import get_user_email
+        user_id = chat_request.user_id or get_user_email(current_user)
         tools = [{
             "type": "function",
             "function": {
@@ -398,7 +399,8 @@ async def chat_simple(
     tools = None
     if chat_request.use_memory:
         # Use authenticated user's email as user_id (same as memories router)
-        user_id = chat_request.user_id or current_user.email
+        from src.utils.auth_helpers import get_user_email
+        user_id = chat_request.user_id or get_user_email(current_user)
         tools = [{
             "type": "function",
             "function": {
