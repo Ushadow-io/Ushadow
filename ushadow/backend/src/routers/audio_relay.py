@@ -38,8 +38,9 @@ class AudioRelayConnection:
         try:
             import websockets
 
-            # Add token to URL
-            url_with_token = f"{self.url}?token={self.token}"
+            # Add token to URL (use & if URL already has query params)
+            separator = '&' if '?' in self.url else '?'
+            url_with_token = f"{self.url}{separator}token={self.token}"
 
             # Detect endpoint type for logging
             # Note: /ws endpoint accepts codec via query parameter
