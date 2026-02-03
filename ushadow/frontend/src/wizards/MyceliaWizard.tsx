@@ -188,8 +188,8 @@ export default function MyceliaWizard() {
         wizard.next()
       }
     } else if (wizard.currentStep.id === 'complete') {
-      // Navigate to services page
-      navigate('/services')
+      // Navigate to service configs page
+      navigate('/instances')
     }
   }
 
@@ -367,15 +367,15 @@ function CompleteStep({ tokenData }: CompleteStepProps) {
         <ul className="space-y-2 text-sm text-neutral-700 dark:text-neutral-300">
           <li className="flex items-start gap-2">
             <CheckCircle className="h-4 w-4 text-success-600 dark:text-success-400 flex-shrink-0 mt-0.5" />
-            <span>Access the web UI at https://localhost:14433</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <CheckCircle className="h-4 w-4 text-success-600 dark:text-success-400 flex-shrink-0 mt-0.5" />
             <span>Connect Apple Voice Memos, Google Drive, or local audio files</span>
           </li>
           <li className="flex items-start gap-2">
             <CheckCircle className="h-4 w-4 text-success-600 dark:text-success-400 flex-shrink-0 mt-0.5" />
             <span>Search your voice notes and conversations</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <CheckCircle className="h-4 w-4 text-success-600 dark:text-success-400 flex-shrink-0 mt-0.5" />
+            <span>View and manage the service on the Instances page</span>
           </li>
         </ul>
       </div>

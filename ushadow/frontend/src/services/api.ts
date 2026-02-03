@@ -1965,3 +1965,45 @@ export const githubImportApi = {
       compose_path
     }),
 }
+
+// =============================================================================
+// Dashboard API - Chronicle activity monitoring
+// =============================================================================
+
+export enum ActivityType {
+  CONVERSATION = 'conversation',
+  MEMORY = 'memory',
+}
+
+export interface ActivityEvent {
+  id: string
+  type: ActivityType
+  title: string
+  description?: string
+  timestamp: string
+  metadata: Record<string, any>
+  source?: string
+}
+
+export interface DashboardStats {
+  conversation_count: number
+  memory_count: number
+}
+
+export interface DashboardData {
+  stats: DashboardStats
+  recent_conversations: ActivityEvent[]
+  recent_memories: ActivityEvent[]
+  last_updated: string
+}
+
+export const dashboardApi = {
+  /** Get complete dashboard data (stats + recent conversations & memories) */
+  getDashboardData: (conversationLimit?: number, memoryLimit?: number) =>
+    api.get<DashboardData>('/api/dashboard/', {
+      params: {
+        conversation_limit: conversationLimit,
+        memory_limit: memoryLimit
+      },
+    }),
+}

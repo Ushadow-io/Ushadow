@@ -130,7 +130,7 @@ function AppContent() {
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
                 <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
-                <Route path="services" element={<ServicesPage />} />
+                <Route path="services" element={<FeatureRoute featureFlag="legacy_services_page"><ServicesPage /></FeatureRoute>} />
                 <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><ServiceConfigsPage /></FeatureRoute>} />
                 <Route path="interfaces" element={<InterfacesPage />} />
                 <Route path="chat" element={<ChatPage />} />

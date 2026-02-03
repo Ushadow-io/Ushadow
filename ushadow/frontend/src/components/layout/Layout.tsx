@@ -118,7 +118,7 @@ export default function Layout() {
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
-    { path: '/services', label: 'Services', icon: Server },
+    { path: '/services', label: 'Services', icon: Server, badgeVariant: 'deprecated', featureFlag: 'legacy_services_page' },
     { path: '/instances', label: 'Services', icon: Layers, badgeVariant: 'beta', featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
