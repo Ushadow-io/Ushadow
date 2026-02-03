@@ -8,7 +8,7 @@
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
         chronicle-push mycelia-push openmemory-push \
-        release
+        release env-sync env-sync-apply env-info
 
 # Read .env for display purposes only (actual logic is in run.py)
 -include .env
@@ -76,6 +76,11 @@ help:
 	@echo "  make install      - Install Python dependencies"
 	@echo "  make lint         - Run linters"
 	@echo "  make format       - Format code"
+	@echo ""
+	@echo "Environment commands:"
+	@echo "  make env-info     - Show current environment info"
+	@echo "  make env-sync     - Check for missing variables from .env.example"
+	@echo "  make env-sync-apply - Add missing variables to .env"
 	@echo ""
 	@echo "Cleanup commands:"
 	@echo "  make clean-logs   - Remove log files"
@@ -450,6 +455,14 @@ env-info:
 	@echo "WEBUI_PORT: $${WEBUI_PORT:-3000}"
 	@echo "CHRONICLE_PORT: $${CHRONICLE_PORT:-8000}"
 	@echo "MONGODB_DATABASE: $${MONGODB_DATABASE:-ushadow}"
+
+# Sync .env with .env.example (show missing variables)
+env-sync:
+	@uv run scripts/sync-env.py
+
+# Sync .env with .env.example (apply missing variables)
+env-sync-apply:
+	@uv run scripts/sync-env.py --apply
 
 # Launcher release - triggers GitHub Actions workflow
 # Usage: make release VERSION=0.4.2 [PLATFORMS=macos] [DRAFT=true] [RELEASE_NAME="Bug Fixes"]
