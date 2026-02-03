@@ -1,6 +1,7 @@
 import React from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
+import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -8,8 +9,12 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
-  const { user, token, isLoading, isAdmin, setupRequired } = useAuth()
+  const { user, token, isLoading: authLoading, isAdmin, setupRequired } = useAuth()
+  const { isAuthenticated: kcAuthenticated, isLoading: kcLoading } = useKeycloakAuth()
   const location = useLocation()
+
+  // Combined loading state - wait for both auth systems to check
+  const isLoading = authLoading || kcLoading
 
   if (isLoading) {
     return (
@@ -24,7 +29,22 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     return <Navigate to="/register" replace />
   }
 
-  if (!token || !user) {
+  // Check if user is authenticated via either method:
+  // 1. Legacy JWT (token + user from AuthContext)
+  // 2. Keycloak OAuth (isAuthenticated from KeycloakAuthContext)
+  const isAuthenticated = (token && user) || kcAuthenticated
+
+  console.log('[ProtectedRoute] Auth check:', {
+    pathname: location.pathname,
+    hasToken: !!token,
+    hasUser: !!user,
+    kcAuthenticated,
+    isAuthenticated,
+    willRedirect: !isAuthenticated
+  })
+
+  if (!isAuthenticated) {
+    console.log('[ProtectedRoute] Not authenticated, redirecting to login from:', location.pathname)
     // Preserve the intended destination so login can redirect back
     return <Navigate to="/login" state={{ from: location.pathname }} replace />
   }

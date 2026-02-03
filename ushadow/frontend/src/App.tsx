@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { KeycloakAuthProvider } from './contexts/KeycloakAuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
@@ -28,6 +29,7 @@ import Layout from './components/layout/Layout'
 import RegistrationPage from './pages/RegistrationPage'
 import LoginPage from './pages/LoginPage'
 import ErrorPage from './pages/ErrorPage'
+import OAuthCallback from './auth/OAuthCallback'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import ChroniclePage from './pages/ChroniclePage'
@@ -90,6 +92,7 @@ function AppContent() {
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/oauth/callback" element={<OAuthCallback />} />
               <Route path="/design-system" element={<ColorSystemPreview />} />
 
               {/* Protected Routes - All wrapped in Layout */}
@@ -156,6 +159,7 @@ function App() {
       <ThemeProvider>
         <ToastProvider>
           <VibeKanbanWebCompanion />
+<<<<<<< HEAD
           <AuthProvider>
             <FeatureFlagsProvider>
               <BrowserRouter basename={getBasename()}>
@@ -163,6 +167,17 @@ function App() {
               </BrowserRouter>
             </FeatureFlagsProvider>
           </AuthProvider>
+=======
+          <KeycloakAuthProvider>
+            <AuthProvider>
+              <FeatureFlagsProvider>
+                <BrowserRouter basename={getBasename()}>
+                  <AppContent />
+                </BrowserRouter>
+              </FeatureFlagsProvider>
+            </AuthProvider>
+          </KeycloakAuthProvider>
+>>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
         </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>

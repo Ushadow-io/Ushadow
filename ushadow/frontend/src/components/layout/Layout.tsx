@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
+import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
@@ -27,7 +28,8 @@ interface NavigationItem {
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, logout, isAdmin } = useAuth()
+  const { user, logout: legacyLogout, isAdmin } = useAuth()
+  const { isAuthenticated: kcAuthenticated, logout: kcLogout } = useKeycloakAuth()
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
   const { getSetupLabel, isFirstTimeUser } = useWizard()
@@ -40,6 +42,18 @@ export default function Layout() {
   // QR code hook
   const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
 
+  // Unified logout handler that works for both auth methods
+  const handleLogout = () => {
+    if (kcAuthenticated) {
+      // User is authenticated via Keycloak - use Keycloak logout
+      kcLogout()
+    } else {
+      // User is authenticated via legacy JWT - clear localStorage only
+      legacyLogout()
+      navigate('/login')
+    }
+  }
+
   // Get dynamic wizard label (includes path, label, level, and icon)
   const wizardLabel = getSetupLabel()
   // Helper to check if recording is in a processing state
@@ -48,6 +62,20 @@ export default function Layout() {
   // Redirect first-time users to wizard ONLY if they just came from login/register
   // This prevents redirect loops when accessing the app directly
   useEffect(() => {
+    console.log('[LAYOUT] Wizard check:', {
+      kcAuthenticated,
+      pathname: location.pathname,
+      locationState: location.state,
+      isFirstTime: isFirstTimeUser(),
+    })
+
+    // Skip wizard redirect for Keycloak users - they're already authenticated via SSO
+    // and don't need the setup wizard
+    if (kcAuthenticated) {
+      console.log('[LAYOUT] ✅ Skipping wizard redirect - Keycloak user')
+      return
+    }
+
     // Check sessionStorage for registration hard-reload case (cleared after reading)
     const sessionFromAuth = sessionStorage.getItem('fromAuth') === 'true'
     if (sessionFromAuth) {
@@ -59,10 +87,13 @@ export default function Layout() {
                      sessionFromAuth
 
     if (isFirstTimeUser() && fromAuth && !location.pathname.startsWith('/wizard')) {
+      console.log('[LAYOUT] 🔄 Redirecting first-time user to wizard')
       const { path } = getSetupLabel()
       navigate(path, { replace: true })
+    } else {
+      console.log('[LAYOUT] ✅ No wizard redirect needed')
     }
-  }, [location, isFirstTimeUser, getSetupLabel, navigate])
+  }, [location, isFirstTimeUser, getSetupLabel, navigate, kcAuthenticated])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -433,7 +464,7 @@ export default function Layout() {
                       <button
                         onClick={() => {
                           setUserMenuOpen(false)
-                          logout()
+                          handleLogout()
                         }}
                         className="w-full flex items-center space-x-3 px-4 py-2 text-sm transition-colors"
                         style={{ color: 'var(--error-400)' }}

@@ -89,30 +89,17 @@ flags:
 
   # Service Configs - Show custom service instance configurations
   service_configs:
-    enabled: true
+    enabled: false
     description: "Show custom service config instances in the Services tab (multi-instance
       per template)"
     type: release
 
-  # Legacy Services Page - Old services management page (being replaced by instances_management)
-  legacy_services_page:
-    enabled: false
-    description: "Show legacy Services page with compose service management (deprecated)"
-    type: release
-
-  # Chronicle Page - Direct Chronicle service interface
-  chronicle_page:
+  # Split Services View - Organize services into API/Workers and UI tabs
+  split_services:
     enabled: true
-    description: "Show Chronicle page with queue dashboard and session management"
+    description: "Split services into API & Workers and UI Services tabs with automatic
+      worker grouping"
     type: release
-
-  # Mobile Dual Source Conversations - Fetch from both Chronicle and Mycelia
-  mobile_dual_source_conversations:
-    enabled: true
-    description: "Mobile app: Fetch conversations from both Chronicle and Mycelia
-      backends (like web)"
-    type: release
-
 
   # Add your feature flags here following this format:
   # my_feature_name:

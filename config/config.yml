@@ -2,16 +2,11 @@ defaults:
   llm: openai-llm
   embedding: openai-embed
   stt: stt-deepgram
-  stt_stream: stt-deepgram-stream
   tts: tts-http
   vector_store: vs-qdrant
 
-# Enable provider segments from Deepgram diarization
-misc_settings:
-  use_provider_segments: true
-
 memory:
-  provider: openmemory_mcp
+  provider: chronicle
   timeout_seconds: 1200
   extraction:
     enabled: true
@@ -21,9 +16,9 @@ memory:
 
       '
   openmemory_mcp:
-    server_url: http://mem0:8765
+    server_url: http://localhost:8765
     client_name: chronicle
-    user_id: ${oc.env:OPENMEMORY_USER_ID,default}
+    user_id: default
     timeout: 30
   mycelia:
     api_url: http://localhost:5173
@@ -38,9 +33,7 @@ memory:
       description: "Main memory store with inference facts and contextual knowledge from previous interactions"
       enabled: true
       metadata:
-        # Use dynamic service_urls setting instead of hardcoded URL
-        # base_url: "http://localhost:8765"  # Old direct URL
-        base_url: "${oc.env:MEMORY_SERVER_URL,http://localhost:8765}"
+        base_url: "http://localhost:8765"
         timeout: 5.0
 
     # Example: Notion workspace (disabled by default)

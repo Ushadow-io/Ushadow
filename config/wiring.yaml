@@ -35,53 +35,26 @@ wiring:
   source_capability: transcription
   target_config_id: chronicle-backend-ushadow-purple--leader-
   target_capability: transcription
-- id: 5196bbbe
+<<<<<<< HEAD
+=======
+- id: a6167961
   source_config_id: openai
   source_capability: llm
   target_config_id: chronicle-backend
   target_capability: llm
-- id: bd7584c1
+- id: 1dd92eb0
   source_config_id: deepgram
   source_capability: transcription
   target_config_id: chronicle-backend
   target_capability: transcription
-- id: 524e16b4
-  source_config_id: openai
-  source_capability: llm
-  target_config_id: mem0
-  target_capability: llm
-- id: 9effb2d8
-  source_config_id: openai
-  source_capability: llm
-  target_config_id: agent-zero
-  target_capability: llm
-- id: 9b6dd118
-  source_config_id: openai
-  source_capability: llm
-  target_config_id: chronicle-workers
-  target_capability: llm
-- id: b6e0dc1b
-  source_config_id: deepgram
-  source_capability: transcription
-  target_config_id: chronicle-workers
-  target_capability: transcription
-- id: '57619041'
+- id: 08e43d57
   source_config_id: openai
   source_capability: llm
   target_config_id: mycelia-backend
   target_capability: llm
-- id: febb1825
+- id: ecef1236
   source_config_id: whisper-local
   source_capability: transcription
   target_config_id: mycelia-backend
   target_capability: transcription
-- id: d5984114
-  source_config_id: openai
-  source_capability: llm
-  target_config_id: chronicle-backend-ushadow-orange--leader-
-  target_capability: llm
-- id: 9b64413a
-  source_config_id: deepgram
-  source_capability: transcription
-  target_config_id: chronicle-backend-ushadow-orange--leader-
-  target_capability: transcription
+>>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
