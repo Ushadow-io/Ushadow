@@ -315,6 +315,37 @@ async def create_initial_admin(
 @router.get("/me", response_model=UserRead)
 async def get_current_user_info(user: User = Depends(get_current_user)):
     """Get current authenticated user information."""
+    from src.utils.auth_helpers import get_user_id, get_user_email, get_user_name
+
+    # If user is a Keycloak dict, look up the MongoDB User record
+    if isinstance(user, dict):
+        from src.services.keycloak_user_sync import get_mongodb_user_id_for_keycloak_user
+        from src.models.user import User as UserModel
+
+        # Get or create MongoDB User record
+        mongodb_user_id = await get_mongodb_user_id_for_keycloak_user(
+            keycloak_sub=user.get("sub"),
+            email=user.get("email"),
+            name=user.get("name")
+        )
+
+        # Fetch the User record
+        user_record = await UserModel.get(mongodb_user_id)
+        if not user_record:
+            raise HTTPException(status_code=404, detail="User record not found")
+
+        return UserRead(
+            id=user_record.id,
+            email=user_record.email,
+            display_name=user_record.display_name,
+            is_active=user_record.is_active,
+            is_superuser=user_record.is_superuser,
+            is_verified=user_record.is_verified,
+            created_at=user_record.created_at,
+            updated_at=user_record.updated_at,
+        )
+
+    # Legacy User object
     return UserRead(
         id=user.id,
         email=user.email,
