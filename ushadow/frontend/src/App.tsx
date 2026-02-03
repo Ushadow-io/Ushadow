@@ -159,15 +159,6 @@ function App() {
       <ThemeProvider>
         <ToastProvider>
           <VibeKanbanWebCompanion />
-<<<<<<< HEAD
-          <AuthProvider>
-            <FeatureFlagsProvider>
-              <BrowserRouter basename={getBasename()}>
-                <AppContent />
-              </BrowserRouter>
-            </FeatureFlagsProvider>
-          </AuthProvider>
-=======
           <KeycloakAuthProvider>
             <AuthProvider>
               <FeatureFlagsProvider>
@@ -177,7 +168,6 @@ function App() {
               </FeatureFlagsProvider>
             </AuthProvider>
           </KeycloakAuthProvider>
->>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
         </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>
