@@ -584,6 +584,12 @@ export interface KubernetesCluster {
   labels: Record<string, string>
   infra_scans?: Record<string, any>
   deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
+
+  // Ingress configuration
+  ingress_domain?: string
+  ingress_class?: string
+  ingress_enabled_by_default?: boolean
+  tailscale_magicdns_enabled?: boolean
 }
 
 export const kubernetesApi = {
@@ -595,6 +601,8 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
+  updateCluster: (clusterId: string, updates: Partial<Pick<KubernetesCluster, 'name' | 'namespace' | 'labels' | 'ingress_domain' | 'ingress_class' | 'ingress_enabled_by_default' | 'tailscale_magicdns_enabled'>>) =>
+    api.patch<KubernetesCluster>(`/api/kubernetes/${clusterId}`, updates),
 
   // Service management
   getAvailableServices: () =>

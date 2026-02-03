@@ -307,6 +307,33 @@ class KubernetesManager:
             logger.error(f"Error updating cluster infra scan: {e}")
             return False
 
+    async def update_cluster(
+        self,
+        cluster_id: str,
+        updates: Dict[str, Any]
+    ) -> Optional[KubernetesCluster]:
+        """Update cluster configuration fields."""
+        try:
+            # Validate cluster exists
+            cluster = await self.get_cluster(cluster_id)
+            if not cluster:
+                return None
+
+            # Update MongoDB document
+            result = await self.clusters_collection.update_one(
+                {"cluster_id": cluster_id},
+                {"$set": updates}
+            )
+
+            if result.modified_count == 0 and result.matched_count == 0:
+                return None
+
+            # Return updated cluster
+            return await self.get_cluster(cluster_id)
+        except Exception as e:
+            logger.error(f"Error updating cluster: {e}")
+            return None
+
     async def remove_cluster(self, cluster_id: str) -> bool:
         """Remove a cluster and its kubeconfig."""
         # Delete encrypted kubeconfig file

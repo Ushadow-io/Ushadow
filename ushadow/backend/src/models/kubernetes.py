@@ -36,6 +36,24 @@ class KubernetesCluster(BaseModel):
     # Labels for organization
     labels: Dict[str, str] = Field(default_factory=dict)
 
+    # Ingress configuration (cluster-wide defaults)
+    ingress_domain: Optional[str] = Field(
+        None,
+        description="Base domain for auto-generated ingress (e.g., 'shadow' for *.shadow)"
+    )
+    ingress_class: str = Field(
+        "nginx",
+        description="Ingress controller class (nginx, traefik, etc.)"
+    )
+    ingress_enabled_by_default: bool = Field(
+        False,
+        description="Auto-enable ingress for new deployments"
+    )
+    tailscale_magicdns_enabled: bool = Field(
+        False,
+        description="Whether Tailscale MagicDNS is configured"
+    )
+
     @computed_field
     @property
     def deployment_target_id(self) -> str:
@@ -128,6 +146,18 @@ class KubernetesClusterCreate(BaseModel):
     context: Optional[str] = Field(None, description="Context to use (if not specified, uses current-context)")
     namespace: str = Field("default", description="Default namespace")
     labels: Dict[str, str] = Field(default_factory=dict)
+
+
+class KubernetesClusterUpdate(BaseModel):
+    """Request to update cluster configuration."""
+
+    name: Optional[str] = None
+    namespace: Optional[str] = None
+    labels: Optional[Dict[str, str]] = None
+    ingress_domain: Optional[str] = None
+    ingress_class: Optional[str] = None
+    ingress_enabled_by_default: Optional[bool] = None
+    tailscale_magicdns_enabled: Optional[bool] = None
 
 
 class KubernetesDeploymentSpec(BaseModel):
