@@ -16,6 +16,7 @@ interface KeycloakAuthContextType {
   isLoading: boolean
   userInfo: any | null
   login: (redirectUri?: string) => void
+  register: (redirectUri?: string) => void
   logout: (redirectUri?: string) => void
   getAccessToken: () => string | null
   handleCallback: (code: string, state: string) => Promise<void>
@@ -143,6 +144,31 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
     window.location.href = loginUrl
   }
 
+  const register = async (redirectUri?: string) => {
+    // Save current location for return after registration
+    const returnUrl = redirectUri || window.location.pathname + window.location.search
+    sessionStorage.setItem('login_return_url', returnUrl)
+
+    // Generate CSRF state
+    const state = generateState()
+    sessionStorage.setItem('oauth_state', state)
+
+    // Build Keycloak registration URL - uses /registrations endpoint instead of /auth
+    const registrationUrl = await TokenManager.buildLoginUrl({
+      keycloakUrl: keycloakConfig.url,
+      realm: keycloakConfig.realm,
+      clientId: keycloakConfig.clientId,
+      redirectUri: `${window.location.origin}/oauth/callback`,
+      state,
+    })
+
+    // Replace /auth with /registrations to trigger Keycloak registration screen
+    const registrationEndpoint = registrationUrl.replace('/protocol/openid-connect/auth', '/protocol/openid-connect/registrations')
+
+    // Redirect to Keycloak registration
+    window.location.href = registrationEndpoint
+  }
+
   const logout = (redirectUri?: string) => {
     // Build logout URL FIRST (needs id_token from storage)
     // Important: Keycloak requires exact match, so add trailing slash to origin
@@ -209,6 +235,7 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         userInfo,
         login,
+        register,
         logout,
         getAccessToken,
         handleCallback,

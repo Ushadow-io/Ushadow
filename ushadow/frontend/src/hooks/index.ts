@@ -50,3 +50,7 @@ export type { UseServiceCatalogResult } from './useServiceCatalog';
 
 export { useDeploymentActions } from './useDeploymentActions';
 export type { UseDeploymentActionsResult } from './useDeploymentActions';
+
+// Sharing hooks
+export { useShare } from './useShare';
+export type { UseShareOptions, UseShareReturn } from './useShare';

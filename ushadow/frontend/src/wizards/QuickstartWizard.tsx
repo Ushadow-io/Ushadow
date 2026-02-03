@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, RefreshCw } from 'lucide-react'
+import { Sparkles, Loader2, RefreshCw, CheckCircle } from 'lucide-react'
 
 import { servicesApi, quickstartApi, type QuickstartConfig, type CapabilityRequirement, type ServiceInfo } from '../services/api'
 import { ServiceStatusCard, type ServiceStatus } from '../components/services'

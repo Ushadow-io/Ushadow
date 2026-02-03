@@ -76,7 +76,8 @@ flags:
   # Timeline - visualize memories on an interactive timeline
   timeline:
     enabled: true
-    description: "Timeline - Visualize memories with time ranges on Gantt charts and D3 timelines"
+    description: "Timeline - Visualize memories with time ranges on Gantt charts and
+      D3 timelines"
     type: release
 
   # ServiceConfigs Management - Service instance deployment and wiring
@@ -89,13 +90,15 @@ flags:
   # Service Configs - Show custom service instance configurations
   service_configs:
     enabled: false
-    description: "Show custom service config instances in the Services tab (multi-instance per template)"
+    description: "Show custom service config instances in the Services tab (multi-instance
+      per template)"
     type: release
 
   # Split Services View - Organize services into API/Workers and UI tabs
   split_services:
-    enabled: false
-    description: "Split services into API & Workers and UI Services tabs with automatic worker grouping"
+    enabled: true
+    description: "Split services into API & Workers and UI Services tabs with automatic
+      worker grouping"
     type: release
 
   # Add your feature flags here following this format:

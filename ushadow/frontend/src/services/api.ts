@@ -62,7 +62,15 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(getStorageKey('token'))
+  // Check for Keycloak token first (in sessionStorage)
+  const kcToken = sessionStorage.getItem('kc_access_token')
+
+  // Fallback to legacy JWT token (in localStorage)
+  const legacyToken = localStorage.getItem(getStorageKey('token'))
+
+  // Prefer Keycloak token if both are present
+  const token = kcToken || legacyToken
+
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
