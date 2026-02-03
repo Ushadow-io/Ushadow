@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, TRello } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, Trello } from 'lucide-react'
 import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
