@@ -421,11 +421,15 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
       const { buildRelayUrl } = await import('../../services/audioProviderApi');
 
+      // Determine audio source for codec parameter
+      // mic = pcm, omi = opus
+      const audioSource = selectedSource.type === 'microphone' ? 'mic' : 'omi';
+
       // Always use relay URL (even for single destination)
       // Mobile can't connect directly to internal Docker container names like "chronicle:5001"
       // The relay handles forwarding to internal services
-      const streamUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, selectedDestinations);
-      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s):', streamUrl);
+      const streamUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, selectedDestinations, audioSource);
+      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s) with codec:', audioSource === 'mic' ? 'pcm' : 'opus', streamUrl);
 
       return streamUrl;
     } catch (err) {
@@ -433,7 +437,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to build stream URL');
       return null;
     }
-  }, [selectedUNode, authToken, availableDestinations, selectedDestinationIds]);
+  }, [selectedUNode, authToken, availableDestinations, selectedDestinationIds, selectedSource.type]);
 
   // Handle source change
   const handleSourceChange = useCallback(async (source: StreamSource) => {

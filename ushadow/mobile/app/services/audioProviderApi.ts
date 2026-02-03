@@ -203,23 +203,37 @@ export async function getAvailableAudioDestinations(
  * Build relay WebSocket URL with multiple destinations.
  * Connects to relay endpoint which fans out to all selected destinations.
  *
- * Note: Services should use unified /ws/audio endpoint that auto-detects format.
- * No need to swap paths based on source type - the server detects Opus/PCM/float32.
+ * Adds codec parameter to destination URLs based on audio source:
+ * - mic (device microphone) → ?codec=pcm
+ * - omi (hardware device) → ?codec=opus
  */
 export function buildRelayUrl(
   baseUrl: string,
   token: string,
-  selectedDestinations: AudioDestination[]
+  selectedDestinations: AudioDestination[],
+  audioSource: 'mic' | 'omi' = 'mic'
 ): string {
   // Convert http(s) to ws(s)
   const wsBaseUrl = baseUrl.replace(/^http/, 'ws');
 
-  // Build destinations array for relay - use URLs as-is
-  // Services should expose /ws/audio unified endpoint that auto-detects format
-  const destinations = selectedDestinations.map(dest => ({
-    name: dest.instance_name,
-    url: dest.url,
-  }));
+  // Determine codec based on audio source
+  const codec = audioSource === 'omi' ? 'opus' : 'pcm';
+
+  // Build destinations array for relay - add codec parameter if not present
+  const destinations = selectedDestinations.map(dest => {
+    let destUrl = dest.url;
+
+    // Add codec parameter if the URL doesn't already have it
+    if (!destUrl.includes('codec=')) {
+      const separator = destUrl.includes('?') ? '&' : '?';
+      destUrl = `${destUrl}${separator}codec=${codec}`;
+    }
+
+    return {
+      name: dest.instance_name,
+      url: destUrl,
+    };
+  });
 
   // Create relay URL
   const url = new URL(`${wsBaseUrl}/ws/audio/relay`);
