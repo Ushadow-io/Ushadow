@@ -10,11 +10,14 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { TokenManager } from '../auth/TokenManager'
 import { keycloakConfig, backendConfig } from '../auth/config'
+import { authApi } from '../services/api'
+import type { User } from '../types/user'
 
 interface KeycloakAuthContextType {
   isAuthenticated: boolean
   isLoading: boolean
   userInfo: any | null
+  user: User | null  // MongoDB user data from /api/auth/me
   login: (redirectUri?: string) => void
   register: (redirectUri?: string) => void
   logout: (redirectUri?: string) => void
@@ -30,8 +33,26 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
   const initialUserInfo = initialAuthState ? TokenManager.getUserInfo() : null
 
   const [isAuthenticated, setIsAuthenticated] = useState(initialAuthState)
-  const [isLoading, setIsLoading] = useState(false) // No loading needed - we check synchronously
+  const [isLoading, setIsLoading] = useState(initialAuthState) // Loading if authenticated (need to fetch user data)
   const [userInfo, setUserInfo] = useState<any | null>(initialUserInfo)
+  const [user, setUser] = useState<User | null>(null)  // MongoDB user data
+
+  // Function to fetch MongoDB user data
+  const fetchUserData = async () => {
+    setIsLoading(true)
+    try {
+      console.log('[KC-AUTH] Fetching user data from /api/auth/me...')
+      const response = await authApi.getMe()
+      console.log('[KC-AUTH] User data received:', response.data)
+      console.log('[KC-AUTH] display_name:', response.data.display_name)
+      setUser(response.data)
+    } catch (error) {
+      console.error('[KC-AUTH] Failed to fetch user data:', error)
+      setUser(null)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   useEffect(() => {
     // Re-check auth state on mount (in case token expired between initial check and mount)
@@ -41,9 +62,15 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
       if (authenticated) {
         const info = TokenManager.getUserInfo()
         setUserInfo(info)
+        // Fetch MongoDB user data
+        fetchUserData()
       } else {
         setUserInfo(null)
+        setUser(null)
       }
+    } else if (authenticated && !user) {
+      // If already authenticated but no user data, fetch it
+      fetchUserData()
     }
 
     // Set up automatic token refresh
@@ -94,6 +121,9 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
             setIsAuthenticated(true)
             const info = TokenManager.getUserInfo()
             setUserInfo(info)
+
+            // Fetch fresh user data
+            fetchUserData()
 
             // Schedule next refresh
             setupTokenRefresh()
@@ -183,6 +213,7 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
     TokenManager.clearTokens()
     setIsAuthenticated(false)
     setUserInfo(null)
+    setUser(null)
 
     // Redirect to Keycloak logout
     window.location.href = logoutUrl
@@ -220,6 +251,9 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
     const info = TokenManager.getUserInfo()
     setUserInfo(info)
 
+    // Fetch MongoDB user data
+    await fetchUserData()
+
     // Clean up
     sessionStorage.removeItem('oauth_state')
   }
@@ -234,6 +268,7 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated,
         isLoading,
         userInfo,
+        user,  // MongoDB user data
         login,
         register,
         logout,

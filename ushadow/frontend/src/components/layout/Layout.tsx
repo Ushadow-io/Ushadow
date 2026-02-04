@@ -28,8 +28,12 @@ interface NavigationItem {
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, logout: legacyLogout, isAdmin } = useAuth()
-  const { isAuthenticated: kcAuthenticated, logout: kcLogout } = useKeycloakAuth()
+  const { user: legacyUser, logout: legacyLogout, isAdmin: legacyIsAdmin } = useAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, logout: kcLogout } = useKeycloakAuth()
+
+  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  const user = kcAuthenticated && kcUser ? kcUser : legacyUser
+  const isAdmin = kcAuthenticated && kcUser ? kcUser.is_superuser : legacyIsAdmin
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
   const { getSetupLabel, isFirstTimeUser } = useWizard()
@@ -420,7 +424,7 @@ export default function Layout() {
                             className="text-sm font-medium truncate"
                             style={{ color: isDark ? 'var(--text-primary)' : '#171717' }}
                           >
-                            {user?.name || 'User'}
+                            {user?.display_name || 'User'}
                           </p>
                           <p
                             className="text-xs truncate"

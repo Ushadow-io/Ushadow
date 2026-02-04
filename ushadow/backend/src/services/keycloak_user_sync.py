@@ -48,12 +48,17 @@ async def get_or_create_user_from_keycloak(
 
     if user:
         logger.info(f"[KC-USER-SYNC] Found existing user: {email} (MongoDB ID: {user.id})")
+        logger.info(f"[KC-USER-SYNC] Name from Keycloak: '{name}', Current display_name: '{user.display_name}'")
 
         # Update display_name if it changed
         if name and user.display_name != name:
             logger.info(f"[KC-USER-SYNC] Updating display_name: {user.display_name} → {name}")
             user.display_name = name
             await user.save()
+        elif not name:
+            logger.warning(f"[KC-USER-SYNC] ⚠️ No name provided from Keycloak for {email}")
+        else:
+            logger.debug(f"[KC-USER-SYNC] Display name already matches, no update needed")
 
         return user
 
@@ -66,7 +71,10 @@ async def get_or_create_user_from_keycloak(
 
         # Link to Keycloak
         user.keycloak_id = keycloak_sub
-        if name and not user.display_name:
+        # Update display_name if we have a proper name from Keycloak
+        # (even if display_name was previously set to email)
+        if name and (not user.display_name or user.display_name == email):
+            logger.info(f"[KC-USER-SYNC] Updating display_name: {user.display_name} → {name}")
             user.display_name = name
         await user.save()
 

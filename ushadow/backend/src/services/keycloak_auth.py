@@ -97,10 +97,21 @@ def get_keycloak_user_from_token(token: str) -> Optional[dict]:
     if not payload:
         return None
 
+    # Get name from token, fallback to building it from given_name + family_name
+    name = payload.get("name")
+    if not name:
+        given_name = payload.get("given_name", "")
+        family_name = payload.get("family_name", "")
+        if given_name or family_name:
+            name = f"{given_name} {family_name}".strip()
+            logger.debug(f"[KC-AUTH] Built name from given_name + family_name: {name}")
+    else:
+        logger.debug(f"[KC-AUTH] Using name from token: {name}")
+
     return {
         "sub": payload.get("sub"),
         "email": payload.get("email"),
-        "name": payload.get("name"),
+        "name": name,
         "preferred_username": payload.get("preferred_username"),
         "email_verified": payload.get("email_verified", False),
         # Mark as Keycloak user for backend logic
