@@ -83,7 +83,7 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
                     is_installed = True
 
             # Debug logging
-            logger.info(f"Service: {service.service_name}, installed: {is_installed}, installed_names: {installed_names}")
+            logger.debug(f"Service: {service.service_name}, installed: {is_installed}, installed_names: {installed_names}")
 
             templates.append(Template(
                 id=service.service_id,

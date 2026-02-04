@@ -62,7 +62,15 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(getStorageKey('token'))
+  // Check for Keycloak token first (in sessionStorage)
+  const kcToken = sessionStorage.getItem('kc_access_token')
+
+  // Fallback to legacy JWT token (in localStorage)
+  const legacyToken = localStorage.getItem(getStorageKey('token'))
+
+  // Prefer Keycloak token if both are present
+  const token = kcToken || legacyToken
+
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -124,6 +132,32 @@ export const chronicleApi = {
   getStatus: () => api.get('/api/chronicle/status'),
   getConversations: () => api.get('/api/chronicle/conversations'),
   getConversation: (id: string) => api.get(`/api/chronicle/conversations/${id}`),
+}
+
+// Mycelia integration endpoints
+// Mycelia service name constant - ensures consistency
+const MYCELIA_SERVICE = 'mycelia-backend'
+
+export const myceliaApi = {
+  // Connection info for service discovery
+  getConnectionInfo: () => api.get(`/api/services/${MYCELIA_SERVICE}/connection-info`),
+
+  getStatus: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/health`),
+
+  // Conversations
+  getConversations: (params?: { limit?: number; skip?: number; start?: string; end?: string }) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations`, { params }),
+  getConversation: (id: string) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/${id}`),
+  getConversationStats: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/stats`),
+
+  // Audio Timeline Data
+  getAudioItems: (params: { start: string; end: string; resolution?: string }) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/audio/items`, { params }),
+
+  // Generic Resource Access (for MCP-style resources)
+  callResource: (resourceName: string, body: any) =>
+    api.post(`/api/services/${MYCELIA_SERVICE}/proxy/api/resource/${resourceName}`, body),
 }
 
 // MCP integration endpoints
@@ -558,6 +592,12 @@ export interface KubernetesCluster {
   labels: Record<string, string>
   infra_scans?: Record<string, any>
   deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
+
+  // Ingress configuration
+  ingress_domain?: string
+  ingress_class?: string
+  ingress_enabled_by_default?: boolean
+  tailscale_magicdns_enabled?: boolean
 }
 
 export const kubernetesApi = {
@@ -569,6 +609,8 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
+  updateCluster: (clusterId: string, updates: Partial<Pick<KubernetesCluster, 'name' | 'namespace' | 'labels' | 'ingress_domain' | 'ingress_class' | 'ingress_enabled_by_default' | 'tailscale_magicdns_enabled'>>) =>
+    api.patch<KubernetesCluster>(`/api/kubernetes/${clusterId}`, updates),
 
   // Service management
   getAvailableServices: () =>
@@ -1821,6 +1863,39 @@ export const audioApi = {
     api.get('/api/providers/audio_consumer/available'),
 }
 
+// =============================================================================
+// Unified Memories API - Cross-source memory retrieval
+// =============================================================================
+
+export interface ConversationMemory {
+  id: string
+  content: string
+  created_at: string
+  metadata: Record<string, any>
+  source: 'openmemory' | 'mycelia' | 'chronicle'
+  score?: number
+}
+
+export interface ConversationMemoriesResponse {
+  conversation_id: string
+  conversation_source: 'chronicle' | 'mycelia'
+  memories: ConversationMemory[]
+  count: number
+  sources_queried: string[]
+}
+
+export const unifiedMemoriesApi = {
+  /** Get all memories for a conversation across all sources (OpenMemory + native backend) */
+  getConversationMemories: (conversationId: string, source: 'chronicle' | 'mycelia') =>
+    api.get<ConversationMemoriesResponse>(`/api/memories/by-conversation/${conversationId}`, {
+      params: { conversation_source: source }
+    }),
+
+  /** Get a single memory by ID from any memory source */
+  getMemoryById: (memoryId: string) =>
+    api.get<ConversationMemory>(`/api/memories/${memoryId}`),
+}
+
 export const githubImportApi = {
   /** Scan a GitHub repository for docker-compose files */
   scan: (github_url: string, branch?: string, compose_path?: string) =>
@@ -1888,5 +1963,47 @@ export const githubImportApi = {
       branch,
       tag,
       compose_path
+    }),
+}
+
+// =============================================================================
+// Dashboard API - Chronicle activity monitoring
+// =============================================================================
+
+export enum ActivityType {
+  CONVERSATION = 'conversation',
+  MEMORY = 'memory',
+}
+
+export interface ActivityEvent {
+  id: string
+  type: ActivityType
+  title: string
+  description?: string
+  timestamp: string
+  metadata: Record<string, any>
+  source?: string
+}
+
+export interface DashboardStats {
+  conversation_count: number
+  memory_count: number
+}
+
+export interface DashboardData {
+  stats: DashboardStats
+  recent_conversations: ActivityEvent[]
+  recent_memories: ActivityEvent[]
+  last_updated: string
+}
+
+export const dashboardApi = {
+  /** Get complete dashboard data (stats + recent conversations & memories) */
+  getDashboardData: (conversationLimit?: number, memoryLimit?: number) =>
+    api.get<DashboardData>('/api/dashboard/', {
+      params: {
+        conversation_limit: conversationLimit,
+        memory_limit: memoryLimit
+      },
     }),
 }

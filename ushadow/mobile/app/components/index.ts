@@ -16,6 +16,9 @@ export { OmiDeviceScanner } from './OmiDeviceScanner';
 export { OmiDeviceCard } from './OmiDeviceCard';
 export { OmiDeviceSection } from './OmiDeviceSection';
 
+// Debug Components
+export { BackgroundTaskDebugPanel } from './BackgroundTaskDebugPanel';
+
 // Streaming Components (unified)
 export {
   StreamingDisplay,

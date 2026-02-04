@@ -1,33 +1,37 @@
-import React, { useState, useEffect } from 'react'
-import { useNavigate, Navigate, useLocation } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
-import { Eye, EyeOff } from 'lucide-react'
+import React from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 import AuthHeader from '../components/auth/AuthHeader'
+import { LogIn } from 'lucide-react'
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState('')
   const navigate = useNavigate()
   const location = useLocation()
-
-  const { user, login, setupRequired, isLoading: authLoading } = useAuth()
+  const { isAuthenticated, isLoading, login, register } = useKeycloakAuth()
 
   // Get the intended destination from router state (set by ProtectedRoute)
   const from = (location.state as { from?: string })?.from || '/'
 
   // After successful login, redirect to intended destination
-  useEffect(() => {
-    if (user) {
-      console.log('Login successful, redirecting to:', from)
+  // Note: Don't redirect if we're on the callback page - that's handled by OAuthCallback component
+  React.useEffect(() => {
+    if (isAuthenticated && location.pathname !== '/oauth/callback') {
       navigate(from, { replace: true, state: { fromAuth: true } })
     }
-  }, [user, navigate, from])
+  }, [isAuthenticated, navigate, from, location.pathname])
 
-  // Show loading while checking setup status
-  if (setupRequired === null || authLoading) {
+  const handleLogin = () => {
+    // Redirect to Keycloak login page
+    login(from)
+  }
+
+  const handleRegister = () => {
+    // Redirect to Keycloak registration page
+    register(from)
+  }
+
+  // Show loading while checking authentication
+  if (isLoading) {
     return (
       <div
         className="flex-1 flex flex-col"
@@ -39,184 +43,123 @@ export default function LoginPage() {
               className="animate-spin rounded-full h-8 w-8 border-b-2"
               style={{ borderColor: 'var(--primary-400)' }}
             ></div>
-            <span style={{ color: 'var(--text-secondary)' }}>Checking setup status...</span>
+            <span style={{ color: 'var(--text-secondary)' }}>Checking authentication...</span>
           </div>
         </div>
       </div>
     )
   }
 
-  // Redirect to registration if required
-  // IMPORTANT: This must be after all hooks to follow Rules of Hooks
-  if (setupRequired === true) {
-    return <Navigate to="/register" replace />
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
-    setError('')
-
-    const result = await login(email, password)
-    if (!result.success) {
-      // Show specific error message based on error type
-      if (result.errorType === 'connection_failure') {
-        setError('Unable to connect to server. Please check your connection and try again.')
-      } else if (result.errorType === 'authentication_failure') {
-        setError('Invalid email or password')
-      } else {
-        setError(result.error || 'Login failed. Please try again.')
-      }
-    }
-    setIsLoading(false)
-  }
-
   return (
     <div
       className="flex-1 flex flex-col relative overflow-hidden"
-      style={{ backgroundColor: 'var(--surface-900)' }}
+      style={{ backgroundColor: '#0a0a0a' }}
       data-testid="login-page"
     >
-      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8">
-        {/* Decorative background blur circles - brand green and purple */}
-        {/* Using fixed positioning so glows extend to viewport edges, not container edges */}
-        <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div
-            className="absolute -top-40 -right-40 w-96 h-96 rounded-full blur-3xl"
-            style={{ backgroundColor: 'rgba(168, 85, 247, 0.15)' }}
-          ></div>
-          <div
-            className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full blur-3xl"
-            style={{ backgroundColor: 'rgba(74, 222, 128, 0.15)' }}
-          ></div>
-        </div>
+      {/* Geometric grid background pattern */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px)
+          `,
+          backgroundSize: '80px 80px',
+        }}
+      />
 
-        <div className="max-w-md w-full space-y-3 relative z-10">
-          <AuthHeader subtitle="Sign in to your account" />
+      {/* Diagonal cross pattern overlay */}
+      <div
+        className="fixed inset-0 pointer-events-none opacity-30"
+        style={{
+          background: `
+            linear-gradient(45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%),
+            linear-gradient(-45deg, transparent 48%, rgba(255, 255, 255, 0.01) 49%, rgba(255, 255, 255, 0.01) 51%, transparent 52%)
+          `,
+          backgroundSize: '120px 120px',
+        }}
+      />
 
-          {/* Login Form */}
+      <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8 relative z-10">
+        <div className="max-w-md w-full space-y-6">
+          <AuthHeader subtitle="Sign in with your account" />
+
+          {/* Login Card */}
           <div
-            className="rounded-xl shadow-xl backdrop-blur-sm p-6 space-y-4 animate-slide-up"
+            className="rounded-lg shadow-xl p-8 space-y-6 animate-slide-up"
             style={{
-              backgroundColor: 'var(--surface-800)',
-              border: '1px solid var(--surface-500)',
+              backgroundColor: '#1a1a1a',
+              border: '1px solid #27272a',
             }}
           >
-            <form className="space-y-4" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium"
-                  style={{ color: 'var(--text-secondary)' }}
-                >
-                  Email address
-                </label>
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="appearance-none block w-full px-4 py-3 rounded-lg transition-all sm:text-sm focus:outline-none focus:ring-1"
-                  style={{
-                    backgroundColor: 'var(--surface-700)',
-                    border: '1px solid var(--surface-400)',
-                    color: 'var(--text-primary)',
-                  }}
-                  placeholder="your@email.com"
-                  data-testid="login-email-input"
-                />
-              </div>
+            <div className="text-center space-y-2">
+              <h2 className="text-xl font-semibold" style={{ color: '#ffffff' }}>
+                Welcome to Ushadow
+              </h2>
+              <p className="text-sm" style={{ color: '#a1a1aa' }}>
+                Secure authentication powered by Keycloak
+              </p>
+            </div>
 
-              <div className="space-y-2">
-                <label
-                  htmlFor="password"
-                  className="block text-sm font-medium"
-                  style={{ color: 'var(--text-secondary)' }}
-                >
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    id="password"
-                    name="password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="appearance-none block w-full px-4 py-3 pr-12 rounded-lg transition-all sm:text-sm focus:outline-none focus:ring-1"
-                    style={{
-                      backgroundColor: 'var(--surface-700)',
-                      border: '1px solid var(--surface-400)',
-                      color: 'var(--text-primary)',
-                    }}
-                    placeholder="Enter your password"
-                    data-testid="login-password-input"
-                  />
-                  <button
-                    type="button"
-                    className="absolute inset-y-0 right-0 pr-4 flex items-center transition-colors"
-                    style={{ color: 'var(--text-muted)' }}
-                    onClick={() => setShowPassword(!showPassword)}
-                    data-testid="toggle-password-visibility"
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" />
-                    ) : (
-                      <Eye className="h-5 w-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div
-                  className="rounded-lg p-4"
-                  style={{
-                    backgroundColor: 'rgba(248, 113, 113, 0.1)',
-                    border: '1px solid rgba(248, 113, 113, 0.3)',
-                  }}
-                  data-testid="login-error"
-                >
-                  <p className="text-sm" style={{ color: 'var(--error-400)' }}>{error}</p>
-                </div>
-              )}
-
-              <div>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full py-3 px-4 text-base font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98]"
-                  style={{
-                    backgroundColor: '#4ade80',
-                    color: 'var(--surface-900)',
-                    boxShadow: '0 0 20px rgba(74, 222, 128, 0.2)',
-                  }}
-                  data-testid="login-submit-button"
-                >
-                  {isLoading ? (
-                    <div className="flex items-center justify-center space-x-2">
-                      <div
-                        className="animate-spin rounded-full h-5 w-5 border-2 border-t-transparent"
-                        style={{ borderColor: 'var(--surface-900)' }}
-                      ></div>
-                      <span>Signing in...</span>
-                    </div>
-                  ) : (
-                    'Sign in'
-                  )}
-                </button>
-              </div>
-            </form>
-
-            <p
-              className="text-center text-xs pt-2"
-              style={{ color: 'var(--text-muted)' }}
+            {/* Sign in with Keycloak Button */}
+            <button
+              onClick={handleLogin}
+              className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
+              style={{
+                backgroundColor: '#3b82f6',
+                color: '#ffffff',
+                border: 'none',
+              }}
+              data-testid="login-button-keycloak"
             >
-              Ushadow Dashboard v0.1.0
+              <LogIn className="h-5 w-5" />
+              <span>Sign in with Keycloak</span>
+            </button>
+
+            <div className="text-center">
+              <p className="text-xs" style={{ color: '#71717a' }}>
+                You'll be redirected to Keycloak for secure authentication
+              </p>
+            </div>
+
+            {/* Divider */}
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t" style={{ borderColor: '#27272a' }}></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span style={{ backgroundColor: '#1a1a1a', color: '#71717a', padding: '0 8px' }}>
+                  Or
+                </span>
+              </div>
+            </div>
+
+            <div className="text-center">
+              <p className="text-sm" style={{ color: '#a1a1aa' }}>
+                Don't have an account?{' '}
+                <button
+                  onClick={handleRegister}
+                  className="font-medium hover:underline transition-colors"
+                  style={{ color: '#3b82f6' }}
+                  data-testid="register-link"
+                >
+                  Create one now
+                </button>
+              </p>
+            </div>
+          </div>
+
+          {/* Info Card */}
+          <div
+            className="rounded-lg p-4 text-sm"
+            style={{
+              backgroundColor: '#1a1a1a',
+              border: '1px solid #27272a',
+              color: '#a1a1aa',
+            }}
+          >
+            <p className="text-center">
+              New to Ushadow? Your administrator will provide you with access credentials.
             </p>
           </div>
         </div>

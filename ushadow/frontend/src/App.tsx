@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { KeycloakAuthProvider } from './contexts/KeycloakAuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
@@ -28,9 +29,12 @@ import Layout from './components/layout/Layout'
 import RegistrationPage from './pages/RegistrationPage'
 import LoginPage from './pages/LoginPage'
 import ErrorPage from './pages/ErrorPage'
+import OAuthCallback from './auth/OAuthCallback'
 import Dashboard from './pages/Dashboard'
 import WizardStartPage from './pages/WizardStartPage'
 import ChroniclePage from './pages/ChroniclePage'
+import ConversationsPage from './pages/ConversationsPage'
+import ConversationDetailPage from './pages/ConversationDetailPage'
 import RecordingPage from './pages/RecordingPage'
 import MCPPage from './pages/MCPPage'
 import AgentZeroPage from './pages/AgentZeroPage'
@@ -40,6 +44,7 @@ import SettingsPage from './pages/SettingsPage'
 import ServiceConfigsPage from './pages/ServiceConfigsPage'
 import InterfacesPage from './pages/InterfacesPage'
 import MemoriesPage from './pages/MemoriesPage'
+import MemoryDetailPage from './pages/MemoryDetailPage'
 import ClusterPage from './pages/ClusterPage'
 import SpeakerRecognitionPage from './pages/SpeakerRecognitionPage'
 import ChatPage from './pages/ChatPage'
@@ -87,6 +92,7 @@ function AppContent() {
               {/* Public Routes */}
               <Route path="/register" element={<RegistrationPage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/oauth/callback" element={<OAuthCallback />} />
               <Route path="/design-system" element={<ColorSystemPreview />} />
 
               {/* Protected Routes - All wrapped in Layout */}
@@ -117,16 +123,19 @@ function AppContent() {
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="wizard/mycelia" element={<MyceliaWizard />} />
                 <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="conversations" element={<ConversationsPage />} />
+                <Route path="conversations/:id" element={<ConversationDetailPage />} />
                 <Route path="recording" element={<RecordingPage />} />
                 <Route path="speaker-recognition" element={<SpeakerRecognitionPage />} />
                 <Route path="mcp" element={<FeatureRoute featureFlag="mcp_hub"><MCPPage /></FeatureRoute>} />
                 <Route path="agent-zero" element={<FeatureRoute featureFlag="agent_zero"><AgentZeroPage /></FeatureRoute>} />
                 <Route path="n8n" element={<FeatureRoute featureFlag="n8n_workflows"><N8NPage /></FeatureRoute>} />
-                <Route path="services" element={<ServicesPage />} />
+                <Route path="services" element={<FeatureRoute featureFlag="legacy_services_page"><ServicesPage /></FeatureRoute>} />
                 <Route path="instances" element={<FeatureRoute featureFlag="instances_management"><ServiceConfigsPage /></FeatureRoute>} />
                 <Route path="interfaces" element={<InterfacesPage />} />
                 <Route path="chat" element={<ChatPage />} />
                 <Route path="memories" element={<MemoriesPage />} />
+                <Route path="memories/:id" element={<MemoryDetailPage />} />
                 <Route path="timeline" element={<FeatureRoute featureFlag="timeline"><TimelinePage /></FeatureRoute>} />
                 <Route path="cluster" element={<ClusterPage />} />
                 <Route path="kubernetes" element={<KubernetesClustersPage />} />
@@ -150,13 +159,15 @@ function App() {
       <ThemeProvider>
         <ToastProvider>
           <VibeKanbanWebCompanion />
-          <AuthProvider>
-            <FeatureFlagsProvider>
-              <BrowserRouter basename={getBasename()}>
-                <AppContent />
-              </BrowserRouter>
-            </FeatureFlagsProvider>
-          </AuthProvider>
+          <KeycloakAuthProvider>
+            <AuthProvider>
+              <FeatureFlagsProvider>
+                <BrowserRouter basename={getBasename()}>
+                  <AppContent />
+                </BrowserRouter>
+              </FeatureFlagsProvider>
+            </AuthProvider>
+          </KeycloakAuthProvider>
         </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>

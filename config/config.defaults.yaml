@@ -17,6 +17,16 @@ auth:
   admin_email: admin@example.com
   admin_name: admin
 
+# Keycloak OAuth Configuration
+keycloak:
+  enabled: true
+  url: http://keycloak:8080  # Internal Docker URL
+  public_url: http://localhost:8081  # External browser URL
+  realm: ushadow
+  backend_client_id: ushadow-backend
+  frontend_client_id: ushadow-frontend
+  admin_user: admin
+
 # Speech Detection Settings
 speech_detection:
   min_words: 5

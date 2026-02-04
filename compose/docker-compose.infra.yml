@@ -94,7 +94,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: postgres
-    profiles: ["memory","metamcp","postgres"]
+    profiles: ["memory","metamcp","postgres","infra"]
     ports:
       - "5432:5432"
     environment:
@@ -125,7 +125,10 @@ services:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
     environment:
-      # - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD}
+      # Basic auth (JWT requires Neo4j Enterprise - use auth proxy for Community Edition)
+      - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-password}
+
+      # Plugins
       - NEO4J_PLUGINS=["apoc"]
     volumes:
       - neo4j_data:/data
@@ -136,6 +139,44 @@ services:
 
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    profiles: ["infra"]
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+      - "${KEYCLOAK_MGMT_PORT:-9000}:9000"  # Management
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/ushadow
+      - KC_DB_USERNAME=ushadow
+      - KC_DB_PASSWORD=ushadow
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+      - KC_HEALTH_ENABLED=true
+    volumes:
+      - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
+      - ../config/keycloak:/opt/keycloak/data/import:ro
+    command:
+      - start-dev
+      - --import-realm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ushadow-network
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 5

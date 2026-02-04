@@ -267,6 +267,14 @@ HOST_IP=localhost
 
 # Development mode
 DEV_MODE={'true' if dev_mode else 'false'}
+
+# ==========================================
+# KEYCLOAK SSO CONFIGURATION
+# ==========================================
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD=admin
+KEYCLOAK_PORT=8081
+KEYCLOAK_MGMT_PORT=9000
 """
 
     env_file.write_text(env_content)

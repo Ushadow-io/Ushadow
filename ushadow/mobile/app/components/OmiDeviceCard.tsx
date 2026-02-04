@@ -23,6 +23,8 @@ import {
   useDeviceConnection,
   useAudioListener,
   useAudioStreamer,
+  useAppLifecycle,
+  useConnectionHealth,
 } from '../hooks';
 import { useBluetooth, useOmiConnection } from '../contexts';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
@@ -33,6 +35,11 @@ import {
   setActiveOmiDevice,
 } from '../_utils/omiDeviceStorage';
 import { appendTokenToUrl } from '../_utils/authStorage';
+import {
+  registerBackgroundTask,
+  unregisterBackgroundTask,
+  updateConnectionState,
+} from '../services/backgroundTasks';
 
 interface OmiDeviceCardProps {
   device: SavedOmiDevice;
@@ -105,20 +112,10 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
   const isConnected = connectedDeviceId === device.id;
   console.log('[OmiDeviceCard] All hooks done, isConnected:', isConnected);
 
-  // Notify parent of streaming state changes
-  // Use ref to avoid infinite loop from callback changing on every render
-  const onStreamingStateChangeRef = useRef(onStreamingStateChange);
-  onStreamingStateChangeRef.current = onStreamingStateChange;
-
-  useEffect(() => {
-    console.log('[OmiDeviceCard] useEffect: streaming state changed, isStreaming:', isStreaming);
-    onStreamingStateChangeRef.current?.(isStreaming);
-    console.log('[OmiDeviceCard] useEffect: callback complete');
-  }, [isStreaming]);
-
   /**
    * Build WebSocket URL for OMI device streaming
    * Uses ws_omi endpoint with authentication
+   * Moved here to be available in lifecycle callbacks
    */
   const buildOmiWebSocketUrl = useCallback((): string => {
     let url = webSocketUrl.trim();
@@ -141,6 +138,113 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
     return url;
   }, [webSocketUrl, authToken]);
 
+  // Connection health monitoring
+  const { checkHealth, bluetoothHealthy, websocketHealthy } = useConnectionHealth({
+    omiConnection: isConnected ? omiConnection : undefined,
+    websocketReadyState: audioStreamer.getWebSocketReadyState(),
+    onUnhealthy: (type) => {
+      console.log(`[OmiDeviceCard] ⚠️ Connection unhealthy: ${type}`);
+    },
+  });
+
+  // App lifecycle management - handle background/foreground transitions
+  const { appState, isActive: isAppActive } = useAppLifecycle({
+    onForeground: async () => {
+      console.log('[OmiDeviceCard] 🟢 App returned to foreground');
+
+      // Only check health for THIS device if it's supposed to be active
+      if (!isActive) {
+        console.log('[OmiDeviceCard] Device not active, skipping health check');
+        return;
+      }
+
+      console.log('[OmiDeviceCard] Running connection health check...');
+      const health = await checkHealth();
+
+      // Handle Bluetooth connection health
+      if (isConnected && !health.bluetooth) {
+        console.log('[OmiDeviceCard] ❌ Bluetooth connection lost in background, reconnecting...');
+        try {
+          await connectToDevice(device.id);
+        } catch (error) {
+          console.error('[OmiDeviceCard] Failed to reconnect Bluetooth:', error);
+        }
+      }
+
+      // Handle WebSocket connection health
+      if (isStreaming && !health.websocket) {
+        console.log('[OmiDeviceCard] ❌ WebSocket connection lost in background, reconnecting...');
+        try {
+          const wsUrl = buildOmiWebSocketUrl();
+          await audioStreamer.startStreaming(wsUrl);
+
+          // Restart audio listener if Bluetooth is healthy
+          if (health.bluetooth) {
+            await startAudioListener(async (audioBytes: Uint8Array) => {
+              if (audioBytes.length > 0 && audioStreamer.getWebSocketReadyState() === WebSocket.OPEN) {
+                await audioStreamer.sendAudio(audioBytes);
+              }
+            });
+          }
+        } catch (error) {
+          console.error('[OmiDeviceCard] Failed to reconnect WebSocket:', error);
+          setIsStreaming(false);
+        }
+      }
+
+      console.log('[OmiDeviceCard] Foreground transition complete');
+    },
+
+    onBackground: () => {
+      console.log('[OmiDeviceCard] 🔴 App moved to background');
+      console.log('[OmiDeviceCard] Connection state:', {
+        isConnected,
+        isStreaming,
+        bluetoothHealthy,
+        websocketHealthy,
+      });
+      // Note: We keep connections alive, OS may suspend them
+      // Reconnection will happen in onForeground if needed
+    },
+  });
+
+  // Notify parent of streaming state changes
+  // Use ref to avoid infinite loop from callback changing on every render
+  const onStreamingStateChangeRef = useRef(onStreamingStateChange);
+  onStreamingStateChangeRef.current = onStreamingStateChange;
+
+  useEffect(() => {
+    console.log('[OmiDeviceCard] useEffect: streaming state changed, isStreaming:', isStreaming);
+    onStreamingStateChangeRef.current?.(isStreaming);
+    console.log('[OmiDeviceCard] useEffect: callback complete');
+  }, [isStreaming]);
+
+  /**
+   * Cross-connection monitoring (Phase 3: Fix 5)
+   * Stop one connection if the other fails to save resources
+   */
+  useEffect(() => {
+    // Only monitor if this device is supposed to be streaming
+    if (!isStreaming) return;
+
+    const wsReady = audioStreamer.getWebSocketReadyState();
+
+    // If Bluetooth is listening but WebSocket disconnected
+    if (isListeningAudio && wsReady !== WebSocket.OPEN) {
+      console.log('[OmiDeviceCard] ⚠️ WebSocket disconnected while Bluetooth streaming, stopping Bluetooth');
+      stopAudioListener().catch((err) => {
+        console.error('[OmiDeviceCard] Failed to stop audio listener:', err);
+      });
+    }
+
+    // If WebSocket is open but Bluetooth stopped listening
+    if (!isListeningAudio && wsReady === WebSocket.OPEN) {
+      console.log('[OmiDeviceCard] ⚠️ Bluetooth stopped while WebSocket open, stopping WebSocket');
+      audioStreamer.stopStreaming();
+      setIsStreaming(false);
+    }
+  }, [isListeningAudio, isStreaming, audioStreamer, stopAudioListener]);
+
   /**
    * Handle device connection/disconnection
    */
@@ -151,8 +255,18 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
         await stopAudioListener();
         audioStreamer.stopStreaming();
         setIsStreaming(false);
+
+        // Unregister background task when stopping streaming
+        await unregisterBackgroundTask();
       }
       await disconnectFromDevice();
+
+      // Update connection state
+      await updateConnectionState({
+        isConnected: false,
+        isStreaming: false,
+        deviceId: device.id,
+      });
     } else {
       if (!isBluetoothOn) {
         Alert.alert('Bluetooth Required', 'Please enable Bluetooth to connect.');
@@ -168,6 +282,13 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
         // Set as active device when connected
         await setActiveOmiDevice(device.id);
         onSetActive(device.id);
+
+        // Update connection state
+        await updateConnectionState({
+          isConnected: true,
+          isStreaming: false,
+          deviceId: device.id,
+        });
       } catch (error) {
         console.error('[OmiDeviceCard] Connection failed:', error);
       }
@@ -205,6 +326,17 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
       await stopAudioListener();
       audioStreamer.stopStreaming();
       setIsStreaming(false);
+
+      // Unregister background task
+      console.log('[OmiDeviceCard] Unregistering background task...');
+      await unregisterBackgroundTask();
+
+      // Update connection state for background task
+      await updateConnectionState({
+        isConnected,
+        isStreaming: false,
+        deviceId: device.id,
+      });
     } else {
       // Start streaming
       try {
@@ -222,10 +354,33 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
         });
 
         setIsStreaming(true);
+
+        // Register background task to keep connection alive
+        console.log('[OmiDeviceCard] Registering background task...');
+        const registered = await registerBackgroundTask(60); // Check every 60s minimum
+        if (registered) {
+          console.log('[OmiDeviceCard] ✅ Background task registered');
+        } else {
+          console.warn('[OmiDeviceCard] ⚠️ Failed to register background task');
+        }
+
+        // Update connection state for background task
+        await updateConnectionState({
+          isConnected,
+          isStreaming: true,
+          deviceId: device.id,
+        });
       } catch (error) {
         console.error('[OmiDeviceCard] Failed to start streaming:', error);
         Alert.alert('Streaming Error', 'Failed to start audio streaming.');
         audioStreamer.stopStreaming();
+
+        // Clean up connection state
+        await updateConnectionState({
+          isConnected,
+          isStreaming: false,
+          deviceId: device.id,
+        });
       }
     }
   }, [

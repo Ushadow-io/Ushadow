@@ -431,6 +431,7 @@ export default function ServiceConfigsPage() {
     // Try to find instance first, otherwise treat as template ID
     const consumerInstance = instances.find(inst => inst.id === consumerId)
     const templateId = consumerInstance?.template_id || consumerId
+    console.log('[DEBUG handleDeployConsumer]', { consumerId, consumerInstance: consumerInstance?.id, templateId, configId: target.configId })
 
     // Load ALL available targets (both Docker and K8s) for unified selection
     setLoadingTargets(true)
@@ -1396,6 +1397,7 @@ export default function ServiceConfigsPage() {
           providerTemplates={providerTemplates}
           serviceStatuses={serviceStatuses}
           deployments={filteredDeployments}
+          splitServicesEnabled={isEnabled('split_services')}
           onAddConfig={showServiceConfigs ? handleAddConfig : () => {}}
           onWiringChange={handleWiringChange}
           onWiringClear={handleWiringClear}

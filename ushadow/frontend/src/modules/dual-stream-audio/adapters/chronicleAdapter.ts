@@ -35,10 +35,14 @@ export class ChronicleWebSocketAdapter {
       const { backendUrl, token, deviceName = 'webui-dual-stream' } = this.config
 
       // Build WebSocket URL
-      // Determine protocol from the backend URL, not the current page
       let wsUrl: string
 
-      if (backendUrl && backendUrl.startsWith('http')) {
+      // Check if backendUrl is already a complete WebSocket URL (relay or direct)
+      if (backendUrl && (backendUrl.startsWith('ws://') || backendUrl.startsWith('wss://'))) {
+        // Already a complete WebSocket URL (e.g., from relay)
+        wsUrl = backendUrl
+        console.log('🔗 Using pre-built WebSocket URL (relay)')
+      } else if (backendUrl && backendUrl.startsWith('http')) {
         // Extract protocol from backendUrl (https:// -> wss://, http:// -> ws://)
         const protocol = backendUrl.startsWith('https://') ? 'wss:' : 'ws:'
         const host = backendUrl.replace(/^https?:\/\//, '')
@@ -53,7 +57,7 @@ export class ChronicleWebSocketAdapter {
         wsUrl = `${protocol}//${window.location.host}/ws_pcm?token=${token}&device_name=${deviceName}`
       }
 
-      console.log('🔗 Connecting to Chronicle WebSocket:', wsUrl)
+      console.log('🔗 Connecting to Chronicle WebSocket:', wsUrl.replace(/token=[^&]+/, 'token=REDACTED'))
 
       this.ws = new WebSocket(wsUrl)
 
