@@ -164,7 +164,7 @@ services:
       - KC_HEALTH_ENABLED=true
     volumes:
       - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
-      - ../config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - ../config/keycloak:/opt/keycloak/data/import:ro
     command:
       - start-dev
       - --import-realm
