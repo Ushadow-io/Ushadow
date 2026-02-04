@@ -10,7 +10,10 @@ export default function LoginPage() {
   const { isAuthenticated, isLoading, login, register } = useKeycloakAuth()
 
   // Get the intended destination from router state (set by ProtectedRoute)
-  const from = (location.state as { from?: string })?.from || '/'
+  // or from query param (used by share pages and other public routes)
+  const searchParams = new URLSearchParams(location.search)
+  const returnTo = searchParams.get('returnTo')
+  const from = (location.state as { from?: string })?.from || returnTo || '/'
 
   // After successful login, redirect to intended destination
   // Note: Don't redirect if we're on the callback page - that's handled by OAuthCallback component

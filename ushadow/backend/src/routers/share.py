@@ -6,8 +6,9 @@ Thin router layer that delegates to ShareService for business logic.
 
 import logging
 import os
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -24,6 +25,90 @@ from ..services.auth import get_current_user, get_optional_current_user
 from ..services.share_service import ShareService
 
 logger = logging.getLogger(__name__)
+
+REQUEST_TIMEOUT = 10.0
+
+
+def _get_backend_base_url() -> str:
+    """Get the backend base URL from config.
+
+    Uses network.host_ip and network.backend_public_port from OmegaConf settings.
+
+    Returns:
+        Backend URL string (e.g., "http://localhost:8000")
+    """
+    try:
+        from src.config import get_settings
+        settings = get_settings()
+        host_ip = settings.get_sync("network.host_ip", "localhost")
+        port = settings.get_sync("network.backend_public_port", 8000)
+        return f"http://{host_ip}:{port}"
+    except Exception as e:
+        logger.warning(f"Failed to get backend URL from config: {e}, using default")
+        return "http://localhost:8000"
+
+
+async def _fetch_resource_data(
+    resource_type: str,
+    resource_id: str,
+    auth_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch actual resource data via the service proxy.
+
+    Uses the generic service proxy at /api/services/{name}/proxy/{path}
+    which handles service discovery and request forwarding.
+
+    Args:
+        resource_type: Type of resource (conversation, memory, etc.)
+        resource_id: ID of the resource
+        auth_token: Optional Bearer token for authenticated requests
+
+    Returns:
+        Resource data dict, or error info if fetch fails
+    """
+    # Get backend URL from config
+    backend_base_url = _get_backend_base_url()
+
+    # Map resource type to service and endpoint
+    if resource_type == "conversation":
+        # Conversations are stored in Mycelia
+        proxy_url = f"{backend_base_url}/api/services/mycelia-backend/proxy"
+        path = f"/data/conversations/{resource_id}"
+    elif resource_type == "memory":
+        # Memories may be in OpenMemory (mem0) or Mycelia
+        proxy_url = f"{backend_base_url}/api/services/mem0/proxy"
+        path = f"/api/v1/memories/{resource_id}"
+    else:
+        return {"error": f"Unknown resource type: {resource_type}"}
+
+    # Build headers - disable automatic decompression to avoid gzip mismatch issues
+    headers = {"Accept-Encoding": "identity"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        try:
+            url = f"{proxy_url}{path}"
+            logger.debug(f"Fetching resource via proxy: {url}")
+            response = await client.get(url, headers=headers)
+
+            if response.status_code == 200:
+                logger.info(f"Successfully fetched {resource_type} {resource_id}")
+                return response.json()
+            elif response.status_code == 404:
+                logger.warning(f"Resource not found: {resource_type} {resource_id}")
+                return {"error": f"{resource_type.title()} not found"}
+            elif response.status_code in (401, 403):
+                logger.warning(f"Auth failed fetching resource: {response.status_code}")
+                return {"error": "Authentication required to view this resource"}
+            else:
+                logger.warning(f"Failed to fetch resource: {response.status_code}")
+                return {"error": f"Failed to fetch {resource_type}: HTTP {response.status_code}"}
+
+        except httpx.RequestError as e:
+            logger.error(f"Could not connect to service proxy: {e}")
+            return {"error": "Could not connect to data service"}
+
 
 router = APIRouter(prefix="/api/share", tags=["sharing"])
 
@@ -140,6 +225,10 @@ async def access_shared_resource(
     # Get request IP for Tailscale validation
     request_ip = request.client.host if request.client else None
 
+    # Extract auth token from request (for forwarding to service proxy)
+    auth_header = request.headers.get("authorization", "")
+    auth_token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+
     # Validate access
     is_valid, share_token, reason = await service.validate_share_access(
         token=token,
@@ -165,15 +254,19 @@ async def access_shared_resource(
         metadata=metadata,
     )
 
-    # TODO: Fetch actual resource data from Chronicle/Mycelia
-    # For now, return share token info and placeholder resource
+    # Fetch actual resource data (pass auth token for authenticated shares)
+    resource_data = await _fetch_resource_data(
+        share_token.resource_type,
+        share_token.resource_id,
+        auth_token=auth_token,
+    )
+
     return {
         "share_token": service.to_response(share_token).dict(),
         "resource": {
             "type": share_token.resource_type,
             "id": share_token.resource_id,
-            # TODO: Add actual resource data here
-            "data": f"Placeholder for {share_token.resource_type}:{share_token.resource_id}",
+            "data": resource_data,
         },
         "permissions": share_token.permissions,
     }
