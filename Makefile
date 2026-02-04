@@ -538,13 +538,37 @@ keycloak-fresh-start:
 	@echo "2. Clearing Keycloak database..."
 	@docker exec postgres psql -U ushadow -d ushadow -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
 		echo "⚠️  Database already clean or Postgres not running"
-	@echo "3. Starting Keycloak..."
+	@echo "3. Starting Keycloak (realm will import automatically)..."
 	@docker-compose -f compose/docker-compose.infra.yml --profile infra up -d keycloak
-	@echo "4. Waiting for Keycloak to start (30s)..."
-	@sleep 30
-	@echo "5. Creating realm from export..."
-	@$(MAKE) keycloak-create-realm || echo "⚠️  Realm creation failed - may need manual setup"
+	@echo "4. Waiting for Keycloak health check..."
+	@for i in {1..60}; do \
+		printf "   Checking health (attempt $$i/60)...\r"; \
+		if curl -sf http://localhost:$${KEYCLOAK_MGMT_PORT:-9000}/health/ready > /dev/null 2>&1; then \
+			echo "\n   ✅ Keycloak is healthy                    "; \
+			break; \
+		fi; \
+		if [ $$i -eq 60 ]; then \
+			echo "\n   ⚠️  Keycloak health check timeout - check logs: docker logs keycloak"; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done
+	@echo "5. Waiting for realm import to complete..."
+	@for i in {1..30}; do \
+		printf "   Checking realm (attempt $$i/30)...\r"; \
+		if curl -sf http://localhost:$${KEYCLOAK_PORT:-8081}/realms/ushadow > /dev/null 2>&1; then \
+			echo "\n   ✅ Realm 'ushadow' is ready                    "; \
+			break; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "\n   ⚠️  Realm import timeout - check logs: docker logs keycloak"; \
+		fi; \
+		sleep 2; \
+	done
+	@echo "6. Restarting backend..."
+	@docker ps --format "{{.Names}}" | grep -E "^ushadow-.*-backend$$" | grep -v chronicle | grep -v mycelia | head -1 | xargs -r docker restart
+	@echo "✅ Backend restarted"
 	@echo "✅ Fresh Keycloak setup complete"
-	@echo "   Admin console: http://localhost:8081"
+	@echo "   Admin console: http://localhost:$${KEYCLOAK_PORT:-8081}"
 	@echo "   Username: admin"
 	@echo "   Password: admin"

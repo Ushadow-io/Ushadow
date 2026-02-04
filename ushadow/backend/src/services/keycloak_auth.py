@@ -1,17 +1,18 @@
 """
 Keycloak Token Validation
 
-Validates Keycloak JWT access tokens for API requests.
-This allows federated users (authenticated via Keycloak) to access the API
-without needing a local Ushadow account.
+Validates Keycloak JWT access tokens using python-keycloak library.
+Provides FastAPI dependencies for authentication.
 """
 
-import os
 import logging
 from typing import Optional, Union
-import jwt
-from fastapi import HTTPException, status, Depends, Request
+
+from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from keycloak.exceptions import KeycloakError
+
+from .keycloak_client import get_keycloak_client
 
 logger = logging.getLogger(__name__)
 
@@ -21,62 +22,31 @@ security = HTTPBearer(auto_error=False)
 
 def validate_keycloak_token(token: str) -> Optional[dict]:
     """
-    Validate a Keycloak access token.
+    Validate a Keycloak access token using python-keycloak.
+
+    This properly validates:
+    - Token signature using Keycloak's public keys (JWKS)
+    - Token expiration
+    - Issuer
+    - Other standard JWT claims
 
     Args:
         token: JWT access token from Keycloak
 
     Returns:
         Decoded token payload if valid, None if invalid
-
-    Note:
-        This is a simplified validation for development.
-        In production, you should:
-        1. Fetch Keycloak's public keys from JWKS endpoint
-        2. Verify signature using the public key
-        3. Validate issuer, audience, and other claims
     """
     try:
-        # For now, decode without verification (development only!)
-        # TODO: Add proper JWT signature verification using Keycloak's public keys
-        # Keycloak typically uses RS256 algorithm, so we need to allow it even when not verifying
-        payload = jwt.decode(
-            token,
-            algorithms=["RS256", "HS256"],  # Allow common algorithms
-            options={
-                "verify_signature": False,  # FIXME: Enable in production!
-                "verify_exp": True,  # Still check expiration
-            }
-        )
+        kc_client = get_keycloak_client()
 
-        # Log the payload for debugging
-        logger.info(f"Decoded Keycloak token - issuer: {payload.get('iss')}, user: {payload.get('preferred_username')}")
+        # Decode and validate token (checks signature, expiration, etc.)
+        payload = kc_client.decode_token(token, validate=True)
 
-        # Validate issuer (accept both internal and external URLs)
-        keycloak_external = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8081")
-        keycloak_internal = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
-        keycloak_realm = os.getenv("KEYCLOAK_REALM", "ushadow")
-
-        expected_issuers = [
-            f"{keycloak_external}/realms/{keycloak_realm}",
-            f"{keycloak_internal}/realms/{keycloak_realm}",
-        ]
-
-        token_issuer = payload.get("iss")
-        if token_issuer not in expected_issuers:
-            logger.warning(f"Invalid issuer: {token_issuer} (expected one of {expected_issuers})")
-            # Don't reject - just log for now during development
-            # return None
-
-        # Token is valid
         logger.info(f"✓ Validated Keycloak token for user: {payload.get('preferred_username')}")
         return payload
 
-    except jwt.ExpiredSignatureError:
-        logger.warning("Keycloak token expired")
-        return None
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid Keycloak token: {e}")
+    except KeycloakError as e:
+        logger.warning(f"Keycloak token validation failed: {e}")
         return None
     except Exception as e:
         logger.error(f"Error validating Keycloak token: {e}", exc_info=True)
@@ -127,7 +97,7 @@ async def get_current_user_hybrid(
 
     This is a FastAPI dependency that can be used in place of the legacy get_current_user.
     It tries to validate the token as:
-    1. Keycloak access token
+    1. Keycloak access token (using python-keycloak with proper signature validation)
     2. Legacy Ushadow JWT (via fastapi-users)
 
     Args:
@@ -150,7 +120,7 @@ async def get_current_user_hybrid(
     token_preview = token[:20] + "..." if len(token) > 20 else token
     logger.info(f"[AUTH] Validating token: {token_preview}")
 
-    # Try Keycloak token validation first (simpler, no database lookup)
+    # Try Keycloak token validation first (with proper signature validation)
     keycloak_user = get_keycloak_user_from_token(token)
     if keycloak_user:
         logger.info(f"[AUTH] ✅ Keycloak authentication successful: {keycloak_user.get('email')}")

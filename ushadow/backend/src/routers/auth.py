@@ -421,8 +421,7 @@ class TokenExchangeResponse(BaseModel):
 async def exchange_code_for_tokens(request: TokenExchangeRequest):
     """Exchange OAuth authorization code for access/refresh tokens.
 
-    This endpoint implements the OAuth 2.0 Authorization Code Flow with PKCE.
-    It exchanges the authorization code received from Keycloak for actual tokens.
+    Standard OAuth 2.0 Authorization Code Flow with PKCE using python-keycloak.
 
     Args:
         request: Contains authorization code, PKCE verifier, and redirect URI
@@ -434,65 +433,34 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
         400: If code exchange fails (invalid code, expired, etc.)
         503: If Keycloak is unreachable
     """
-    import httpx
-    from src.config.keycloak_settings import get_keycloak_config
+    from src.services.keycloak_client import get_keycloak_client
+    from keycloak.exceptions import KeycloakError
 
     try:
-        # Get Keycloak configuration
-        kc_config = get_keycloak_config()
+        kc_client = get_keycloak_client()
 
-        if not kc_config.get("enabled"):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Keycloak authentication is not enabled"
-            )
+        # Exchange authorization code for tokens
+        tokens = kc_client.exchange_code_for_tokens(
+            code=request.code,
+            redirect_uri=request.redirect_uri,
+            code_verifier=request.code_verifier
+        )
 
-        # Prepare token exchange request to Keycloak
-        token_url = f"{kc_config['url']}/realms/{kc_config['realm']}/protocol/openid-connect/token"
+        logger.info("[TOKEN-EXCHANGE] ✓ Successfully exchanged code for tokens")
 
-        token_data = {
-            "grant_type": "authorization_code",
-            "code": request.code,
-            "redirect_uri": request.redirect_uri,
-            "client_id": kc_config["frontend_client_id"],
-            "code_verifier": request.code_verifier,
-        }
+        return TokenExchangeResponse(
+            access_token=tokens["access_token"],
+            refresh_token=tokens.get("refresh_token"),
+            id_token=tokens.get("id_token"),
+            expires_in=tokens.get("expires_in"),
+            token_type=tokens.get("token_type", "Bearer")
+        )
 
-        logger.info(f"[TOKEN-EXCHANGE] Exchanging code with Keycloak at {token_url}")
-
-        # Make request to Keycloak
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                token_url,
-                data=token_data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10.0
-            )
-
-            if response.status_code != 200:
-                error_detail = response.text
-                logger.error(f"[TOKEN-EXCHANGE] Keycloak error: {error_detail}")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Token exchange failed: {error_detail}"
-                )
-
-            tokens = response.json()
-            logger.info(f"[TOKEN-EXCHANGE] ✓ Successfully exchanged code for tokens")
-
-            return TokenExchangeResponse(
-                access_token=tokens["access_token"],
-                refresh_token=tokens.get("refresh_token"),
-                id_token=tokens.get("id_token"),
-                expires_in=tokens.get("expires_in"),
-                token_type=tokens.get("token_type", "Bearer")
-            )
-
-    except httpx.RequestError as e:
-        logger.error(f"[TOKEN-EXCHANGE] Failed to connect to Keycloak: {e}")
+    except KeycloakError as e:
+        logger.error(f"[TOKEN-EXCHANGE] Keycloak error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Cannot connect to Keycloak authentication server"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Token exchange failed: {str(e)}"
         )
     except Exception as e:
         logger.error(f"[TOKEN-EXCHANGE] Unexpected error: {e}", exc_info=True)
@@ -500,6 +468,58 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
-    
-    logger.info(f"User logged out: {user.email}")
-    return {"message": "Successfully logged out"}
+
+
+# Token Refresh
+class TokenRefreshRequest(BaseModel):
+    """Request for refreshing access token."""
+    refresh_token: str = Field(..., description="Valid refresh token")
+
+
+@router.post("/refresh", response_model=TokenExchangeResponse)
+async def refresh_access_token(request: TokenRefreshRequest):
+    """Refresh access token using refresh token.
+
+    Standard OAuth 2.0 refresh token flow using python-keycloak.
+
+    Args:
+        request: Contains refresh token
+
+    Returns:
+        New access token, refresh token, and ID token
+
+    Raises:
+        401: If refresh token is invalid or expired
+        503: If Keycloak is unreachable
+    """
+    from src.services.keycloak_client import get_keycloak_client
+    from keycloak.exceptions import KeycloakError
+
+    try:
+        kc_client = get_keycloak_client()
+
+        # Refresh token
+        tokens = kc_client.refresh_token(request.refresh_token)
+
+        logger.info("[TOKEN-REFRESH] ✓ Successfully refreshed access token")
+
+        return TokenExchangeResponse(
+            access_token=tokens["access_token"],
+            refresh_token=tokens.get("refresh_token"),
+            id_token=tokens.get("id_token"),
+            expires_in=tokens.get("expires_in"),
+            token_type=tokens.get("token_type", "Bearer")
+        )
+
+    except KeycloakError as e:
+        logger.error(f"[TOKEN-REFRESH] Keycloak error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token refresh failed: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"[TOKEN-REFRESH] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
