@@ -101,6 +101,13 @@ flags:
       worker grouping"
     type: release
 
+  # Legacy Services Page - Old Docker service configuration page
+  legacy_services_page:
+    enabled: false
+    description: "Legacy Services page (replaced by Instances page) - Docker service
+      configuration"
+    type: release
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false

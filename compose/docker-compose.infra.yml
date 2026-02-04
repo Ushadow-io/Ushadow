@@ -94,7 +94,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: postgres
-    profiles: ["memory","metamcp","postgres"]
+    profiles: ["memory","metamcp","postgres","infra"]
     ports:
       - "5432:5432"
     environment:

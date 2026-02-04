@@ -24,7 +24,7 @@ from src.models.share import ShareToken  # Beanie document model
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
 from src.routers import kubernetes, tailscale, unodes, docker, sse
-from src.routers import github_import, audio_relay, memories, share, keycloak_admin
+from src.routers import github_import, audio_relay, memories, share, keycloak_admin, dashboard
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -198,6 +198,7 @@ app.include_router(audio_relay.router, tags=["audio"])
 app.include_router(memories.router, tags=["memories"])
 app.include_router(share.router, tags=["sharing"])
 app.include_router(keycloak_admin.router, prefix="/api/keycloak", tags=["keycloak-admin"])
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)
