@@ -81,8 +81,8 @@ export default function ServicesTab({
           </p>
         </div>
 
-        {/* Service Cards Grid */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
+        {/* Service Cards - Masonry Layout */}
+        <div className="columns-1 xl:columns-2 gap-4 pb-8">
           {composeTemplates.map((template) => {
             // Find ALL configs for this template
             const templateConfigs = instances.filter((i) => i.template_id === template.id)
@@ -101,33 +101,34 @@ export default function ServicesTab({
             const serviceDeployments = deployments.filter((d) => d.service_id === template.id)
 
             return (
-              <FlatServiceCard
-                key={template.id}
-                template={template}
-                config={config ? { ...config, status: status?.status || config.status } : null}
-                wiring={consumerWiring}
-                providerTemplates={providerTemplates}
-                initialConfigs={templateConfigs}
-                instanceCount={templateConfigs.length}
-                deployments={serviceDeployments}
-                onStopDeployment={onStopDeployment}
-                onRestartDeployment={onRestartDeployment}
-                onRemoveDeployment={onRemoveDeployment}
-                onEditDeployment={onEditDeployment}
-                onAddConfig={() => onAddConfig(template.id)}
-                onWiringChange={(capability, sourceConfigId) =>
-                  onWiringChange(consumerId, capability, sourceConfigId)
-                }
-                onWiringClear={(capability) => onWiringClear(consumerId, capability)}
-                onConfigCreate={onConfigCreate}
-                onEditConfig={onEditConfig}
-                onDeleteConfig={onDeleteConfig}
-                onUpdateConfig={onUpdateConfig}
-                onStart={() => onStart(template.id)}
-                onStop={() => onStop(template.id)}
-                onEdit={() => onEdit(template.id)}
-                onDeploy={(target) => onDeploy(template.id, target)}
-              />
+              <div key={template.id} className="break-inside-avoid mb-4">
+                <FlatServiceCard
+                  template={template}
+                  config={config ? { ...config, status: status?.status || config.status } : null}
+                  wiring={consumerWiring}
+                  providerTemplates={providerTemplates}
+                  initialConfigs={templateConfigs}
+                  instanceCount={templateConfigs.length}
+                  deployments={serviceDeployments}
+                  onStopDeployment={onStopDeployment}
+                  onRestartDeployment={onRestartDeployment}
+                  onRemoveDeployment={onRemoveDeployment}
+                  onEditDeployment={onEditDeployment}
+                  onAddConfig={() => onAddConfig(template.id)}
+                  onWiringChange={(capability, sourceConfigId) =>
+                    onWiringChange(consumerId, capability, sourceConfigId)
+                  }
+                  onWiringClear={(capability) => onWiringClear(consumerId, capability)}
+                  onConfigCreate={onConfigCreate}
+                  onEditConfig={onEditConfig}
+                  onDeleteConfig={onDeleteConfig}
+                  onUpdateConfig={onUpdateConfig}
+                  onStart={() => onStart(template.id)}
+                  onStop={() => onStop(template.id)}
+                  onEdit={() => onEdit(template.id)}
+                  onDeploy={(target) => onDeploy(template.id, target)}
+                />
+              </div>
             )
           })}
         </div>
@@ -136,31 +137,37 @@ export default function ServicesTab({
   }
 
   // Separate services into UI and non-UI (API/Workers)
-  // UI services have "UI" or "ui" in their name
-  const uiServices = composeTemplates.filter((template) =>
-    template.name.toLowerCase().includes('ui')
-  )
+  // UI services have "ui" or "frontend" in their name
+  const isUiService = (template: Template) => {
+    const name = template.name.toLowerCase()
+    return name.includes('ui') || name.includes('frontend')
+  }
 
-  const apiServices = composeTemplates.filter((template) =>
-    !template.name.toLowerCase().includes('ui')
-  )
+  const uiServices = composeTemplates.filter(isUiService)
+
+  const apiServices = composeTemplates.filter((template) => !isUiService(template))
 
   // Group workers with their corresponding API services
-  // Workers typically have "-worker" in their name
+  // Workers typically have "-worker" or "-workers" in their name
   const groupedApiServices = apiServices.reduce((acc, template) => {
     const templateName = template.name.toLowerCase()
 
     // Check if this is a worker
     if (templateName.includes('worker')) {
       // Try to find the corresponding API service
-      // Remove "worker" and "-worker" to find the base name
-      const baseName = templateName.replace(/[-_]?worker[-_]?/gi, '').trim()
+      // Remove "worker", "workers", "-worker", "-workers", "python", etc. to find the base name
+      const baseName = templateName
+        .replace(/[-_\s]?workers?[-_\s]?/gi, '')
+        .replace(/[-_\s]?(python|node|go|rust)[-_\s]?/gi, '') // Remove language qualifiers
+        .trim()
 
       // Find the API service that matches this base name
-      const apiService = apiServices.find(t =>
-        !t.name.toLowerCase().includes('worker') &&
-        t.name.toLowerCase().includes(baseName)
-      )
+      // Check both directions: parent contains baseName OR baseName contains parent
+      const apiService = apiServices.find(t => {
+        if (t.name.toLowerCase().includes('worker')) return false
+        const parentName = t.name.toLowerCase()
+        return parentName.includes(baseName) || baseName.includes(parentName)
+      })
 
       if (apiService) {
         // Add this worker to the API service's workers array
@@ -184,7 +191,27 @@ export default function ServicesTab({
     return acc
   }, [] as Array<{ api: Template; workers: Template[] }>)
 
-  const renderServiceCard = (template: Template) => {
+  // Helper to get worker data in the format expected by FlatServiceCard
+  const getWorkerData = (workerTemplates: Template[]) => {
+    return workerTemplates.map((workerTemplate) => {
+      const workerConfigs = instances.filter((i) => i.template_id === workerTemplate.id)
+      const workerConfig = workerConfigs[0] || null
+      const workerServiceName = workerTemplate.id.includes(':')
+        ? workerTemplate.id.split(':').pop()!
+        : workerTemplate.id
+      const workerStatus = serviceStatuses[workerServiceName]
+      const workerDeployments = deployments.filter((d) => d.service_id === workerTemplate.id)
+
+      return {
+        template: workerTemplate,
+        config: workerConfig,
+        status: workerStatus?.status || 'stopped',
+        deployments: workerDeployments,
+      }
+    })
+  }
+
+  const renderServiceCard = (template: Template, workerTemplates: Template[] = []) => {
     // Find ALL configs for this template
     const templateConfigs = instances.filter((i) => i.template_id === template.id)
     // Show the first config (or null if none)
@@ -200,6 +227,9 @@ export default function ServicesTab({
 
     // Get deployments for this service
     const serviceDeployments = deployments.filter((d) => d.service_id === template.id)
+
+    // Prepare worker data
+    const workers = getWorkerData(workerTemplates)
 
     return (
       <FlatServiceCard
@@ -228,6 +258,11 @@ export default function ServicesTab({
         onStop={() => onStop(template.id)}
         onEdit={() => onEdit(template.id)}
         onDeploy={(target) => onDeploy(template.id, target)}
+        workers={workers}
+        onStartWorker={onStart}
+        onStopWorker={onStop}
+        onEditWorker={onEdit}
+        onDeployWorker={(templateId, target) => onDeploy(templateId, target)}
       />
     )
   }
@@ -278,26 +313,23 @@ export default function ServicesTab({
         </p>
       </div>
 
-      {/* Service Cards Grid */}
+      {/* Service Cards - Masonry Layout */}
       {activeSubTab === 'api' ? (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
+        <div className="columns-1 xl:columns-2 gap-4 pb-8">
           {groupedApiServices.map(({ api, workers }) => (
-            <div key={api.id} className="space-y-2">
-              {/* API Service Card */}
-              {renderServiceCard(api)}
-
-              {/* Worker Cards - shown in the same column as their API */}
-              {workers.length > 0 && (
-                <div className="ml-4 space-y-2 border-l-2 border-neutral-200 dark:border-neutral-700 pl-4">
-                  {workers.map((worker) => renderServiceCard(worker))}
-                </div>
-              )}
+            <div key={api.id} className="break-inside-avoid mb-4">
+              {/* API Service Card with workers embedded */}
+              {renderServiceCard(api, workers)}
             </div>
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
-          {uiServices.map((template) => renderServiceCard(template))}
+        <div className="columns-1 xl:columns-2 gap-4 pb-8">
+          {uiServices.map((template) => (
+            <div key={template.id} className="break-inside-avoid mb-4">
+              {renderServiceCard(template)}
+            </div>
+          ))}
         </div>
       )}
 
