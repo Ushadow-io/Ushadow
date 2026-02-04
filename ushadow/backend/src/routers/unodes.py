@@ -34,6 +34,7 @@ class UNodeRegistrationRequest(BaseModel):
     """Request to register a u-node."""
     token: str
     hostname: str
+    envname: Optional[str] = None
     tailscale_ip: str
     platform: str = "unknown"
     manager_version: str = "0.1.0"
@@ -122,6 +123,7 @@ async def register_unode(request: UNodeRegistrationRequest):
 
     unode_create = UNodeCreate(
         hostname=request.hostname,
+        envname=request.envname,
         tailscale_ip=request.tailscale_ip,
         platform=platform,
         manager_version=request.manager_version,
@@ -375,6 +377,8 @@ class LeaderInfoResponse(BaseModel):
     """
     # Leader info
     hostname: str
+    envname: Optional[str] = None
+    display_name: Optional[str] = None
     tailscale_ip: str
     tailscale_hostname: Optional[str] = None  # Full Tailscale DNS name
     capabilities: UNodeCapabilities
@@ -511,6 +515,8 @@ async def get_leader_info():
 
     return LeaderInfoResponse(
         hostname=leader.hostname,
+        envname=leader.envname,
+        display_name=leader.display_name,
         tailscale_ip=leader.tailscale_ip,
         tailscale_hostname=tailscale_hostname,
         capabilities=leader.capabilities,

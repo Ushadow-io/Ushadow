@@ -18,6 +18,7 @@ interface CatalogService {
 interface UNode {
   id: string
   hostname: string
+  envname?: string
   display_name: string
   role: 'leader' | 'worker' | 'standby'
   platform: string
@@ -69,6 +70,8 @@ interface DiscoveredPeer {
 // Leader info from /api/unodes/leader/info
 interface LeaderInfo {
   hostname: string
+  envname?: string
+  display_name?: string
   tailscale_ip: string
   capabilities: {
     can_run_docker: boolean
@@ -84,6 +87,8 @@ interface LeaderInfo {
   unodes: Array<{
     id: string
     hostname: string
+    envname?: string
+    display_name?: string
     tailscale_ip: string
     status: string
     role: string

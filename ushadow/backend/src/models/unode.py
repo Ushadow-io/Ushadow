@@ -49,8 +49,9 @@ class UNodeCapabilities(BaseModel):
 
 class UNodeBase(BaseModel):
     """Base u-node model."""
-    hostname: str = Field(..., description="Tailscale hostname or K8s cluster ID")
-    display_name: Optional[str] = None
+    hostname: str = Field(..., description="Machine hostname (system name or Tailscale DNS)")
+    envname: Optional[str] = Field(None, description="Environment name (e.g., 'orange', 'purple')")
+    display_name: Optional[str] = Field(None, description="Display name, defaults to hostname-envname")
     type: UNodeType = Field(UNodeType.DOCKER, description="Deployment target type")
     role: UNodeRole = UNodeRole.WORKER
     platform: UNodePlatform = UNodePlatform.UNKNOWN
@@ -62,6 +63,7 @@ class UNodeBase(BaseModel):
 class UNodeCreate(BaseModel):
     """Model for registering a new u-node."""
     hostname: str
+    envname: Optional[str] = None
     tailscale_ip: str
     platform: UNodePlatform = UNodePlatform.UNKNOWN
     capabilities: Optional[UNodeCapabilities] = None

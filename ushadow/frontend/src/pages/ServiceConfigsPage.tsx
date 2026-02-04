@@ -1134,14 +1134,19 @@ export default function ServiceConfigsPage() {
     const filtered = filterCurrentEnvOnly
       ? deployments.filter((d) => {
           // Match deployments from the current environment only
-          // Check if the deployment's hostname matches this environment's compose project or env name
-          const matches = d.unode_hostname && (
-            d.unode_hostname === currentEnv ||
-            d.unode_hostname === currentComposeProject ||
-            d.unode_hostname.startsWith(`${currentComposeProject}.`)
+          // Check if the deployment's hostname or container name contains the env name
+          const hostname = d.unode_hostname?.toLowerCase() || ''
+          const containerName = d.container_name?.toLowerCase() || ''
+          const matches = (
+            hostname === currentEnv ||
+            hostname === currentComposeProject ||
+            hostname.startsWith(`${currentComposeProject}.`) ||
+            hostname.includes(currentEnv) ||
+            containerName.includes(currentComposeProject) ||
+            containerName.includes(currentEnv)
           )
           if (!matches && d.unode_hostname) {
-            console.log(`  ⏭️ Filtered out deployment ${d.id}: hostname=${d.unode_hostname}`)
+            console.log(`  ⏭️ Filtered out deployment ${d.id}: hostname=${d.unode_hostname}, container=${d.container_name}`)
           }
           return matches
         })
