@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { Epic, TicketPriority } from './KanbanBoard'
+import { useState, useEffect } from 'react'
+import type { Epic, TicketPriority, UshadowEnvironment } from '../hooks/useTauri'
 
 interface CreateTicketDialogProps {
   isOpen: boolean
@@ -7,6 +7,7 @@ interface CreateTicketDialogProps {
   onCreated: () => void
   epics: Epic[]
   projectId?: string
+  projectRoot: string
   backendUrl: string
   initialEnvironment?: string // For "Create from Environment" flow
 }
@@ -17,6 +18,7 @@ export function CreateTicketDialog({
   onCreated,
   epics,
   projectId,
+  projectRoot,
   backendUrl,
   initialEnvironment,
 }: CreateTicketDialogProps) {
@@ -25,8 +27,27 @@ export function CreateTicketDialog({
   const [priority, setPriority] = useState<TicketPriority>('medium')
   const [epicId, setEpicId] = useState<string>('')
   const [tags, setTags] = useState<string>('')
+  const [environment, setEnvironment] = useState<string>(initialEnvironment || '')
+  const [environments, setEnvironments] = useState<UshadowEnvironment[]>([])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Load environments when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      loadEnvironments()
+    }
+  }, [isOpen])
+
+  const loadEnvironments = async () => {
+    try {
+      const { tauri } = await import('../hooks/useTauri')
+      const discovery = await tauri.discoverEnvironments()
+      setEnvironments(discovery.environments.filter(env => env.is_worktree && env.path && env.branch))
+    } catch (err) {
+      console.error('Failed to load environments:', err)
+    }
+  }
 
   if (!isOpen) return null
 
@@ -36,24 +57,63 @@ export function CreateTicketDialog({
     setCreating(true)
 
     try {
-      const payload = {
+      const { tauri } = await import('../hooks/useTauri')
+
+      const tagsList = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : []
+
+      console.log('[CreateTicket] Creating ticket with Tauri command')
+      console.log('[CreateTicket] Data:', { title, description, priority, epicId, tags: tagsList, projectId, environment })
+
+      // Create the ticket first
+      const ticket = await tauri.createTicket(
         title,
-        description: description || undefined,
+        description || null,
         priority,
-        epic_id: epicId || undefined,
-        tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-        project_id: projectId,
-        environment_name: initialEnvironment,
-      }
+        epicId || null,
+        tagsList,
+        environment || null,
+        projectId || null
+      )
 
-      const response = await fetch(`${backendUrl}/api/kanban/tickets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
+      // If environment is selected, attach to worktree
+      if (environment) {
+        const env = environments.find(e => e.name === environment)
+        if (env && env.path && env.branch) {
+          console.log('[CreateTicket] Attaching to environment:', environment)
+          const result = await tauri.attachTicketToWorktree(ticket.id, env.path, env.branch)
 
-      if (!response.ok) {
-        throw new Error('Failed to create ticket')
+          // Update ticket with worktree info
+          await tauri.updateTicket(
+            ticket.id,
+            undefined, // title
+            undefined, // description
+            'in_progress', // status
+            undefined, // priority
+            undefined, // epicId
+            undefined, // tags
+            undefined, // order
+            result.worktree_path,
+            result.branch_name,
+            result.tmux_window_name,
+            result.tmux_session_name,
+            environment
+          )
+
+          // Start coding agent in the tmux window
+          console.log('[CreateTicket] Starting coding agent for ticket:', ticket.id)
+          try {
+            await tauri.startCodingAgentForTicket(
+              ticket.id,
+              result.tmux_window_name,
+              result.tmux_session_name,
+              result.worktree_path
+            )
+            console.log('[CreateTicket] ✓ Coding agent started')
+          } catch (err) {
+            console.error('[CreateTicket] Failed to start coding agent:', err)
+            // Don't fail the whole operation if agent fails to start
+          }
+        }
       }
 
       onCreated()
@@ -63,7 +123,9 @@ export function CreateTicketDialog({
       setPriority('medium')
       setEpicId('')
       setTags('')
+      setEnvironment('')
     } catch (err) {
+      console.error('[CreateTicket] Exception:', err)
       setError(err instanceof Error ? err.message : 'Failed to create ticket')
     } finally {
       setCreating(false)
@@ -151,6 +213,29 @@ export function CreateTicketDialog({
             </select>
           </div>
 
+          {/* Environment */}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Environment (optional)
+            </label>
+            <select
+              value={environment}
+              onChange={(e) => setEnvironment(e.target.value)}
+              className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white"
+              data-testid="create-ticket-environment"
+            >
+              <option value="">No Environment</option>
+              {environments.map((env) => (
+                <option key={env.name} value={env.name}>
+                  {env.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Assign this ticket to an environment immediately (will set status to In Progress)
+            </p>
+          </div>
+
           {/* Tags */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -165,13 +250,6 @@ export function CreateTicketDialog({
               data-testid="create-ticket-tags"
             />
           </div>
-
-          {/* Environment (if provided) */}
-          {initialEnvironment && (
-            <div className="text-sm text-gray-400">
-              Linked to environment: <span className="text-white">{initialEnvironment}</span>
-            </div>
-          )}
 
           {/* Error */}
           {error && (

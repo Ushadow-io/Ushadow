@@ -41,23 +41,16 @@ export function CreateEpicDialog({
     setCreating(true)
 
     try {
-      const payload = {
+      const { tauri } = await import('../hooks/useTauri')
+
+      await tauri.createEpic(
         title,
-        description: description || undefined,
+        description || null,
         color,
-        base_branch: baseBranch,
-        project_id: projectId,
-      }
-
-      const response = await fetch(`${backendUrl}/api/kanban/epics`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!response.ok) {
-        throw new Error('Failed to create epic')
-      }
+        baseBranch,
+        null, // branch_name (not set during creation)
+        projectId || null
+      )
 
       onCreated()
       // Reset form

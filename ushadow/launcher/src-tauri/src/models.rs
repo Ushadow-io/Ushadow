@@ -161,3 +161,69 @@ pub struct ComposeServiceDefinition {
     pub default_port: Option<u16>, // Primary exposed port
     pub profiles: Vec<String>, // Profiles this service belongs to
 }
+
+/// Kanban ticket status
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketStatus {
+    Backlog,
+    Todo,
+    InProgress,
+    InReview,
+    Done,
+    Archived,
+}
+
+/// Kanban ticket priority
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TicketPriority {
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+/// Epic (collection of related tickets)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Epic {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub color: String,
+    pub branch_name: Option<String>,
+    pub base_branch: String,
+    pub project_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Kanban ticket
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Ticket {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: TicketStatus,
+    pub priority: TicketPriority,
+    pub epic_id: Option<String>,
+    pub tags: Vec<String>,
+    pub color: Option<String>,
+    pub tmux_window_name: Option<String>,
+    pub tmux_session_name: Option<String>,
+    pub branch_name: Option<String>,
+    pub worktree_path: Option<String>,
+    pub environment_name: Option<String>,
+    pub project_id: Option<String>,
+    pub assigned_to: Option<String>,
+    pub order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Kanban data storage structure
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct KanbanData {
+    pub tickets: Vec<Ticket>,
+    pub epics: Vec<Epic>,
+}

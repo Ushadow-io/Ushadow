@@ -3,10 +3,35 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodingAgentConfig {
+    /// Name/type of the coding agent (e.g., "claude", "aider", "cursor")
+    pub agent_type: String,
+    /// Command to run the agent (e.g., "claude", "aider")
+    pub command: String,
+    /// Additional arguments to pass to the agent
+    pub args: Vec<String>,
+    /// Whether to auto-start the agent when a ticket is assigned
+    pub auto_start: bool,
+}
+
+impl Default for CodingAgentConfig {
+    fn default() -> Self {
+        Self {
+            agent_type: "claude".to_string(),
+            command: "claude".to_string(),
+            args: vec!["--dangerously-skip-permissions".to_string()],
+            auto_start: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LauncherSettings {
     pub default_admin_email: Option<String>,
     pub default_admin_password: Option<String>,
     pub default_admin_name: Option<String>,
+    #[serde(default)]
+    pub coding_agent: CodingAgentConfig,
 }
 
 impl Default for LauncherSettings {
@@ -15,6 +40,7 @@ impl Default for LauncherSettings {
             default_admin_email: None,
             default_admin_password: None,
             default_admin_name: Some("Administrator".to_string()),
+            coding_agent: CodingAgentConfig::default(),
         }
     }
 }

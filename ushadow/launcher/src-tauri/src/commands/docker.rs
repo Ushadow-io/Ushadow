@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
 use tauri::State;
-use crate::models::{ContainerStatus, ServiceInfo, ComposeServiceDefinition};
+use crate::models::{ContainerStatus, ServiceInfo, InfraService};
 use super::utils::{silent_command, shell_command, quote_path_buf};
 use super::platform::{Platform, PlatformOps};
 use super::bundled;
@@ -844,7 +844,7 @@ pub async fn create_environment(state: State<'_, AppState>, name: String, mode: 
 
 /// Parse docker-compose.infra.yml to get list of available services
 #[tauri::command]
-pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<ComposeServiceDefinition>, String> {
+pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<InfraService>, String> {
     let root = state.project_root.lock().map_err(|e| e.to_string())?;
     let project_root = root.clone().ok_or("Project root not set")?;
     drop(root);
@@ -928,15 +928,47 @@ pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<Com
             })
             .unwrap_or_else(Vec::new);
 
-        result.push(ComposeServiceDefinition {
-            id: service_name,
+        // Check if this service is actually running
+        let running = check_service_running(&service_name);
+
+        // Format ports string
+        let ports_str = default_port.map(|p| p.to_string());
+
+        result.push(InfraService {
+            name: service_name,
             display_name,
-            default_port,
-            profiles,
+            running,
+            ports: ports_str,
         });
     }
 
     Ok(result)
+}
+
+/// Check if a service container is running
+fn check_service_running(service_name: &str) -> bool {
+    use std::process::Command;
+
+    // Check if container exists and is running
+    let output = Command::new("docker")
+        .args([
+            "ps",
+            "--filter",
+            &format!("name={}", service_name),
+            "--filter",
+            "status=running",
+            "--format",
+            "{{.Names}}",
+        ])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.lines().any(|line| line.contains(service_name))
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

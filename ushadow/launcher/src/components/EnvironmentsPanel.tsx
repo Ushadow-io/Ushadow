@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, Trello } from 'lucide-react'
 import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
@@ -111,12 +111,14 @@ export function EnvironmentsPanel({
   // Auto-open browser view when selecting running environment
   useEffect(() => {
     if (selectedEnv) {
+      console.log('[EnvironmentsPanel] Setting showBrowserView to:', selectedEnv.running)
       setShowBrowserView(selectedEnv.running)
     }
   }, [selectedEnv?.name, selectedEnv?.running])
 
   // Handle environment selection
   const handleEnvSelect = (env: UshadowEnvironment) => {
+    console.log('[EnvironmentsPanel] Environment selected:', env.name, 'running:', env.running)
     setSelectedEnv(env)
   }
 
@@ -257,6 +259,10 @@ export function EnvironmentsPanel({
 
       {/* Right Column - Detail Panel or Browser View */}
       <div className="flex-1 bg-surface-800 rounded-lg overflow-hidden ml-4">
+        {(() => {
+          console.log('[EnvironmentsPanel] Render - selectedEnv:', selectedEnv?.name, 'showBrowserView:', showBrowserView, 'running:', selectedEnv?.running)
+          return null
+        })()}
         {selectedEnv ? (
           showBrowserView && selectedEnv.running ? (
             <BrowserView
@@ -372,15 +378,17 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
 
   // Prefer Tailscale URL if available, otherwise use localhost
   const baseUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
+  const displayUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
+
   // Add launcher query param so frontend knows to hide footer
-  // Add timestamp to force reload and avoid cookie conflicts
-  const timestamp = Date.now()
-  const url = baseUrl
-    ? baseUrl.includes('?')
+  // Use useMemo to calculate URL only when environment changes (not on every render)
+  const url = useMemo(() => {
+    if (!baseUrl) return ''
+    const timestamp = Date.now()
+    return baseUrl.includes('?')
       ? `${baseUrl}&launcher=true&_t=${timestamp}`
       : `${baseUrl}?launcher=true&_t=${timestamp}`
-    : ''
-  const displayUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
+  }, [baseUrl, environment.name])
 
   // Reset error state when environment changes
   useEffect(() => {
@@ -416,8 +424,9 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
   }
 
   const handleOpenInNewTab = () => {
-    if (url) {
-      window.open(url, '_blank')
+    // Open in new tab without launcher param (so footer shows normally)
+    if (displayUrl) {
+      window.open(displayUrl, '_blank')
     }
   }
 

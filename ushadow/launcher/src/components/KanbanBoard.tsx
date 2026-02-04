@@ -43,6 +43,7 @@ export interface Ticket {
 interface KanbanBoardProps {
   projectId?: string
   backendUrl: string
+  projectRoot: string
 }
 
 const COLUMNS: { status: TicketStatus; title: string }[] = [
@@ -53,49 +54,44 @@ const COLUMNS: { status: TicketStatus; title: string }[] = [
   { status: 'done', title: 'Done' },
 ]
 
-export function KanbanBoard({ projectId, backendUrl }: KanbanBoardProps) {
+export function KanbanBoard({ projectId, backendUrl, projectRoot }: KanbanBoardProps) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [epics, setEpics] = useState<Epic[]>([])
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [showCreateTicket, setShowCreateTicket] = useState(false)
   const [showCreateEpic, setShowCreateEpic] = useState(false)
   const [selectedEpic, setSelectedEpic] = useState<string | null>(null)
 
-  // Fetch tickets and epics
-  const fetchData = useCallback(async () => {
+  // Fetch tickets and epics (using Tauri commands)
+  const fetchData = useCallback(async (isInitialLoad = false) => {
     try {
-      setLoading(true)
+      // Only show loading overlay on initial load, not during background polling
+      if (isInitialLoad) {
+        setInitialLoading(true)
+      }
 
-      const ticketsUrl = projectId
-        ? `${backendUrl}/api/kanban/tickets?project_id=${projectId}`
-        : `${backendUrl}/api/kanban/tickets`
+      const { tauri } = await import('../hooks/useTauri')
 
-      const epicsUrl = projectId
-        ? `${backendUrl}/api/kanban/epics?project_id=${projectId}`
-        : `${backendUrl}/api/kanban/epics`
-
-      const [ticketsRes, epicsRes] = await Promise.all([
-        fetch(ticketsUrl),
-        fetch(epicsUrl),
+      const [ticketsData, epicsData] = await Promise.all([
+        tauri.getTickets(projectId || undefined),
+        tauri.getEpics(projectId || undefined),
       ])
 
-      if (ticketsRes.ok && epicsRes.ok) {
-        const ticketsData = await ticketsRes.json()
-        const epicsData = await epicsRes.json()
-        setTickets(ticketsData)
-        setEpics(epicsData)
-      }
+      setTickets(ticketsData)
+      setEpics(epicsData)
     } catch (error) {
       console.error('Failed to fetch kanban data:', error)
     } finally {
-      setLoading(false)
+      if (isInitialLoad) {
+        setInitialLoading(false)
+      }
     }
-  }, [projectId, backendUrl])
+  }, [projectId])
 
   useEffect(() => {
-    fetchData()
-    // Poll every 30 seconds
-    const interval = setInterval(fetchData, 30000)
+    fetchData(true) // Initial load - show loading overlay
+    // Poll every 30 seconds (background refresh - no loading overlay)
+    const interval = setInterval(() => fetchData(false), 30000)
     return () => clearInterval(interval)
   }, [fetchData])
 
@@ -114,16 +110,16 @@ export function KanbanBoard({ projectId, backendUrl }: KanbanBoardProps) {
     : ticketsByStatus
 
   const handleTicketCreated = () => {
-    fetchData()
+    fetchData(false) // Background refresh after creation
     setShowCreateTicket(false)
   }
 
   const handleEpicCreated = () => {
-    fetchData()
+    fetchData(false) // Background refresh after creation
     setShowCreateEpic(false)
   }
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div className="flex items-center justify-center h-full" data-testid="kanban-loading">
         <div className="text-gray-400">Loading kanban board...</div>
@@ -205,6 +201,7 @@ export function KanbanBoard({ projectId, backendUrl }: KanbanBoardProps) {
                   epics={epics}
                   onUpdate={fetchData}
                   backendUrl={backendUrl}
+                  projectRoot={projectRoot}
                 />
               ))}
             </div>
@@ -220,6 +217,7 @@ export function KanbanBoard({ projectId, backendUrl }: KanbanBoardProps) {
           onCreated={handleTicketCreated}
           epics={epics}
           projectId={projectId}
+          projectRoot={projectRoot}
           backendUrl={backendUrl}
         />
       )}

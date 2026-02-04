@@ -46,7 +46,7 @@ export function InfrastructurePanel({
   onToggleService
 }: InfrastructurePanelProps) {
   const [expanded, setExpanded] = useState(true)
-  const [composeServices, setComposeServices] = useState<ComposeServiceDefinition[]>([])
+  const [composeServices, setComposeServices] = useState<InfraService[]>([])
 
   // Load services from docker-compose.infra.yml
   useEffect(() => {
@@ -69,48 +69,29 @@ export function InfrastructurePanel({
     })))
   }
 
-  // Build unified list of services
+  // Build unified list of services (now composeServices already includes running status)
   const predefinedServices = composeServices.map(composeSvc => {
-    // More flexible matching for service names (handles postgres, postgresql, etc.)
-    const runningService = services.find(s => {
-      const svcName = (s.name || '').toLowerCase()
-      const svcDisplay = (s.display_name || '').toLowerCase()
-      const id = composeSvc.id.toLowerCase()
-
-      // Direct match or common variations
-      if (svcName.includes(id) || svcDisplay.includes(id)) return true
-
-      // Special cases for postgres/postgresql
-      if (id === 'postgres' && (svcName.includes('postgresql') || svcDisplay.includes('postgresql'))) return true
-      if (id === 'postgres' && (svcName.includes('pg') || svcDisplay.includes('pg'))) return true
-
-      // MongoDB variations
-      if (id === 'mongodb' && (svcName.includes('mongo') || svcDisplay.includes('mongo'))) return true
-      if (id === 'mongo' && (svcName.includes('mongodb') || svcDisplay.includes('mongodb'))) return true
-
-      return false
-    })
-
-    const isSelected = selectedServices.includes(composeSvc.id)
-    const isRunning = runningService?.running ?? false
+    const serviceId = composeSvc.name.toLowerCase()
+    const isSelected = selectedServices.includes(serviceId)
 
     return {
-      id: composeSvc.id,
+      id: serviceId,
       displayName: composeSvc.display_name,
-      defaultPort: composeSvc.default_port,
+      defaultPort: composeSvc.ports ? parseInt(composeSvc.ports) : null,
       isSelected,
-      isRunning,
-      ports: runningService?.ports,
-      serviceName: runningService?.name
+      isRunning: composeSvc.running,
+      ports: composeSvc.ports,
+      serviceName: composeSvc.name
     }
   })
 
-  // Add discovered services not in compose list
+  // Add discovered services not in compose list (for dynamic container discovery)
   const additionalServices = services
     .filter(s => {
       const matchesPredefined = composeServices.some(composeSvc =>
-        s.name.toLowerCase().includes(composeSvc.id) ||
-        s.display_name?.toLowerCase().includes(composeSvc.id)
+        s.name.toLowerCase() === composeSvc.name.toLowerCase() ||
+        s.name.toLowerCase().includes(composeSvc.name.toLowerCase()) ||
+        s.display_name?.toLowerCase().includes(composeSvc.name.toLowerCase())
       )
       return !matchesPredefined
     })

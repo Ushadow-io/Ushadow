@@ -405,6 +405,17 @@ pub async fn create_worktree(
         }
     }
 
+    // Before creating, clean up any locked/missing worktrees at this path
+    eprintln!("[create_worktree] Checking for locked/missing worktrees...");
+    let _ = silent_command("git")
+        .args(["worktree", "unlock", worktree_path.to_str().unwrap()])
+        .current_dir(&main_repo)
+        .output();
+    let _ = silent_command("git")
+        .args(["worktree", "prune"])
+        .current_dir(&main_repo)
+        .output();
+
     let (output, final_branch) = if branch_exists {
         // Branch exists - checkout directly into worktree
         let output = silent_command("git")
@@ -701,7 +712,9 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
         .find(|wt| wt.name == name)
         .ok_or_else(|| format!("Worktree '{}' not found", name))?;
 
-    // Remove the worktree
+    eprintln!("[remove_worktree] Removing worktree at: {}", worktree.path);
+
+    // Try to remove the worktree
     let output = silent_command("git")
         .args(["worktree", "remove", &worktree.path])
         .current_dir(&main_repo)
@@ -710,9 +723,37 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // If it's locked or missing, try to unlock and prune
+        if stderr.contains("locked") || stderr.contains("missing") {
+            eprintln!("[remove_worktree] Worktree is locked/missing, attempting to unlock and prune...");
+
+            // Try to unlock
+            let _ = silent_command("git")
+                .args(["worktree", "unlock", &worktree.path])
+                .current_dir(&main_repo)
+                .output();
+
+            // Try to prune
+            let prune_output = silent_command("git")
+                .args(["worktree", "prune"])
+                .current_dir(&main_repo)
+                .output()
+                .map_err(|e| format!("Failed to prune worktrees: {}", e))?;
+
+            if prune_output.status.success() {
+                eprintln!("[remove_worktree] ✓ Successfully pruned locked/missing worktree");
+                return Ok(());
+            } else {
+                let prune_stderr = String::from_utf8_lossy(&prune_output.stderr);
+                return Err(format!("Failed to prune worktree: {}", prune_stderr));
+            }
+        }
+
         return Err(format!("Git command failed: {}", stderr));
     }
 
+    eprintln!("[remove_worktree] ✓ Worktree removed successfully");
     Ok(())
 }
 
@@ -1306,12 +1347,9 @@ pub async fn open_tmux_in_terminal(window_name: String, worktree_path: String) -
             let temp_script = format!("/tmp/ushadow_iterm_{}.sh", window_name.replace("/", "_"));
 
             let script_content = format!(
-                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Create dedicated session for this environment if it doesn't exist\ntmux has-session -t {} 2>/dev/null || tmux new-session -d -s {} -c '{}'\n# Attach to this environment's dedicated session\nexec tmux attach-session -t {}\n",
+                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Attach to the workmux session and select the specific window\nexec tmux attach-session -t workmux:{}\n",
                 display_name,
                 r, g, b,
-                window_name,
-                window_name,
-                worktree_path,
                 window_name
             );
             fs::write(&temp_script, script_content)
@@ -1321,16 +1359,38 @@ pub async fn open_tmux_in_terminal(window_name: String, worktree_path: String) -
                 .output()
                 .map_err(|e| format!("Failed to chmod: {}", e))?;
 
-            // Simple iTerm2 AppleScript that executes the script
+            // iTerm2 AppleScript that reuses existing windows with matching name
             let applescript = format!(
                 r#"tell application "iTerm"
     activate
-    set newWindow to (create window with default profile)
-    tell current session of newWindow
-        set name to "{}"
-        write text "{} && exit"
-    end tell
+
+    -- Try to find existing window with this name
+    set foundWindow to false
+    repeat with aWindow in windows
+        repeat with aTab in tabs of aWindow
+            repeat with aSession in sessions of aTab
+                if name of aSession is "{}" then
+                    -- Found existing window, select it
+                    select aSession
+                    set foundWindow to true
+                    exit repeat
+                end if
+            end repeat
+            if foundWindow then exit repeat
+        end repeat
+        if foundWindow then exit repeat
+    end repeat
+
+    -- If no existing window found, create new one
+    if not foundWindow then
+        set newWindow to (create window with default profile)
+        tell current session of newWindow
+            set name to "{}"
+            write text "{} && exit"
+        end tell
+    end if
 end tell"#,
+                display_name,
                 display_name,
                 temp_script
             );

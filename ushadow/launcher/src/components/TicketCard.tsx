@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { Tag, Folder, GitBranch, Terminal, Clock, AlertCircle } from 'lucide-react'
 import type { Ticket, Epic } from './KanbanBoard'
+import { TicketDetailDialog } from './TicketDetailDialog'
+import { EnvironmentBadge } from './EnvironmentBadge'
 
 interface TicketCardProps {
   ticket: Ticket
   epics: Epic[]
   onUpdate: () => void
   backendUrl: string
+  projectRoot: string
 }
 
 const PRIORITY_COLORS = {
@@ -23,8 +26,9 @@ const PRIORITY_LABELS = {
   urgent: 'Urgent',
 }
 
-export function TicketCard({ ticket, epics, onUpdate, backendUrl }: TicketCardProps) {
+export function TicketCard({ ticket, epics, onUpdate, backendUrl, projectRoot }: TicketCardProps) {
   const [isDragging, setIsDragging] = useState(false)
+  const [showDetail, setShowDetail] = useState(false)
 
   // Find epic for this ticket
   const epic = ticket.epic_id ? epics.find(e => e.id === ticket.epic_id) : null
@@ -59,17 +63,19 @@ export function TicketCard({ ticket, epics, onUpdate, backendUrl }: TicketCardPr
   }
 
   return (
-    <div
-      draggable
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      style={getBorderStyle()}
-      className={`
-        bg-gray-900 rounded p-3 cursor-move hover:bg-gray-850 transition-colors
-        ${isDragging ? 'opacity-50' : ''}
-      `}
-      data-testid={`ticket-card-${ticket.id}`}
-    >
+    <>
+      <div
+        draggable
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onClick={() => setShowDetail(true)}
+        style={getBorderStyle()}
+        className={`
+          bg-gray-900 rounded p-3 cursor-pointer hover:bg-gray-850 transition-colors
+          ${isDragging ? 'opacity-50' : ''}
+        `}
+        data-testid={`ticket-card-${ticket.id}`}
+      >
       {/* Header */}
       <div className="flex items-start justify-between mb-2">
         <h3 className="text-sm font-medium text-white flex-1 pr-2" data-testid="ticket-card-title">
@@ -90,15 +96,28 @@ export function TicketCard({ ticket, epics, onUpdate, backendUrl }: TicketCardPr
         </p>
       )}
 
-      {/* Epic Badge */}
-      {epic && (
-        <div
-          className="flex items-center gap-1.5 text-xs mb-2 px-2 py-1 rounded"
-          style={{ backgroundColor: `${epic.color}20`, color: epic.color }}
-          data-testid="ticket-card-epic"
-        >
-          <Folder className="w-3 h-3" />
-          <span>{epic.title}</span>
+      {/* Badges Row - Epic and Environment */}
+      {(epic || ticket.environment_name) && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {epic && (
+            <div
+              className="flex items-center gap-1.5 text-xs px-2 py-1 rounded"
+              style={{ backgroundColor: `${epic.color}20`, color: epic.color }}
+              data-testid="ticket-card-epic"
+            >
+              <Folder className="w-3 h-3" />
+              <span>{epic.title}</span>
+            </div>
+          )}
+
+          {ticket.environment_name && (
+            <EnvironmentBadge
+              name={ticket.environment_name}
+              variant="badge"
+              showIcon={true}
+              testId="ticket-card-environment"
+            />
+          )}
         </div>
       )}
 
@@ -145,5 +164,20 @@ export function TicketCard({ ticket, epics, onUpdate, backendUrl }: TicketCardPr
         </div>
       </div>
     </div>
+
+      {/* Detail Dialog */}
+      <TicketDetailDialog
+        ticket={ticket}
+        epics={epics}
+        isOpen={showDetail}
+        onClose={() => setShowDetail(false)}
+        onUpdated={() => {
+          setShowDetail(false)
+          onUpdate()
+        }}
+        projectRoot={projectRoot}
+        backendUrl={backendUrl}
+      />
+    </>
   )
 }

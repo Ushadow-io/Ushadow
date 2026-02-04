@@ -7,6 +7,11 @@ license = "MIT"
 repository = ""
 edition = "2021"
 
+# Additional binaries
+[[bin]]
+name = "kanban-cli"
+path = "src/bin/kanban-cli.rs"
+
 [build-dependencies]
 tauri-build = { version = "1", features = [] }
 
@@ -22,6 +27,7 @@ portable-pty = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 dirs = "5"
 chrono = "0.4"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [features]
 default = ["custom-protocol"]

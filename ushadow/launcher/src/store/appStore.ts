@@ -27,6 +27,7 @@ interface AppState {
   dryRunMode: boolean
   showDevTools: boolean
   multiProjectMode: boolean  // Enable multi-project support
+  kanbanEnabled: boolean     // Enable Kanban board feature
 
   // UI state
   logExpanded: boolean
@@ -50,6 +51,7 @@ interface AppState {
   setShowDevTools: (enabled: boolean) => void
   setLogExpanded: (expanded: boolean) => void
   setMultiProjectMode: (enabled: boolean) => void
+  setKanbanEnabled: (enabled: boolean) => void
   setAppMode: (mode: AppMode) => void
   setSpoofedPrereq: (key: keyof SpoofedPrerequisites, value: boolean | null) => void
   resetSpoofedPrereqs: () => void
@@ -80,6 +82,7 @@ export const useAppStore = create<AppState>()(
       showDevTools: false,
       logExpanded: true,
       multiProjectMode: false,
+      kanbanEnabled: false,
       appMode: 'install',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
@@ -92,6 +95,7 @@ export const useAppStore = create<AppState>()(
       setShowDevTools: (enabled) => set({ showDevTools: enabled }),
       setLogExpanded: (expanded) => set({ logExpanded: expanded }),
       setMultiProjectMode: (enabled) => set({ multiProjectMode: enabled }),
+      setKanbanEnabled: (enabled) => set({ kanbanEnabled: enabled }),
       setAppMode: (mode) => set({ appMode: mode }),
       setSpoofedPrereq: (key, value) => set((state) => ({
         spoofedPrereqs: { ...state.spoofedPrereqs, [key]: value }

@@ -37,6 +37,7 @@ function App() {
     worktreesDir,
     setWorktreesDir,
     multiProjectMode,
+    kanbanEnabled,
     projects,
     activeProjectId,
   } = useAppStore()
@@ -167,8 +168,13 @@ function App() {
     }
   }, [isResizing, handleMouseMove, handleMouseUp])
 
-  // Native keyboard shortcuts enabled (clipboard API available in Tauri webview)
-  // All standard shortcuts work: Cmd/Ctrl+C/V/X/Z/A, etc.
+  // Enable native clipboard operations (undo/redo/copy/paste/cut/select-all)
+  // Tauri webview supports standard browser clipboard API
+  useEffect(() => {
+    // Allow all native keyboard shortcuts to work by not interfering
+    // This enables: Cmd/Ctrl+Z (undo), Cmd/Ctrl+Shift+Z (redo), Cmd/Ctrl+A (select all), etc.
+    console.log('Native keyboard shortcuts enabled (clipboard API available:', !!navigator.clipboard, ')')
+  }, [])
 
   // Apply spoofed values to prerequisites
   const getEffectivePrereqs = useCallback((real: Prerequisites | null): Prerequisites | null => {
@@ -1487,16 +1493,18 @@ function App() {
               <FolderGit2 className="w-3 h-3 inline mr-1" />
               Environments
             </button>
-            <button
-              onClick={() => setAppMode('kanban')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'kanban' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
-              data-testid="nav-kanban"
-            >
-              <Trello className="w-3 h-3 inline mr-1" />
-              Kanban
-            </button>
+            {kanbanEnabled && (
+              <button
+                onClick={() => setAppMode('kanban')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  appMode === 'kanban' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                }`}
+                data-testid="nav-kanban"
+              >
+                <Trello className="w-3 h-3 inline mr-1" />
+                Kanban
+              </button>
+            )}
           </div>
 
           {/* Tmux Manager */}
@@ -1509,15 +1517,15 @@ function App() {
             <Terminal className="w-4 h-4" />
           </button>
 
-          {/* Settings / Credentials Button */}
+          {/* Settings Button */}
           <button
             onClick={() => setShowSettingsDialog(true)}
             className="px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2 font-medium text-sm"
-            title="Configure default credentials"
+            title="Configure launcher settings"
             data-testid="open-settings-button"
           >
             <Sliders className="w-4 h-4" />
-            Credentials
+            Settings
           </button>
 
           {/* Refresh */}
@@ -1669,12 +1677,22 @@ function App() {
               tmuxStatuses={tmuxStatuses}
             />
           </div>
-        ) : appMode === 'kanban' ? (
+        ) : appMode === 'kanban' && kanbanEnabled ? (
           /* Kanban Page - Ticket Management */
-          <KanbanBoard
-            projectId={projectRoot}
-            backendUrl={discovery?.environments[0]?.localhost_url ?? 'http://localhost:8000'}
-          />
+          (() => {
+            // Use the first available backend (running or not)
+            const backendUrl = discovery?.environments.find(e => e.running)?.localhost_url
+                            || discovery?.environments[0]?.localhost_url
+                            || 'http://localhost:8000'
+
+            return (
+              <KanbanBoard
+                projectId={projectRoot}
+                backendUrl={backendUrl}
+                projectRoot={projectRoot || ''}
+              />
+            )
+          })()
         ) : null}
       </main>
 
