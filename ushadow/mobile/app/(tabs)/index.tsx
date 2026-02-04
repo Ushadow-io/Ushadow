@@ -22,6 +22,7 @@ import {
   ConnectionLogViewer,
   LoginScreen,
   UnifiedStreamingPage,
+  BackgroundTaskDebugPanel,
 } from '../components';
 import { useConnectionLog, useSessionTracking } from '../hooks';
 import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../theme';
@@ -198,6 +199,11 @@ export default function HomeScreen() {
         />
       </View>
 
+      {/* Background Task Debug Panel */}
+      <View style={styles.debugPanel}>
+        <BackgroundTaskDebugPanel testID="background-task-debug" />
+      </View>
+
       {/* Login Screen Modal */}
       <LoginScreen
         visible={showLoginScreen}
@@ -322,5 +328,9 @@ const styles = StyleSheet.create({
   streamingContainer: {
     flex: 1,
     paddingHorizontal: spacing.lg,
+  },
+  debugPanel: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
   },
 });

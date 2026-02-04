@@ -267,6 +267,31 @@ HOST_IP=localhost
 
 # Development mode
 DEV_MODE={'true' if dev_mode else 'false'}
+
+# ==========================================
+# DATABASE CONFIGURATION
+# ==========================================
+POSTGRES_USER=ushadow
+POSTGRES_PASSWORD=ushadow
+POSTGRES_DB=ushadow
+POSTGRES_MULTIPLE_DATABASES=metamcp,openmemory
+
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=password
+
+# ==========================================
+# KEYCLOAK SSO CONFIGURATION
+# ==========================================
+# These env vars are used for deployment overrides via OmegaConf interpolation
+KEYCLOAK_URL=http://keycloak:8080
+KEYCLOAK_EXTERNAL_URL=http://localhost:8081
+KEYCLOAK_REALM=ushadow
+KEYCLOAK_CLIENT_ID=ushadow-frontend
+KEYCLOAK_CLIENT_SECRET=
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD=admin
+KEYCLOAK_PORT=8081
+KEYCLOAK_MGMT_PORT=9000
 """
 
     env_file.write_text(env_content)

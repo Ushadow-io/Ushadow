@@ -2,11 +2,16 @@ defaults:
   llm: openai-llm
   embedding: openai-embed
   stt: stt-deepgram
+  stt_stream: stt-deepgram-stream
   tts: tts-http
   vector_store: vs-qdrant
 
+# Enable provider segments from Deepgram diarization
+misc_settings:
+  use_provider_segments: true
+
 memory:
-  provider: chronicle
+  provider: openmemory_mcp
   timeout_seconds: 1200
   extraction:
     enabled: true
@@ -16,9 +21,9 @@ memory:
 
       '
   openmemory_mcp:
-    server_url: http://localhost:8765
+    server_url: ${oc.env:MEMORY_SERVER_URL,http://localhost:8765}
     client_name: chronicle
-    user_id: default
+    user_id: ${oc.env:OPENMEMORY_USER_ID,default}
     timeout: 30
   mycelia:
     api_url: http://localhost:5173

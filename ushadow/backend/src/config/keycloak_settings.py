@@ -18,8 +18,8 @@ def get_keycloak_config() -> dict:
             - backend_client_id: str
             - backend_client_secret: str (from secrets.yaml)
             - frontend_client_id: str
-            - admin_user: str
-            - admin_password: str (from secrets.yaml)
+            - admin_keycloak_user: str (from secrets.yaml keycloak.admin_user)
+            - admin_keycloak_password: str (from secrets.yaml keycloak.admin_password)
     """
     settings = get_settings()
 
@@ -31,12 +31,14 @@ def get_keycloak_config() -> dict:
         "realm": settings.get_sync("keycloak.realm", "ushadow"),
         "backend_client_id": settings.get_sync("keycloak.backend_client_id", "ushadow-backend"),
         "frontend_client_id": settings.get_sync("keycloak.frontend_client_id", "ushadow-frontend"),
-        "admin_user": settings.get_sync("keycloak.admin_user", "admin"),
     }
 
     # Secrets (from config/SECRETS/secrets.yaml)
     config["backend_client_secret"] = settings.get_sync("keycloak.backend_client_secret")
-    config["admin_password"] = settings.get_sync("keycloak.admin_password")
+
+    # Keycloak admin credentials (separate from Ushadow admin)
+    config["admin_keycloak_user"] = settings.get_sync("keycloak.admin_user", "admin")
+    config["admin_keycloak_password"] = settings.get_sync("keycloak.admin_password", "admin")
 
     return config
 

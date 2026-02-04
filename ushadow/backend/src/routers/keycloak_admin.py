@@ -51,11 +51,12 @@ async def enable_pkce_for_client(client_id: str):
 
         # Update client attributes to require PKCE
         import httpx
-        import os
+        from src.config.keycloak_settings import get_keycloak_config
 
         token = await admin_client._get_admin_token()
-        keycloak_url = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
-        realm = os.getenv("KEYCLOAK_REALM", "ushadow")
+        config = get_keycloak_config()
+        keycloak_url = config["url"]
+        realm = config["realm"]
 
         # Get full client config first
         async with httpx.AsyncClient() as http_client:

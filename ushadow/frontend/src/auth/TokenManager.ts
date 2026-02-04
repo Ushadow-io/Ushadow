@@ -10,12 +10,15 @@ import { jwtDecode } from 'jwt-decode'
 const TOKEN_KEY = 'kc_access_token'
 const REFRESH_TOKEN_KEY = 'kc_refresh_token'
 const ID_TOKEN_KEY = 'kc_id_token'
+const EXPIRES_AT_KEY = 'kc_expires_at' // Timestamp when access_token expires
+const REFRESH_EXPIRES_AT_KEY = 'kc_refresh_expires_at' // Timestamp when refresh_token expires
 
 interface TokenResponse {
   access_token: string
   refresh_token?: string
   id_token?: string
-  expires_in?: number
+  expires_in?: number // Access token lifetime in seconds
+  refresh_expires_in?: number // Refresh token lifetime in seconds
   token_type?: string
 }
 
@@ -47,9 +50,11 @@ interface DecodedToken {
 
 export class TokenManager {
   /**
-   * Store tokens in sessionStorage
+   * Store tokens in sessionStorage with expiry times
    */
   static storeTokens(tokens: TokenResponse): void {
+    const now = Math.floor(Date.now() / 1000)
+
     if (tokens.access_token) {
       sessionStorage.setItem(TOKEN_KEY, tokens.access_token)
     }
@@ -58,6 +63,20 @@ export class TokenManager {
     }
     if (tokens.id_token) {
       sessionStorage.setItem(ID_TOKEN_KEY, tokens.id_token)
+    }
+
+    // Store expiry times (OAuth2 standard: use expires_in from token response)
+    if (tokens.expires_in) {
+      const expiresAt = now + tokens.expires_in
+      sessionStorage.setItem(EXPIRES_AT_KEY, expiresAt.toString())
+      console.log('[TokenManager] Access token expires in:', tokens.expires_in, 'seconds')
+    }
+
+    // Store refresh token expiry if provided
+    if (tokens.refresh_expires_in) {
+      const refreshExpiresAt = now + tokens.refresh_expires_in
+      sessionStorage.setItem(REFRESH_EXPIRES_AT_KEY, refreshExpiresAt.toString())
+      console.log('[TokenManager] Refresh token expires in:', tokens.refresh_expires_in, 'seconds')
     }
   }
 
@@ -89,6 +108,22 @@ export class TokenManager {
     sessionStorage.removeItem(TOKEN_KEY)
     sessionStorage.removeItem(REFRESH_TOKEN_KEY)
     sessionStorage.removeItem(ID_TOKEN_KEY)
+    sessionStorage.removeItem(EXPIRES_AT_KEY)
+    sessionStorage.removeItem(REFRESH_EXPIRES_AT_KEY)
+  }
+
+  /**
+   * Get access token expiry info from storage (OAuth2 standard)
+   */
+  static getTokenExpiry(): { expiresAt: number; expiresIn: number } | null {
+    const expiresAtStr = sessionStorage.getItem(EXPIRES_AT_KEY)
+    if (!expiresAtStr) return null
+
+    const expiresAt = parseInt(expiresAtStr, 10)
+    const now = Math.floor(Date.now() / 1000)
+    const expiresIn = expiresAt - now
+
+    return { expiresAt, expiresIn }
   }
 
   /**
@@ -259,22 +294,35 @@ export class TokenManager {
   }
 
   /**
-   * Refresh access token using refresh token
+   * Refresh access token using refresh token directly with Keycloak.
+   *
+   * This is the standard OAuth2/OIDC approach:
+   * - Frontend manages its own token lifecycle
+   * - No issuer mismatch issues (uses same Keycloak URL as login)
+   * - Works from any domain (localhost, Tailscale, etc.)
    */
-  static async refreshAccessToken(backendUrl: string): Promise<TokenResponse> {
+  static async refreshAccessToken(
+    keycloakUrl: string,
+    realm: string,
+    clientId: string
+  ): Promise<TokenResponse> {
     const refreshToken = this.getRefreshToken()
     if (!refreshToken) {
       throw new Error('No refresh token available')
     }
 
-    console.log('[TokenManager] Refreshing access token...')
+    console.log('[TokenManager] Refreshing access token with Keycloak...')
 
-    const response = await fetch(`${backendUrl}/api/auth/refresh`, {
+    const tokenUrl = `${keycloakUrl}/realms/${realm}/protocol/openid-connect/token`
+
+    const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: JSON.stringify({
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
         refresh_token: refreshToken,
       }),
     })

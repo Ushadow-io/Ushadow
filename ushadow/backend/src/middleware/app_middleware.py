@@ -338,6 +338,17 @@ def setup_exception_handlers(app: FastAPI) -> None:
 
 def setup_middleware(app: FastAPI) -> None:
     """Set up all middleware for the FastAPI application."""
+    # Configure request logger with timestamp format (must be done here after logging.basicConfig)
+    if not request_logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        handler.setFormatter(formatter)
+        request_logger.addHandler(handler)
+        request_logger.setLevel(logging.INFO)
+        request_logger.propagate = False  # Don't propagate to root logger
+
     # Add request logging middleware
     app.add_middleware(RequestLoggingMiddleware)
     logger.info("📝 Request logging middleware enabled")

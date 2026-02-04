@@ -134,7 +134,8 @@ async def access_shared_resource(
         404: If share token not found
     """
     # Get user email if authenticated
-    user_email = current_user.email if current_user else None
+    from src.utils.auth_helpers import get_user_email
+    user_email = get_user_email(current_user) if current_user else None
 
     # Get request IP for Tailscale validation
     request_ip = request.client.host if request.client else None

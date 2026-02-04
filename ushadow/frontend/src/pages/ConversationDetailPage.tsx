@@ -1,10 +1,6 @@
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useRef, useState, useEffect } from 'react'
-<<<<<<< HEAD
-import { ArrowLeft, MessageSquare, Clock, Calendar, User, AlertCircle, Play, Pause, Brain, ExternalLink } from 'lucide-react'
-=======
 import { ArrowLeft, MessageSquare, Clock, Calendar, User, AlertCircle, Play, Pause, Brain, ExternalLink, Share2 } from 'lucide-react'
->>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
 import { useConversationDetail } from '../hooks/useConversationDetail'
 import type { ConversationSource } from '../hooks/useConversations'
 import { useQuery } from '@tanstack/react-query'
@@ -13,11 +9,8 @@ import { getChronicleAudioUrl } from '../services/chronicleApi'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { MemoryCard } from '../components/memories/MemoryCard'
-<<<<<<< HEAD
-=======
 import ShareDialog from '../components/ShareDialog'
 import { useShare } from '../hooks/useShare'
->>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
 
 export default function ConversationDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -27,15 +20,12 @@ export default function ConversationDetailPage() {
 
   const { conversation, isLoading, error } = useConversationDetail(id!, source)
 
-<<<<<<< HEAD
-=======
   // Share functionality
   const shareProps = useShare({
     resourceType: 'conversation',
     resourceId: id || '',
   })
 
->>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
   // Fetch memories for this conversation (unified API for both Chronicle and Mycelia)
   const { data: memoriesData, isLoading: memoriesLoading } = useQuery({
     queryKey: ['conversation-memories', id, source],
@@ -399,13 +389,8 @@ export default function ConversationDetailPage() {
           </div>
         </div>
 
-<<<<<<< HEAD
-        {/* Play Full Audio Button */}
-        <div className="pt-4 border-t border-neutral-200 dark:border-neutral-700">
-=======
         {/* Play Full Audio Button and Share Button */}
         <div className="pt-4 border-t border-neutral-200 dark:border-neutral-700 flex items-center gap-3">
->>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
           <button
             onClick={handleFullAudioPlayPause}
             className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -427,10 +412,6 @@ export default function ConversationDetailPage() {
               </>
             )}
           </button>
-<<<<<<< HEAD
-        </div>
-
-=======
 
           <button
             onClick={shareProps.openShareDialog}
@@ -445,7 +426,7 @@ export default function ConversationDetailPage() {
         {/* Share Dialog */}
         <ShareDialog {...shareProps} />
 
->>>>>>> 0e9fc19e (feat: Add Keycloak SSO integration with conversation sharing)
+
         {/* Metadata grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
           {/* Start time */}

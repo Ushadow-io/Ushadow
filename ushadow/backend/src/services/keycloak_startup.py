@@ -8,12 +8,37 @@ manual Keycloak configuration.
 
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 from .keycloak_admin import get_keycloak_admin
 from ..config.keycloak_settings import is_keycloak_enabled
+from .tailscale_manager import TailscaleManager
 
 logger = logging.getLogger(__name__)
+
+
+def get_tailscale_hostname() -> Optional[str]:
+    """
+    Get the full Tailscale hostname for the current environment.
+
+    Returns:
+        Full hostname like "orange.spangled-kettle.ts.net" or None
+    """
+    try:
+        manager = TailscaleManager()
+        tailnet_suffix = manager.get_tailnet_suffix()
+
+        if not tailnet_suffix:
+            return None
+
+        # Get environment name (e.g., "orange", "purple")
+        env_name = os.getenv("ENV_NAME", "ushadow")
+
+        # Construct full hostname: {env}.{tailnet}
+        return f"{env_name}.{tailnet_suffix}"
+    except Exception as e:
+        logger.debug(f"[KC-STARTUP] Could not get Tailscale hostname: {e}")
+        return None
 
 
 def get_current_redirect_uris() -> List[str]:
@@ -44,14 +69,15 @@ def get_current_redirect_uris() -> List[str]:
         custom_uri = f"{frontend_url.rstrip('/')}/oauth/callback"
         redirect_uris.append(custom_uri)
 
-    # Tailscale hostname (if available)
-    tailscale_hostname = os.getenv("TAILSCALE_HOSTNAME")
+    # Tailscale hostname (auto-detect using TailscaleManager)
+    tailscale_hostname = get_tailscale_hostname()
     if tailscale_hostname:
         # Support both http and https for Tailscale
         ts_uri_http = f"http://{tailscale_hostname}/oauth/callback"
         ts_uri_https = f"https://{tailscale_hostname}/oauth/callback"
         redirect_uris.append(ts_uri_http)
         redirect_uris.append(ts_uri_https)
+        logger.info(f"[KC-STARTUP] 📡 Adding Tailscale URIs: {tailscale_hostname}")
 
     return redirect_uris
 
@@ -80,8 +106,8 @@ def get_current_post_logout_uris() -> List[str]:
         post_logout_uris.append(base_url)
         post_logout_uris.append(base_url + "/")
 
-    # Tailscale hostname
-    tailscale_hostname = os.getenv("TAILSCALE_HOSTNAME")
+    # Tailscale hostname (auto-detect using TailscaleManager)
+    tailscale_hostname = get_tailscale_hostname()
     if tailscale_hostname:
         post_logout_uris.append(f"http://{tailscale_hostname}")
         post_logout_uris.append(f"http://{tailscale_hostname}/")
@@ -89,6 +115,36 @@ def get_current_post_logout_uris() -> List[str]:
         post_logout_uris.append(f"https://{tailscale_hostname}/")
 
     return post_logout_uris
+
+
+def get_web_origins() -> List[str]:
+    """
+    Get allowed web origins (CORS) from settings.
+
+    Uses security.cors_origins from OmegaConf settings which is already
+    configured for the backend's CORS middleware.
+
+    Returns:
+        List of allowed origins for Keycloak webOrigins (CORS)
+    """
+    try:
+        from ..config import get_settings
+        settings = get_settings()
+        cors_origins = settings.get_sync("security.cors_origins", "")
+
+        if cors_origins and cors_origins.strip():
+            # Split comma-separated origins and strip whitespace
+            origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+            logger.info(f"[KC-STARTUP] Using {len(origins)} web origins from settings")
+            return origins
+    except Exception as e:
+        logger.warning(f"[KC-STARTUP] Could not get CORS origins from settings: {e}")
+
+    # Fallback to defaults
+    logger.warning("[KC-STARTUP] Using default web origins")
+    port_offset = int(os.getenv("PORT_OFFSET", "10"))
+    frontend_port = 3000 + port_offset
+    return [f"http://localhost:{frontend_port}"]
 
 
 async def register_current_environment():
@@ -119,14 +175,16 @@ async def register_current_environment():
         # Get URIs to register
         redirect_uris = get_current_redirect_uris()
         post_logout_uris = get_current_post_logout_uris()
+        web_origins = get_web_origins()  # Get CORS origins from settings
 
         logger.info("[KC-STARTUP] 🔐 Registering redirect URIs with Keycloak...")
         logger.info(f"[KC-STARTUP] Environment: PORT_OFFSET={os.getenv('PORT_OFFSET', '10')}")
 
-        # Register redirect URIs
+        # Register redirect URIs and webOrigins (CORS)
         success = await admin_client.update_client_redirect_uris(
             client_id="ushadow-frontend",
             redirect_uris=redirect_uris,
+            web_origins=web_origins,  # Pass CORS origins from settings
             merge=True  # Merge with existing URIs
         )
 

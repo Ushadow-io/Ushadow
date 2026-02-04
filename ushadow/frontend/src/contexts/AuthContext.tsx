@@ -75,6 +75,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Verify token is still valid by making a request
           const response = await authApi.getMe()
           console.log('🔐 AuthContext: API call successful, user data:', response.data)
+          console.log('🔐 AuthContext: display_name:', response.data.display_name)
+          console.log('🔐 AuthContext: email:', response.data.email)
           setUser(response.data)
           setToken(savedToken)
         } catch (error) {
@@ -104,6 +106,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Get user info
       const userResponse = await authApi.getMe()
+      console.log('🔐 AuthContext: Login successful, user data:', userResponse.data)
+      console.log('🔐 AuthContext: User display_name:', userResponse.data.display_name)
       setUser(userResponse.data)
 
       return { success: true }

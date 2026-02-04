@@ -551,8 +551,9 @@ async def create_join_token(
     Returns the token and a one-liner join command.
     """
     unode_manager = await get_unode_manager()
+    from src.utils.auth_helpers import get_user_id
     response = await unode_manager.create_join_token(
-        user_id=current_user.id,
+        user_id=get_user_id(current_user),
         request=request
     )
 

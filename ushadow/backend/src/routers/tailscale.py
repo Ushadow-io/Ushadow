@@ -23,6 +23,7 @@ from src.models.user import User
 from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
+from src.services.keycloak_startup import register_current_environment
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -703,9 +704,11 @@ async def get_mobile_connection_qr(
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match
+        from src.utils.auth_helpers import get_user_id, get_user_email
+
         auth_token = generate_jwt_for_service(
-            user_id=str(current_user.id),
-            user_email=current_user.email,
+            user_id=get_user_id(current_user),
+            user_email=get_user_email(current_user),
             audiences=["ushadow", "chronicle"]
         )
 
@@ -1336,6 +1339,9 @@ async def configure_tailscale_serve(
     Sets up base routes: /api/* and /auth/* to backend, /* to frontend,
     and WebSocket routes /ws_pcm and /ws_omi direct to Chronicle.
     Also saves the Tailscale configuration to disk.
+
+    Additionally registers the Tailscale hostname with Keycloak to enable
+    OAuth callbacks from the Tailscale domain.
     """
     try:
         manager = get_tailscale_manager()
@@ -1356,18 +1362,35 @@ async def configure_tailscale_serve(
         # Get the current serve status to return actual routes
         status = manager.get_serve_status() or ""
 
+        # Register Tailscale hostname with Keycloak for OAuth callbacks
+        # Reuse the same registration logic that runs on backend startup
+        keycloak_success = False
+        keycloak_message = "Keycloak registration skipped"
+        try:
+            await register_current_environment()
+            keycloak_success = True
+            keycloak_message = f"OAuth callbacks registered for {config.hostname}"
+            logger.info(f"[TAILSCALE] ✓ Registered Keycloak URIs for {config.hostname}")
+        except Exception as e:
+            logger.warning(f"[TAILSCALE] Failed to register Keycloak URIs: {e}")
+            keycloak_message = f"Failed to register OAuth callback URLs: {str(e)}"
+
         if success:
             return {
                 "status": "configured",
                 "message": "Tailscale serve configured successfully with base routes",
                 "routes": status,
-                "hostname": config.hostname
+                "hostname": config.hostname,
+                "keycloak_registered": keycloak_success,
+                "keycloak_message": keycloak_message
             }
         else:
             return {
                 "status": "partial",
                 "message": "Some routes may have failed to configure",
-                "routes": status
+                "routes": status,
+                "keycloak_registered": keycloak_success,
+                "keycloak_message": keycloak_message
             }
 
     except Exception as e:
@@ -1504,3 +1527,5 @@ async def get_serve_status(
             "routes": None,
             "error": str(e)
         }
+
+

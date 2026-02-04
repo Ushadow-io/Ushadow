@@ -28,8 +28,12 @@ interface NavigationItem {
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, logout: legacyLogout, isAdmin } = useAuth()
-  const { isAuthenticated: kcAuthenticated, logout: kcLogout } = useKeycloakAuth()
+  const { user: legacyUser, logout: legacyLogout, isAdmin: legacyIsAdmin } = useAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, logout: kcLogout } = useKeycloakAuth()
+
+  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  const user = kcAuthenticated && kcUser ? kcUser : legacyUser
+  const isAdmin = kcAuthenticated && kcUser ? kcUser.is_superuser : legacyIsAdmin
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
   const { getSetupLabel, isFirstTimeUser } = useWizard()
@@ -112,14 +116,14 @@ export default function Layout() {
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/recording', label: 'Recording', icon: Radio },
-    { path: '/chronicle', label: 'Chronicle', icon: MessageSquare, featureFlag: 'chronicle_page' },
+    { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
     { path: '/conversations', label: 'Conversations', icon: Archive },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
-    { path: '/services', label: 'Services', icon: Server, featureFlag: 'legacy_services_page' },
-    { path: '/instances', label: 'Services', icon: Layers, featureFlag: 'instances_management' },
+    { path: '/services', label: 'Services', icon: Server, badgeVariant: 'deprecated', featureFlag: 'legacy_services_page' },
+    { path: '/instances', label: 'Services', icon: Layers, badgeVariant: 'beta', featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
@@ -420,7 +424,7 @@ export default function Layout() {
                             className="text-sm font-medium truncate"
                             style={{ color: isDark ? 'var(--text-primary)' : '#171717' }}
                           >
-                            {user?.name || 'User'}
+                            {user?.display_name || 'User'}
                           </p>
                           <p
                             className="text-xs truncate"
