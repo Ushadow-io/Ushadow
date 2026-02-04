@@ -172,3 +172,38 @@ async def get_current_user_hybrid(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token"
     )
+
+
+async def get_current_user_or_none(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Union[dict, None]:
+    """
+    Optional hybrid authentication dependency.
+
+    Same as get_current_user_hybrid but returns None instead of raising
+    401 when no credentials are provided or token is invalid.
+    Use this for endpoints that work with or without authentication.
+
+    Args:
+        credentials: HTTP Authorization credentials (Bearer token)
+
+    Returns:
+        User info dict if authenticated, None otherwise
+    """
+    if not credentials:
+        logger.debug("[AUTH] No credentials provided (optional auth)")
+        return None
+
+    token = credentials.credentials
+    token_preview = token[:20] + "..." if len(token) > 20 else token
+    logger.debug(f"[AUTH] Optional auth - validating token: {token_preview}")
+
+    # Try Keycloak token validation first
+    keycloak_user = get_keycloak_user_from_token(token)
+    if keycloak_user:
+        logger.info(f"[AUTH] ✅ Optional auth - Keycloak user: {keycloak_user.get('email')}")
+        return keycloak_user
+
+    # Token provided but invalid - return None for optional auth
+    logger.debug("[AUTH] Optional auth - token invalid, returning None")
+    return None
