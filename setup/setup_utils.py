@@ -412,10 +412,19 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
             'chronicle': {'api_key': ''}
         }
 
-    # Note: Keycloak admin uses the main admin.password (no separate keycloak section needed)
-    # Keycloak client secret can be set via KEYCLOAK_CLIENT_SECRET env var if needed
+    # Ensure keycloak section exists with admin credentials
     if 'keycloak' not in data:
         data['keycloak'] = {}
+
+    # Set Keycloak admin credentials (separate from Ushadow admin)
+    # These match KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD in .env
+    if not data['keycloak'].get('admin_user'):
+        data['keycloak']['admin_user'] = os.getenv('KEYCLOAK_ADMIN', 'admin')
+        created_new = True
+
+    if not data['keycloak'].get('admin_password'):
+        data['keycloak']['admin_password'] = os.getenv('KEYCLOAK_ADMIN_PASSWORD', 'admin')
+        created_new = True
 
     # Only store backend_client_secret if provided (optional for public clients)
     keycloak_client_secret = os.getenv('KEYCLOAK_CLIENT_SECRET', '')
