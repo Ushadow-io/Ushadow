@@ -1,16 +1,17 @@
 """
 Keycloak Token Validation
 
-Validates Keycloak JWT access tokens using python-keycloak library.
-Provides FastAPI dependencies for authentication.
+Validates Keycloak JWT access tokens with signature verification but issuer-agnostic.
+This allows the app to work from any domain (localhost, Tailscale, public URLs).
 """
 
 import logging
 from typing import Optional, Union
+import jwt
+from jwt import PyJWKClient
 
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from keycloak.exceptions import KeycloakError
 
 from .keycloak_client import get_keycloak_client
 
@@ -19,37 +20,72 @@ logger = logging.getLogger(__name__)
 # Security scheme for extracting Bearer tokens
 security = HTTPBearer(auto_error=False)
 
+# Cache for JWKS client (fetches Keycloak's public keys)
+_jwks_client: Optional[PyJWKClient] = None
+
+
+def get_jwks_client() -> PyJWKClient:
+    """Get cached JWKS client for fetching Keycloak's public keys."""
+    global _jwks_client
+    if _jwks_client is None:
+        kc_client = get_keycloak_client()
+        # Construct JWKS URL from Keycloak server URL
+        jwks_url = f"{kc_client.server_url}/realms/{kc_client.realm}/protocol/openid-connect/certs"
+        _jwks_client = PyJWKClient(jwks_url)
+        logger.info(f"[KC-AUTH] Initialized JWKS client: {jwks_url}")
+    return _jwks_client
+
 
 def validate_keycloak_token(token: str) -> Optional[dict]:
     """
-    Validate a Keycloak access token using python-keycloak.
+    Validate a Keycloak JWT access token with signature verification but issuer-agnostic.
 
-    This properly validates:
-    - Token signature using Keycloak's public keys (JWKS)
-    - Token expiration
-    - Issuer
-    - Other standard JWT claims
+    This approach:
+    - ✅ Verifies JWT signature using Keycloak's public keys (JWKS)
+    - ✅ Checks token expiration
+    - ✅ Works from ANY domain (localhost, Tailscale, public URLs)
+    - ✅ No backend client or introspection permissions needed
+    - ✅ Fast (no network call after JWKS cached)
+
+    The issuer check is skipped to allow multi-domain deployments where
+    users access the app from different URLs (localhost:3000, tailscale, etc).
 
     Args:
         token: JWT access token from Keycloak
 
     Returns:
-        Decoded token payload if valid, None if invalid
+        Decoded token payload if valid, None if invalid/expired
     """
     try:
-        kc_client = get_keycloak_client()
+        # Get JWKS client (fetches Keycloak's public keys for signature verification)
+        jwks_client = get_jwks_client()
 
-        # Decode and validate token (checks signature, expiration, etc.)
-        payload = kc_client.decode_token(token, validate=True)
+        # Get the signing key from JWKS
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-        logger.info(f"✓ Validated Keycloak token for user: {payload.get('preferred_username')}")
+        # Decode and validate JWT
+        # - Verify signature using Keycloak's public key
+        # - Check expiration
+        # - Skip issuer validation (options={"verify_iss": False})
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_iss": False},  # Allow any issuer (multi-domain support)
+            audience=None  # Skip audience check (optional, can be added if needed)
+        )
+
+        logger.info(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")
         return payload
 
-    except KeycloakError as e:
-        logger.warning(f"Keycloak token validation failed: {e}")
+    except jwt.ExpiredSignatureError:
+        logger.warning("[KC-AUTH] Token expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"[KC-AUTH] Invalid token: {e}")
         return None
     except Exception as e:
-        logger.error(f"Error validating Keycloak token: {e}", exc_info=True)
+        logger.error(f"[KC-AUTH] Error validating token: {e}", exc_info=True)
         return None
 
 

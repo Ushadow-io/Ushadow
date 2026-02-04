@@ -412,6 +412,17 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
             'chronicle': {'api_key': ''}
         }
 
+    # Note: Keycloak admin uses the main admin.password (no separate keycloak section needed)
+    # Keycloak client secret can be set via KEYCLOAK_CLIENT_SECRET env var if needed
+    if 'keycloak' not in data:
+        data['keycloak'] = {}
+
+    # Only store backend_client_secret if provided (optional for public clients)
+    keycloak_client_secret = os.getenv('KEYCLOAK_CLIENT_SECRET', '')
+    if keycloak_client_secret:
+        data['keycloak']['backend_client_secret'] = keycloak_client_secret
+        created_new = True
+
     # Write back to file
     try:
         secrets_path.parent.mkdir(parents=True, exist_ok=True)

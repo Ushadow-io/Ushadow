@@ -164,12 +164,12 @@
       "authorizationServicesEnabled": false,
       "fullScopeAllowed": true,
       "redirectUris": [
-        "http://localhost:3000/oauth/callback"
-        
+        "http://localhost:3000/oauth/callback",
+        "http://localhost:*/oauth/callback"
       ],
       "webOrigins": [
-        "http://localhost:3000"
-      
+        "http://localhost:3000",
+        "http://localhost:*"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",

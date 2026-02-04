@@ -117,6 +117,36 @@ def get_current_post_logout_uris() -> List[str]:
     return post_logout_uris
 
 
+def get_web_origins() -> List[str]:
+    """
+    Get allowed web origins (CORS) from settings.
+
+    Uses security.cors_origins from OmegaConf settings which is already
+    configured for the backend's CORS middleware.
+
+    Returns:
+        List of allowed origins for Keycloak webOrigins (CORS)
+    """
+    try:
+        from ..config import get_settings
+        settings = get_settings()
+        cors_origins = settings.get_sync("security.cors_origins", "")
+
+        if cors_origins and cors_origins.strip():
+            # Split comma-separated origins and strip whitespace
+            origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+            logger.info(f"[KC-STARTUP] Using {len(origins)} web origins from settings")
+            return origins
+    except Exception as e:
+        logger.warning(f"[KC-STARTUP] Could not get CORS origins from settings: {e}")
+
+    # Fallback to defaults
+    logger.warning("[KC-STARTUP] Using default web origins")
+    port_offset = int(os.getenv("PORT_OFFSET", "10"))
+    frontend_port = 3000 + port_offset
+    return [f"http://localhost:{frontend_port}"]
+
+
 async def register_current_environment():
     """
     Register the current environment's redirect URIs with Keycloak.
@@ -145,14 +175,16 @@ async def register_current_environment():
         # Get URIs to register
         redirect_uris = get_current_redirect_uris()
         post_logout_uris = get_current_post_logout_uris()
+        web_origins = get_web_origins()  # Get CORS origins from settings
 
         logger.info("[KC-STARTUP] 🔐 Registering redirect URIs with Keycloak...")
         logger.info(f"[KC-STARTUP] Environment: PORT_OFFSET={os.getenv('PORT_OFFSET', '10')}")
 
-        # Register redirect URIs
+        # Register redirect URIs and webOrigins (CORS)
         success = await admin_client.update_client_redirect_uris(
             client_id="ushadow-frontend",
             redirect_uris=redirect_uris,
+            web_origins=web_origins,  # Pass CORS origins from settings
             merge=True  # Merge with existing URIs
         )
 

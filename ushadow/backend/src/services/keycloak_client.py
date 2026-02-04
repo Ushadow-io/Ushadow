@@ -6,7 +6,6 @@ Handles token exchange, refresh, validation, and user info retrieval.
 """
 
 import logging
-import os
 from typing import Optional, Dict, Any
 
 from keycloak import KeycloakOpenID
@@ -27,19 +26,21 @@ class KeycloakClient:
     """
 
     def __init__(self):
-        """Initialize Keycloak OpenID client from environment variables."""
-        # Use external URL for token operations (what frontend uses)
-        # Fall back to internal URL if not set
-        external_url = os.getenv("KEYCLOAK_EXTERNAL_URL")
-        internal_url = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
+        """Initialize Keycloak OpenID client from settings configuration."""
+        from src.config.keycloak_settings import get_keycloak_config
 
-        logger.info(f"[KC-CLIENT] KEYCLOAK_EXTERNAL_URL={external_url}")
-        logger.info(f"[KC-CLIENT] KEYCLOAK_URL={internal_url}")
+        # Load configuration from settings (config.defaults.yaml + secrets.yaml)
+        # Settings system handles env var interpolation via OmegaConf
+        config = get_keycloak_config()
 
-        self.server_url = external_url or internal_url
-        self.realm = os.getenv("KEYCLOAK_REALM", "ushadow")
-        self.client_id = os.getenv("KEYCLOAK_CLIENT_ID", "ushadow-frontend")
-        self.client_secret = os.getenv("KEYCLOAK_CLIENT_SECRET")
+        # Use internal URL for efficient Docker network communication
+        # Token introspection is issuer-agnostic, so we don't need external URL
+        self.server_url = config["url"]
+        self.realm = config["realm"]
+        self.client_id = config["frontend_client_id"]  # Used for token validation
+        self.client_secret = config.get("backend_client_secret")
+
+        logger.info(f"[KC-CLIENT] Using Keycloak URL: {self.server_url}")
 
         # Initialize KeycloakOpenID client
         self.keycloak_openid = KeycloakOpenID(

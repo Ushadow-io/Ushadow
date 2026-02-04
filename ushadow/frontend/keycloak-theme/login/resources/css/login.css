@@ -30,7 +30,8 @@ html,
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
-  justify-content: center !important;
+  justify-content: flex-start !important;
+  padding-top: 4rem !important;
   position: relative !important;
 }
 
@@ -78,7 +79,7 @@ body::after {
 #kc-header-wrapper {
   width: 100% !important;
   text-align: center !important;
-  margin: 0 auto 2rem auto !important;
+  margin: 0 auto 1rem auto !important;
   position: relative !important;
   z-index: 10 !important;
   display: flex !important;
@@ -90,9 +91,9 @@ body::after {
 #kc-header-wrapper::before {
   content: '';
   display: block;
-  width: 180px !important;
-  height: 180px !important;
-  margin: 0 auto 1rem;
+  width: 120px !important;
+  height: 120px !important;
+  margin: 0 auto 0.75rem;
   background: url('../img/logo.png') center no-repeat;
   background-size: contain;
   filter: drop-shadow(0 8px 24px rgba(74, 222, 128, 0.2)) drop-shadow(0 8px 24px rgba(168, 85, 247, 0.2));
@@ -101,13 +102,13 @@ body::after {
 /* Ushadow brand text - GRADIENT green to purple */
 #kc-header,
 #kc-header-wrapper h1 {
-  font-size: 2.75rem !important;
+  font-size: 2.25rem !important;
   font-weight: 600 !important;
   background: linear-gradient(90deg, #4ade80 0%, #a855f7 100%) !important;
   -webkit-background-clip: text !important;
   -webkit-text-fill-color: transparent !important;
   background-clip: text !important;
-  margin: 0 auto 0.5rem auto !important;
+  margin: 0 auto 0.25rem auto !important;
   letter-spacing: -0.03em !important;
   display: inline-block !important;
   text-align: center !important;
@@ -118,11 +119,11 @@ body::after {
 #kc-header::after {
   content: 'AI Orchestration Platform';
   display: block;
-  font-size: 1rem;
+  font-size: 0.9rem;
   font-weight: 400;
   color: #a1a1aa;
-  margin-top: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
   background: none !important;
   -webkit-text-fill-color: #a1a1aa !important;
   letter-spacing: normal !important;
@@ -502,13 +503,17 @@ button[type="submit"]:active {
    ============================================ */
 
 @media (max-width: 768px) {
+  .login-pf-page {
+    padding-top: 2rem !important;
+  }
+
   #kc-header-wrapper::before {
-    width: 140px !important;
-    height: 140px !important;
+    width: 100px !important;
+    height: 100px !important;
   }
 
   #kc-header {
-    font-size: 2.25rem !important;
+    font-size: 1.875rem !important;
   }
 
   .card-pf {

@@ -1508,7 +1508,14 @@ export const tailscaleApi = {
   provisionCertInContainer: (hostname: string) =>
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
-    api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
+    api.post<{
+      status: string;
+      message: string;
+      routes?: string;
+      hostname?: string;
+      keycloak_registered?: boolean;
+      keycloak_message?: string;
+    }>('/api/tailscale/configure-serve', config),
   getServeStatus: () =>
     api.get<{ status: string; routes: string | null; error?: string }>('/api/tailscale/serve-status'),
   updateCorsOrigins: (hostname: string) =>

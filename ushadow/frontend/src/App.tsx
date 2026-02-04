@@ -7,6 +7,7 @@ import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
 import { ToastProvider } from './contexts/ToastContext'
+import { SettingsProvider } from './contexts/SettingsContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
 import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
@@ -158,16 +159,18 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <ToastProvider>
-          <VibeKanbanWebCompanion />
-          <KeycloakAuthProvider>
-            <AuthProvider>
-              <FeatureFlagsProvider>
-                <BrowserRouter basename={getBasename()}>
-                  <AppContent />
-                </BrowserRouter>
-              </FeatureFlagsProvider>
-            </AuthProvider>
-          </KeycloakAuthProvider>
+          <SettingsProvider>
+            <VibeKanbanWebCompanion />
+            <KeycloakAuthProvider>
+              <AuthProvider>
+                <FeatureFlagsProvider>
+                  <BrowserRouter basename={getBasename()}>
+                    <AppContent />
+                  </BrowserRouter>
+                </FeatureFlagsProvider>
+              </AuthProvider>
+            </KeycloakAuthProvider>
+          </SettingsProvider>
         </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>

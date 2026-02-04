@@ -1,7 +1,8 @@
 /**
  * Keycloak and Backend Configuration
  *
- * Loaded from environment variables (.env file)
+ * Configuration is fetched from backend settings API at runtime.
+ * Fallback to env vars only for initial load before settings are available.
  */
 
 /**
@@ -24,12 +25,36 @@ function getBackendUrl(): string {
   return import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 }
 
-export const keycloakConfig = {
-  url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8081',
-  realm: import.meta.env.VITE_KEYCLOAK_REALM || 'ushadow',
-  clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'ushadow-frontend',
-}
-
+// Backend config is static (based on origin)
 export const backendConfig = {
   url: getBackendUrl(),
+}
+
+// Keycloak config will be populated from backend settings
+// These are just defaults for initial load
+export let keycloakConfig = {
+  url: 'http://localhost:8081',
+  realm: 'ushadow',
+  clientId: 'ushadow-frontend',
+}
+
+/**
+ * Update Keycloak config from backend settings.
+ * Should be called on app initialization and after settings changes.
+ */
+export function updateKeycloakConfig(settings: {
+  keycloak?: {
+    public_url?: string
+    realm?: string
+    frontend_client_id?: string
+  }
+}) {
+  if (settings.keycloak) {
+    keycloakConfig = {
+      url: settings.keycloak.public_url || keycloakConfig.url,
+      realm: settings.keycloak.realm || keycloakConfig.realm,
+      clientId: settings.keycloak.frontend_client_id || keycloakConfig.clientId,
+    }
+    console.log('[Config] Updated Keycloak config:', keycloakConfig)
+  }
 }

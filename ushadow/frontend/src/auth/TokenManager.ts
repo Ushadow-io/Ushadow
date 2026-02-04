@@ -294,22 +294,35 @@ export class TokenManager {
   }
 
   /**
-   * Refresh access token using refresh token
+   * Refresh access token using refresh token directly with Keycloak.
+   *
+   * This is the standard OAuth2/OIDC approach:
+   * - Frontend manages its own token lifecycle
+   * - No issuer mismatch issues (uses same Keycloak URL as login)
+   * - Works from any domain (localhost, Tailscale, etc.)
    */
-  static async refreshAccessToken(backendUrl: string): Promise<TokenResponse> {
+  static async refreshAccessToken(
+    keycloakUrl: string,
+    realm: string,
+    clientId: string
+  ): Promise<TokenResponse> {
     const refreshToken = this.getRefreshToken()
     if (!refreshToken) {
       throw new Error('No refresh token available')
     }
 
-    console.log('[TokenManager] Refreshing access token...')
+    console.log('[TokenManager] Refreshing access token with Keycloak...')
 
-    const response = await fetch(`${backendUrl}/api/auth/refresh`, {
+    const tokenUrl = `${keycloakUrl}/realms/${realm}/protocol/openid-connect/token`
+
+    const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: JSON.stringify({
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
         refresh_token: refreshToken,
       }),
     })

@@ -100,10 +100,13 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
       const timeoutId = setTimeout(async () => {
         try {
           console.log('[KC-AUTH] Refreshing token...')
-          if (!backendConfig?.url) {
-            throw new Error('Backend URL not configured')
-          }
-          const newTokens = await TokenManager.refreshAccessToken(backendConfig.url)
+
+          // Refresh directly with Keycloak (no backend needed)
+          const newTokens = await TokenManager.refreshAccessToken(
+            keycloakConfig.url,
+            keycloakConfig.realm,
+            keycloakConfig.clientId
+          )
           TokenManager.storeTokens(newTokens)
           console.log('[KC-AUTH] ✅ Token refreshed successfully')
 
