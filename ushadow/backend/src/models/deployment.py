@@ -214,6 +214,7 @@ class DeployRequest(BaseModel):
     service_id: str
     unode_hostname: str
     config_id: Optional[str] = Field(None, description="ServiceConfig ID with env var overrides")
+    force_rebuild: bool = Field(False, description="Force rebuild Docker image even if it exists")
 
 
 class ServiceDefinitionCreate(BaseModel):

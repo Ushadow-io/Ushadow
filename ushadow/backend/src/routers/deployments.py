@@ -216,7 +216,8 @@ async def deploy_service(
         deployment = await manager.deploy_service(
             data.service_id,
             data.unode_hostname,
-            config_id=config_id
+            config_id=config_id,
+            force_rebuild=data.force_rebuild
         )
         return deployment
     except ValueError as e:
