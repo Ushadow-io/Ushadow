@@ -32,6 +32,35 @@ pub fn get_colors_for_name(name: &str) -> (String, String) {
     (name.to_string(), name.to_string())
 }
 
+/// Delete a git branch (best effort - won't fail if branch doesn't exist)
+fn delete_branch(main_repo: &str, branch_name: &str) {
+    eprintln!("[delete_branch] Attempting to delete branch '{}'", branch_name);
+
+    // Try to delete the branch with -D (force delete)
+    let output = silent_command("git")
+        .args(["branch", "-D", branch_name])
+        .current_dir(main_repo)
+        .output();
+
+    match output {
+        Ok(result) if result.status.success() => {
+            eprintln!("[delete_branch] ✓ Successfully deleted branch '{}'", branch_name);
+        }
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            // Don't error if branch doesn't exist
+            if !stderr.contains("not found") && !stderr.contains("does not exist") {
+                eprintln!("[delete_branch] Warning: Failed to delete branch '{}': {}", branch_name, stderr);
+            } else {
+                eprintln!("[delete_branch] Branch '{}' already deleted or doesn't exist", branch_name);
+            }
+        }
+        Err(e) => {
+            eprintln!("[delete_branch] Warning: Failed to run git branch -D: {}", e);
+        }
+    }
+}
+
 /// Check if a worktree exists for a given branch
 #[tauri::command]
 pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<Option<WorktreeInfo>, String> {
@@ -714,6 +743,9 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
 
     eprintln!("[remove_worktree] Removing worktree at: {}", worktree.path);
 
+    // Store branch name for deletion after worktree removal
+    let branch_name = worktree.branch.clone();
+
     // Try to remove the worktree
     let output = silent_command("git")
         .args(["worktree", "remove", &worktree.path])
@@ -723,6 +755,27 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // If it contains modified/untracked files, use --force
+        if stderr.contains("modified or untracked files") || stderr.contains("use --force") {
+            eprintln!("[remove_worktree] Worktree has uncommitted changes, forcing removal...");
+
+            let force_output = silent_command("git")
+                .args(["worktree", "remove", "--force", &worktree.path])
+                .current_dir(&main_repo)
+                .output()
+                .map_err(|e| format!("Failed to force remove worktree: {}", e))?;
+
+            if force_output.status.success() {
+                eprintln!("[remove_worktree] ✓ Successfully force-removed worktree");
+                // Delete the associated branch
+                delete_branch(&main_repo, &branch_name);
+                return Ok(());
+            } else {
+                let force_stderr = String::from_utf8_lossy(&force_output.stderr);
+                return Err(format!("Failed to force remove worktree: {}", force_stderr));
+            }
+        }
 
         // If it's locked or missing, try to unlock and prune
         if stderr.contains("locked") || stderr.contains("missing") {
@@ -743,6 +796,8 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
 
             if prune_output.status.success() {
                 eprintln!("[remove_worktree] ✓ Successfully pruned locked/missing worktree");
+                // Delete the associated branch
+                delete_branch(&main_repo, &branch_name);
                 return Ok(());
             } else {
                 let prune_stderr = String::from_utf8_lossy(&prune_output.stderr);
@@ -754,6 +809,10 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
     }
 
     eprintln!("[remove_worktree] ✓ Worktree removed successfully");
+
+    // Delete the associated branch
+    delete_branch(&main_repo, &branch_name);
+
     Ok(())
 }
 

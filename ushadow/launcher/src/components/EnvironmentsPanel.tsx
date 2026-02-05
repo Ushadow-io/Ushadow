@@ -24,7 +24,7 @@ interface EnvironmentsPanelProps {
   onDelete?: (envName: string) => void
   onDismissError?: (name: string) => void
   onAttachTmux?: (env: UshadowEnvironment) => void
-  loadingEnv: string | null
+  loadingEnv: { name: string; action: 'starting' | 'stopping' | 'deleting' | 'merging' } | null
   tmuxStatuses?: { [envName: string]: TmuxStatus }
 }
 
@@ -68,8 +68,8 @@ export function EnvironmentsPanel({
     const isCreating = creatingEnvs.some(ce => ce.name === env.name)
     if (isCreating) return true
 
-    // Check if environment is being loaded (loadingEnv)
-    if (loadingEnv === env.name) return true
+    // Check if environment is being started (not deleted/stopped)
+    if (loadingEnv?.name === env.name && loadingEnv.action === 'starting') return true
 
     return false
   }
@@ -219,7 +219,7 @@ export function EnvironmentsPanel({
                     onStop={() => onStop(env.name)}
                     onOpenInApp={() => onOpenInApp(env)}
                     onCreateTicket={() => handleCreateTicket(env.name)}
-                    isLoading={loadingEnv === env.name}
+                    isLoading={loadingEnv?.name === env.name}
                     isSelected={selectedEnv?.name === env.name}
                     onSelect={() => handleEnvSelect(env)}
                   />
@@ -237,7 +237,7 @@ export function EnvironmentsPanel({
                     onStop={() => onStop(env.name)}
                     onOpenInApp={() => onOpenInApp(env)}
                     onCreateTicket={() => handleCreateTicket(env.name)}
-                    isLoading={loadingEnv === env.name}
+                    isLoading={loadingEnv?.name === env.name}
                     isSelected={selectedEnv?.name === env.name}
                     onSelect={() => handleEnvSelect(env)}
                   />
@@ -269,7 +269,8 @@ export function EnvironmentsPanel({
               environment={selectedEnv}
               onClose={() => setShowBrowserView(false)}
               onStop={() => onStop(selectedEnv.name)}
-              isLoading={loadingEnv === selectedEnv.name}
+              isLoading={loadingEnv?.name === selectedEnv.name}
+              loadingAction={loadingEnv?.name === selectedEnv.name ? loadingEnv.action : undefined}
               tmuxStatus={tmuxStatuses[selectedEnv.name]}
             />
           ) : (
@@ -281,7 +282,8 @@ export function EnvironmentsPanel({
               onMerge={onMerge ? () => onMerge(selectedEnv.name) : undefined}
               onDelete={onDelete ? () => onDelete(selectedEnv.name) : undefined}
               onAttachTmux={onAttachTmux ? () => onAttachTmux(selectedEnv) : undefined}
-              isLoading={loadingEnv === selectedEnv.name}
+              isLoading={loadingEnv?.name === selectedEnv.name}
+              loadingAction={loadingEnv?.name === selectedEnv.name ? loadingEnv.action : undefined}
               tmuxStatus={tmuxStatuses[selectedEnv.name]}
             />
           )
@@ -368,10 +370,11 @@ interface BrowserViewProps {
   onClose: () => void
   onStop: () => void
   isLoading: boolean
+  loadingAction?: 'starting' | 'stopping' | 'deleting' | 'merging'
   tmuxStatus?: TmuxStatus
 }
 
-function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: BrowserViewProps) {
+function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, tmuxStatus }: BrowserViewProps) {
   const colors = getColors(environment.color || environment.name)
   const [iframeError, setIframeError] = useState(false)
   const [iframeLoading, setIframeLoading] = useState(true)
@@ -426,7 +429,7 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
   const handleOpenInNewTab = () => {
     // Open in new tab without launcher param (so footer shows normally)
     if (displayUrl) {
-      window.open(displayUrl, '_blank')
+      tauri.openBrowser(displayUrl)
     }
   }
 
@@ -504,7 +507,7 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
         <div className="flex items-center justify-between px-4 py-2 bg-surface-800">
           <div className="flex items-center gap-4 text-xs">
             <button
-              onClick={() => window.open(displayUrl, '_blank')}
+              onClick={() => tauri.openBrowser(displayUrl)}
               className="text-text-muted hover:text-primary-400 font-mono transition-colors cursor-pointer underline decoration-dotted"
               title="Open in external browser"
               data-testid="browser-view-url"
@@ -543,7 +546,13 @@ function BrowserView({ environment, onClose, onStop, isLoading, tmuxStatus }: Br
           /* Loading Animation Overlay */
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 z-10">
             <Loader2 className="w-16 h-16 text-primary-400 animate-spin mb-4" />
-            <p className="text-lg font-semibold text-text-primary mb-2">Starting containers...</p>
+            <p className="text-lg font-semibold text-text-primary mb-2">
+              {loadingAction === 'starting' && 'Starting containers...'}
+              {loadingAction === 'stopping' && 'Stopping containers...'}
+              {loadingAction === 'deleting' && 'Deleting environment...'}
+              {loadingAction === 'merging' && 'Merging worktree...'}
+              {!loadingAction && 'Processing...'}
+            </p>
             <p className="text-sm text-text-muted">This may take a moment</p>
           </div>
         ) : (
@@ -594,10 +603,11 @@ interface DetailViewProps {
   onDelete?: () => void
   onAttachTmux?: () => void
   isLoading: boolean
+  loadingAction?: 'starting' | 'stopping' | 'deleting' | 'merging'
   tmuxStatus?: TmuxStatus
 }
 
-function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, onDelete, onAttachTmux, isLoading, tmuxStatus }: DetailViewProps) {
+function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, onDelete, onAttachTmux, isLoading, loadingAction, tmuxStatus }: DetailViewProps) {
   const colors = getColors(environment.color || environment.name)
   const displayUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
 
@@ -704,7 +714,7 @@ function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, on
           <div className="flex items-center justify-between px-4 py-2 bg-surface-800">
             <div className="flex items-center gap-4 text-xs">
               <button
-                onClick={() => window.open(displayUrl, '_blank')}
+                onClick={() => tauri.openBrowser(displayUrl)}
                 className="text-text-muted hover:text-primary-400 font-mono transition-colors cursor-pointer underline decoration-dotted"
                 title="Open in external browser"
                 data-testid="detail-view-url"
@@ -740,11 +750,17 @@ function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, on
 
       {/* Content */}
       <div className="flex-1 p-6 overflow-auto relative">
-        {isLoading && !environment.running ? (
+        {isLoading && (!environment.running || loadingAction === 'deleting' || loadingAction === 'stopping') ? (
           /* Loading Animation Overlay */
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800/95 backdrop-blur-sm z-10">
             <Loader2 className="w-16 h-16 text-primary-400 animate-spin mb-4" />
-            <p className="text-lg font-semibold text-text-primary mb-2">Starting containers...</p>
+            <p className="text-lg font-semibold text-text-primary mb-2">
+              {loadingAction === 'starting' && 'Starting containers...'}
+              {loadingAction === 'stopping' && 'Stopping containers...'}
+              {loadingAction === 'deleting' && 'Deleting environment...'}
+              {loadingAction === 'merging' && 'Merging worktree...'}
+              {!loadingAction && 'Processing...'}
+            </p>
             <p className="text-sm text-text-muted">This may take a moment</p>
           </div>
         ) : null}

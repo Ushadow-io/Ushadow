@@ -65,11 +65,14 @@ api.interceptors.request.use((config) => {
   // Check for Keycloak token first (in sessionStorage)
   const kcToken = sessionStorage.getItem('kc_access_token')
 
+  // Check for native login token (in localStorage - persists)
+  const nativeToken = localStorage.getItem('ushadow_access_token')
+
   // Fallback to legacy JWT token (in localStorage)
   const legacyToken = localStorage.getItem(getStorageKey('token'))
 
-  // Prefer Keycloak token if both are present
-  const token = kcToken || legacyToken
+  // Priority: Keycloak (session) > Native (persistent) > Legacy
+  const token = kcToken || nativeToken || legacyToken
 
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -96,6 +99,9 @@ api.interceptors.response.use(
         // Token expired or invalid on core ushadow endpoints, redirect to login
         console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
         localStorage.removeItem(getStorageKey('token'))
+        localStorage.removeItem('ushadow_access_token')
+        localStorage.removeItem('ushadow_user')
+        sessionStorage.removeItem('kc_access_token')
         window.location.href = '/login'
       }
     } else if (error.code === 'ECONNABORTED') {

@@ -59,7 +59,7 @@ function App() {
   const [installingItem, setInstallingItem] = useState<string | null>(null)
   const [isLaunching, setIsLaunching] = useState(false)
   const [loadingInfra, setLoadingInfra] = useState(false)
-  const [loadingEnv, setLoadingEnv] = useState<string | null>(null)
+  const [loadingEnv, setLoadingEnv] = useState<{ name: string; action: 'starting' | 'stopping' | 'deleting' | 'merging' } | null>(null)
   const [showProjectDialog, setShowProjectDialog] = useState(false)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
@@ -548,7 +548,7 @@ function App() {
   // Environment handlers
   const handleStartEnv = async (envName: string, explicitPath?: string) => {
     console.log(`DEBUG: handleStartEnv called for ${envName}`)
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'starting' })
     log(`Starting ${envName}...`, 'step')
 
     // Use explicit path if provided, otherwise look up the environment
@@ -660,7 +660,7 @@ function App() {
   }
 
   const handleStopEnv = async (envName: string) => {
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'stopping' })
     log(`Stopping ${envName}...`, 'step')
 
     try {
@@ -715,7 +715,7 @@ function App() {
 
     if (!confirmed) return
 
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'merging' })
     log(`Merging worktree "${envName}" to main...`, 'step')
 
     try {
@@ -763,20 +763,20 @@ function App() {
       ? `Delete environment "${envName}"?\n\n` +
         `This will:\n` +
         `• Stop all containers\n` +
-        `• Remove the worktree\n` +
+        `• Remove the worktree (including any uncommitted changes)\n` +
         `• Close the tmux session\n\n` +
-        `This action cannot be undone!`
+        `⚠️  This action cannot be undone!`
       : `Delete environment "${envName}"?\n\n` +
         `This will:\n` +
         `• Stop all containers\n` +
         `• Close the tmux session\n\n` +
-        `This action cannot be undone!`
+        `⚠️  This action cannot be undone!`
 
     const confirmed = window.confirm(message)
 
     if (!confirmed) return
 
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'deleting' })
     log(`Deleting environment "${envName}"...`, 'step')
 
     try {

@@ -130,7 +130,14 @@ export class TokenManager {
    * Check if user is authenticated (has valid token)
    */
   static isAuthenticated(): boolean {
-    const token = this.getAccessToken()
+    // Check for Keycloak token first (sessionStorage)
+    let token = this.getAccessToken()
+
+    // Check for native token (localStorage - persists)
+    if (!token) {
+      token = localStorage.getItem('ushadow_access_token')
+    }
+
     if (!token) {
       console.log('[TokenManager] No access token found')
       return false
