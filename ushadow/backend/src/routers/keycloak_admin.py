@@ -9,9 +9,41 @@ from pydantic import BaseModel
 import logging
 
 from src.services.keycloak_admin import get_keycloak_admin
+from src.config.keycloak_settings import get_keycloak_config, is_keycloak_enabled
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class KeycloakConfigResponse(BaseModel):
+    """Public Keycloak configuration for clients"""
+    enabled: bool
+    public_url: str
+    realm: str
+    frontend_client_id: str
+    backend_client_id: str
+
+
+@router.get("/config", response_model=KeycloakConfigResponse)
+async def get_keycloak_public_config():
+    """
+    Get public Keycloak configuration for clients.
+
+    This endpoint returns non-sensitive configuration that clients
+    (like the ush CLI tool) need to authenticate with Keycloak.
+
+    Returns:
+        Public Keycloak configuration (no secrets)
+    """
+    config = get_keycloak_config()
+
+    return KeycloakConfigResponse(
+        enabled=is_keycloak_enabled(),
+        public_url=config.get("public_url", "http://localhost:8080"),
+        realm=config.get("realm", "ushadow"),
+        frontend_client_id=config.get("frontend_client_id", "ushadow-frontend"),
+        backend_client_id=config.get("backend_client_id", "ushadow-backend"),
+    )
 
 
 class ClientUpdateResponse(BaseModel):
@@ -141,6 +173,96 @@ async def get_client_config(client_id: str):
         "enabled": client.get("enabled"),
         "publicClient": client.get("publicClient"),
         "standardFlowEnabled": client.get("standardFlowEnabled"),
+        "directAccessGrantsEnabled": client.get("directAccessGrantsEnabled"),
         "attributes": client.get("attributes", {}),
         "redirectUris": client.get("redirectUris", []),
     }
+
+
+@router.post("/clients/{client_id}/enable-direct-grant", response_model=ClientUpdateResponse)
+async def enable_direct_grant_for_client(client_id: str):
+    """
+    Enable Direct Access Grants (Resource Owner Password Credentials) for a Keycloak client.
+
+    This allows CLI tools and other non-browser clients to authenticate using username/password.
+
+    Args:
+        client_id: The Keycloak client ID (e.g., "ushadow-frontend")
+
+    Returns:
+        Success status and message
+    """
+    admin_client = get_keycloak_admin()
+
+    try:
+        # Get current client configuration
+        client = await admin_client.get_client_by_client_id(client_id)
+        if not client:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Client '{client_id}' not found in Keycloak"
+            )
+
+        client_uuid = client["id"]
+        logger.info(f"[KC-ADMIN] Enabling direct access grants for client: {client_id} ({client_uuid})")
+
+        # Update client to enable direct access grants
+        import httpx
+
+        token = await admin_client._get_admin_token()
+        config = get_keycloak_config()
+        keycloak_url = config["url"]
+        realm = config["realm"]
+
+        # Get full client config first
+        async with httpx.AsyncClient() as http_client:
+            get_response = await http_client.get(
+                f"{keycloak_url}/admin/realms/{realm}/clients/{client_uuid}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0
+            )
+
+            if get_response.status_code != 200:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get client config: {get_response.text}"
+                )
+
+            full_client_config = get_response.json()
+
+            # Enable direct access grants
+            full_client_config["directAccessGrantsEnabled"] = True
+
+            # Update client
+            update_response = await http_client.put(
+                f"{keycloak_url}/admin/realms/{realm}/clients/{client_uuid}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                },
+                json=full_client_config,
+                timeout=10.0
+            )
+
+            if update_response.status_code != 204:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to update client: {update_response.text}"
+                )
+
+        logger.info(f"[KC-ADMIN] ✓ Direct access grants enabled for client: {client_id}")
+
+        return ClientUpdateResponse(
+            success=True,
+            message=f"Direct access grants enabled for client '{client_id}'",
+            client_id=client_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KC-ADMIN] Failed to enable direct access grants: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to enable direct access grants: {str(e)}"
+        )
