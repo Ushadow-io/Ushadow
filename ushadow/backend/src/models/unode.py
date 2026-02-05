@@ -68,6 +68,7 @@ class UNodeCreate(BaseModel):
     platform: UNodePlatform = UNodePlatform.UNKNOWN
     capabilities: Optional[UNodeCapabilities] = None
     manager_version: str = "0.1.0"
+    labels: Dict[str, str] = Field(default_factory=dict)
 
 
 class UNode(UNodeBase):

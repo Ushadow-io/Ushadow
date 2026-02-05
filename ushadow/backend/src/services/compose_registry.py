@@ -123,6 +123,7 @@ class DiscoveredService:
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
     wizard: Optional[str] = None  # Setup wizard ID from x-ushadow
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # Exposed URLs from x-ushadow
+    tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
 
     # Environment variables
     required_env_vars: List[ComposeEnvVar] = field(default_factory=list)
@@ -286,6 +287,7 @@ class ComposeServiceRegistry:
                 route_path=service.route_path,
                 wizard=service.wizard,
                 exposes=service.exposes,
+                tags=service.tags,
                 required_env_vars=service.required_env_vars,
                 optional_env_vars=service.optional_env_vars,
             )

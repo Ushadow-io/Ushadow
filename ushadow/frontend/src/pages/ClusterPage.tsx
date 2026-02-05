@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle, QrCode, Smartphone, Info } from 'lucide-react'
+import { Server, Plus, RefreshCw, Copy, Trash2, CheckCircle, XCircle, Clock, Monitor, HardDrive, Cpu, Check, Play, Square, RotateCcw, Package, FileText, ArrowUpCircle, X, Unlink, ExternalLink, AlertTriangle, QrCode, Smartphone, Info, Globe } from 'lucide-react'
 import { clusterApi, deploymentsApi, servicesApi, Deployment } from '../services/api'
 import { useMobileQrCode } from '../hooks/useQrCode'
 import Modal from '../components/Modal'
@@ -28,6 +28,7 @@ interface UNode {
   registered_at: string
   manager_version: string
   services: string[]
+  labels?: Record<string, string>
   capabilities: {
     can_run_docker: boolean
     can_run_gpu: boolean
@@ -157,6 +158,12 @@ export default function ClusterPage() {
   const [upgradeVersion, setUpgradeVersion] = useState('latest')
   const [upgrading, setUpgrading] = useState(false)
   const [upgradeResult, setUpgradeResult] = useState<{ success: boolean; message: string } | null>(null)
+
+  // Public unode creation state
+  const [showPublicUnodeModal, setShowPublicUnodeModal] = useState(false)
+  const [creatingPublicUnode, setCreatingPublicUnode] = useState(false)
+  const [publicUnodeResult, setPublicUnodeResult] = useState<{ success: boolean; message: string; hostname?: string; public_url?: string } | null>(null)
+  const [tailscaleAuthKey, setTailscaleAuthKey] = useState('')
   const [availableVersions, setAvailableVersions] = useState<string[]>(['latest'])
   const [loadingVersions, setLoadingVersions] = useState(false)
 
@@ -257,6 +264,38 @@ export default function ClusterPage() {
       alert(`Failed to create token: ${err.response?.data?.detail || err.message}`)
     } finally {
       setCreatingToken(false)
+    }
+  }
+
+  const handleCreatePublicUnode = async () => {
+    if (!tailscaleAuthKey.trim()) {
+      alert('Please enter a Tailscale auth key')
+      return
+    }
+
+    try {
+      setCreatingPublicUnode(true)
+      setPublicUnodeResult(null)
+      const response = await clusterApi.createPublicUNode({
+        tailscale_auth_key: tailscaleAuthKey,
+        labels: { zone: 'public', funnel: 'enabled' }
+      })
+      setPublicUnodeResult({
+        success: response.data.success,
+        message: response.data.message,
+        hostname: response.data.hostname,
+        public_url: response.data.public_url
+      })
+      // Reload unodes after a brief delay to show the new unode
+      setTimeout(() => loadUnodes(), 5000)
+    } catch (err: any) {
+      console.error('Error creating public unode:', err)
+      setPublicUnodeResult({
+        success: false,
+        message: err.response?.data?.detail || err.message
+      })
+    } finally {
+      setCreatingPublicUnode(false)
     }
   }
 
@@ -508,6 +547,14 @@ export default function ClusterPage() {
             </button>
           )}
           <button
+            className="btn-secondary flex items-center space-x-2"
+            onClick={() => setShowPublicUnodeModal(true)}
+            data-testid="create-public-unode-btn"
+          >
+            <Globe className="h-5 w-5" />
+            <span>Create Public UNode</span>
+          </button>
+          <button
             className="btn-primary flex items-center space-x-2"
             onClick={handleCreateToken}
             disabled={creatingToken}
@@ -614,8 +661,18 @@ export default function ClusterPage() {
               {/* Node Header */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center space-x-3">
-                  <div className={`p-2 rounded-lg ${node.role === 'leader' ? 'bg-warning-100 dark:bg-warning-900/30' : 'bg-primary-100 dark:bg-primary-900/30'}`}>
-                    <Server className={`h-6 w-6 ${node.role === 'leader' ? 'text-warning-600 dark:text-warning-400' : 'text-primary-600 dark:text-primary-400'}`} />
+                  <div className={`p-2 rounded-lg ${
+                    node.labels?.zone === 'public'
+                      ? 'bg-blue-100 dark:bg-blue-900/30'
+                      : node.role === 'leader'
+                      ? 'bg-warning-100 dark:bg-warning-900/30'
+                      : 'bg-primary-100 dark:bg-primary-900/30'
+                  }`}>
+                    {node.labels?.zone === 'public' ? (
+                      <Globe className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                    ) : (
+                      <Server className={`h-6 w-6 ${node.role === 'leader' ? 'text-warning-600 dark:text-warning-400' : 'text-primary-600 dark:text-primary-400'}`} />
+                    )}
                   </div>
                   <div>
                     <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
@@ -626,6 +683,20 @@ export default function ClusterPage() {
                       <span className="capitalize">{node.platform}</span>
                       <span className="text-neutral-400">|</span>
                       <span className="capitalize">{node.role}</span>
+                      {node.labels?.zone === 'public' && (
+                        <>
+                          <span className="text-neutral-400">|</span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full font-medium">
+                            <Globe className="h-3 w-3" />
+                            Public
+                          </span>
+                        </>
+                      )}
+                      {node.labels?.funnel === 'enabled' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-full font-medium">
+                          Funnel
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -652,6 +723,24 @@ export default function ClusterPage() {
                 <span className="text-neutral-500 dark:text-neutral-400">IP: </span>
                 <span className="font-mono text-neutral-700 dark:text-neutral-300">{node.tailscale_ip}</span>
               </div>
+
+              {/* Labels (for public unodes) */}
+              {node.labels && Object.keys(node.labels).length > 0 && (
+                <div className="mb-4">
+                  <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1">Labels:</div>
+                  <div className="flex flex-wrap gap-1">
+                    {Object.entries(node.labels).map(([key, value]) => (
+                      <span
+                        key={key}
+                        className="px-2 py-0.5 bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded text-xs font-mono"
+                        data-testid={`unode-label-${key}`}
+                      >
+                        {key}={value}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Last Seen (for offline nodes) */}
               {isNodeOffline && node.last_seen && (
@@ -1100,6 +1189,155 @@ export default function ClusterPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Create Public UNode Modal */}
+      {showPublicUnodeModal && createPortal(
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowPublicUnodeModal(false) }}
+        >
+          <div
+            className="bg-white dark:bg-neutral-800 rounded-lg max-w-2xl w-full shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-neutral-200 dark:border-neutral-700">
+              <div className="flex items-center gap-3">
+                <Globe className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
+                  Create Public UNode
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowPublicUnodeModal(false)}
+                className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <p className="text-sm text-blue-900 dark:text-blue-100">
+                  This will create a virtual public worker unode on the same physical machine with Tailscale Funnel enabled.
+                  It can host services that need public internet access (like share-dmz).
+                </p>
+              </div>
+
+              {!publicUnodeResult && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                      Tailscale Auth Key
+                    </label>
+                    <input
+                      type="password"
+                      value={tailscaleAuthKey}
+                      onChange={(e) => setTailscaleAuthKey(e.target.value)}
+                      placeholder="tskey-auth-..."
+                      className="w-full px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100"
+                      data-testid="tailscale-auth-key-input"
+                    />
+                    <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                      Generate a key at{' '}
+                      <a
+                        href="https://login.tailscale.com/admin/settings/keys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        Tailscale Settings
+                      </a>
+                      {' '}with tags: <code className="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 rounded">tag:dmz,tag:public</code>
+                    </p>
+                  </div>
+
+                  <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                    <div className="flex gap-2 text-amber-800 dark:text-amber-300 text-sm">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-medium">Important:</p>
+                        <ul className="mt-1 ml-4 list-disc space-y-1">
+                          <li>This unode will be publicly accessible via Tailscale Funnel</li>
+                          <li>Only deploy DMZ services with appropriate security</li>
+                          <li>Services deployed here can be reached from the internet</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {publicUnodeResult && (
+                <div className={`p-4 rounded-lg border ${
+                  publicUnodeResult.success
+                    ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                    : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                }`}>
+                  <div className={`flex items-start gap-2 ${
+                    publicUnodeResult.success ? 'text-green-800 dark:text-green-300' : 'text-red-800 dark:text-red-300'
+                  }`}>
+                    {publicUnodeResult.success ? (
+                      <CheckCircle className="h-5 w-5 flex-shrink-0" />
+                    ) : (
+                      <XCircle className="h-5 w-5 flex-shrink-0" />
+                    )}
+                    <div className="flex-1">
+                      <p className="font-medium">{publicUnodeResult.message}</p>
+                      {publicUnodeResult.hostname && (
+                        <p className="mt-2 text-sm">
+                          <strong>Hostname:</strong> {publicUnodeResult.hostname}
+                        </p>
+                      )}
+                      {publicUnodeResult.public_url && (
+                        <p className="mt-1 text-sm">
+                          <strong>Public URL:</strong> {publicUnodeResult.public_url}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 p-6 border-t border-neutral-200 dark:border-neutral-700">
+              <button
+                onClick={() => {
+                  setShowPublicUnodeModal(false)
+                  setPublicUnodeResult(null)
+                  setTailscaleAuthKey('')
+                }}
+                className="btn-secondary"
+              >
+                {publicUnodeResult ? 'Close' : 'Cancel'}
+              </button>
+              {!publicUnodeResult && (
+                <button
+                  onClick={handleCreatePublicUnode}
+                  disabled={creatingPublicUnode || !tailscaleAuthKey.trim()}
+                  className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-testid="create-public-unode-submit"
+                >
+                  {creatingPublicUnode ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                      Creating...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Create Public UNode
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* Deploy Service Modal */}
