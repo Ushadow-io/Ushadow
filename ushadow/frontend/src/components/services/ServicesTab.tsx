@@ -222,14 +222,18 @@ export default function ServicesTab({
     const serviceName = template.id.includes(':') ? template.id.split(':').pop()! : template.id
     const status = serviceStatuses[serviceName]
 
-    // Filter wiring for this consumer
-    const consumerWiring = wiring.filter((w) => w.target_config_id === consumerId)
+    // Prepare worker data first so we can include their wiring
+    const workers = getWorkerData(workerTemplates)
+
+    // Get all relevant consumer IDs (main service + all workers)
+    const workerConsumerIds = workers.map((w) => w.config?.id || w.template.id)
+    const allConsumerIds = [consumerId, ...workerConsumerIds]
+
+    // Filter wiring for this consumer and all workers
+    const consumerWiring = wiring.filter((w) => allConsumerIds.includes(w.target_config_id))
 
     // Get deployments for this service
     const serviceDeployments = deployments.filter((d) => d.service_id === template.id)
-
-    // Prepare worker data
-    const workers = getWorkerData(workerTemplates)
 
     return (
       <FlatServiceCard
@@ -263,6 +267,12 @@ export default function ServicesTab({
         onStopWorker={onStop}
         onEditWorker={onEdit}
         onDeployWorker={(templateId, target) => onDeploy(templateId, target)}
+        onWorkerWiringChange={(workerConfigId, capability, sourceConfigId) =>
+          onWiringChange(workerConfigId, capability, sourceConfigId)
+        }
+        onWorkerWiringClear={(workerConfigId, capability) =>
+          onWiringClear(workerConfigId, capability)
+        }
       />
     )
   }

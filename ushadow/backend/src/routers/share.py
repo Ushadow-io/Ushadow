@@ -24,28 +24,11 @@ from ..models.user import User
 from ..services.auth import get_current_user, get_optional_current_user
 from ..services.share_service import ShareService
 
+from ..utils.service_urls import get_backend_base_url
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 10.0
-
-
-def _get_backend_base_url() -> str:
-    """Get the backend base URL from config.
-
-    Uses network.host_ip and network.backend_public_port from OmegaConf settings.
-
-    Returns:
-        Backend URL string (e.g., "http://localhost:8000")
-    """
-    try:
-        from src.config import get_settings
-        settings = get_settings()
-        host_ip = settings.get_sync("network.host_ip", "localhost")
-        port = settings.get_sync("network.backend_public_port", 8000)
-        return f"http://{host_ip}:{port}"
-    except Exception as e:
-        logger.warning(f"Failed to get backend URL from config: {e}, using default")
-        return "http://localhost:8000"
 
 
 async def _fetch_resource_data(
@@ -67,7 +50,7 @@ async def _fetch_resource_data(
         Resource data dict, or error info if fetch fails
     """
     # Get backend URL from config
-    backend_base_url = _get_backend_base_url()
+    backend_base_url = get_backend_base_url()
 
     # Map resource type to service and endpoint
     if resource_type == "conversation":
