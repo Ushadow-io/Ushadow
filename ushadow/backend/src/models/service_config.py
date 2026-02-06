@@ -137,6 +137,12 @@ class ServiceConfig(BaseModel):
         description="Required unode labels for deployment (e.g., {'zone': 'public', 'region': 'us-west'})"
     )
 
+    # Funnel route configuration (for public unodes)
+    route: Optional[str] = Field(
+        None,
+        description="Tailscale Funnel route path (e.g., '/share') for public access on funnel-enabled unodes"
+    )
+
     # Timestamps (for config tracking)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -197,6 +203,10 @@ class ServiceConfigUpdate(BaseModel):
     deployment_labels: Optional[Dict[str, str]] = Field(
         None,
         description="Required unode labels for deployment"
+    )
+    route: Optional[str] = Field(
+        None,
+        description="Tailscale Funnel route path for public access"
     )
 
 

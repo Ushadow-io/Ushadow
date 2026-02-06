@@ -24,7 +24,7 @@ from ..models.user import User
 from ..services.auth import get_current_user, get_optional_current_user
 from ..services.share_service import ShareService
 
-from ..utils.service_urls import get_backend_base_url
+from ..config import get_localhost_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +49,14 @@ async def _fetch_resource_data(
     Returns:
         Resource data dict, or error info if fetch fails
     """
-    # Get backend URL from config
-    backend_base_url = get_backend_base_url()
-
     # Map resource type to service and endpoint
     if resource_type == "conversation":
         # Conversations are stored in Mycelia
-        proxy_url = f"{backend_base_url}/api/services/mycelia-backend/proxy"
+        proxy_url = get_localhost_proxy_url("mycelia-backend")
         path = f"/data/conversations/{resource_id}"
     elif resource_type == "memory":
         # Memories may be in OpenMemory (mem0) or Mycelia
-        proxy_url = f"{backend_base_url}/api/services/mem0/proxy"
+        proxy_url = get_localhost_proxy_url("mem0")
         path = f"/api/v1/memories/{resource_id}"
     else:
         return {"error": f"Unknown resource type: {resource_type}"}

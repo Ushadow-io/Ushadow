@@ -135,6 +135,11 @@ class EnvironmentInfo:
             # Also add display_name format: {HOST_HOSTNAME}-{env_name}
             local_names.append(f"{host_hostname}-{self.env_name}")
 
+        # Virtual unodes on same machine (e.g., ushadow-orange-public)
+        # Pattern: ushadow-{env_name}-{suffix}
+        if hostname.startswith(f"ushadow-{self.env_name}-"):
+            return True
+
         return hostname in local_names
 
     def get_container_labels(self) -> dict:
