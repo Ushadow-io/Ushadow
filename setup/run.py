@@ -400,6 +400,8 @@ def compose_up(dev_mode: bool, build: bool = False) -> bool:
     mode_label = "dev" if dev_mode else "prod"
     action = "Building and starting" if build else "Starting"
     print_color(Colors.BLUE, f"{Icons.ROCKET} {action} {APP_DISPLAY_NAME} ({mode_label} mode)...")
+    print("   (Pulling images if needed... this may take a few minutes on first run)")
+    sys.stdout.flush()  # Ensure message is displayed immediately
 
     cmd = get_compose_cmd(dev_mode) + ["up", "-d"]
     if build:
@@ -608,6 +610,11 @@ def main():
             elif line.startswith("WEBUI_PORT="):
                 webui_port = int(line.split("=")[1])
         config = {"backend_port": backend_port, "webui_port": webui_port}
+
+        # Force backend restart to ensure Keycloak URL registration runs
+        print_color(Colors.BLUE, f"{Icons.RESTART} Restarting backend to register Keycloak URLs...")
+        compose_cmd = get_compose_cmd(dev_mode) + ["restart", "backend"]
+        subprocess.run(compose_cmd, cwd=str(PROJECT_ROOT), capture_output=True)
     else:
         # Prompt for config in interactive mode
         if args.quick:

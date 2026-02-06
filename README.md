@@ -111,14 +111,27 @@ For production-like builds without hot-reload:
 
 This runs the same setup as `dev.sh` but builds optimized production bundles.
 
-### Post-Installation: User Registration
+### Post-Installation Steps
 
-**IMPORTANT:** After services start, you must register a user with Keycloak before accessing the dashboard.
+#### 1. Complete the Quickstart Wizard
+
+After services start, navigate to http://localhost:3000 to access the setup wizard. The wizard will guide you through:
+
+1. **Initial Configuration** - Set up basic settings
+2. **Service Selection** - Choose which services to enable
+   - **Note:** You can skip starting services during the wizard and enable them later
+   - Services can be started individually from the dashboard or using `make` commands
+3. **API Keys** (optional) - Configure API keys for AI providers (OpenAI, Deepgram, etc.)
+
+**You don't need to start all services to complete the wizard** - skip this step and configure services as needed later.
+
+#### 2. Register a User with Keycloak
+
+**IMPORTANT:** You must register a user with Keycloak before you can fully access the dashboard.
 
 1. Wait for all services to be healthy (check with `make status`)
-2. Navigate to http://localhost:3000
-3. Click "Register" and create your account
-4. The first user created will have admin privileges
+2. On the login screen, click "Register" and create your account
+3. The first user created will have admin privileges
 
 **Troubleshooting Keycloak Issues:**
 

@@ -232,34 +232,30 @@ export default function TailscaleWizard() {
 
     setCorsStatus({ updated: false, loading: true })
     try {
-      // Step 1: Update CORS origins (doesn't touch Caddy routes)
+      // Update CORS origins to allow Tailscale hostname
+      console.log('[TailscaleWizard] Updating CORS origins for:', config.hostname)
       const response = await tailscaleApi.updateCorsOrigins(config.hostname)
+      console.log('[TailscaleWizard] CORS update response:', response.data)
 
-      // Step 2: Update Keycloak public_url in backend settings
-      const keycloakUrl = `https://${config.hostname}:8081`
-      await settingsApi.updateConfig({
-        keycloak: {
-          public_url: keycloakUrl
-        }
-      })
-      console.log('[TailscaleWizard] Updated Keycloak public_url to:', keycloakUrl)
+      // Note: Keycloak URL is now determined dynamically based on origin
+      // (see auth/config.ts getKeycloakUrl()) so no settings update needed
 
-      // Step 3: Refresh frontend settings to pick up new Keycloak config
-      if (typeof refreshSettings === 'function') {
-        await refreshSettings()
-        console.log('[TailscaleWizard] Frontend settings refreshed')
-      }
-
+      // Success - update UI state
       setCorsStatus({
         updated: true,
-        origin: response.data.origin,
+        origin: response.data?.origin || `https://${config.hostname}`,
         loading: false
       })
+      console.log('[TailscaleWizard] CORS update complete')
     } catch (err) {
-      console.error('Failed to update CORS and settings:', err)
+      console.error('[TailscaleWizard] Failed to update CORS and settings:', err)
+      console.error('[TailscaleWizard] Error details:', {
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined
+      })
       setCorsStatus({
         updated: false,
-        error: 'Failed to update CORS origins and settings',
+        error: err instanceof Error ? err.message : 'Failed to update CORS origins and settings',
         loading: false
       })
     }

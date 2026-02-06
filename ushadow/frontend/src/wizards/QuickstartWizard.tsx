@@ -2,7 +2,16 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sparkles, Loader2, RefreshCw, CheckCircle } from 'lucide-react'
 
-import { servicesApi, quickstartApi, type QuickstartConfig, type CapabilityRequirement, type ServiceInfo } from '../services/api'
+import {
+  servicesApi,
+  quickstartApi,
+  deploymentsApi,
+  type QuickstartConfig,
+  type CapabilityRequirement,
+  type ServiceInfo,
+  type DeployTarget,
+  type Deployment
+} from '../services/api'
 import { ServiceStatusCard, type ServiceStatus } from '../components/services'
 import { RequiredFieldsForm } from '../components/forms'
 import { useWizard } from '../contexts/WizardContext'
@@ -62,8 +71,12 @@ function QuickstartWizardContent() {
   // Container states - built dynamically from API response
   const [containers, setContainers] = useState<ContainerInfo[]>([])
 
+  // Deployment target (local leader node)
+  const [deployTarget, setDeployTarget] = useState<DeployTarget | null>(null)
+
   useEffect(() => {
     loadQuickstartConfig()
+    loadDeploymentTarget()
   }, [])
 
   // Check container status when entering start_services step
@@ -91,6 +104,22 @@ function QuickstartWizardContent() {
       console.error('Failed to load quickstart config:', error)
       setMessage({ type: 'error', text: 'Failed to load wizard configuration' })
       setLoading(false)
+    }
+  }
+
+  const loadDeploymentTarget = async () => {
+    try {
+      const response = await deploymentsApi.listTargets()
+      // Find the local leader (Docker target with is_leader=true)
+      const leader = response.data.find((t: DeployTarget) => t.type === 'docker' && t.is_leader)
+      if (leader) {
+        setDeployTarget(leader)
+        console.log('[QuickstartWizard] Found local leader:', leader.identifier)
+      } else {
+        console.warn('[QuickstartWizard] No local leader found in deployment targets')
+      }
+    } catch (error) {
+      console.error('Failed to load deployment targets:', error)
     }
   }
 
@@ -143,26 +172,35 @@ function QuickstartWizardContent() {
     }
   }
 
-  // Container management
+  // Container management - using v2 deployment API
   const checkContainerStatuses = async () => {
-    try {
-      const response = await servicesApi.getInstalled()
-      const servicesList = response.data
+    if (!deployTarget) {
+      console.warn('[QuickstartWizard] No deployment target available for status check')
+      return
+    }
 
-      console.log('[QuickstartWizard] Docker services from API:', servicesList.map((s: any) => ({ name: s.name, status: s.status })))
+    try {
+      // Get all deployments for the local leader
+      const response = await deploymentsApi.listDeployments({
+        unode_hostname: deployTarget.identifier
+      })
+      const deployments = response.data
+
+      console.log('[QuickstartWizard] Deployments from API:', deployments.map((d: Deployment) => ({ service_id: d.service_id, status: d.status })))
       console.log('[QuickstartWizard] Containers to check:', containers.map(c => c.name))
 
       setContainers((prev) =>
         prev.map((container) => {
-          // Match by exact name only - avoid false positives from partial matches
-          const serviceInfo = servicesList.find(
-            (s) => s.service_name === container.name
+          // Find deployment for this service
+          // Note: deployment service_id includes compose file prefix, so we need to match by service name
+          const deployment = deployments.find((d: Deployment) =>
+            d.service_id.includes(container.name)
           )
 
-          console.log(`[QuickstartWizard] Matching ${container.name}:`, serviceInfo ? { name: serviceInfo.service_name, status: serviceInfo.status } : 'NOT FOUND')
+          console.log(`[QuickstartWizard] Matching ${container.name}:`, deployment ? { service_id: deployment.service_id, status: deployment.status } : 'NOT FOUND')
 
-          if (serviceInfo) {
-            const isRunning = serviceInfo.status === 'running'
+          if (deployment) {
+            const isRunning = deployment.status === 'running'
             return {
               ...container,
               status: isRunning ? 'running' : 'stopped',
@@ -177,6 +215,11 @@ function QuickstartWizardContent() {
   }
 
   const startContainer = async (containerName: string) => {
+    if (!deployTarget) {
+      setMessage({ type: 'error', text: 'No deployment target available' })
+      return
+    }
+
     setContainers((prev) =>
       prev.map((c) => (c.name === containerName ? { ...c, status: 'starting' } : c))
     )
@@ -186,72 +229,95 @@ function QuickstartWizardContent() {
     const displayName = container?.displayName || containerName
 
     try {
-      await servicesApi.startService(containerName)
+      // Use v2 deployment API - deploy service to local leader
+      // The service_id should match the service name from quickstart config
+      await deploymentsApi.deploy(containerName, deployTarget.identifier)
 
-      // Poll for status - longer timeout for slower containers
+      setMessage({ type: 'info', text: `Deploying ${displayName}... (pulling images if needed)` })
+
+      // Poll for deployment status - longer timeout for image pulls
       let attempts = 0
-      const maxAttempts = 30 // 60 seconds total
+      const maxAttempts = 60 // 120 seconds total (2 minutes for image pulls)
 
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await servicesApi.getDockerDetails(containerName)
-          console.log(`[QuickstartWizard] Poll ${containerName} attempt ${attempts}:`, response.data)
-          const isRunning = response.data.status === 'running'
+          if (!deployTarget) return
 
-          if (isRunning) {
+          // Get deployments for this service
+          const response = await deploymentsApi.listDeployments({
+            unode_hostname: deployTarget.identifier
+          })
+
+          // Find this service's deployment
+          const deployment = response.data.find((d: Deployment) =>
+            d.service_id.includes(containerName)
+          )
+
+          console.log(`[QuickstartWizard] Poll ${containerName} attempt ${attempts}:`, deployment?.status)
+
+          if (deployment && deployment.status === 'running') {
             setContainers((prev) =>
               prev.map((c) => (c.name === containerName ? { ...c, status: 'running' } : c))
             )
 
-            // Update wizard context with service status (uses service name directly)
+            // Update wizard context with service status
             updateServiceStatus(containerName, { configured: true, running: true })
 
             setMessage({ type: 'success', text: `${displayName} started successfully!` })
             return
           }
 
-          if (attempts < maxAttempts) {
-            setTimeout(pollStatus, 2000)
-          } else {
-            // Final check - container might be running but API was slow
-            // Mark as running anyway since the start command succeeded
+          if (deployment && deployment.status === 'failed') {
             setContainers((prev) =>
               prev.map((c) =>
                 c.name === containerName
-                  ? { ...c, status: 'running' } // Assume running after timeout
+                  ? { ...c, status: 'error', error: 'Deployment failed' }
                   : c
               )
             )
-            updateServiceStatus(containerName, { configured: true, running: true })
-            setMessage({ type: 'info', text: `${displayName} started (status check timed out)` })
+            setMessage({ type: 'error', text: `${displayName} deployment failed` })
+            return
+          }
+
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, 2000)
+          } else {
+            // Timeout - check final status
+            if (deployment && deployment.status === 'deploying') {
+              // Still deploying - probably pulling large images
+              setContainers((prev) =>
+                prev.map((c) =>
+                  c.name === containerName
+                    ? { ...c, status: 'running' } // Assume it will succeed
+                    : c
+                )
+              )
+              updateServiceStatus(containerName, { configured: true, running: true })
+              setMessage({ type: 'info', text: `${displayName} deployment in progress (may take a few more minutes)` })
+            } else {
+              setMessage({ type: 'info', text: `${displayName} status check timed out` })
+            }
           }
         } catch (err) {
           if (attempts < maxAttempts) {
             setTimeout(pollStatus, 2000)
           } else {
-            // Even on error, assume it started since the start command succeeded
-            setContainers((prev) =>
-              prev.map((c) =>
-                c.name === containerName ? { ...c, status: 'running' } : c
-              )
-            )
-            updateServiceStatus(containerName, { configured: true, running: true })
-            setMessage({ type: 'info', text: `${displayName} started (status check failed)` })
+            setMessage({ type: 'error', text: `Failed to check ${displayName} status` })
           }
         }
       }
 
-      setTimeout(pollStatus, 2000)
+      setTimeout(pollStatus, 3000) // Start polling after 3 seconds
     } catch (error) {
       setContainers((prev) =>
         prev.map((c) =>
           c.name === containerName
-            ? { ...c, status: 'error', error: getErrorMessage(error, 'Failed to start') }
+            ? { ...c, status: 'error', error: getErrorMessage(error, 'Failed to deploy') }
             : c
         )
       )
-      setMessage({ type: 'error', text: getErrorMessage(error, `Failed to start ${displayName}`) })
+      setMessage({ type: 'error', text: getErrorMessage(error, `Failed to deploy ${displayName}`) })
     }
   }
 

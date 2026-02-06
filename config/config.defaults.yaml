@@ -131,4 +131,5 @@ selected_providers:
 # (adds/removes) are tracked in config.overrides.yaml → installed_services.
 default_services:
   - chronicle-backend
+  - chronicle-workers
   - mem0
