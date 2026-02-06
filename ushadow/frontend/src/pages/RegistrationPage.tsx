@@ -126,8 +126,43 @@ export default function RegistrationPage() {
           ></div>
         </div>
 
-        <div className="max-w-md w-full space-y-3 relative z-10">
+        <div className="max-w-md w-full space-y-4 relative z-10">
           <AuthHeader subtitle="Create your admin account to get started" />
+
+          {/* First-Time Setup Banner */}
+          <div
+            className="rounded-xl p-4 border-2"
+            style={{
+              backgroundColor: 'rgba(74, 222, 128, 0.1)',
+              borderColor: 'rgba(74, 222, 128, 0.4)',
+            }}
+            data-testid="first-time-setup-banner"
+          >
+            <div className="flex items-start space-x-3">
+              <div
+                className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5"
+                style={{
+                  backgroundColor: 'rgba(74, 222, 128, 0.2)',
+                }}
+              >
+                <span className="text-lg">ℹ️</span>
+              </div>
+              <div className="flex-1">
+                <h3
+                  className="text-sm font-semibold mb-1"
+                  style={{ color: 'var(--success-400)' }}
+                >
+                  First-Time Setup Required
+                </h3>
+                <p
+                  className="text-xs leading-relaxed"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  This is your first time launching Ushadow. Please create an admin account below to access the dashboard and configure your AI assistant.
+                </p>
+              </div>
+            </div>
+          </div>
 
           {/* Registration Form */}
           <div
@@ -290,24 +325,24 @@ export default function RegistrationPage() {
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full py-3 px-4 text-base font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transform transition-all hover:scale-[1.02] active:scale-[0.98]"
+                  className="w-full py-4 px-6 text-lg font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed shadow-xl hover:shadow-2xl transform transition-all hover:scale-[1.03] active:scale-[0.97]"
                   style={{
                     backgroundImage: 'linear-gradient(135deg, #4ade80 0%, #a855f7 100%)',
                     color: 'var(--surface-900)',
-                    boxShadow: '0 0 20px rgba(74, 222, 128, 0.2), 0 0 40px rgba(168, 85, 247, 0.2)',
+                    boxShadow: '0 0 30px rgba(74, 222, 128, 0.3), 0 0 60px rgba(168, 85, 247, 0.3)',
                   }}
                   data-testid="register-submit-button"
                 >
                   {isLoading ? (
                     <div className="flex items-center justify-center space-x-2">
                       <div
-                        className="animate-spin rounded-full h-5 w-5 border-2 border-t-transparent"
+                        className="animate-spin rounded-full h-6 w-6 border-2 border-t-transparent"
                         style={{ borderColor: 'var(--surface-900)' }}
                       ></div>
-                      <span>Creating account...</span>
+                      <span>Creating Account...</span>
                     </div>
                   ) : (
-                    'Create Admin Account'
+                    '🚀 Create Admin Account & Get Started'
                   )}
                 </button>
               </div>
