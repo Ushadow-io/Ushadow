@@ -33,8 +33,12 @@ import {
   isAuthenticated,
   saveAuthToken,
   saveApiUrl,
+  getApiUrl,
+  getIdToken,
 } from '../_utils/authStorage';
+import { getActiveUnode } from '../_utils/unodeStorage';
 import { ConnectionState, createInitialConnectionState } from '../types/connectionLog';
+import { logoutFromKeycloak } from '../services/keycloakAuth';
 
 export default function HomeScreen() {
   // Auth state
@@ -42,6 +46,8 @@ export default function HomeScreen() {
   const [authInfo, setAuthInfo] = useState<{ email: string; userId: string } | null>(null);
   const [showLoginScreen, setShowLoginScreen] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [currentHostname, setCurrentHostname] = useState<string | undefined>(undefined);
+  const [currentApiUrl, setCurrentApiUrl] = useState<string | undefined>(undefined);
 
   // UI state
   const [showLogViewer, setShowLogViewer] = useState(false);
@@ -55,7 +61,7 @@ export default function HomeScreen() {
   // Session tracking hook
   const { sessions, startSession, updateSessionStatus, endSession, clearAllSessions } = useSessionTracking();
 
-  // Load auth state on mount
+  // Load auth state and unode info on mount
   useEffect(() => {
     const loadAuthState = async () => {
       try {
@@ -66,6 +72,28 @@ export default function HomeScreen() {
           setAuthToken(token);
           setAuthInfo(info);
           logEvent('server', 'connected', 'Authenticated session restored', info?.email);
+        }
+
+        // Load current unode hostname and API URL for Keycloak config
+        const activeUnode = await getActiveUnode();
+        const apiUrl = await getApiUrl();
+
+        console.log('[Home] Debug - activeUnode:', activeUnode);
+        console.log('[Home] Debug - apiUrl:', apiUrl);
+
+        if (activeUnode) {
+          // Use stored hostname (e.g., "Orion"), fallback to name if not set
+          const hostname = activeUnode.hostname || activeUnode.name;
+
+          setCurrentHostname(hostname);
+          setCurrentApiUrl(apiUrl || activeUnode.apiUrl);
+          console.log('[Home] Loaded active unode hostname:', hostname);
+          console.log('[Home] Loaded API URL:', apiUrl || activeUnode.apiUrl);
+        } else if (apiUrl) {
+          setCurrentApiUrl(apiUrl);
+          console.log('[Home] Loaded API URL (no active unode):', apiUrl);
+        } else {
+          console.log('[Home] No active unode or API URL found');
         }
       } catch (error) {
         console.error('[Home] Failed to load auth state:', error);
@@ -81,6 +109,8 @@ export default function HomeScreen() {
     useCallback(() => {
       const refreshAuthState = async () => {
         const authenticated = await isAuthenticated();
+        const activeUnode = await getActiveUnode();
+
         if (authenticated) {
           const token = await getAuthToken();
           const info = await getAuthInfo();
@@ -89,14 +119,30 @@ export default function HomeScreen() {
             setAuthToken(token);
             setAuthInfo(info);
           }
-        } else if (authToken) {
-          // Token was cleared or expired
-          setAuthToken(null);
-          setAuthInfo(null);
+        } else {
+          // Not authenticated
+          if (authToken) {
+            // Token was cleared or expired
+            setAuthToken(null);
+            setAuthInfo(null);
+          }
+
+          // Auto-show login if there's a recently saved unode (within last 5 seconds)
+          // This indicates a fresh QR scan, not just an old saved connection
+          if (activeUnode && !showLoginScreen && activeUnode.lastConnectedAt) {
+            const lastConnected = new Date(activeUnode.lastConnectedAt).getTime();
+            const now = Date.now();
+            const fiveSecondsAgo = now - 5000;
+
+            if (lastConnected > fiveSecondsAgo) {
+              console.log('[Home] Recently scanned QR code - showing login screen');
+              setShowLoginScreen(true);
+            }
+          }
         }
       };
       refreshAuthState();
-    }, [authToken])
+    }, [authToken, showLoginScreen])
   );
 
   const handleLoginSuccess = useCallback(
@@ -114,12 +160,24 @@ export default function HomeScreen() {
   );
 
   const handleLogout = useCallback(async () => {
+    // Logout from Keycloak session first (if available)
+    if (currentApiUrl) {
+      try {
+        const idToken = await getIdToken();
+        console.log('[Home] Logging out with ID token:', idToken ? 'present' : 'missing');
+        await logoutFromKeycloak(currentApiUrl, idToken || undefined, currentHostname);
+      } catch (error) {
+        console.warn('[Home] Keycloak logout failed, continuing with local logout:', error);
+      }
+    }
+
+    // Clear local auth state
     await clearAuthToken();
     setAuthToken(null);
     setAuthInfo(null);
     setConnectionState((prev) => ({ ...prev, server: 'disconnected' }));
     logEvent('server', 'disconnected', 'Logged out');
-  }, [logEvent]);
+  }, [logEvent, currentApiUrl, currentHostname]);
 
   return (
     <SafeAreaView style={styles.container} testID="home-screen">
@@ -209,6 +267,8 @@ export default function HomeScreen() {
         visible={showLoginScreen}
         onClose={() => setShowLoginScreen(false)}
         onLoginSuccess={handleLoginSuccess}
+        initialApiUrl={currentApiUrl}
+        hostname={currentHostname}
       />
 
       {/* Connection Log Viewer Modal */}
