@@ -536,6 +536,16 @@ export const clusterApi = {
     registry: string
     image: string
   }>('/api/unodes/versions'),
+  // Create public unode
+  createPublicUNode: (data: { tailscale_auth_key: string; hostname?: string; labels?: Record<string, string> }) =>
+    api.post<{
+      success: boolean
+      message: string
+      hostname: string
+      join_token?: string
+      public_url?: string
+      compose_project?: string
+    }>('/api/unodes/create-public', data),
   // Leader info for mobile app / cluster display
   getLeaderInfo: () => api.get<{
     hostname: string
@@ -689,6 +699,8 @@ export interface Deployment {
   deployed_config?: Record<string, any>
   access_url?: string
   exposed_port?: number
+  public_url?: string  // Public URL via Tailscale Funnel
+  metadata?: Record<string, any>  // Deployment metadata
 }
 
 export interface DeployTarget {
@@ -729,8 +741,11 @@ export const deploymentsApi = {
   deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
 
   // Deployments
-  deploy: (serviceId: string, unodeHostname: string, configId?: string) =>
-    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId }),
+  deploy: (serviceId: string, unodeHostname: string, configId?: string, forceRebuild?: boolean) =>
+    api.post<Deployment>('/api/deployments/deploy',
+      { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId, force_rebuild: forceRebuild },
+      { timeout: 600000 }  // 10 minutes for builds
+    ),
   listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
@@ -745,6 +760,19 @@ export const deploymentsApi = {
   // Exposed URLs for service discovery
   getExposedUrls: (params?: { type?: string; name?: string }) =>
     api.get<ExposedUrl[]>('/api/deployments/exposed-urls', { params }),
+
+  // Funnel route management (public access)
+  configureFunnelRoute: (deploymentId: string, route: string, saveToConfig?: boolean) =>
+    api.patch<FunnelRouteResponse>(`/api/deployments/${deploymentId}/funnel`, {
+      route,
+      save_to_config: saveToConfig ?? false,
+    }),
+  removeFunnelRoute: (deploymentId: string, saveToConfig?: boolean) =>
+    api.delete<FunnelRouteResponse>(`/api/deployments/${deploymentId}/funnel`, {
+      params: { save_to_config: saveToConfig ?? false },
+    }),
+  getFunnelConfiguration: (deploymentId: string) =>
+    api.get<FunnelConfiguration>(`/api/deployments/${deploymentId}/funnel`),
 }
 
 // Exposed URL types (for service discovery)
@@ -756,6 +784,27 @@ export interface ExposedUrl {
   name: string  // e.g., "audio_intake"
   metadata: Record<string, any>
   status: string  // e.g., "running"
+}
+
+// Funnel route management types
+export interface FunnelRouteResponse {
+  success: boolean
+  deployment_id: string
+  route?: string
+  route_removed?: string
+  public_url?: string
+  previous_route?: string
+  saved_to_config: boolean
+  note?: string
+}
+
+export interface FunnelConfiguration {
+  deployment_id: string
+  service: string
+  unode: string
+  funnel_enabled: boolean
+  route?: string
+  public_url?: string
 }
 
 // Tailscale Setup Wizard types

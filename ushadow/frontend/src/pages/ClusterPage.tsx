@@ -655,7 +655,13 @@ export default function ClusterPage() {
             return (
             <div
               key={node.id}
-              className={`card-hover p-6 ${isNodeOffline ? 'border-2 border-danger-400 dark:border-danger-600' : ''}`}
+              className={`card-hover p-6 ${
+                node.labels?.zone === 'public'
+                  ? 'border-2 border-purple-400 dark:border-purple-600'
+                  : isNodeOffline
+                  ? 'border-2 border-danger-400 dark:border-danger-600'
+                  : ''
+              }`}
               data-testid={`node-card-${node.hostname}`}
             >
               {/* Node Header */}
