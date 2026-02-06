@@ -583,3 +583,229 @@ async def get_deployment_logs(
     if logs is None:
         raise HTTPException(status_code=404, detail="Deployment not found or logs unavailable")
     return {"logs": logs}
+
+
+# =============================================================================
+# Funnel Configuration (Public Access)
+# =============================================================================
+
+@router.get("/{deployment_id}/funnel")
+async def get_funnel_configuration(
+    deployment_id: str,
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get funnel configuration for a deployment.
+
+    Returns funnel status, route, and public URL if configured.
+    """
+    from src.services.tailscale_manager import get_tailscale_manager
+
+    manager = get_deployment_manager()
+    unode_manager = await get_unode_manager()
+
+    # Get deployment
+    deployments = await manager.list_deployments()
+    deployment = next((d for d in deployments if d.id == deployment_id), None)
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check if unode has funnel enabled
+    unodes = await unode_manager.list_unodes()
+    unode = next((u for u in unodes if u.hostname == deployment.unode_hostname), None)
+
+    funnel_enabled = bool(unode and unode.labels.get("funnel") == "enabled")
+
+    # Get funnel configuration from deployment metadata
+    funnel_route = deployment.metadata.get("funnel_route")
+
+    # Build public URL if funnel is enabled and route is configured
+    public_url = None
+    if funnel_enabled and funnel_route:
+        ts_manager = get_tailscale_manager()
+        status = ts_manager.get_status()
+        if status.get("BackendState") == "Running":
+            hostname = status.get("Self", {}).get("DNSName", "").rstrip(".")
+            if hostname:
+                public_url = f"https://{hostname}{funnel_route}"
+
+    return {
+        "deployment_id": deployment_id,
+        "service": deployment.service_id,
+        "unode": deployment.unode_hostname,
+        "funnel_enabled": funnel_enabled,
+        "route": funnel_route,
+        "public_url": public_url
+    }
+
+
+@router.patch("/{deployment_id}/funnel")
+async def configure_funnel_route(
+    deployment_id: str,
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Configure funnel route for a deployment.
+
+    Enables public internet access via Tailscale Funnel.
+    """
+    from src.services.tailscale_manager import get_tailscale_manager
+    from src.services.service_config_manager import get_service_config_manager
+
+    route = request.get("route")
+    save_to_config = request.get("save_to_config", False)
+
+    if not route or not route.startswith("/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Route must start with / (e.g., /my-service)"
+        )
+
+    manager = get_deployment_manager()
+    unode_manager = await get_unode_manager()
+
+    # Get deployment
+    deployments = await manager.list_deployments()
+    deployment = next((d for d in deployments if d.id == deployment_id), None)
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check if unode has funnel enabled
+    unodes = await unode_manager.list_unodes()
+    unode = next((u for u in unodes if u.hostname == deployment.unode_hostname), None)
+
+    if not unode or unode.labels.get("funnel") != "enabled":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Funnel not enabled for unode {deployment.unode_hostname}"
+        )
+
+    # Get container target URL
+    container_name = deployment.container_name
+    exposed_port = deployment.exposed_port
+
+    if not container_name or not exposed_port:
+        raise HTTPException(
+            status_code=400,
+            detail="Deployment missing container_name or exposed_port"
+        )
+
+    target_url = f"http://{container_name}:{exposed_port}"
+
+    # Configure funnel route via Tailscale
+    ts_manager = get_tailscale_manager()
+    exit_code, stdout, stderr = ts_manager.exec_command(
+        f"tailscale funnel --bg --set-path {route} {target_url}",
+        timeout=10
+    )
+
+    if exit_code != 0:
+        error_msg = stderr or stdout or "Unknown error"
+        logger.error(f"Failed to configure funnel route {route}: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to configure funnel: {error_msg}"
+        )
+
+    # Store route in deployment metadata (in-memory for now)
+    deployment.metadata["funnel_route"] = route
+    previous_route = deployment.metadata.get("previous_funnel_route")
+
+    # Get public URL
+    status = ts_manager.get_status()
+    hostname = status.get("Self", {}).get("DNSName", "").rstrip(".")
+    public_url = f"https://{hostname}{route}" if hostname else None
+
+    # Optionally save to service config
+    if save_to_config and deployment.config_id:
+        try:
+            config_manager = await get_service_config_manager()
+            config = await config_manager.get_config(deployment.config_id)
+            if config:
+                config.funnel_route = route
+                await config_manager.update_config(deployment.config_id, config.dict(exclude_unset=True))
+        except Exception as e:
+            logger.warning(f"Failed to save funnel route to config: {e}")
+
+    logger.info(f"Configured funnel route {route} for deployment {deployment_id}")
+
+    return {
+        "success": True,
+        "deployment_id": deployment_id,
+        "route": route,
+        "previous_route": previous_route,
+        "public_url": public_url,
+        "saved_to_config": save_to_config,
+        "note": "Funnel route configured successfully"
+    }
+
+
+@router.delete("/{deployment_id}/funnel")
+async def remove_funnel_route(
+    deployment_id: str,
+    save_to_config: bool = Query(False),
+    current_user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Remove funnel route for a deployment.
+
+    Disables public internet access for this deployment.
+    """
+    from src.services.tailscale_manager import get_tailscale_manager
+    from src.services.service_config_manager import get_service_config_manager
+
+    manager = get_deployment_manager()
+
+    # Get deployment
+    deployments = await manager.list_deployments()
+    deployment = next((d for d in deployments if d.id == deployment_id), None)
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Get current route from metadata
+    route = deployment.metadata.get("funnel_route")
+
+    if not route:
+        return {
+            "success": True,
+            "deployment_id": deployment_id,
+            "note": "No funnel route configured"
+        }
+
+    # Remove funnel route via Tailscale
+    ts_manager = get_tailscale_manager()
+    exit_code, stdout, stderr = ts_manager.exec_command(
+        f"tailscale funnel --bg --remove-path {route}",
+        timeout=10
+    )
+
+    if exit_code != 0:
+        error_msg = stderr or stdout or "Unknown error"
+        logger.warning(f"Failed to remove funnel route {route}: {error_msg}")
+        # Continue anyway to clear metadata
+
+    # Clear route from deployment metadata
+    deployment.metadata["previous_funnel_route"] = route
+    deployment.metadata.pop("funnel_route", None)
+
+    # Optionally remove from service config
+    if save_to_config and deployment.config_id:
+        try:
+            config_manager = await get_service_config_manager()
+            config = await config_manager.get_config(deployment.config_id)
+            if config:
+                config.funnel_route = None
+                await config_manager.update_config(deployment.config_id, config.dict(exclude_unset=True))
+        except Exception as e:
+            logger.warning(f"Failed to remove funnel route from config: {e}")
+
+    logger.info(f"Removed funnel route {route} for deployment {deployment_id}")
+
+    return {
+        "success": True,
+        "deployment_id": deployment_id,
+        "route_removed": route,
+        "saved_to_config": save_to_config,
+        "note": "Funnel route removed successfully"
+    }
