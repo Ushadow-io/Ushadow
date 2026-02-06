@@ -33,14 +33,16 @@ class KeycloakClient:
         # Settings system handles env var interpolation via OmegaConf
         config = get_keycloak_config()
 
-        # Use internal URL for efficient Docker network communication
-        # Token introspection is issuer-agnostic, so we don't need external URL
-        self.server_url = config["url"]
+        # CRITICAL: Use public_url for token operations to match token issuer
+        # Tokens are issued with public_url as issuer (e.g., http://100.105.225.45:8081)
+        # Using internal URL (http://keycloak:8080) causes "Invalid token issuer" errors
+        # during token refresh because the issuer in the JWT doesn't match
+        self.server_url = config["public_url"]
         self.realm = config["realm"]
         self.client_id = config["frontend_client_id"]  # Used for token validation
         self.client_secret = config.get("backend_client_secret")
 
-        logger.info(f"[KC-CLIENT] Using Keycloak URL: {self.server_url}")
+        logger.info(f"[KC-CLIENT] Using Keycloak public URL: {self.server_url}")
 
         # Initialize KeycloakOpenID client
         self.keycloak_openid = KeycloakOpenID(

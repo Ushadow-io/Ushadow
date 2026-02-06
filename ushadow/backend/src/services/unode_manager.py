@@ -275,7 +275,7 @@ class UNodeManager:
             "last_seen": now,
             "manager_version": "0.1.0",
             "services": self._detect_running_services(),
-            "labels": {"type": "leader"},
+            "labels": {"type": "leader", "is_local": "true"},
             "metadata": {"is_origin": True},
         }
 
@@ -651,7 +651,7 @@ Write-Host ""
             "last_seen": now,
             "manager_version": unode_data.manager_version,
             "services": [],
-            "labels": {},
+            "labels": unode_data.labels,  # Use labels from UNodeCreate
             "metadata": {},
             "unode_secret_hash": unode_secret_hash,
             "unode_secret_encrypted": unode_secret_encrypted,
@@ -692,6 +692,10 @@ Write-Host ""
 
         if unode_data.capabilities:
             update_data["capabilities"] = unode_data.capabilities.model_dump()
+
+        # Update labels if provided (don't clear existing labels if not provided)
+        if unode_data.labels:
+            update_data["labels"] = unode_data.labels
 
         await self.unodes_collection.update_one(
             {"hostname": unode_data.hostname},
@@ -767,15 +771,33 @@ Write-Host ""
         status: Optional[UNodeStatus] = None,
         role: Optional[UNodeRole] = None
     ) -> List[UNode]:
-        """List all u-nodes, optionally filtered by status or role."""
+        """List all u-nodes, optionally filtered by status or role.
+
+        If multiple records exist for the same hostname (duplicates), returns only the latest.
+        """
         query = {}
         if status:
             query["status"] = status.value
         if role:
             query["role"] = role.value
 
+        # Use aggregation to get only the latest record per hostname
+        pipeline = [
+            {"$match": query},
+            {"$sort": {"registered_at": -1}},  # Sort by registration date, newest first
+            {"$group": {
+                "_id": "$hostname",  # Group by hostname
+                "doc": {"$first": "$$ROOT"}  # Take the first (latest) document
+            }},
+            {"$replaceRoot": {"newRoot": "$doc"}}  # Flatten back to original structure
+        ]
+
         unodes = []
-        async for doc in self.unodes_collection.find(query):
+        async for doc in self.unodes_collection.aggregate(pipeline):
+            # Debug: log what MongoDB returns
+            if doc.get("hostname") == "ushadow-orange-public":
+                logger.info(f"MongoDB doc for ushadow-orange-public: labels={doc.get('labels', 'MISSING')}")
+
             unodes.append(UNode(**{k: v for k, v in doc.items() if k != "unode_secret_hash"}))
 
         return unodes

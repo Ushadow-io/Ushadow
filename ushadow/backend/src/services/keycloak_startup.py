@@ -49,6 +49,7 @@ def get_current_redirect_uris() -> List[str]:
     - PORT_OFFSET environment variable (for multi-worktree support)
     - FRONTEND_URL environment variable (for custom domains)
     - Tailscale hostname detection (for .ts.net domains)
+    - Mobile app URIs (ushadow://* for React Native)
 
     Returns:
         List of redirect URIs to register
@@ -78,6 +79,15 @@ def get_current_redirect_uris() -> List[str]:
         redirect_uris.append(ts_uri_http)
         redirect_uris.append(ts_uri_https)
         logger.info(f"[KC-STARTUP] 📡 Adding Tailscale URIs: {tailscale_hostname}")
+
+    # Mobile app redirect URIs (React Native)
+    mobile_uris = [
+        "ushadow://*",  # Production mobile app (covers oauth/callback)
+        "exp://localhost:8081/--/oauth/callback",  # Expo Go development
+        "exp://*",  # Expo Go wildcard
+    ]
+    redirect_uris.extend(mobile_uris)
+    logger.info(f"[KC-STARTUP] 📱 Adding mobile app URIs")
 
     return redirect_uris
 
@@ -113,6 +123,13 @@ def get_current_post_logout_uris() -> List[str]:
         post_logout_uris.append(f"http://{tailscale_hostname}/")
         post_logout_uris.append(f"https://{tailscale_hostname}")
         post_logout_uris.append(f"https://{tailscale_hostname}/")
+
+    # Mobile app post-logout redirect URIs (React Native)
+    mobile_logout_uris = [
+        "ushadow://*",  # Production mobile app (covers logout/callback)
+        "exp://*",  # Expo Go wildcard
+    ]
+    post_logout_uris.extend(mobile_logout_uris)
 
     return post_logout_uris
 
