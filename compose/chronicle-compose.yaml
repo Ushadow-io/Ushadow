@@ -12,6 +12,7 @@ x-ushadow:
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
     requires: [llm, transcription]
     optional: [memory]  # Uses memory if available, works without it
+    tags: ["voice", "journal", "ai", "transcription", "conversation", "audio"]
     # route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
     exposes:
       - name: audio_intake
@@ -142,6 +143,9 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       # - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+           # Memory capability (optional, from selected provider)
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-openmemory_mcp}
+      - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
       - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 
       # Worker orchestrator configuration

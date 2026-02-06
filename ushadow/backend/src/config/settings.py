@@ -678,7 +678,7 @@ class Settings:
         if expected_type == 'url':
             try:
                 from src.services.docker_manager import get_docker_manager
-                from src.utils.service_urls import get_internal_proxy_url
+                from src.config.urls import get_docker_proxy_url
 
                 docker_mgr = get_docker_manager()
 
@@ -695,8 +695,8 @@ class Settings:
                     # Get service display name
                     display_name = service_config.get('description', service_name.replace('-', ' ').title())
 
-                    # Get internal proxy URL using shared utility
-                    internal_url = get_internal_proxy_url(service_name)
+                    # Get Docker proxy URL using shared utility
+                    internal_url = get_docker_proxy_url(service_name)
 
                     suggestions.append(SettingSuggestion(
                         path=suggestion_path,
