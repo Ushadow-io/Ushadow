@@ -58,7 +58,10 @@ services:
       - ${PROJECT_ROOT:-..}/mycelia/frontend:/app
       - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/app/myceliasdk
     environment:
-      - MYCELIA_FRONTEND_MODE=dev  
+      - MYCELIA_FRONTEND_MODE=dev
+      - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:8888}
+      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
+      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
     networks:
       - ushadow-network
     healthcheck:
