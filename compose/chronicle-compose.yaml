@@ -1,6 +1,11 @@
 # Chronicle backend service definition with separate workers
 # Environment variables are passed directly via docker compose subprocess env
 # No .env files needed - CapabilityResolver provides all values
+#
+# Image Strategy:
+#   - Submodule checked out: Builds from local source (./chronicle)
+#   - Submodule missing: Pulls pre-built images from ghcr.io/ushadow-io/chronicle/*
+#   - Uses pull_policy: build to prefer local builds when context exists
 
 # =============================================================================
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
@@ -42,12 +47,12 @@ x-ushadow:
 
 services:
   chronicle-backend:
+    image: ghcr.io/ushadow-io/chronicle/backend:latest
     build:
       context: ../chronicle/backends/advanced
       dockerfile: Dockerfile
       target: dev
-    # image: ghcr.io/ushadow-io/chronicle/backend:latest
-    image: chronicle-backend:latest
+    pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-backend
     ports:
       - "${CHRONICLE_BACKEND_PORT:-8090}:8000"
@@ -116,12 +121,12 @@ services:
           memory: 2G
 
   chronicle-workers:
-    # image: ghcr.io/ushadow-io/chronicle/backend:latest
-    image: chronicle-wworkers:latest
+    image: ghcr.io/ushadow-io/chronicle/backend:latest
     build:
       context: ../chronicle/backends/advanced
       dockerfile: Dockerfile
       target: prod
+    pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-workers
     command: ["uv", "run", "python", "worker_orchestrator.py"]
     environment:
@@ -169,11 +174,11 @@ services:
     restart: unless-stopped
 
   chronicle-webui:
-    # image: ghcr.io/ushadow-io/chronicle/webui:nodeps2
-    image: chronicle-webui:latest
+    image: ghcr.io/ushadow-io/chronicle/webui:latest
     build:
       context: ../chronicle/backends/advanced/webui
       dockerfile: Dockerfile
+    pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-webui
     ports:
       - "${CHRONICLE_WEBUI_PORT:-3080}:80"

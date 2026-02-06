@@ -7,6 +7,11 @@
 # Access:
 #   - Web UI: http://localhost:${MYCELIA_FRONTEND_PORT:-8080}
 #   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-8888}
+#
+# Image Strategy:
+#   - Submodule checked out: Builds from local source (./mycelia)
+#   - Submodule missing: Pulls pre-built images from ghcr.io/ushadow-io/mycelia/*
+#   - Uses pull_policy: build to prefer local builds when context exists
 
 # =============================================================================
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
@@ -47,10 +52,11 @@ x-ushadow:
 
 services:
   mycelia-frontend:
+    image: ghcr.io/ushadow-io/mycelia/frontend:latest
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./frontend/Dockerfile.${MYCELIA_FRONTEND_MODE:-dev}
-    image: mycelia-frontend:latest
+    pull_policy: build  # Build from source if mycelia submodule exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-frontend
     ports:
       - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
@@ -73,10 +79,11 @@ services:
     restart: unless-stopped
 
   mycelia-backend:
+    image: ghcr.io/ushadow-io/mycelia/backend:latest
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./backend/Dockerfile
-    image: mycelia-backend:latest
+    pull_policy: build  # Build from source if mycelia submodule exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
     ports:
       - "${MYCELIA_BACKEND_PORT:-8888}:8888"
@@ -147,10 +154,11 @@ services:
     restart: unless-stopped
 
   mycelia-python-worker:
+    image: ghcr.io/ushadow-io/mycelia/python-worker:latest
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./python/Dockerfile
-    image: mycelia-python:latest
+    pull_policy: build  # Build from source if mycelia submodule exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-python-worker
     environment:
       - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:8888}
