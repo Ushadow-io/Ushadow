@@ -25,6 +25,19 @@ export function useMemories(source: MemorySource = 'openmemory') {
   const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
   const isLoadingUser = legacyLoading || kcLoading
+
+  // Diagnostic logging for user email resolution
+  if (!isLoadingUser && !user) {
+    console.warn('[useMemories] No user object available from either auth context, falling back to:', FALLBACK_USER_ID)
+    console.warn('[useMemories] Auth state:', {
+      keycloakAuth: { isAuthenticated: kcAuthenticated, hasUser: !!kcUser },
+      legacyAuth: { hasUser: !!legacyUser }
+    })
+  } else if (!isLoadingUser && !user.email) {
+    console.warn('[useMemories] User object exists but email is missing:', { user, userId: FALLBACK_USER_ID })
+  } else if (!isLoadingUser) {
+    console.log('[useMemories] Using user email as ID:', user.email, 'from', kcAuthenticated ? 'Keycloak' : 'legacy auth')
+  }
   const queryClient = useQueryClient()
   const {
     searchQuery,
