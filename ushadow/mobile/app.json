@@ -75,7 +75,10 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "enableProguardInReleaseBuilds": false,
+            "enableJetifier": true,
+            "newArchEnabled": false
           }
         }
       ]
