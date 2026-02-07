@@ -53,6 +53,7 @@
       "favicon": "./assets/favicon.ico"
     },
     "plugins": [
+      "./plugins/withAndroidManifestFix.js",
       "expo-router",
       "@react-native-voice/voice",
       [
