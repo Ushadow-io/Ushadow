@@ -38,26 +38,26 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
   const steps: Step[] = [
     {
       number: 1,
-      title: 'Start your UNode server',
-      description: 'Run the Ushadow backend on your computer or server. The QR code will appear in the terminal.',
-      icon: 'desktop-outline',
+      title: 'Download Ushadow',
+      description: 'Get the Ushadow server software for your computer from ushadow.io',
+      icon: 'download-outline',
     },
     {
       number: 2,
+      title: 'Start your server',
+      description: 'Run the Ushadow backend. A QR code will appear in the terminal for easy connection.',
+      icon: 'desktop-outline',
+    },
+    {
+      number: 3,
       title: 'Connect this app',
       description: 'Tap "Add UNode" below and scan the QR code, or enter the server URL manually.',
       icon: 'qr-code-outline',
     },
     {
-      number: 3,
-      title: 'Choose your audio source',
-      description: 'Use your phone microphone or connect an OMI wearable device.',
-      icon: 'mic-outline',
-    },
-    {
       number: 4,
       title: 'Start streaming',
-      description: 'Press the stream button to send audio to your server for transcription.',
+      description: 'Choose your audio source (phone mic or OMI device) and press the stream button.',
       icon: 'play-circle-outline',
     },
   ];
@@ -124,14 +124,25 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
           </TouchableOpacity>
 
           {/* Help Links */}
-          <View style={styles.helpLinks}>
-            <Text style={styles.helpText}>Need help?</Text>
+          <View style={styles.helpLinksContainer}>
             <TouchableOpacity
-              onPress={() => Linking.openURL('https://github.com/Ushadow-io/ushadow')}
-              testID={`${testID}-docs-link`}
+              style={styles.downloadButton}
+              onPress={() => Linking.openURL('https://ushadow.io')}
+              testID={`${testID}-download-link`}
             >
-              <Text style={styles.helpLink}>View Documentation</Text>
+              <Ionicons name="globe-outline" size={16} color={colors.primary[400]} />
+              <Text style={styles.downloadButtonText}>Download Server (ushadow.io)</Text>
             </TouchableOpacity>
+
+            <View style={styles.helpLinks}>
+              <Text style={styles.helpText}>Need help?</Text>
+              <TouchableOpacity
+                onPress={() => Linking.openURL('https://github.com/Ushadow-io/ushadow')}
+                testID={`${testID}-docs-link`}
+              >
+                <Text style={styles.helpLink}>View Documentation</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       )}
@@ -237,12 +248,31 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '600',
   },
+  helpLinksContainer: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  downloadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.primary[400] + '15',
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.primary[400] + '30',
+  },
+  downloadButtonText: {
+    color: colors.primary[400],
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+  },
   helpLinks: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.xs,
-    marginTop: spacing.md,
     paddingTop: spacing.sm,
   },
   helpText: {
