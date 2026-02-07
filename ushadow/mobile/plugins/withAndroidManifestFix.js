@@ -23,6 +23,9 @@ module.exports = function withAndroidManifestFix(config) {
       mainApplication.$ = {};
     }
 
+    // Set the appComponentFactory to use androidx version
+    mainApplication.$['android:appComponentFactory'] = 'androidx.core.app.CoreComponentFactory';
+
     // Add or append to tools:replace attribute
     if (mainApplication.$['tools:replace']) {
       if (!mainApplication.$['tools:replace'].includes('android:appComponentFactory')) {

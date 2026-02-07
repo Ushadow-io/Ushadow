@@ -54,6 +54,7 @@
     },
     "plugins": [
       "./plugins/withAndroidManifestFix.js",
+      "./plugins/withAndroidGradleFix.js",
       "expo-router",
       "@react-native-voice/voice",
       [
