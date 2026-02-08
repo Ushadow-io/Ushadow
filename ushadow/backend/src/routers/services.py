@@ -451,7 +451,7 @@ async def get_service_connection_info(
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
 
     # Import URL utilities
-    from src.utils.service_urls import get_internal_proxy_url, get_relative_proxy_url
+    from src.config import get_docker_proxy_url, get_relative_proxy_url
 
     # Proxy URL (for frontend REST API access through ushadow)
     proxy_url = get_relative_proxy_url(name)
@@ -461,7 +461,7 @@ async def get_service_connection_info(
 
     # Internal URL (for backend-to-service communication)
     # Use proxy with full backend hostname for stable service discovery
-    internal_url = get_internal_proxy_url(name)
+    internal_url = get_docker_proxy_url(name)
 
     # Direct URL (for frontend WebSocket/streaming access)
     # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
@@ -595,20 +595,22 @@ async def proxy_service_request(
                 else:
                     internal_port = int(first_port)
 
-        # Check if remote deployment
-        # Get current hostname from ENV_NAME, COMPOSE_PROJECT_NAME, or UNODE_HOSTNAME
-        current_hostname = (
-            os.getenv("ENV_NAME") or
-            os.getenv("COMPOSE_PROJECT_NAME", "").replace("ushadow-", "") or
-            os.getenv("UNODE_HOSTNAME", "local")
-        )
+        # Check if remote deployment using unode labels (more reliable than hostname matching)
+        # Fetch the unode to check its labels
+        from src.services.unode_manager import get_unode_manager
 
-        # Normalize both to compare - remove ushadow- prefix if present
-        deployment_host_normalized = (matching_deployment.unode_hostname or "").replace("ushadow-", "")
-        current_host_normalized = current_hostname.replace("ushadow-", "")
+        try:
+            unode_mgr = await get_unode_manager()
+            unode = await unode_mgr.get_unode(matching_deployment.unode_hostname)
+            # Check for is_local label - if not present or "false", treat as remote
+            is_local = unode and unode.labels.get("is_local") == "true"
+            is_remote = not is_local
 
-        logger.info(f"[PROXY] Deployment check: deployment={deployment_host_normalized}, current={current_host_normalized}")
-        is_remote = deployment_host_normalized and deployment_host_normalized != current_host_normalized
+            logger.info(f"[PROXY] Deployment check: unode={matching_deployment.unode_hostname}, is_local={is_local}, labels={unode.labels if unode else 'N/A'}")
+        except Exception as e:
+            # If we can't fetch the unode, fall back to treating it as remote for safety
+            logger.warning(f"[PROXY] Could not fetch unode {matching_deployment.unode_hostname}: {e}")
+            is_remote = True
 
         if is_remote:
             # For remote deployments, proxy through the remote unode manager

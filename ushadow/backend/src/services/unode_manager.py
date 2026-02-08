@@ -133,9 +133,10 @@ class UNodeManager:
 
     async def _register_self_as_leader(self):
         """Register the current u-node as the cluster leader."""
-        import os
+        import socket as socket_module
 
         hostname = None
+        envname = None
         tailscale_ip = None
         status_data = None
 
@@ -193,7 +194,7 @@ class UNodeManager:
                 except Exception as e:
                     logger.warning(f"Docker API exec method failed for leader registration: {e}")
 
-        # Method 3: Try local tailscale CLI
+        # Method 3: Try local tailscale CLI (uses fixed command, no user input)
         if not status_data:
             try:
                 result = await asyncio.create_subprocess_exec(
@@ -221,35 +222,51 @@ class UNodeManager:
         if not tailscale_ip:
             tailscale_ip = os.environ.get("TAILSCALE_IP")
 
-        # Use COMPOSE_PROJECT_NAME as hostname (matches the deployment identity)
-        hostname = os.environ.get("COMPOSE_PROJECT_NAME")
-        if not hostname:
-            # Fall back to Tailscale DNSName
-            if status_data:
-                self_info = status_data.get("Self", {})
-                dns_name = self_info.get("DNSName", "")
-                if dns_name:
-                    hostname = dns_name.split(".")[0]
-        if not hostname:
-            import socket
-            hostname = socket.gethostname()
-            logger.warning(f"Could not determine hostname, using socket hostname: {hostname}")
+        # Get environment name from ENV_NAME
+        envname = os.environ.get("ENV_NAME")
 
-        logger.info(f"Leader registration: hostname={hostname}, tailscale_ip={tailscale_ip}")
+        # Get hostname: prefer Tailscale DNSName (short form), then HOST_HOSTNAME env var
+        if status_data:
+            self_info = status_data.get("Self", {})
+            dns_name = self_info.get("DNSName", "")
+            if dns_name:
+                # Extract short hostname from "blue.spangled-kettle.ts.net."
+                hostname = dns_name.split(".")[0]
+
+        if not hostname:
+            # HOST_HOSTNAME is set by setup/run.py from the host machine's friendly name
+            hostname = os.environ.get("HOST_HOSTNAME")
+            if hostname:
+                logger.info(f"Using HOST_HOSTNAME env var: {hostname}")
+
+        if not hostname:
+            # Last resort - inside Docker this will be container ID
+            hostname = socket_module.gethostname()
+            logger.warning(f"Using socket hostname (may be container ID): {hostname}")
+
+        # Generate display_name as hostname-envname
+        if envname:
+            display_name = f"{hostname}-{envname}"
+        else:
+            display_name = hostname
+
+        logger.info(f"Leader registration: hostname={hostname}, envname={envname}, display_name={display_name}, tailscale_ip={tailscale_ip}")
 
         # Remove any old leader entries and keep only one
+        # Match on display_name (hostname-envname) which is unique per environment
         await self.unodes_collection.delete_many({
             "role": UNodeRole.LEADER.value,
-            "hostname": {"$ne": hostname}
+            "display_name": {"$ne": display_name}
         })
 
-        # Check if we already exist
-        existing = await self.unodes_collection.find_one({"hostname": hostname})
+        # Check if we already exist (match on display_name which is unique)
+        existing = await self.unodes_collection.find_one({"display_name": display_name})
 
         now = datetime.now(timezone.utc)
         unode_data = {
             "hostname": hostname,
-            "display_name": f"{hostname} (Leader)",
+            "envname": envname,
+            "display_name": display_name,
             "role": UNodeRole.LEADER.value,
             "status": UNodeStatus.ONLINE.value,
             "tailscale_ip": tailscale_ip,
@@ -258,7 +275,7 @@ class UNodeManager:
             "last_seen": now,
             "manager_version": "0.1.0",
             "services": self._detect_running_services(),
-            "labels": {"type": "leader"},
+            "labels": {"type": "leader", "is_local": "true"},
             "metadata": {"is_origin": True},
         }
 
@@ -614,10 +631,17 @@ Write-Host ""
         now = datetime.now(timezone.utc)
         unode_id = secrets.token_hex(16)
 
+        # Generate display_name as hostname-envname if envname is provided
+        if unode_data.envname:
+            display_name = f"{unode_data.hostname}-{unode_data.envname}"
+        else:
+            display_name = unode_data.hostname
+
         unode_doc = {
             "id": unode_id,
             "hostname": unode_data.hostname,
-            "display_name": unode_data.hostname,
+            "envname": unode_data.envname,
+            "display_name": display_name,
             "tailscale_ip": unode_data.tailscale_ip,
             "platform": unode_data.platform.value,
             "role": token_doc.role.value,
@@ -627,7 +651,7 @@ Write-Host ""
             "last_seen": now,
             "manager_version": unode_data.manager_version,
             "services": [],
-            "labels": {},
+            "labels": unode_data.labels,  # Use labels from UNodeCreate
             "metadata": {},
             "unode_secret_hash": unode_secret_hash,
             "unode_secret_encrypted": unode_secret_encrypted,
@@ -668,6 +692,10 @@ Write-Host ""
 
         if unode_data.capabilities:
             update_data["capabilities"] = unode_data.capabilities.model_dump()
+
+        # Update labels if provided (don't clear existing labels if not provided)
+        if unode_data.labels:
+            update_data["labels"] = unode_data.labels
 
         await self.unodes_collection.update_one(
             {"hostname": unode_data.hostname},
@@ -743,15 +771,33 @@ Write-Host ""
         status: Optional[UNodeStatus] = None,
         role: Optional[UNodeRole] = None
     ) -> List[UNode]:
-        """List all u-nodes, optionally filtered by status or role."""
+        """List all u-nodes, optionally filtered by status or role.
+
+        If multiple records exist for the same hostname (duplicates), returns only the latest.
+        """
         query = {}
         if status:
             query["status"] = status.value
         if role:
             query["role"] = role.value
 
+        # Use aggregation to get only the latest record per hostname
+        pipeline = [
+            {"$match": query},
+            {"$sort": {"registered_at": -1}},  # Sort by registration date, newest first
+            {"$group": {
+                "_id": "$hostname",  # Group by hostname
+                "doc": {"$first": "$$ROOT"}  # Take the first (latest) document
+            }},
+            {"$replaceRoot": {"newRoot": "$doc"}}  # Flatten back to original structure
+        ]
+
         unodes = []
-        async for doc in self.unodes_collection.find(query):
+        async for doc in self.unodes_collection.aggregate(pipeline):
+            # Debug: log what MongoDB returns
+            if doc.get("hostname") == "ushadow-orange-public":
+                logger.info(f"MongoDB doc for ushadow-orange-public: labels={doc.get('labels', 'MISSING')}")
+
             unodes.append(UNode(**{k: v for k, v in doc.items() if k != "unode_secret_hash"}))
 
         return unodes
@@ -882,10 +928,20 @@ Write-Host ""
         actual_platform = (worker_info or {}).get("platform", platform)
         actual_version = (worker_info or {}).get("manager_version", manager_version)
         
+        # Get envname from worker info if available
+        actual_envname = (worker_info or {}).get("envname")
+
+        # Generate display_name as hostname-envname if envname is available
+        if actual_envname:
+            display_name = f"{hostname}-{actual_envname}"
+        else:
+            display_name = hostname
+
         unode_doc = {
             "id": unode_id,
             "hostname": hostname,
-            "display_name": hostname,
+            "envname": actual_envname,
+            "display_name": display_name,
             "tailscale_ip": tailscale_ip,
             "platform": actual_platform,
             "role": UNodeRole.WORKER.value,
@@ -1409,8 +1465,11 @@ install_docker
 install_tailscale
 connect_tailscale
 
-# Get u-node info
-NODE_HOSTNAME=$(hostname)
+# Get u-node info - use friendly hostname
+case "$(uname -s)" in
+    Darwin*) NODE_HOSTNAME=$(scutil --get ComputerName 2>/dev/null || hostname -s);;
+    *)       NODE_HOSTNAME=$(hostname -s 2>/dev/null || hostname);;
+esac
 TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
 
 if [ -z "$TAILSCALE_IP" ]; then

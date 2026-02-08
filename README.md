@@ -51,49 +51,161 @@ ushadow is an AI orchestration platform that provides a unified dashboard and AP
 
 ### Prerequisites
 
-- Docker & Docker Compose
-- Git
-- Python 3.12+ (optional for local development - will be auto-installed via uv)
+Before getting started, ensure you have:
+
+- **Docker & Docker Compose** - For running services in containers
+- **Git** - For version control and worktree management
+- **Python 3.12+** (optional) - Will be auto-installed via `uv` if not present
+- **Node.js 18+** (optional) - Only needed for frontend development
 
 **Note:** The startup scripts will automatically install `uv` (Python package manager) if not present. No manual Python setup required!
 
-### Installation
+### Choose Your Installation Method
 
-1. **Clone the repository**
+You have three options to get started with ushadow:
+
+#### Option 1: Desktop Launcher (GUI - Recommended for Multi-Environment Development)
+
+The ushadow Desktop Launcher provides a graphical interface for managing multiple parallel development environments with git worktrees.
 
 ```bash
-git clone https://github.com/Ushadow-io/Ushadow.git
-cd Ushadow
+cd ushadow/launcher
+npm install
+npm run dev
 ```
 
-2. **Run quickstart script**
+The launcher will:
+- Auto-detect existing environments/worktrees
+- Manage tmux sessions for each environment
+- Start/stop Docker containers per environment
+- Provide one-click access to terminals and VS Code
+
+**See [ushadow/launcher/README.md](ushadow/launcher/README.md) for full launcher documentation.**
+
+#### Option 2: Development Script (Quick Start for Development)
+
+For a single development environment with hot-reload:
+
+```bash
+./dev.sh
+```
+
+This script will:
+- Auto-install `uv` (Python package manager) if not present
+- Generate secure credentials
+- Set up Docker networks
+- Start infrastructure services (Postgres, Keycloak, MongoDB, Redis, Qdrant)
+- Start Chronicle backend
+- Start ushadow application in **development mode** (with Vite HMR)
+- Display access URLs and credentials
+
+**Note:** `dev.sh` creates an environment named "ushadow" by default on ports 8080 (backend) and 3000 (frontend).
+
+#### Option 3: Production Script (Quick Start for Testing)
+
+For production-like builds without hot-reload:
 
 ```bash
 ./go.sh
 ```
 
-This script will:
-- Auto-install uv (Python package manager) if not present
-- Generate secure credentials
-- Configure multi-worktree support (if needed)
-- Set up Docker networks
-- Start infrastructure services (MongoDB, Redis, Qdrant)
-- Start Chronicle backend
-- Start ushadow application
-- Display access URLs and credentials
+This runs the same setup as `dev.sh` but builds optimized production bundles.
 
-**For development mode with hot-reload:**
+### Post-Installation Steps
+
+#### 1. Complete the Quickstart Wizard
+
+After services start, navigate to http://localhost:3000 to access the setup wizard. The wizard will guide you through:
+
+1. **Initial Configuration** - Set up basic settings
+2. **Service Selection** - Choose which services to enable
+   - **Note:** You can skip starting services during the wizard and enable them later
+   - Services can be started individually from the dashboard or using `make` commands
+3. **API Keys** (optional) - Configure API keys for AI providers (OpenAI, Deepgram, etc.)
+
+**You don't need to start all services to complete the wizard** - skip this step and configure services as needed later.
+
+#### 2. Register a User with Keycloak
+
+**IMPORTANT:** You must register a user with Keycloak before you can fully access the dashboard.
+
+1. Wait for all services to be healthy (check with `make status`)
+2. On the login screen, click "Register" and create your account
+3. The first user created will have admin privileges
+
+**Troubleshooting Keycloak Issues:**
+
+If you encounter authentication problems, use these Makefile commands:
+
 ```bash
-./dev.sh
+# Delete and recreate Keycloak realm
+make keycloak-reset-realm
+
+# Complete fresh start (stops Keycloak, clears DB, restarts, imports realm)
+make keycloak-fresh-start
 ```
 
-3. **Access ushadow Dashboard**
+### Accessing ushadow
 
-Open http://localhost:3000 in your browser
+Once services are running and you've registered:
 
-Default credentials (unless changed during setup):
-- Email: `admin@ushadow.local`
-- Password: `ushadow-123`
+- **Dashboard**: http://localhost:3000
+- **API Documentation**: http://localhost:8080/docs
+- **Keycloak Admin**: http://localhost:8081 (admin/admin)
+
+### Helpful Commands
+
+The project includes two powerful tools for managing ushadow:
+
+#### Makefile Commands
+
+```bash
+make help           # Show all available commands
+make status         # Show running containers
+make health         # Check service health
+make logs           # View application logs
+make logs-f         # Follow application logs in real-time
+make restart        # Restart ushadow application
+make clean          # Stop everything and remove volumes
+
+# Service management
+make svc-list                # List all services
+make restart-chronicle       # Restart specific service
+make restart-<service>       # Restart any service
+
+# Keycloak realm management
+make keycloak-reset-realm    # Delete and recreate realm
+make keycloak-fresh-start    # Complete fresh Keycloak setup
+
+# Testing
+make test                    # Run unit tests
+make test-integration        # Run integration tests
+make test-robot              # Run Robot Framework E2E tests
+```
+
+#### ush Shell Tool
+
+`ush` is a dynamic CLI that auto-discovers commands from the OpenAPI spec:
+
+```bash
+./ush                    # List all command groups
+./ush shell              # Interactive mode with Tab completion
+./ush health             # Check backend health
+./ush whoami             # Show current user info
+./ush services list      # List all services
+./ush services start chronicle  # Start a service
+```
+
+**Interactive shell mode:**
+```bash
+./ush shell
+ushadow> services <Tab>           # Shows available commands and services
+ushadow> services chronicle <Tab> # Shows commands for chronicle
+ushadow> services chronicle start # Start chronicle
+ushadow> exit
+```
+
+See `./ush --help` for more information.
 
 ## Multi-Worktree Environments
 

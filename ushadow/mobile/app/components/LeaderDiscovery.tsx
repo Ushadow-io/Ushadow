@@ -21,7 +21,7 @@ import QRScanner, { UshadowConnectionData } from './QRScanner';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 
 interface LeaderDiscoveryProps {
-  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string) => void;
+  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string, hostname?: string) => void;
 }
 
 export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
@@ -55,15 +55,15 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
     // This now saves the server AND attempts to connect
     const result = await connectFromQR(data);
     if (result.success && result.leader && onLeaderFound) {
-      // Pass auth token from QR code if available (v3+)
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl);
+      // Don't pass auth token - user will login with Keycloak instead
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
   const handleConnectToScanned = async () => {
     const result = await connectToScanned();
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
@@ -72,7 +72,7 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
 
     const result = await connectToLeader(savedLeader.tailscaleIp, savedLeader.port);
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
@@ -86,13 +86,13 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
 
     const result = await connectToEndpoint(trimmed);
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
   const handleConnectToLeader = () => {
     if (leader && onLeaderFound) {
-      onLeaderFound(leader.apiUrl, leader.streamUrl, undefined, leader.chronicleApiUrl);
+      onLeaderFound(leader.apiUrl, leader.streamUrl, undefined, leader.chronicleApiUrl, leader.hostname);
     }
   };
 

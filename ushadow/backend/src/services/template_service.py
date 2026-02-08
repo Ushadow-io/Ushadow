@@ -97,6 +97,7 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
                 compose_file=str(service.namespace) if service.namespace else None,
                 service_name=service.service_name,
                 mode="local",
+                tags=service.tags,
                 installed=is_installed,
             ))
     except Exception as e:

@@ -81,6 +81,8 @@ async def bridge_to_service_token(
     keycloak_sub = keycloak_user.get("sub")
     user_name = keycloak_user.get("name")
 
+    logger.debug(f"[TOKEN-BRIDGE] Extracted from token - email: {user_email}, name: '{user_name}', sub: {keycloak_sub}")
+
     if not user_email or not keycloak_sub:
         logger.error(f"[TOKEN-BRIDGE] Missing user info: email={user_email}, keycloak_sub={keycloak_sub}")
         return None

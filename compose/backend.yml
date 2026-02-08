@@ -24,12 +24,31 @@ services:
       - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
       # Compose project name for per-environment Tailscale containers
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
+      # Environment name for unode display
+      - ENV_NAME=${ENV_NAME:-}
+      # Host machine hostname - uses shell's HOSTNAME at compose startup
+      - HOST_HOSTNAME=${HOST_HOSTNAME:-${HOSTNAME}}
       # Config directory location
       - CONFIG_DIR=/config
       - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:${WEBUI_PORT}}
       # Rich console width for logging (prevents log wrapping)
       - COLUMNS=200
+      # Database configuration
+      - POSTGRES_USER=${POSTGRES_USER:-ushadow}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
+      - POSTGRES_DB=${POSTGRES_DB:-ushadow}
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      # Keycloak SSO configuration
+      # Backend reads via OmegaConf which interpolates these env vars in config.defaults.yaml
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-http://localhost:8081}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-ushadow}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-ushadow-frontend}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-}
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-changeme}
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config  # Mount config directory (read-write for feature flags)

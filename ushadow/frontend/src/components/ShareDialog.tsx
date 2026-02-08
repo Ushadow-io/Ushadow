@@ -5,6 +5,7 @@ import {  Copy, Check, Trash2 } from 'lucide-react'
 import Modal from './Modal'
 import { SettingField } from './settings/SettingField'
 import ConfirmDialog from './ConfirmDialog'
+import { api } from '../services/api'
 
 interface ShareToken {
   token: string
@@ -59,16 +60,8 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
   const { data: shares, isLoading: loadingShares } = useQuery<ShareToken[]>({
     queryKey: ['shares', resourceType, resourceId],
     queryFn: async () => {
-      const response = await fetch(
-        `/api/share/resource/${resourceType}/${resourceId}`,
-        {
-          credentials: 'include',
-        }
-      )
-      if (!response.ok) {
-        throw new Error('Failed to fetch shares')
-      }
-      return response.json()
+      const response = await api.get(`/api/share/resource/${resourceType}/${resourceId}`)
+      return response.data
     },
     enabled: isOpen,
   })
@@ -76,39 +69,27 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
   // Create share token mutation
   const createShareMutation = useMutation({
     mutationFn: async (data: ShareFormData) => {
-      const response = await fetch('/api/share/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          resource_type: resourceType,
-          resource_id: resourceId,
-          ...data,
-        }),
+      const response = await api.post('/api/share/create', {
+        resource_type: resourceType,
+        resource_id: resourceId,
+        ...data,
       })
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Failed to create share link')
-      }
-      return response.json()
+      return response.data
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shares', resourceType, resourceId] })
       reset()
+    },
+    onError: (error: any) => {
+      console.error('[ShareDialog] Create share failed:', error)
+      console.error('[ShareDialog] Error response:', error.response?.data)
     },
   })
 
   // Revoke share token mutation
   const revokeShareMutation = useMutation({
     mutationFn: async (token: string) => {
-      const response = await fetch(`/api/share/${token}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      })
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Failed to revoke share link')
-      }
+      await api.delete(`/api/share/${token}`)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shares', resourceType, resourceId] })
@@ -123,6 +104,7 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
   }
 
   const handleCreateShare = handleSubmit(async (data) => {
+    console.log('[ShareDialog] Creating share with data:', data)
     await createShareMutation.mutateAsync(data)
   })
 
@@ -159,6 +141,7 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
                   render={({ field }) => (
                     <SettingField
                       id="share-expires-in-days"
+                      name="expires_in_days"
                       type="select"
                       label="Expires In"
                       value={field.value?.toString() || ''}
@@ -180,6 +163,7 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
                   render={({ field }) => (
                     <SettingField
                       id="share-max-views"
+                      name="max_views"
                       type="text"
                       label="Max Views"
                       placeholder="Unlimited"
@@ -197,6 +181,7 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
                   render={({ field }) => (
                     <SettingField
                       id="share-require-auth"
+                      name="require_auth"
                       type="toggle"
                       label="Require Authentication"
                       description="Users must log in to access"
@@ -212,6 +197,7 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
                   render={({ field }) => (
                     <SettingField
                       id="share-tailscale-only"
+                      name="tailscale_only"
                       type="toggle"
                       label="Tailscale Only"
                       description="Only accessible from your Tailscale network"
@@ -233,7 +219,7 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
 
               {createShareMutation.isError && (
                 <p className="text-sm text-red-600 dark:text-red-400" data-testid="share-dialog-error">
-                  {createShareMutation.error?.message}
+                  {(createShareMutation.error as any)?.response?.data?.detail || createShareMutation.error?.message || 'Failed to create share link'}
                 </p>
               )}
             </form>
@@ -263,14 +249,30 @@ const ShareDialog: React.FC<ShareDialogProps> = ({
                         <p className="text-sm font-mono text-gray-900 dark:text-gray-100 truncate">
                           {share.share_url}
                         </p>
-                        <div className="flex gap-3 mt-1 text-xs text-gray-600 dark:text-gray-400">
-                          <span>Views: {share.view_count}{share.max_views ? `/${share.max_views}` : ''}</span>
+                        <div className="flex flex-wrap gap-2 mt-1 text-xs">
+                          <span className="text-gray-600 dark:text-gray-400">
+                            Views: {share.view_count}{share.max_views ? `/${share.max_views}` : ''}
+                          </span>
                           {share.expires_at && (
-                            <span>
+                            <span className="text-gray-600 dark:text-gray-400">
                               Expires: {new Date(share.expires_at).toLocaleDateString()}
                             </span>
                           )}
-                          {share.tailscale_only && <span className="text-blue-600">Tailscale Only</span>}
+                          {/* Access mode badges */}
+                          {share.require_auth ? (
+                            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded">
+                              Private
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded">
+                              Public
+                            </span>
+                          )}
+                          {share.tailscale_only && (
+                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded">
+                              Tailscale
+                            </span>
+                          )}
                         </div>
                       </div>
 

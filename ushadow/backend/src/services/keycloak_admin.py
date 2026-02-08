@@ -116,14 +116,16 @@ class KeycloakAdminClient:
         self,
         client_id: str,
         redirect_uris: List[str],
+        web_origins: Optional[List[str]] = None,
         merge: bool = True
     ) -> bool:
         """
-        Update redirect URIs for a Keycloak client.
+        Update redirect URIs and webOrigins (CORS) for a Keycloak client.
 
         Args:
             client_id: The client_id (e.g., "ushadow-frontend")
             redirect_uris: List of redirect URIs to set
+            web_origins: Optional list of web origins (CORS). If not provided, extracted from redirect URIs.
             merge: If True, merge with existing URIs. If False, replace entirely.
 
         Returns:
@@ -147,17 +149,48 @@ class KeycloakAdminClient:
             final_uris = redirect_uris
             logger.info(f"[KC-ADMIN] Replacing redirect URIs with {len(final_uris)} URIs")
 
+        # Get webOrigins (CORS)
+        if web_origins is not None:
+            # Use provided web origins
+            final_origins_set = set(web_origins)
+            if merge:
+                existing_origins = set(client.get("webOrigins", []))
+                final_origins_set = final_origins_set.union(existing_origins)
+            final_origins = list(final_origins_set)
+            logger.info(f"[KC-ADMIN] Using {len(final_origins)} provided webOrigins")
+            for origin in sorted(final_origins):
+                logger.info(f"[KC-ADMIN]   - {origin}")
+        else:
+            # Extract origins from redirect URIs for CORS
+            origins_set = set()
+            for uri in final_uris:
+                # Extract origin from redirect URI (e.g., http://localhost:3020/oauth/callback -> http://localhost:3020)
+                if uri.startswith("http"):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(uri)
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    origins_set.add(origin)
+
+            # Merge with existing webOrigins if merge=True
+            if merge:
+                existing_origins = set(client.get("webOrigins", []))
+                origins_set = origins_set.union(existing_origins)
+
+            final_origins = list(origins_set)
+            logger.info(f"[KC-ADMIN] Extracted {len(final_origins)} webOrigins from redirect URIs")
+
         # Update client configuration
         token = await self._get_admin_token()
         url = f"{self.keycloak_url}/admin/realms/{self.realm}/clients/{client_uuid}"
 
         async with httpx.AsyncClient() as client_http:
             try:
-                # Prepare update payload (only redirect URIs)
+                # Prepare update payload (redirect URIs + webOrigins)
                 update_payload = {
                     "id": client_uuid,
                     "clientId": client_id,
                     "redirectUris": final_uris,
+                    "webOrigins": final_origins,
                 }
 
                 response = await client_http.put(
@@ -291,14 +324,18 @@ async def register_current_environment_redirect_uri() -> bool:
         - ushadow-orange (PORT_OFFSET=20): Registers http://localhost:3020/auth/callback
         - With Tailscale: Also registers https://ushadow.spangled-kettle.ts.net/auth/callback
     """
-    # Get configuration from environment
-    keycloak_url = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
-    keycloak_realm = os.getenv("KEYCLOAK_REALM", "ushadow")
-    keycloak_client_id = os.getenv("KEYCLOAK_FRONTEND_CLIENT_ID", "ushadow-frontend")
+    from src.config.keycloak_settings import get_keycloak_config
+
+    # Get configuration from settings (config.defaults.yaml + secrets.yaml)
+    # Settings system handles env var interpolation via OmegaConf
+    config = get_keycloak_config()
+    keycloak_url = config["url"]
+    keycloak_realm = config["realm"]
+    keycloak_client_id = config["frontend_client_id"]
 
     # Admin credentials
-    admin_user = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
-    admin_password = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
+    admin_keycloak_user = config["admin_keycloak_user"]
+    admin_keycloak_password = config["admin_keycloak_password"]
 
     # Calculate frontend port from PORT_OFFSET
     port_offset = int(os.getenv("PORT_OFFSET", "0"))
@@ -342,8 +379,8 @@ async def register_current_environment_redirect_uri() -> bool:
     admin_client = KeycloakAdminClient(
         keycloak_url=keycloak_url,
         realm=keycloak_realm,
-        admin_user=admin_user,
-        admin_password=admin_password,
+        admin_user=admin_keycloak_user,
+        admin_password=admin_keycloak_password,
     )
 
     # Register login redirect URIs
@@ -380,21 +417,24 @@ def get_keycloak_admin() -> KeycloakAdminClient:
     """
     Get the Keycloak admin client singleton.
 
-    Configuration is loaded from environment variables.
+    Configuration is loaded from settings (config.defaults.yaml + secrets.yaml).
     """
+    from src.config.keycloak_settings import get_keycloak_config
+
     global _keycloak_admin_client
 
     if _keycloak_admin_client is None:
-        keycloak_url = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
-        keycloak_realm = os.getenv("KEYCLOAK_REALM", "ushadow")
-        admin_user = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
-        admin_password = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
+        config = get_keycloak_config()
+        keycloak_url = config["url"]
+        keycloak_realm = config["realm"]
+        admin_keycloak_user = config["admin_keycloak_user"]
+        admin_keycloak_password = config["admin_keycloak_password"]
 
         _keycloak_admin_client = KeycloakAdminClient(
             keycloak_url=keycloak_url,
             realm=keycloak_realm,
-            admin_user=admin_user,
-            admin_password=admin_password,
+            admin_user=admin_keycloak_user,
+            admin_password=admin_keycloak_password,
         )
 
     return _keycloak_admin_client

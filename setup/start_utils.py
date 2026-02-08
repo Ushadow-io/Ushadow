@@ -162,6 +162,11 @@ def start_infrastructure(
         if not compose_path.exists():
             return False, f"Compose file not found: {compose_file}"
 
+        # Inform user that images may need to be pulled
+        print("🐳 Starting infrastructure containers...")
+        print("   (Pulling images if needed... this may take a few minutes on first run)")
+        sys.stdout.flush()  # Ensure message is displayed immediately
+
         # Create and start infrastructure
         # Note: Must include --profile flags since all services in infra compose have profiles
         # Only start core infra (mongo, redis) - memory services started separately when needed

@@ -493,10 +493,21 @@ export function ProviderConfigDropdown({
   const [isOpen, setIsOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 })
   const [activeSubmenu, setActiveSubmenu] = useState<{ option: ProviderOption; top: number } | null>(null)
+  const [optimisticValue, setOptimisticValue] = useState<ProviderOption | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const testIdBase = `provider-dropdown-${consumerId}-${capability}`
+
+  // Clear optimistic value when actual value updates (API completed)
+  useEffect(() => {
+    if (value?.id === optimisticValue?.id) {
+      setOptimisticValue(null)
+    }
+  }, [value, optimisticValue])
+
+  // The displayed value: optimistic takes priority for instant feedback
+  const displayValue = optimisticValue || value
 
   // Calculate menu position when opening
   const updateMenuPosition = useCallback(() => {
@@ -554,9 +565,12 @@ export function ProviderConfigDropdown({
   }, [activeSubmenu])
 
   const handleSelect = (option: ProviderOption) => {
-    onChange(option)
+    // Set optimistic value immediately for instant feedback
+    setOptimisticValue(option)
     setIsOpen(false)
     setActiveSubmenu(null)
+    // Call onChange in background (don't await)
+    onChange(option)
   }
 
   const handleArrowClick = (option: ProviderOption, event: React.MouseEvent) => {
@@ -593,7 +607,7 @@ export function ProviderConfigDropdown({
       )
     }
 
-    if (!value) {
+    if (!displayValue) {
       return (
         <span className="text-neutral-400 dark:text-neutral-500">
           Select provider...
@@ -601,18 +615,18 @@ export function ProviderConfigDropdown({
       )
     }
 
-    const ModeIcon = value.mode === 'cloud' ? Cloud : HardDrive
+    const ModeIcon = displayValue.mode === 'cloud' ? Cloud : HardDrive
 
     return (
       <span className="flex items-center gap-2">
         <ModeIcon className="h-4 w-4 text-neutral-500" />
-        <span className="font-medium">{value.name}</span>
-        {value.configSummary && (
+        <span className="font-medium">{displayValue.name}</span>
+        {displayValue.configSummary && (
           <span className="text-neutral-500 dark:text-neutral-400">
-            - {value.configSummary}
+            - {displayValue.configSummary}
           </span>
         )}
-        {value.isDefault && (
+        {displayValue.isDefault && (
           <span className="text-xs text-neutral-400">(default)</span>
         )}
       </span>

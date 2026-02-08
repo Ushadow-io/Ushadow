@@ -139,6 +139,8 @@ class ComposeService:
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
     wizard: Optional[str] = None  # Setup wizard ID
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # URLs this service exposes (audio intake, http api, etc.)
+    tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
+    environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all envs)
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -293,6 +295,8 @@ class ComposeParser(BaseYAMLParser):
         description = service_meta.get("description")
         wizard = service_meta.get("wizard")  # Setup wizard ID
         exposes = service_meta.get("exposes", [])  # URLs this service exposes
+        tags = service_meta.get("tags", [])  # Service tags (e.g., ["audio", "gpu"])
+        environments = service_meta.get("environments", [])  # Environments where visible (empty = all)
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
@@ -319,6 +323,8 @@ class ComposeParser(BaseYAMLParser):
             route_path=route_path,
             wizard=wizard,
             exposes=exposes,
+            tags=tags,
+            environments=environments,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:

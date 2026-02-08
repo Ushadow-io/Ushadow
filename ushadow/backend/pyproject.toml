@@ -32,6 +32,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "bcrypt>=4.2.1",
     "pyjwt>=2.10.1",
+    "python-keycloak>=4.5.1",
 
     # CORS & Middleware
     "fastapi-cors>=0.0.6",

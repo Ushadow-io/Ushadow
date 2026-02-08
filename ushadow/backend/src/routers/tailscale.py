@@ -23,6 +23,7 @@ from src.models.user import User
 from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
+from src.services.keycloak_startup import register_current_environment
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -698,8 +699,44 @@ async def get_mobile_connection_qr(
         config = get_settings()
         api_port = config.get_sync("network.backend_public_port") or 8000
 
-        # Build full API URL for leader info endpoint
-        api_url = f"https://{status.hostname}/api/unodes/leader/info"
+        # Get unode manager to fetch unode hostname and envname
+        from src.services.unode_manager import get_unode_manager
+        from src.models.unode import UNodeRole
+
+        unode_manager = await get_unode_manager()
+        leader_unode = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
+
+        if not leader_unode:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not find leader unode. Please ensure unode is registered."
+            )
+
+        # Build full API URL for unode info endpoint
+        # Use unode hostname, not Tailscale hostname
+        api_url = f"https://{status.hostname}/api/unodes/{leader_unode.hostname}/info"
+
+        # Auto-register mobile redirect URIs in Keycloak
+        from src.services.keycloak_admin import get_keycloak_admin
+        from src.config.keycloak_settings import is_keycloak_enabled
+
+        if is_keycloak_enabled():
+            try:
+                keycloak_admin = get_keycloak_admin()
+                mobile_uris = [
+                    "ushadow://*",  # Production mobile app
+                    "exp://localhost:8081/--/oauth/callback",  # Expo Go development
+                    "exp://*",  # Expo Go wildcard
+                ]
+                await keycloak_admin.update_client_redirect_uris(
+                    client_id="ushadow-frontend",
+                    redirect_uris=mobile_uris,
+                    merge=True
+                )
+                logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Keycloak")
+            except Exception as e:
+                logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
+                # Non-fatal - continue with QR generation
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match
@@ -711,15 +748,16 @@ async def get_mobile_connection_qr(
             audiences=["ushadow", "chronicle"]
         )
 
-        # Minimal connection data for QR code
+        # Connection data for QR code (v4 includes envname)
         connection_data = {
             "type": "ushadow-connect",
-            "v": 3,  # Version 3 includes auth token
-            "hostname": status.hostname,
-            "ip": status.ip_address,
+            "v": 4,  # Version 4 includes envname
+            "hostname": leader_unode.hostname,  # UNode hostname (e.g., "orion")
+            "ip": status.ip_address,            # Tailscale IP
             "port": api_port,
             "api_url": api_url,
             "auth_token": auth_token,
+            "envname": leader_unode.envname,    # Environment name (e.g., "orange")
         }
 
         # Generate QR code
@@ -1338,6 +1376,9 @@ async def configure_tailscale_serve(
     Sets up base routes: /api/* and /auth/* to backend, /* to frontend,
     and WebSocket routes /ws_pcm and /ws_omi direct to Chronicle.
     Also saves the Tailscale configuration to disk.
+
+    Additionally registers the Tailscale hostname with Keycloak to enable
+    OAuth callbacks from the Tailscale domain.
     """
     try:
         manager = get_tailscale_manager()
@@ -1358,18 +1399,35 @@ async def configure_tailscale_serve(
         # Get the current serve status to return actual routes
         status = manager.get_serve_status() or ""
 
+        # Register Tailscale hostname with Keycloak for OAuth callbacks
+        # Reuse the same registration logic that runs on backend startup
+        keycloak_success = False
+        keycloak_message = "Keycloak registration skipped"
+        try:
+            await register_current_environment()
+            keycloak_success = True
+            keycloak_message = f"OAuth callbacks registered for {config.hostname}"
+            logger.info(f"[TAILSCALE] ✓ Registered Keycloak URIs for {config.hostname}")
+        except Exception as e:
+            logger.warning(f"[TAILSCALE] Failed to register Keycloak URIs: {e}")
+            keycloak_message = f"Failed to register OAuth callback URLs: {str(e)}"
+
         if success:
             return {
                 "status": "configured",
                 "message": "Tailscale serve configured successfully with base routes",
                 "routes": status,
-                "hostname": config.hostname
+                "hostname": config.hostname,
+                "keycloak_registered": keycloak_success,
+                "keycloak_message": keycloak_message
             }
         else:
             return {
                 "status": "partial",
                 "message": "Some routes may have failed to configure",
-                "routes": status
+                "routes": status,
+                "keycloak_registered": keycloak_success,
+                "keycloak_message": keycloak_message
             }
 
     except Exception as e:
@@ -1506,3 +1564,96 @@ async def get_serve_status(
             "routes": None,
             "error": str(e)
         }
+
+
+# ============================================================================
+# Tailscale Funnel Management
+# ============================================================================
+
+@router.get("/funnel/status")
+async def get_funnel_status(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get Tailscale Funnel status.
+
+    Funnel exposes services to the public internet (anyone can access without Tailscale).
+    Use this for sharing with people who don't have Tailscale installed.
+
+    Returns:
+        Funnel status with enabled state and public URL
+    """
+    try:
+        manager = get_tailscale_manager()
+        return manager.get_funnel_status()
+    except Exception as e:
+        logger.error(f"Error getting funnel status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/funnel/enable")
+async def enable_funnel(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Enable Tailscale Funnel for public internet access.
+
+    This makes your ushadow instance accessible to anyone on the internet
+    via HTTPS (not just Tailnet members). Use with caution and ensure
+    proper authentication is configured.
+
+    Requires:
+        - Tailscale Serve already configured
+        - Tailscale container running and authenticated
+
+    Returns:
+        Success status and public URL
+    """
+    try:
+        manager = get_tailscale_manager()
+        success, result = manager.enable_funnel()
+
+        if success:
+            return {
+                "status": "enabled",
+                "public_url": result,
+                "message": "Funnel enabled successfully. Your instance is now publicly accessible."
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error enabling funnel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/funnel/disable")
+async def disable_funnel(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Disable Tailscale Funnel.
+
+    This restricts access back to Tailnet-only (not publicly accessible).
+
+    Returns:
+        Success status
+    """
+    try:
+        manager = get_tailscale_manager()
+        success, error = manager.disable_funnel()
+
+        if success:
+            return {
+                "status": "disabled",
+                "message": "Funnel disabled successfully. Access restricted to Tailnet only."
+            }
+        else:
+            raise HTTPException(status_code=400, detail=error)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error disabling funnel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+

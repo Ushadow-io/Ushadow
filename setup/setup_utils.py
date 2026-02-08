@@ -412,6 +412,26 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
             'chronicle': {'api_key': ''}
         }
 
+    # Ensure keycloak section exists with admin credentials
+    if 'keycloak' not in data:
+        data['keycloak'] = {}
+
+    # Set Keycloak admin credentials (separate from Ushadow admin)
+    # These match KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD in .env
+    if not data['keycloak'].get('admin_user'):
+        data['keycloak']['admin_user'] = os.getenv('KEYCLOAK_ADMIN', 'admin')
+        created_new = True
+
+    if not data['keycloak'].get('admin_password'):
+        data['keycloak']['admin_password'] = os.getenv('KEYCLOAK_ADMIN_PASSWORD', 'admin')
+        created_new = True
+
+    # Only store backend_client_secret if provided (optional for public clients)
+    keycloak_client_secret = os.getenv('KEYCLOAK_CLIENT_SECRET', '')
+    if keycloak_client_secret:
+        data['keycloak']['backend_client_secret'] = keycloak_client_secret
+        created_new = True
+
     # Write back to file
     try:
         secrets_path.parent.mkdir(parents=True, exist_ok=True)

@@ -48,3 +48,24 @@ def get_user_name(user: Union[dict, object]) -> Optional[str]:
     if isinstance(user, dict):
         return user.get("name") or user.get("preferred_username")
     return getattr(user, "display_name", None) or getattr(user, "email", None)
+
+
+def is_superuser(user: Union[dict, object]) -> bool:
+    """
+    Check if user is a superuser/admin.
+
+    For Keycloak users, checks for 'admin' role in realm_access.roles.
+    For legacy User objects, checks the is_superuser attribute.
+
+    Args:
+        user: Either Keycloak user dict or legacy User object
+
+    Returns:
+        True if user is a superuser/admin
+    """
+    if isinstance(user, dict):
+        # Keycloak tokens store roles in realm_access.roles
+        realm_access = user.get("realm_access", {})
+        roles = realm_access.get("roles", [])
+        return "admin" in roles or "superuser" in roles
+    return getattr(user, "is_superuser", False)

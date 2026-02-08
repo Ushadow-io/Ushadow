@@ -36,6 +36,11 @@ from .yaml_parser import (
     ComposeService,
     ParsedCompose,
 )
+from .urls import (
+    get_localhost_proxy_url,
+    get_docker_proxy_url,
+    get_relative_proxy_url,
+)
 
 __all__ = [
     # Settings API
@@ -67,4 +72,8 @@ __all__ = [
     "ComposeEnvVar",
     "ComposeService",
     "ParsedCompose",
+    # URL construction
+    "get_localhost_proxy_url",
+    "get_docker_proxy_url",
+    "get_relative_proxy_url",
 ]

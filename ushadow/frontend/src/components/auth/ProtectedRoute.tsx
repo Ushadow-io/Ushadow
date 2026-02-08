@@ -1,6 +1,5 @@
 import React from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { useAuth } from '../../contexts/AuthContext'
 import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
 
 interface ProtectedRouteProps {
@@ -9,12 +8,9 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
-  const { user, token, isLoading: authLoading, isAdmin, setupRequired } = useAuth()
-  const { isAuthenticated: kcAuthenticated, isLoading: kcLoading } = useKeycloakAuth()
+  // ONLY use Keycloak auth (legacy auth disabled)
+  const { isAuthenticated, isLoading } = useKeycloakAuth()
   const location = useLocation()
-
-  // Combined loading state - wait for both auth systems to check
-  const isLoading = authLoading || kcLoading
 
   if (isLoading) {
     return (
@@ -24,21 +20,8 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     )
   }
 
-  // Redirect to registration if required
-  if (setupRequired === true) {
-    return <Navigate to="/register" replace />
-  }
-
-  // Check if user is authenticated via either method:
-  // 1. Legacy JWT (token + user from AuthContext)
-  // 2. Keycloak OAuth (isAuthenticated from KeycloakAuthContext)
-  const isAuthenticated = (token && user) || kcAuthenticated
-
-  console.log('[ProtectedRoute] Auth check:', {
+  console.log('[ProtectedRoute] Keycloak auth check:', {
     pathname: location.pathname,
-    hasToken: !!token,
-    hasUser: !!user,
-    kcAuthenticated,
     isAuthenticated,
     willRedirect: !isAuthenticated
   })
@@ -49,7 +32,8 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     return <Navigate to="/login" state={{ from: location.pathname }} replace />
   }
 
-  if (adminOnly && !isAdmin) {
+  // TODO: Implement Keycloak role-based admin check if needed
+  if (adminOnly) {
     return (
       <div className="min-h-screen bg-neutral-50 dark:bg-neutral-900 flex items-center justify-center">
         <div className="card p-8 text-center animate-fade-in">
@@ -57,7 +41,7 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
             Access Denied
           </h1>
           <p className="text-neutral-600 dark:text-neutral-400">
-            You don't have permission to access this page.
+            Admin-only feature (Keycloak role check not yet implemented)
           </p>
         </div>
       </div>

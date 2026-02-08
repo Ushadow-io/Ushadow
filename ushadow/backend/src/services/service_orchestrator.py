@@ -231,14 +231,41 @@ class ServiceOrchestrator:
     # Discovery Methods
     # =========================================================================
 
+    def _is_service_visible_in_environment(self, service: DiscoveredService) -> bool:
+        """
+        Check if a service should be visible in the current environment.
+
+        Logic:
+        - If service.environments is empty: visible in ALL environments
+        - If service.environments has values: only visible if current ENV_NAME is in the list
+
+        Examples:
+        - environments: [] -> visible everywhere (default)
+        - environments: ["blue"] -> only visible in "blue" env
+        - environments: ["orange", "blue"] -> visible in both
+        """
+        import os
+
+        # If no environments specified, service is visible everywhere
+        if not service.environments:
+            return True
+
+        # Get current environment name
+        current_env = os.getenv("ENV_NAME", "default")
+
+        # Service is only visible if current env is in its list
+        return current_env in service.environments
+
     async def list_installed_services(self) -> List[Dict[str, Any]]:
         """Get all installed services with basic info and status."""
         installed_names, removed_names = await self._get_installed_service_names()
         all_services = self.compose_registry.get_services()
 
+        # Filter by environment and installation status
         installed_services = [
             s for s in all_services
             if self._service_matches_installed(s, installed_names, removed_names)
+            and self._is_service_visible_in_environment(s)
         ]
 
         return [
@@ -253,6 +280,10 @@ class ServiceOrchestrator:
 
         results = []
         for service in all_services:
+            # Filter by environment
+            if not self._is_service_visible_in_environment(service):
+                continue
+
             is_installed = self._service_matches_installed(service, installed_names, removed_names)
             summary = await self._build_service_summary(service, installed=is_installed)
             results.append(summary.to_dict())

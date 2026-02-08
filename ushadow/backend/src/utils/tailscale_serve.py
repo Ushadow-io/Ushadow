@@ -302,6 +302,93 @@ def get_serve_status() -> Optional[str]:
     return None
 
 
+# =============================================================================
+# Funnel Routes (Public Internet Access)
+# =============================================================================
+
+def add_funnel_route(path: str, target: str) -> bool:
+    """Add a route to tailscale funnel (public internet access).
+
+    Uses the modern Tailscale Funnel CLI syntax which automatically:
+    1. Enables Funnel on the hostname (if not already enabled)
+    2. Adds/updates the specified route
+
+    Note: Enabling Funnel makes ALL routes on the hostname publicly accessible,
+    not just the route being added. This is a Tailscale Funnel behavior.
+
+    Args:
+        path: URL path (e.g., "/share", "/api", or "/" for root)
+        target: Backend target (e.g., "http://share-dmz:8000")
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Modern Tailscale Funnel syntax: use --bg for background mode
+    # Do NOT use --https=443 as it tries to create a new listener
+    if path == "/":
+        # Root route - no --set-path
+        cmd = f"tailscale funnel --bg {target}"
+    else:
+        cmd = f"tailscale funnel --bg --set-path {path} {target}"
+
+    exit_code, stdout, stderr = exec_tailscale_command(cmd)
+
+    if exit_code == 0:
+        logger.info(f"Added tailscale funnel route: {path} -> {target}")
+        return True
+    else:
+        logger.error(f"Failed to add funnel route {path}: {stderr}")
+        return False
+
+
+def remove_funnel_route(path: str) -> bool:
+    """Remove a route from tailscale funnel.
+
+    This removes the route entirely. It will no longer be accessible
+    (neither publicly via funnel nor privately via serve).
+
+    Note: Funnel remains enabled on the hostname for other routes.
+    To completely disable funnel for all routes, use: tailscale funnel reset
+
+    Args:
+        path: URL path to remove (e.g., "/share")
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Use funnel command to remove the route
+    if path == "/":
+        cmd = "tailscale funnel off"
+    else:
+        cmd = f"tailscale funnel --set-path {path} off"
+
+    exit_code, stdout, stderr = exec_tailscale_command(cmd)
+
+    if exit_code == 0:
+        logger.info(f"Removed tailscale funnel route: {path}")
+        return True
+    else:
+        logger.error(f"Failed to remove funnel route {path}: {stderr}")
+        return False
+
+
+def get_funnel_status() -> Optional[str]:
+    """Get current tailscale funnel status.
+
+    Returns:
+        Status string or None if error
+    """
+    exit_code, stdout, stderr = exec_tailscale_command("tailscale funnel status")
+
+    if exit_code == 0:
+        return stdout
+    return None
+
+
+# =============================================================================
+# Base Routes Configuration
+# =============================================================================
+
 def configure_base_routes(
     backend_container: str = None,
     frontend_container: str = None,

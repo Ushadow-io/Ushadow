@@ -1,0 +1,119 @@
+version: '3.8'
+
+# Public UNode Virtual Environment
+#
+# Creates a virtual "public" worker unode on the same physical machine as the leader.
+# This unode runs with its own Tailscale instance (with Funnel enabled) and can host
+# services that need public internet access (like share-dmz).
+#
+# Architecture:
+#   Same Physical Machine
+#   ├── orange (leader unode) - Tailscale Serve (private)
+#   └── orange-public (worker unode) - Tailscale Funnel (public)
+
+services:
+  # Tailscale for public unode (separate instance with Funnel)
+  tailscale-public:
+    image: tailscale/tailscale:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-tailscale
+    restart: unless-stopped
+    hostname: ${TAILSCALE_PUBLIC_HOSTNAME:-ushadow-${ENV_NAME:-orange}-public}
+    environment:
+      TS_AUTHKEY: ${TAILSCALE_PUBLIC_AUTH_KEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_EXTRA_ARGS: "--advertise-tags=tag:dmz,tag:public"
+      TS_ACCEPT_DNS: "false"
+    volumes:
+      - public-tailscale-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - public-unode-network
+    command: tailscaled
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "ushadow.component=public-unode-tailscale"
+      - "ushadow.env=${ENV_NAME:-orange}"
+      - "ushadow.zone=public"
+
+  # UNode Manager (registers this virtual unode to the leader)
+  public-unode-manager:
+    image: ghcr.io/ushadow-io/ushadow-manager:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-manager
+    hostname: ${PUBLIC_UNODE_HOSTNAME:-ushadow-orange-public}
+    restart: unless-stopped
+    environment:
+      # Leader URL (via Tailscale - required)
+      LEADER_URL: ${LEADER_URL}
+
+      # UNode identification
+      HOSTNAME: ${PUBLIC_UNODE_HOSTNAME:-ushadow-${ENV_NAME:-orange}-public}
+      ENV_NAME: ${ENV_NAME:-orange}
+      UNODE_ROLE: worker
+
+      # Labels for this unode (set during registration)
+      UNODE_LABELS: zone=public,funnel=enabled,env=${ENV_NAME:-orange}
+
+      # Manager configuration
+      MANAGER_PORT: 8444
+      HEARTBEAT_INTERVAL: 30
+
+      # Join token (for initial registration)
+      JOIN_TOKEN: ${PUBLIC_UNODE_JOIN_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - public-unode-data:/data
+    networks:
+      - public-unode-network
+      - ushadow-network  # Join main network to reach leader via Tailscale
+    depends_on:
+      - tailscale-public  # Simple dependency, don't wait for healthy
+    labels:
+      - "ushadow.component=public-unode-manager"
+      - "ushadow.env=${ENV_NAME:-orange}"
+      - "ushadow.zone=public"
+
+  # MongoDB (shared for share tokens - optional, can use main MongoDB over Tailnet)
+  # Uncomment if you want a local MongoDB for the public unode
+  # mongodb-public:
+  #   image: mongo:7
+  #   container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-mongodb
+  #   restart: unless-stopped
+  #   volumes:
+  #     - public-mongodb-data:/data/db
+  #   networks:
+  #     - public-unode-network
+  #   command: ["--quiet"]
+  #   labels:
+  #     - "ushadow.component=public-mongodb"
+  #     - "ushadow.zone=public"
+
+networks:
+  public-unode-network:
+    name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-network
+    driver: bridge
+  ushadow-network:
+    external: true
+    name: ${NETWORK_NAME:-ushadow-network}
+
+volumes:
+  public-tailscale-state:
+    name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-tailscale-state
+  public-unode-data:
+    name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-unode-data
+  # public-mongodb-data:
+  #   name: ${COMPOSE_PROJECT_NAME:-ushadow}-public-mongodb-data
+
+# x-ushadow metadata
+x-ushadow:
+  type: virtual-unode
+  zone: public
+  funnel: enabled
+  description: "Virtual public worker unode with Tailscale Funnel enabled for hosting DMZ services"

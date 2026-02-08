@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger("ushadow-manager")
 
 # Version info - update this when releasing new versions
-MANAGER_VERSION = "0.2.0"
+MANAGER_VERSION = "0.3.0"
 
 # Configuration from environment
 LEADER_URL = os.environ.get("LEADER_URL", "http://localhost:8010")
@@ -130,16 +130,19 @@ class UshadowManager:
     async def start_api_server(self):
         """Start the HTTP API server for receiving commands from leader."""
         self.web_app = web.Application()
+        # Health endpoint at root (no /api prefix)
         self.web_app.router.add_get("/health", self.handle_health)
-        self.web_app.router.add_get("/info", self.handle_info)
-        self.web_app.router.add_post("/deploy", self.handle_deploy)
-        self.web_app.router.add_post("/stop", self.handle_stop)
-        self.web_app.router.add_post("/restart", self.handle_restart)
-        self.web_app.router.add_post("/remove", self.handle_remove)
-        self.web_app.router.add_post("/upgrade", self.handle_upgrade)
-        self.web_app.router.add_get("/status/{container_name}", self.handle_status)
-        self.web_app.router.add_get("/logs/{container_name}", self.handle_logs)
-        self.web_app.router.add_get("/containers", self.handle_list_containers)
+
+        # API endpoints with /api prefix
+        self.web_app.router.add_get("/api/info", self.handle_info)
+        self.web_app.router.add_post("/api/deploy", self.handle_deploy)
+        self.web_app.router.add_post("/api/stop", self.handle_stop)
+        self.web_app.router.add_post("/api/restart", self.handle_restart)
+        self.web_app.router.add_post("/api/remove", self.handle_remove)
+        self.web_app.router.add_post("/api/upgrade", self.handle_upgrade)
+        self.web_app.router.add_get("/api/status/{container_name}", self.handle_status)
+        self.web_app.router.add_get("/api/logs/{container_name}", self.handle_logs)
+        self.web_app.router.add_get("/api/containers", self.handle_list_containers)
 
         self.web_runner = web.AppRunner(self.web_app)
         await self.web_runner.setup()

@@ -1,85 +1,91 @@
 """
 Keycloak Token Validation
 
-Validates Keycloak JWT access tokens for API requests.
-This allows federated users (authenticated via Keycloak) to access the API
-without needing a local Ushadow account.
+Validates Keycloak JWT access tokens with signature verification but issuer-agnostic.
+This allows the app to work from any domain (localhost, Tailscale, public URLs).
 """
 
-import os
 import logging
 from typing import Optional, Union
 import jwt
-from fastapi import HTTPException, status, Depends, Request
+from jwt import PyJWKClient
+
+from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from .keycloak_client import get_keycloak_client
 
 logger = logging.getLogger(__name__)
 
 # Security scheme for extracting Bearer tokens
 security = HTTPBearer(auto_error=False)
 
+# Cache for JWKS client (fetches Keycloak's public keys)
+_jwks_client: Optional[PyJWKClient] = None
+
+
+def get_jwks_client() -> PyJWKClient:
+    """Get cached JWKS client for fetching Keycloak's public keys."""
+    global _jwks_client
+    if _jwks_client is None:
+        kc_client = get_keycloak_client()
+        # Construct JWKS URL from Keycloak server URL
+        jwks_url = f"{kc_client.server_url}/realms/{kc_client.realm}/protocol/openid-connect/certs"
+        _jwks_client = PyJWKClient(jwks_url)
+        logger.info(f"[KC-AUTH] Initialized JWKS client: {jwks_url}")
+    return _jwks_client
+
 
 def validate_keycloak_token(token: str) -> Optional[dict]:
     """
-    Validate a Keycloak access token.
+    Validate a Keycloak JWT access token with signature verification but issuer-agnostic.
+
+    This approach:
+    - ✅ Verifies JWT signature using Keycloak's public keys (JWKS)
+    - ✅ Checks token expiration
+    - ✅ Works from ANY domain (localhost, Tailscale, public URLs)
+    - ✅ No backend client or introspection permissions needed
+    - ✅ Fast (no network call after JWKS cached)
+
+    The issuer check is skipped to allow multi-domain deployments where
+    users access the app from different URLs (localhost:3000, tailscale, etc).
 
     Args:
         token: JWT access token from Keycloak
 
     Returns:
-        Decoded token payload if valid, None if invalid
-
-    Note:
-        This is a simplified validation for development.
-        In production, you should:
-        1. Fetch Keycloak's public keys from JWKS endpoint
-        2. Verify signature using the public key
-        3. Validate issuer, audience, and other claims
+        Decoded token payload if valid, None if invalid/expired
     """
     try:
-        # For now, decode without verification (development only!)
-        # TODO: Add proper JWT signature verification using Keycloak's public keys
-        # Keycloak typically uses RS256 algorithm, so we need to allow it even when not verifying
+        # Get JWKS client (fetches Keycloak's public keys for signature verification)
+        jwks_client = get_jwks_client()
+
+        # Get the signing key from JWKS
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+
+        # Decode and validate JWT
+        # - Verify signature using Keycloak's public key
+        # - Check expiration
+        # - Skip issuer validation (options={"verify_iss": False})
         payload = jwt.decode(
             token,
-            algorithms=["RS256", "HS256"],  # Allow common algorithms
-            options={
-                "verify_signature": False,  # FIXME: Enable in production!
-                "verify_exp": True,  # Still check expiration
-            }
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_iss": False},  # Allow any issuer (multi-domain support)
+            audience=None  # Skip audience check (optional, can be added if needed)
         )
 
-        # Log the payload for debugging
-        logger.info(f"Decoded Keycloak token - issuer: {payload.get('iss')}, user: {payload.get('preferred_username')}")
-
-        # Validate issuer (accept both internal and external URLs)
-        keycloak_external = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8081")
-        keycloak_internal = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
-        keycloak_realm = os.getenv("KEYCLOAK_REALM", "ushadow")
-
-        expected_issuers = [
-            f"{keycloak_external}/realms/{keycloak_realm}",
-            f"{keycloak_internal}/realms/{keycloak_realm}",
-        ]
-
-        token_issuer = payload.get("iss")
-        if token_issuer not in expected_issuers:
-            logger.warning(f"Invalid issuer: {token_issuer} (expected one of {expected_issuers})")
-            # Don't reject - just log for now during development
-            # return None
-
-        # Token is valid
-        logger.info(f"✓ Validated Keycloak token for user: {payload.get('preferred_username')}")
+        logger.info(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")
         return payload
 
     except jwt.ExpiredSignatureError:
-        logger.warning("Keycloak token expired")
+        logger.warning("[KC-AUTH] Token expired")
         return None
     except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid Keycloak token: {e}")
+        logger.warning(f"[KC-AUTH] Invalid token: {e}")
         return None
     except Exception as e:
-        logger.error(f"Error validating Keycloak token: {e}", exc_info=True)
+        logger.error(f"[KC-AUTH] Error validating token: {e}", exc_info=True)
         return None
 
 
@@ -97,10 +103,21 @@ def get_keycloak_user_from_token(token: str) -> Optional[dict]:
     if not payload:
         return None
 
+    # Get name from token, fallback to building it from given_name + family_name
+    name = payload.get("name")
+    if not name:
+        given_name = payload.get("given_name", "")
+        family_name = payload.get("family_name", "")
+        if given_name or family_name:
+            name = f"{given_name} {family_name}".strip()
+            logger.debug(f"[KC-AUTH] Built name from given_name + family_name: {name}")
+    else:
+        logger.debug(f"[KC-AUTH] Using name from token: {name}")
+
     return {
         "sub": payload.get("sub"),
         "email": payload.get("email"),
-        "name": payload.get("name"),
+        "name": name,
         "preferred_username": payload.get("preferred_username"),
         "email_verified": payload.get("email_verified", False),
         # Mark as Keycloak user for backend logic
@@ -116,7 +133,7 @@ async def get_current_user_hybrid(
 
     This is a FastAPI dependency that can be used in place of the legacy get_current_user.
     It tries to validate the token as:
-    1. Keycloak access token
+    1. Keycloak access token (using python-keycloak with proper signature validation)
     2. Legacy Ushadow JWT (via fastapi-users)
 
     Args:
@@ -139,7 +156,7 @@ async def get_current_user_hybrid(
     token_preview = token[:20] + "..." if len(token) > 20 else token
     logger.info(f"[AUTH] Validating token: {token_preview}")
 
-    # Try Keycloak token validation first (simpler, no database lookup)
+    # Try Keycloak token validation first (with proper signature validation)
     keycloak_user = get_keycloak_user_from_token(token)
     if keycloak_user:
         logger.info(f"[AUTH] ✅ Keycloak authentication successful: {keycloak_user.get('email')}")
@@ -155,3 +172,38 @@ async def get_current_user_hybrid(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token"
     )
+
+
+async def get_current_user_or_none(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Union[dict, None]:
+    """
+    Optional hybrid authentication dependency.
+
+    Same as get_current_user_hybrid but returns None instead of raising
+    401 when no credentials are provided or token is invalid.
+    Use this for endpoints that work with or without authentication.
+
+    Args:
+        credentials: HTTP Authorization credentials (Bearer token)
+
+    Returns:
+        User info dict if authenticated, None otherwise
+    """
+    if not credentials:
+        logger.debug("[AUTH] No credentials provided (optional auth)")
+        return None
+
+    token = credentials.credentials
+    token_preview = token[:20] + "..." if len(token) > 20 else token
+    logger.debug(f"[AUTH] Optional auth - validating token: {token_preview}")
+
+    # Try Keycloak token validation first
+    keycloak_user = get_keycloak_user_from_token(token)
+    if keycloak_user:
+        logger.info(f"[AUTH] ✅ Optional auth - Keycloak user: {keycloak_user.get('email')}")
+        return keycloak_user
+
+    # Token provided but invalid - return None for optional auth
+    logger.debug("[AUTH] Optional auth - token invalid, returning None")
+    return None

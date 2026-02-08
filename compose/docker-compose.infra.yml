@@ -98,11 +98,11 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=ushadow
-      - POSTGRES_PASSWORD=ushadow
-      - POSTGRES_DB=ushadow
+      - POSTGRES_USER=${POSTGRES_USER:-ushadow}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
+      - POSTGRES_DB=${POSTGRES_DB:-ushadow}
       # Additional databases created on startup (comma-separated)
-      - POSTGRES_MULTIPLE_DATABASES=metamcp,openmemory
+      - POSTGRES_MULTIPLE_DATABASES=${POSTGRES_MULTIPLE_DATABASES:-metamcp,openmemory}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../config/postgres-init:/docker-entrypoint-initdb.d:ro
@@ -111,7 +111,7 @@ services:
       - infra-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ushadow"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ushadow}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -155,16 +155,16 @@ services:
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
       - KC_DB=postgres
-      - KC_DB_URL=jdbc:postgresql://postgres:5432/ushadow
-      - KC_DB_USERNAME=ushadow
-      - KC_DB_PASSWORD=ushadow
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ushadow}
+      - KC_DB_USERNAME=${POSTGRES_USER:-ushadow}
+      - KC_DB_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
       - KC_HOSTNAME_STRICT=false
       - KC_HOSTNAME_STRICT_HTTPS=false
       - KC_HTTP_ENABLED=true
       - KC_HEALTH_ENABLED=true
     volumes:
       - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
-      - ../config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - ../config/keycloak:/opt/keycloak/data/import:ro
     command:
       - start-dev
       - --import-realm
@@ -176,7 +176,7 @@ services:
       - infra-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
+      test: ["CMD", "curl", "-f", "http://localhost:${KEYCLOAK_MGMT_PORT:-9000}/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -7,6 +7,7 @@ import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
 import { ToastProvider } from './contexts/ToastContext'
+import { SettingsProvider } from './contexts/SettingsContext'
 import EnvironmentFooter from './components/layout/EnvironmentFooter'
 import BugReportButton from './components/BugReportButton'
 import { useEnvironmentFavicon } from './hooks/useEnvironmentFavicon'
@@ -63,6 +64,7 @@ import {
 } from './wizards'
 import KubernetesClustersPage from './pages/KubernetesClustersPage'
 import ColorSystemPreview from './components/ColorSystemPreview'
+import ShareViewPage from './pages/ShareViewPage'
 
 function AppContent() {
   // Set dynamic favicon based on environment
@@ -75,10 +77,11 @@ function AppContent() {
     return <ErrorPage error={backendError} onRetry={checkSetupStatus} />
   }
 
-  // Check if on public route (login/register)
+  // Check if on public route (login/register/share)
   const isPublicRoute = window.location.pathname === '/login' ||
                         window.location.pathname === '/register' ||
-                        window.location.pathname === '/design-system'
+                        window.location.pathname === '/design-system' ||
+                        window.location.pathname.startsWith('/share/')
 
   // Check if running in launcher mode (embedded iframe)
   const searchParams = new URLSearchParams(window.location.search)
@@ -94,6 +97,7 @@ function AppContent() {
               <Route path="/login" element={<LoginPage />} />
               <Route path="/oauth/callback" element={<OAuthCallback />} />
               <Route path="/design-system" element={<ColorSystemPreview />} />
+              <Route path="/share/:token" element={<ShareViewPage />} />
 
               {/* Protected Routes - All wrapped in Layout */}
               <Route
@@ -158,16 +162,18 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <ToastProvider>
-          <VibeKanbanWebCompanion />
-          <KeycloakAuthProvider>
-            <AuthProvider>
-              <FeatureFlagsProvider>
-                <BrowserRouter basename={getBasename()}>
-                  <AppContent />
-                </BrowserRouter>
-              </FeatureFlagsProvider>
-            </AuthProvider>
-          </KeycloakAuthProvider>
+          <SettingsProvider>
+            <VibeKanbanWebCompanion />
+            <KeycloakAuthProvider>
+              <AuthProvider>
+                <FeatureFlagsProvider>
+                  <BrowserRouter basename={getBasename()}>
+                    <AppContent />
+                  </BrowserRouter>
+                </FeatureFlagsProvider>
+              </AuthProvider>
+            </KeycloakAuthProvider>
+          </SettingsProvider>
         </ToastProvider>
       </ThemeProvider>
     </ErrorBoundary>

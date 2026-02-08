@@ -296,8 +296,9 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
       if (info) {
         // Build DiscoveredLeader with info from API
         // Use HTTPS URL from QR code if available, otherwise construct with correct protocol
+        // Extract base URL by removing any /api/... path
         const baseApiUrl = scannedServer.apiUrl
-          ? scannedServer.apiUrl.replace('/api/unodes/leader/info', '')
+          ? scannedServer.apiUrl.replace(/\/api\/.*$/, '')
           : buildApiUrl(scannedServer.tailscaleIp, scannedServer.port);
         const discoveredLeader: DiscoveredLeader = {
           hostname: info.hostname || scannedServer.hostname,
@@ -384,8 +385,9 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
 
         // Build DiscoveredLeader with info from API (or defaults)
         // Use HTTPS URL from QR code, falling back to constructed URL with correct protocol
+        // Extract base URL by removing any /api/... path
         const baseApiUrl = data.api_url
-          ? data.api_url.replace('/api/unodes/leader/info', '')
+          ? data.api_url.replace(/\/api\/.*$/, '')
           : buildApiUrl(data.ip, data.port);
         const discoveredLeader: DiscoveredLeader = {
           hostname: info.hostname || data.hostname || 'leader',

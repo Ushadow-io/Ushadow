@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import AppConfig from '../config';
 
 const AUTH_TOKEN_KEY = '@ushadow_auth_token';
+const ID_TOKEN_KEY = '@ushadow_id_token';
 const API_URL_KEY = '@ushadow_api_url';
 const DEFAULT_SERVER_URL_KEY = '@ushadow_default_server_url';
 
@@ -45,10 +46,37 @@ export async function getAuthToken(): Promise<string | null> {
 export async function clearAuthToken(): Promise<void> {
   try {
     await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+    await AsyncStorage.removeItem(ID_TOKEN_KEY);
     console.log('[AuthStorage] Token cleared');
   } catch (error) {
     console.error('[AuthStorage] Failed to clear token:', error);
     throw error;
+  }
+}
+
+/**
+ * Store the ID token (for Keycloak logout)
+ */
+export async function saveIdToken(idToken: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(ID_TOKEN_KEY, idToken);
+    console.log('[AuthStorage] ID token saved');
+  } catch (error) {
+    console.error('[AuthStorage] Failed to save ID token:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get the stored ID token
+ */
+export async function getIdToken(): Promise<string | null> {
+  try {
+    const token = await AsyncStorage.getItem(ID_TOKEN_KEY);
+    return token;
+  } catch (error) {
+    console.error('[AuthStorage] Failed to get ID token:', error);
+    return null;
   }
 }
 

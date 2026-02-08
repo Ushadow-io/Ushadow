@@ -24,9 +24,9 @@
   "quickLoginCheckMilliSeconds": 1000,
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
-  "accessTokenLifespan": 300,
+  "accessTokenLifespan": 3600,
   "accessTokenLifespanForImplicitFlow": 900,
-  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionIdleTimeout": 3600,
   "ssoSessionMaxLifespan": 36000,
   "offlineSessionIdleTimeout": 2592000,
   "accessCodeLifespan": 60,
@@ -164,17 +164,30 @@
       "authorizationServicesEnabled": false,
       "fullScopeAllowed": true,
       "redirectUris": [
-        "http://localhost:3000/oauth/callback"
-        
+        "http://localhost:3000/oauth/callback",
+        "http://localhost:*/oauth/callback"
       ],
       "webOrigins": [
-        "http://localhost:3000"
-      
+        "http://localhost:3000",
+        "http://localhost:*"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:3000/"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "users": [],

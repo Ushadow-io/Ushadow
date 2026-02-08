@@ -194,6 +194,16 @@ class Deployment(BaseModel):
         default=None,
         description="Primary exposed port for the service"
     )
+    public_url: Optional[str] = Field(
+        default=None,
+        description="Public URL via Tailscale Funnel (if configured)"
+    )
+
+    # Metadata
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Deployment-specific metadata (e.g., funnel route configuration)"
+    )
 
     # Backend information
     backend_type: str = Field(
@@ -214,6 +224,7 @@ class DeployRequest(BaseModel):
     service_id: str
     unode_hostname: str
     config_id: Optional[str] = Field(None, description="ServiceConfig ID with env var overrides")
+    force_rebuild: bool = Field(False, description="Force rebuild Docker image even if it exists")
 
 
 class ServiceDefinitionCreate(BaseModel):

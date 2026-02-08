@@ -1030,6 +1030,183 @@ class TailscaleManager:
             logger.error(f"Error getting tailnet settings: {e}")
             return None
 
+    # ========================================================================
+    # Tailscale Funnel Management
+    # ========================================================================
+
+    def get_funnel_status(self) -> Dict[str, Any]:
+        """Get Tailscale Funnel status.
+
+        Returns:
+            Dict with funnel status information:
+            - enabled: Whether funnel is currently enabled
+            - port: Port being funneled (usually 443)
+            - public_url: Public URL if funnel is enabled
+            - error: Error message if status check failed
+        """
+        try:
+            exit_code, stdout, stderr = self.exec_command("tailscale funnel status", timeout=5)
+
+            # Check if funnel is enabled by parsing output
+            # New format: "# Funnel on:\n#     - https://hostname.ts.net"
+            # or "https://hostname.ts.net (Funnel on)"
+            output = stdout + stderr
+            is_enabled = "funnel on" in output.lower()
+
+            result = {
+                "enabled": is_enabled,
+                "port": 443 if is_enabled else None,
+                "public_url": None,
+            }
+
+            # Extract public URL if enabled
+            if is_enabled:
+                # Look for "# Funnel on:" section or "(Funnel on)" line
+                for line in output.split('\n'):
+                    line = line.strip()
+                    # Check for URL in comment or regular line
+                    if 'https://' in line:
+                        # Extract URL (might have (Funnel on) suffix)
+                        import re
+                        match = re.search(r'https://[^\s)]+', line)
+                        if match:
+                            result["public_url"] = match.group(0)
+                            break
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting funnel status: {e}")
+            return {
+                "enabled": False,
+                "port": None,
+                "public_url": None,
+                "error": str(e)
+            }
+
+    def enable_funnel(self, port: int = 443) -> Tuple[bool, Optional[str]]:
+        """Enable Tailscale Funnel for public internet access.
+
+        Funnel exposes your Tailscale service to the public internet,
+        allowing users without Tailscale to access it via HTTPS.
+
+        Note: Funnel shares routes with Serve. This reconfigures all existing
+        serve routes to use funnel instead (making them publicly accessible).
+
+        Args:
+            port: Port to funnel (default: 443 for HTTPS)
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            # Get current serve status to preserve routes
+            serve_status = self.get_serve_status()
+            if not serve_status or not serve_status.strip():
+                return False, "Tailscale Serve must be configured before enabling Funnel"
+
+            # Reconfigure routes with funnel (maintains all existing routes)
+            # This is needed because the new CLI merges serve/funnel route tables
+            success = self.configure_layer1_routes_with_funnel()
+
+            if not success:
+                return False, "Failed to reconfigure routes for funnel"
+
+            logger.info(f"Tailscale Funnel enabled on port {port}")
+
+            # Get funnel status to extract public URL
+            status = self.get_funnel_status()
+            return True, status.get("public_url")
+
+        except Exception as e:
+            logger.error(f"Error enabling Funnel: {e}")
+            return False, str(e)
+
+    def configure_layer1_routes_with_funnel(
+        self,
+        backend_container: Optional[str] = None,
+        frontend_container: Optional[str] = None,
+        backend_port: int = 8000,
+        frontend_port: Optional[int] = None,
+    ) -> bool:
+        """Configure Layer 1 routes using funnel (public internet access).
+
+        Same as configure_layer1_routes but uses 'tailscale funnel' instead
+        of 'tailscale serve', making routes publicly accessible.
+
+        Args:
+            backend_container: Backend container name
+            frontend_container: Frontend container name
+            backend_port: Backend internal port (default: 8000)
+            frontend_port: Frontend internal port (auto-detect if None)
+
+        Returns:
+            True if all routes configured successfully
+        """
+        # Use defaults if not provided
+        if not backend_container:
+            backend_container = f"{self.env_name}-backend"
+        if not frontend_container:
+            frontend_container = f"{self.env_name}-webui"
+
+        # Auto-detect frontend port
+        if frontend_port is None:
+            dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
+            frontend_port = 5173 if dev_mode else 80
+
+        backend_base = f"http://{backend_container}:{backend_port}"
+        frontend_target = f"http://{frontend_container}:{frontend_port}"
+
+        success = True
+
+        # Backend API routes - use funnel command
+        backend_routes = ["/api", "/auth", "/ws"]
+        for route in backend_routes:
+            target = f"{backend_base}{route}"
+            exit_code, _, stderr = self.exec_command(
+                f"tailscale funnel --bg --set-path {route} {target}",
+                timeout=10
+            )
+            if exit_code != 0:
+                logger.error(f"Failed to add funnel route {route}: {stderr}")
+                success = False
+
+        # Frontend root route
+        exit_code, _, stderr = self.exec_command(
+            f"tailscale funnel --bg --set-path / {frontend_target}",
+            timeout=10
+        )
+        if exit_code != 0:
+            logger.error(f"Failed to add funnel route /: {stderr}")
+            success = False
+
+        return success
+
+    def disable_funnel(self, port: int = 443) -> Tuple[bool, Optional[str]]:
+        """Disable Tailscale Funnel.
+
+        Args:
+            port: Port to disable funnel for (default: 443)
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            cmd = f"tailscale funnel --https={port} off"
+            exit_code, stdout, stderr = self.exec_command(cmd, timeout=10)
+
+            if exit_code == 0:
+                logger.info(f"Tailscale Funnel disabled on port {port}")
+                return True, None
+            else:
+                error_msg = stderr or stdout or "Unknown error"
+                logger.error(f"Failed to disable Funnel: {error_msg}")
+                return False, error_msg
+
+        except Exception as e:
+            logger.error(f"Error disabling Funnel: {e}")
+            return False, str(e)
+
 
 # ============================================================================
 # Singleton Instance

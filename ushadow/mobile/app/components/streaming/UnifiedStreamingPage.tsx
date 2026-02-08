@@ -306,6 +306,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (result.valid) {
         setAuthStatus('authenticated');
         setAuthError(null);
+
+        // Discover audio endpoints after successful authentication
+        console.log('[UnifiedStreaming] Auth verified, discovering audio endpoints...');
+        await discoverDestinations();
       } else {
         // Determine if expired or error based on message
         if (result.error?.includes('expired') || result.error?.includes('Session')) {
@@ -320,7 +324,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       setAuthStatus('error');
       setAuthError((err as Error).message || 'Verification failed');
     }
-  }, [authToken]);
+  }, [authToken, discoverDestinations]);
 
   // Verify auth when selected UNode changes
   useEffect(() => {
@@ -383,12 +387,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       console.log(`[UnifiedStreaming] Found ${destinations.length} destination(s) supporting ${audioFormat}:`,
         destinations.map(d => d.instance_name));
 
-      if (destinations.length === 0) {
-        Alert.alert(
-          'No Compatible Destinations',
-          `No running audio services found that support ${audioFormat} format. Please check service configuration.`
-        );
-      }
+      // Don't show alert here - user can see the count and try again if needed
+      // Alert only shown when trying to start a stream with no destinations selected
     } catch (err) {
       console.error('[UnifiedStreaming] Failed to discover destinations:', err);
       Alert.alert('Discovery Failed', err instanceof Error ? err.message : 'Failed to discover audio destinations');
@@ -398,10 +398,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
   }, [selectedUNode, authToken, selectedSource.type]);
 
-  // Discover destinations when UNode, auth, or source type changes
-  useEffect(() => {
-    discoverDestinations();
-  }, [discoverDestinations]);
+  // Note: Destination discovery is now manual - only happens when user explicitly requests it
+  // or when starting a stream. This prevents constant alerts when auth changes.
+  // Removed automatic discovery on UNode/auth/source changes.
 
   // Build stream URL using selected destinations
   const getStreamUrl = useCallback(async (): Promise<string | null> => {
@@ -486,6 +485,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       selectedDestinationIds: selectedDestinationIds.length,
       canStream,
     });
+
+    // Discover destinations if not already done
+    if (availableDestinations.length === 0 && !isDiscoveringDestinations) {
+      console.log('[UnifiedStreaming] No destinations available, discovering now...');
+      await discoverDestinations();
+    }
 
     const streamUrl = await getStreamUrl();
     if (!streamUrl) {
