@@ -625,11 +625,11 @@ async def get_funnel_configuration(
     public_url = None
     if funnel_enabled and funnel_route:
         ts_manager = get_tailscale_manager()
-        status = ts_manager.get_status()
-        if status.get("BackendState") == "Running":
-            hostname = status.get("Self", {}).get("DNSName", "").rstrip(".")
-            if hostname:
-                public_url = f"https://{hostname}{funnel_route}"
+        funnel_status = ts_manager.get_funnel_status()
+        base_url = funnel_status.get("public_url")
+        if base_url:
+            # Extract hostname from base URL and append route
+            public_url = base_url.rstrip("/") + funnel_route
 
     return {
         "deployment_id": deployment_id,
@@ -715,9 +715,9 @@ async def configure_funnel_route(
     previous_route = deployment.metadata.get("previous_funnel_route")
 
     # Get public URL
-    status = ts_manager.get_status()
-    hostname = status.get("Self", {}).get("DNSName", "").rstrip(".")
-    public_url = f"https://{hostname}{route}" if hostname else None
+    funnel_status = ts_manager.get_funnel_status()
+    base_url = funnel_status.get("public_url")
+    public_url = base_url.rstrip("/") + route if base_url else None
 
     # Optionally save to service config
     if save_to_config and deployment.config_id:

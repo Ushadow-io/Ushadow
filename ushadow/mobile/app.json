@@ -7,7 +7,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -26,9 +26,15 @@
           "bluetooth-central",
           "fetch",
           "processing"
-        ]
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "io.ushadow.mobile.refresh",
+          "io.ushadow.mobile.processing"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       },
-      "appleTeamId": "6SJ7NH4HSZ"
+      "appleTeamId": "6SJ7NH4HSZ",
+      "buildNumber": "3"
     },
     "android": {
       "adaptiveIcon": {
@@ -52,6 +58,8 @@
       "favicon": "./assets/favicon.ico"
     },
     "plugins": [
+      "./plugins/withAndroidManifestFix.js",
+      "./plugins/withAndroidGradleFix.js",
       "expo-router",
       "@react-native-voice/voice",
       [
@@ -74,10 +82,20 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "enableProguardInReleaseBuilds": false,
+            "enableJetifier": true,
+            "newArchEnabled": false
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8aeabf15-29ff-47df-ab11-7c8994d9c9d4"
+      }
+    },
+    "owner": "thestumonkey"
   }
 }

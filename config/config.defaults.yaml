@@ -21,7 +21,7 @@ auth:
 keycloak:
   enabled: true
   url: http://keycloak:8080  # Internal Docker URL
-  public_url: http://localhost:8081  # External browser URL
+  # public_url comes from tailscale.yaml (auto-generated)
   realm: ushadow
   backend_client_id: ushadow-backend
   frontend_client_id: ushadow-frontend
