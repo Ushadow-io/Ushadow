@@ -94,8 +94,18 @@ api.interceptors.response.use(
         // Let the component handle the service-specific auth error
       } else {
         // Token expired or invalid on core ushadow endpoints, redirect to login
-        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
+        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing all tokens and redirecting to login')
+
+        // Clear legacy token
         localStorage.removeItem(getStorageKey('token'))
+
+        // Clear Keycloak tokens (IMPORTANT: prevents infinite loop with invalid tokens)
+        sessionStorage.removeItem('kc_access_token')
+        sessionStorage.removeItem('kc_refresh_token')
+        sessionStorage.removeItem('kc_id_token')
+        sessionStorage.removeItem('kc_expires_at')
+        sessionStorage.removeItem('kc_refresh_expires_at')
+
         window.location.href = '/login'
       }
     } else if (error.code === 'ECONNABORTED') {

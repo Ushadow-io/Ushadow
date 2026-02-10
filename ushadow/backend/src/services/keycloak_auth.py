@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Union
 import jwt
 from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientError
 
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -34,6 +35,13 @@ def get_jwks_client() -> PyJWKClient:
         _jwks_client = PyJWKClient(jwks_url)
         logger.info(f"[KC-AUTH] Initialized JWKS client: {jwks_url}")
     return _jwks_client
+
+
+def clear_jwks_cache() -> None:
+    """Clear the JWKS client cache. Call this when realm keys change."""
+    global _jwks_client
+    _jwks_client = None
+    logger.info("[KC-AUTH] Cleared JWKS cache")
 
 
 def validate_keycloak_token(token: str) -> Optional[dict]:
@@ -81,11 +89,20 @@ def validate_keycloak_token(token: str) -> Optional[dict]:
     except jwt.ExpiredSignatureError:
         logger.warning("[KC-AUTH] Token expired")
         return None
+
+    except PyJWKClientError as e:
+        # Signing key not found - token is invalid or from old realm
+        # PyJWKClient handles key rotation automatically, no need to clear cache
+        logger.warning(f"[KC-AUTH] Signing key not found - invalid or expired token")
+        return None
+
     except jwt.InvalidTokenError as e:
         logger.warning(f"[KC-AUTH] Invalid token: {e}")
         return None
+
     except Exception as e:
-        logger.error(f"[KC-AUTH] Error validating token: {e}", exc_info=True)
+        # Unexpected errors still get logged with full trace
+        logger.error(f"[KC-AUTH] Unexpected error validating token: {e}", exc_info=True)
         return None
 
 
