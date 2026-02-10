@@ -4,7 +4,25 @@ This module provides configuration for Keycloak integration using OmegaConf.
 All sensitive values (passwords, client secrets) are stored in secrets.yaml.
 """
 
+import os
+
 from src.config import get_settings_store as get_settings
+
+
+def get_keycloak_public_url() -> str:
+    """Get the Keycloak public URL.
+
+    Uses HOST_HOSTNAME from environment if available (hostname where Keycloak runs),
+    otherwise falls back to localhost.
+
+    Returns:
+        Public URL like "http://orion:8081" or "http://localhost:8081"
+    """
+    host_hostname = os.environ.get("HOST_HOSTNAME")
+    if host_hostname:
+        return f"http://{host_hostname}:8081"
+    return "http://localhost:8081"
+
 
 def get_keycloak_config() -> dict:
     """Get Keycloak configuration from OmegaConf settings.
@@ -27,7 +45,7 @@ def get_keycloak_config() -> dict:
     config = {
         "enabled": settings.get_sync("keycloak.enabled", False),
         "url": settings.get_sync("keycloak.url", "http://keycloak:8080"),
-        "public_url": settings.get_sync("keycloak.public_url", "http://localhost:8080"),
+        "public_url": get_keycloak_public_url(),
         "realm": settings.get_sync("keycloak.realm", "ushadow"),
         "backend_client_id": settings.get_sync("keycloak.backend_client_id", "ushadow-backend"),
         "frontend_client_id": settings.get_sync("keycloak.frontend_client_id", "ushadow-frontend"),
