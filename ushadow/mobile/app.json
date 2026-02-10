@@ -26,6 +26,10 @@
           "bluetooth-central",
           "fetch",
           "processing"
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "io.ushadow.mobile.refresh",
+          "io.ushadow.mobile.processing"
         ]
       },
       "appleTeamId": "6SJ7NH4HSZ",
