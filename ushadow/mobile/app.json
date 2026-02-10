@@ -30,10 +30,11 @@
         "BGTaskSchedulerPermittedIdentifiers": [
           "io.ushadow.mobile.refresh",
           "io.ushadow.mobile.processing"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "6SJ7NH4HSZ",
-      "buildNumber": "2"
+      "buildNumber": "3"
     },
     "android": {
       "adaptiveIcon": {
