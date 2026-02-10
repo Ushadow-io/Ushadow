@@ -33,14 +33,14 @@ class KeycloakClient:
         # Settings system handles env var interpolation via OmegaConf
         config = get_keycloak_config()
 
-        # Use internal URL for efficient Docker network communication
-        # Token introspection is issuer-agnostic, so we don't need external URL
+        # Use internal Docker URL for server-to-server communication
+        # The backend runs in Docker and needs to use the internal network
         self.server_url = config["url"]
         self.realm = config["realm"]
         self.client_id = config["frontend_client_id"]  # Used for token validation
         self.client_secret = config.get("backend_client_secret")
 
-        logger.info(f"[KC-CLIENT] Using Keycloak URL: {self.server_url}")
+        logger.info(f"[KC-CLIENT] Using Keycloak public URL: {self.server_url}")
 
         # Initialize KeycloakOpenID client
         self.keycloak_openid = KeycloakOpenID(

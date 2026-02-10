@@ -8,13 +8,33 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { graphApi, type MemorySource } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 import type { GraphData } from '../types/graph'
 
 const FALLBACK_USER_ID = 'ushadow'
 
 export function useGraphApi(limit: number = 100, source: MemorySource = 'openmemory') {
-  const { user } = useAuth()
+  // Check both auth contexts (Keycloak and legacy)
+  const legacyAuth = useAuth()
+  const keycloakAuth = useKeycloakAuth()
+
+  // Prefer Keycloak auth if authenticated, fall back to legacy auth
+  const user = keycloakAuth.isAuthenticated ? keycloakAuth.user : legacyAuth.user
   const userId = user?.email || FALLBACK_USER_ID
+
+  // Diagnostic logging for user email resolution
+  if (!user) {
+    console.warn('[useGraphApi] No user object available from either auth context, falling back to:', FALLBACK_USER_ID)
+    console.warn('[useGraphApi] Auth state:', {
+      keycloakAuth: { isAuthenticated: keycloakAuth.isAuthenticated, hasUser: !!keycloakAuth.user },
+      legacyAuth: { hasUser: !!legacyAuth.user, hasToken: !!legacyAuth.token }
+    })
+  } else if (!user.email) {
+    console.warn('[useGraphApi] User object exists but email is missing:', { user, userId: FALLBACK_USER_ID })
+  } else {
+    console.log('[useGraphApi] Using user email as ID:', user.email, 'from', keycloakAuth.isAuthenticated ? 'Keycloak' : 'legacy auth')
+  }
+
   const queryClient = useQueryClient()
 
   const queryKeys = {

@@ -414,6 +414,7 @@ class TokenExchangeResponse(BaseModel):
     refresh_token: Optional[str] = None
     id_token: Optional[str] = None
     expires_in: Optional[int] = None
+    refresh_expires_in: Optional[int] = None
     token_type: str = "Bearer"
 
 
@@ -453,6 +454,7 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
             refresh_token=tokens.get("refresh_token"),
             id_token=tokens.get("id_token"),
             expires_in=tokens.get("expires_in"),
+            refresh_expires_in=tokens.get("refresh_expires_in"),
             token_type=tokens.get("token_type", "Bearer")
         )
 
@@ -508,6 +510,7 @@ async def refresh_access_token(request: TokenRefreshRequest):
             refresh_token=tokens.get("refresh_token"),
             id_token=tokens.get("id_token"),
             expires_in=tokens.get("expires_in"),
+            refresh_expires_in=tokens.get("refresh_expires_in"),
             token_type=tokens.get("token_type", "Bearer")
         )
 

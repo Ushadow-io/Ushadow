@@ -400,7 +400,11 @@ export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promis
  */
 export async function getChronicleAudioUrl(conversationId: string, cropped: boolean = true): Promise<string> {
   const proxyUrl = await getChronicleProxyUrl()
-  const token = localStorage.getItem(getStorageKey('token')) || ''
+
+  // Get auth token - prefer Keycloak token, fallback to legacy token
+  const kcToken = sessionStorage.getItem('kc_access_token')
+  const legacyToken = localStorage.getItem(getStorageKey('token'))
+  const token = kcToken || legacyToken || ''
 
   if (!token) {
     console.warn('[ChronicleAPI] No auth token found for audio URL')

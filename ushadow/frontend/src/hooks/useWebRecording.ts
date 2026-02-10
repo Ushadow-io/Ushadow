@@ -301,8 +301,12 @@ export const useWebRecording = (): WebRecordingReturn => {
         connectionAttempts: prev.connectionAttempts + 1
       }))
 
-      // Chronicle uses unified auth with ushadow - same token works for both
-      const token = localStorage.getItem(getStorageKey('token'))
+      // Get auth token - prefer Keycloak token, fallback to legacy token
+      // This matches the pattern used in api.ts request interceptor
+      const kcToken = sessionStorage.getItem('kc_access_token')
+      const legacyToken = localStorage.getItem(getStorageKey('token'))
+      const token = kcToken || legacyToken
+
       if (!token) {
         throw new Error('No authentication token found - please log in to ushadow')
       }

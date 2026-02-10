@@ -498,6 +498,7 @@ class DeploymentManager:
         unode_hostname: str,
         config_id: str,
         namespace: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """
         Deploy a service to any deployment target (Docker unode or K8s cluster).
@@ -616,7 +617,8 @@ class DeploymentManager:
                 resolved_service=resolved_service,
                 deployment_id=deployment_id,
                 namespace=namespace,
-                config_id=config_id  # Pass config_id to platform for Deployment model validation
+                config_id=config_id,  # Pass config_id to platform for Deployment model validation
+                force_rebuild=force_rebuild
             )
 
             # For Docker deployments, optionally update tailscale serve routes (non-blocking)

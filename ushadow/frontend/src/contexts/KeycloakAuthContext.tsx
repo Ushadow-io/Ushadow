@@ -66,8 +66,21 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
       }
 
       const token = TokenManager.getAccessToken()
-      if (!token) {
-        console.log('[KC-AUTH] No token found, skipping refresh setup')
+      const refreshToken = TokenManager.getRefreshToken()
+
+      if (!token || !refreshToken) {
+        console.log('[KC-AUTH] No token or refresh token found, skipping refresh setup')
+        return
+      }
+
+      // Check if refresh token has expired
+      const refreshExpiry = TokenManager.getRefreshTokenExpiry()
+      if (refreshExpiry && refreshExpiry.expiresIn <= 0) {
+        console.warn('[KC-AUTH] Refresh token expired, cannot set up refresh')
+        setIsAuthenticated(false)
+        setUserInfo(null)
+        setUser(null)
+        TokenManager.clearTokens()
         return
       }
 
@@ -89,7 +102,9 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
         return
       }
 
-      const refreshAt = Math.max(0, expiresIn - 60) // Refresh 60s before expiry
+      // Refresh well before SSO session idle timeout (30min = 1800s)
+      // Refresh at 25 minutes (1500s) or 60s before token expiry, whichever is sooner
+      const refreshAt = Math.max(0, Math.min(expiresIn - 60, 1500))
 
       console.log('[KC-AUTH] Setting up token refresh (OAuth2 standard):', {
         expiresAt: new Date(expiresAt * 1000).toISOString(),
@@ -101,12 +116,29 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
         try {
           console.log('[KC-AUTH] Refreshing token...')
 
-          // Refresh directly with Keycloak (no backend needed)
-          const newTokens = await TokenManager.refreshAccessToken(
-            keycloakConfig.url,
-            keycloakConfig.realm,
-            keycloakConfig.clientId
-          )
+          // Check if we have a refresh token
+          const refreshToken = TokenManager.getRefreshToken()
+          if (!refreshToken) {
+            throw new Error('No refresh token available')
+          }
+
+          // Refresh via backend (handles Keycloak communication)
+          const response = await fetch(`${backendConfig.url}/api/auth/refresh`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              refresh_token: refreshToken,
+            }),
+          })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`Token refresh failed: ${response.status} ${errorText}`)
+          }
+
+          const newTokens = await response.json()
           TokenManager.storeTokens(newTokens)
           console.log('[KC-AUTH] ✅ Token refreshed successfully')
 

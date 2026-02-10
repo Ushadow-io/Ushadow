@@ -25,22 +25,67 @@ function getBackendUrl(): string {
   return import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 }
 
+/**
+ * Get Keycloak URL for frontend browser access.
+ *
+ * Frontend always uses localhost:8081 because:
+ * - When accessing locally, Keycloak is on localhost:8081
+ * - When accessing via Tailscale, Tailscale routes to the same machine where localhost:8081 works
+ * - Backend uses a different URL (internal Docker network) for server-to-server communication
+ */
+function getKeycloakUrl(): string {
+  return 'http://localhost:8081'
+}
+
 // Backend config is static (based on origin)
 export const backendConfig = {
   url: getBackendUrl(),
 }
 
-// Keycloak config will be populated from backend settings
-// These are just defaults for initial load
-export let keycloakConfig = {
-  url: 'http://localhost:8081',
-  realm: 'ushadow',
-  clientId: 'ushadow-frontend',
-}
+// Internal state for Keycloak config (can be updated from backend settings)
+let _keycloakRealm = 'ushadow'
+let _keycloakClientId = 'ushadow-frontend'
+
+// Keycloak config - URL is always dynamic based on current origin
+// Use Object.defineProperty to create getters that recalculate on each access
+export const keycloakConfig: {
+  readonly url: string
+  realm: string
+  clientId: string
+} = Object.defineProperties({}, {
+  url: {
+    get() {
+      return getKeycloakUrl() // Recalculates every time it's accessed
+    },
+    enumerable: true
+  },
+  realm: {
+    get() {
+      return _keycloakRealm
+    },
+    set(value: string) {
+      _keycloakRealm = value
+    },
+    enumerable: true
+  },
+  clientId: {
+    get() {
+      return _keycloakClientId
+    },
+    set(value: string) {
+      _keycloakClientId = value
+    },
+    enumerable: true
+  }
+}) as any
 
 /**
  * Update Keycloak config from backend settings.
  * Should be called on app initialization and after settings changes.
+ *
+ * Note: The URL is always determined dynamically based on the current origin,
+ * not from settings. This allows seamless switching between localhost and Tailscale.
+ * Settings are only used for realm and clientId configuration.
  */
 export function updateKeycloakConfig(settings: {
   keycloak?: {
@@ -50,11 +95,16 @@ export function updateKeycloakConfig(settings: {
   }
 }) {
   if (settings.keycloak) {
-    keycloakConfig = {
-      url: settings.keycloak.public_url || keycloakConfig.url,
-      realm: settings.keycloak.realm || keycloakConfig.realm,
-      clientId: settings.keycloak.frontend_client_id || keycloakConfig.clientId,
+    if (settings.keycloak.realm) {
+      _keycloakRealm = settings.keycloak.realm
     }
-    console.log('[Config] Updated Keycloak config:', keycloakConfig)
+    if (settings.keycloak.frontend_client_id) {
+      _keycloakClientId = settings.keycloak.frontend_client_id
+    }
+    console.log('[Config] Updated Keycloak config:', {
+      url: keycloakConfig.url,
+      realm: keycloakConfig.realm,
+      clientId: keycloakConfig.clientId
+    })
   }
 }

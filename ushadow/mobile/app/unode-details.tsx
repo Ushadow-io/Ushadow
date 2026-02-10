@@ -38,7 +38,7 @@ import {
   updateUnodeUrls,
   parseStreamUrl,
 } from './_utils/unodeStorage';
-import { getAuthToken, saveAuthToken } from './_utils/authStorage';
+import { getAuthToken, saveAuthToken, clearAuthToken } from './_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from './services/chronicleApi';
@@ -358,40 +358,49 @@ export default function UNodeDetailsPage() {
 
     // Update the existing node with new connection info
     const existingNode = unodes.find(n => n.id === rescanNodeId);
+
+    // Ensure apiUrl is always the base URL (remove any /api/... path)
+    const baseApiUrl = result.leader.apiUrl.replace(/\/api\/.*$/, '');
+
     await saveUnode({
       id: rescanNodeId!, // Keep same ID
       name: existingNode?.name || result.leader.hostname.split('.')[0] || 'UNode',
-      apiUrl: result.leader.apiUrl,
+      hostname: result.leader.hostname, // Save actual hostname (e.g., "Orion")
+      apiUrl: baseApiUrl,
       chronicleApiUrl: result.leader.chronicleApiUrl,
       streamUrl: result.leader.streamUrl,
-      tailscaleIp: new URL(result.leader.apiUrl).hostname,
-      authToken: data.auth_token,
+      tailscaleIp: new URL(baseApiUrl).hostname,
+      // Don't save QR code token - user will login with Keycloak
+      authToken: undefined,
     });
 
     // Reload unodes
     await getUnodes();
     setRescanNodeId(null);
 
-    if (data.auth_token) {
-      // Save token globally so other pages can use it
-      await saveAuthToken(data.auth_token);
-    }
+    // Clear any existing auth token to force Keycloak login
+    await clearAuthToken();
+    console.log('[UNodeDetails] Cleared old token, navigate to home for Keycloak login');
 
-    // Navigate back to the main page so user can start streaming
+    // Navigate back to the main page - will prompt for Keycloak login
     router.replace('/');
   };
 
   // Handle UNode found from discovery (for adding new nodes)
-  const handleUnodeFound = async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string) => {
-    const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
+  const handleUnodeFound = async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
+    // Ensure apiUrl is always the base URL (remove any /api/... path)
+    const baseApiUrl = apiUrl.replace(/\/api\/.*$/, '');
+    const name = new URL(baseApiUrl).hostname.split('.')[0] || 'UNode';
 
     const savedNode = await saveUnode({
       name,
-      apiUrl,
+      hostname, // Save actual hostname (e.g., "Orion")
+      apiUrl: baseApiUrl,
       chronicleApiUrl,
       streamUrl,
-      tailscaleIp: new URL(apiUrl).hostname,
-      authToken: token,
+      tailscaleIp: new URL(baseApiUrl).hostname,
+      // Don't save QR code token - user will login with Keycloak
+      authToken: undefined,
     });
 
     // Reload unodes and select the new node
@@ -401,13 +410,8 @@ export default function UNodeDetailsPage() {
     await setActiveUnode(savedNode.id);
     setShowDiscoveryModal(false);
 
-    // Check status of the node
-    if (token) {
-      // Save token globally so other pages can use it
-      await saveAuthToken(token);
-      setAuthToken(token);
-      checkNodeStatus(savedNode, token);
-    }
+    // Don't save QR code token - user will login with Keycloak instead
+    console.log('[UNodeDetails] UNode added, user will login with Keycloak');
   };
 
   // Get selected node

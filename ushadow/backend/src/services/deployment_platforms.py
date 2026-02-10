@@ -80,6 +80,7 @@ class DeployPlatform(ABC):
         deployment_id: str,
         namespace: Optional[str] = None,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """
         Deploy a service to this target.
@@ -168,10 +169,36 @@ class DockerDeployPlatform(DeployPlatform):
         container_name: str,
         project_name: str,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """Deploy directly to local Docker (bypasses unode manager)."""
         try:
             docker_client = docker.from_env()
+
+            # Force rebuild if requested
+            if force_rebuild:
+                logger.info(f"Force rebuild requested for {resolved_service.image}")
+                compose_file = resolved_service.compose_file
+                service_name = resolved_service.compose_service_name
+
+                if compose_file and service_name:
+                    from src.services.docker_manager import get_docker_manager
+                    docker_mgr = get_docker_manager()
+
+                    logger.info(f"Building image from compose: {compose_file}, service: {service_name}")
+                    success, message = docker_mgr.build_image_from_compose(
+                        compose_file=compose_file,
+                        service_name=service_name,
+                        tag=resolved_service.image
+                    )
+
+                    if success:
+                        logger.info(f"✅ Force rebuild successful: {message}")
+                    else:
+                        raise ValueError(f"Force rebuild failed: {message}")
+                else:
+                    logger.warning(f"Cannot force rebuild - no compose file information available for {resolved_service.service_id}")
+
 
             # ===== PORT CONFIGURATION =====
             # Parse all port-related configuration in one place
@@ -320,8 +347,40 @@ class DockerDeployPlatform(DeployPlatform):
                 )
 
             except docker.errors.ImageNotFound as pull_error:
-                logger.error(f"Image not found in registry: {resolved_service.image}")
-                raise ValueError(f"Docker image not found: {resolved_service.image}. Image does not exist in registry.")
+                # Image not in registry - try to build using DockerManager
+                logger.warning(f"Image not found in registry, attempting to build: {resolved_service.image}")
+
+                compose_file = resolved_service.compose_file
+                service_name = resolved_service.compose_service_name
+
+                if compose_file and service_name:
+                    from src.services.docker_manager import get_docker_manager
+                    docker_mgr = get_docker_manager()
+
+                    success, message = docker_mgr.build_image_from_compose(
+                        compose_file=compose_file,
+                        service_name=service_name,
+                        tag=resolved_service.image
+                    )
+
+                    if success:
+                        logger.info(f"✅ {message}")
+                        # Retry deployment after successful build
+                        return await self._deploy_local(
+                            target, resolved_service, deployment_id,
+                            container_name, project_name, config_id
+                        )
+                    else:
+                        # Provide helpful fallback command
+                        user_compose_path = compose_file
+                        if compose_file.startswith("/compose/"):
+                            user_compose_path = f"compose/{compose_file[9:]}"
+                        raise ValueError(
+                            f"{message}. "
+                            f"Try manually: docker compose -f {user_compose_path} build {service_name}"
+                        )
+                else:
+                    raise ValueError(f"Docker image not found: {resolved_service.image}. No build context available.")
             except docker.errors.APIError as pull_error:
                 logger.error(f"Failed to pull image: {pull_error}")
                 raise ValueError(f"Failed to pull Docker image {resolved_service.image}: {str(pull_error)}")
@@ -342,6 +401,7 @@ class DockerDeployPlatform(DeployPlatform):
         deployment_id: str,
         namespace: Optional[str] = None,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """Deploy to a Docker host via unode manager API or local Docker."""
         hostname = target.identifier  # Use standardized field (hostname for Docker targets)
@@ -363,7 +423,8 @@ class DockerDeployPlatform(DeployPlatform):
                 deployment_id,
                 container_name,
                 project_name,
-                config_id
+                config_id,
+                force_rebuild
             )
 
         # Build deploy payload for remote unode manager
@@ -706,6 +767,7 @@ class KubernetesDeployPlatform(DeployPlatform):
         deployment_id: str,
         namespace: Optional[str] = None,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """Deploy to a Kubernetes cluster."""
         # Use standardized fields

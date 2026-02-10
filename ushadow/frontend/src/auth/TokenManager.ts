@@ -127,6 +127,20 @@ export class TokenManager {
   }
 
   /**
+   * Get refresh token expiry info from storage (OAuth2 standard)
+   */
+  static getRefreshTokenExpiry(): { expiresAt: number; expiresIn: number } | null {
+    const expiresAtStr = sessionStorage.getItem(REFRESH_EXPIRES_AT_KEY)
+    if (!expiresAtStr) return null
+
+    const expiresAt = parseInt(expiresAtStr, 10)
+    const now = Math.floor(Date.now() / 1000)
+    const expiresIn = expiresAt - now
+
+    return { expiresAt, expiresIn }
+  }
+
+  /**
    * Check if user is authenticated (has valid token)
    */
   static isAuthenticated(): boolean {
@@ -302,6 +316,10 @@ export class TokenManager {
 
   /**
    * Refresh access token using refresh token directly with Keycloak.
+   *
+   * @deprecated Use backend /api/auth/refresh endpoint instead.
+   * Direct Keycloak calls can fail with "token not active" errors if the
+   * SSO session has expired or refresh token was rotated.
    *
    * This is the standard OAuth2/OIDC approach:
    * - Frontend manages its own token lifecycle

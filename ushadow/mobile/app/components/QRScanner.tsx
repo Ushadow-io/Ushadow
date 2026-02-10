@@ -27,11 +27,12 @@ import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 export interface UshadowConnectionData {
   type: 'ushadow-connect';
   v: number;
-  hostname: string;
+  hostname: string;  // UNode hostname (e.g., "orange", "public-unode-1")
   ip: string;
   port: number;
-  api_url: string;  // Full URL to leader info endpoint
+  api_url: string;  // Full URL to unode backend (e.g., "http://100.64.1.5:8360")
   auth_token?: string;  // JWT token for authenticating with ushadow and chronicle (v3+)
+  envname?: string;  // Environment name (v4+)
 }
 
 interface QRScannerProps {
@@ -48,17 +49,27 @@ export const QRScanner: React.FC<QRScannerProps> = ({
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scanningRef = React.useRef(false); // Ref to prevent multiple scans
 
   // Reset scanned state when modal opens
   useEffect(() => {
     if (visible) {
       setScanned(false);
       setError(null);
+      scanningRef.current = false; // Reset ref
     }
   }, [visible]);
 
   const handleBarCodeScanned = (result: BarcodeScanningResult) => {
-    if (scanned) return;
+    // Check both state and ref to prevent multiple triggers
+    if (scanned || scanningRef.current) {
+      console.log('[QRScanner] Duplicate scan blocked');
+      return;
+    }
+
+    // Set both flags IMMEDIATELY
+    setScanned(true);
+    scanningRef.current = true;
 
     console.log('[QRScanner] Raw QR data:', result.data);
 
@@ -70,6 +81,7 @@ export const QRScanner: React.FC<QRScannerProps> = ({
       if (data.type !== 'ushadow-connect') {
         console.log('[QRScanner] Wrong type:', data.type);
         setError('Not a Ushadow QR code. Please scan the code from your Ushadow dashboard.');
+        setScanned(false); // Allow retry
         return;
       }
 
@@ -77,16 +89,17 @@ export const QRScanner: React.FC<QRScannerProps> = ({
       if (!data.ip || !data.port) {
         console.log('[QRScanner] Missing fields - ip:', data.ip, 'port:', data.port);
         setError('Invalid QR code data. Missing connection details.');
+        setScanned(false); // Allow retry
         return;
       }
 
       console.log('[QRScanner] QR validation successful, calling onScan');
-      setScanned(true);
       onScan(data as UshadowConnectionData);
     } catch (err) {
       console.error('[QRScanner] Failed to parse QR code:', err);
       console.error('[QRScanner] Raw data was:', result.data);
       setError(`Could not read QR code: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setScanned(false); // Allow retry on error
     }
   };
 

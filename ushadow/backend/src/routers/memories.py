@@ -20,11 +20,10 @@ from pydantic import BaseModel
 from src.services.auth import get_current_user
 from src.models.user import User
 
+from src.config import get_localhost_proxy_url
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memories", tags=["memories"])
-
-# Backend base URL for internal calls
-BACKEND_BASE_URL = "http://localhost:8000"
 
 
 class MemoryItem(BaseModel):
@@ -76,7 +75,7 @@ async def get_memory_by_id(
 
     # 1. Try OpenMemory first (most common source)
     try:
-        openmemory_url = f"{BACKEND_BASE_URL}/api/services/mem0/proxy"
+        openmemory_url = get_localhost_proxy_url("mem0")
         logger.info(f"[MEMORIES] Querying OpenMemory for memory {memory_id}")
         sources_tried.append("openmemory")
 
@@ -113,7 +112,7 @@ async def get_memory_by_id(
 
     # 2. Try Chronicle native memory system
     try:
-        chronicle_url = f"{BACKEND_BASE_URL}/api/services/chronicle-backend/proxy"
+        chronicle_url = get_localhost_proxy_url("chronicle-backend")
         logger.info(f"[MEMORIES] Querying Chronicle for memory {memory_id}")
         sources_tried.append("chronicle")
 
@@ -137,7 +136,7 @@ async def get_memory_by_id(
 
     # 3. Try Mycelia native memory system
     try:
-        mycelia_url = f"{BACKEND_BASE_URL}/api/services/mycelia-backend/proxy"
+        mycelia_url = get_localhost_proxy_url("mycelia-backend")
         logger.info(f"[MEMORIES] Querying Mycelia for memory {memory_id}")
         sources_tried.append("mycelia")
 
@@ -199,7 +198,7 @@ async def get_memories_by_conversation(
     # 1. Try OpenMemory (shared memory system)
     try:
         # Use proxy URL - same method as frontend memoriesApi.getServerUrl()
-        openmemory_url = f"{BACKEND_BASE_URL}/api/services/mem0/proxy"
+        openmemory_url = get_localhost_proxy_url("mem0")
         logger.info(f"[MEMORIES] Querying OpenMemory via proxy at: {openmemory_url}")
         sources_queried.append("openmemory")
         openmemory_memories = await _query_openmemory_by_source_id(
@@ -218,7 +217,7 @@ async def get_memories_by_conversation(
         sources_queried.append("chronicle")
         try:
             # Use proxy URL - same method as frontend
-            chronicle_url = f"{BACKEND_BASE_URL}/api/services/chronicle-backend/proxy"
+            chronicle_url = get_localhost_proxy_url("chronicle-backend")
             logger.info(f"[MEMORIES] Querying Chronicle via proxy at: {chronicle_url}")
             chronicle_memories = await _query_chronicle_memories(
                 chronicle_url,
@@ -234,7 +233,7 @@ async def get_memories_by_conversation(
         sources_queried.append("mycelia")
         try:
             # Use proxy URL - same method as frontend
-            mycelia_url = f"{BACKEND_BASE_URL}/api/services/mycelia-backend/proxy"
+            mycelia_url = get_localhost_proxy_url("mycelia-backend")
             logger.info(f"[MEMORIES] Querying Mycelia via proxy at: {mycelia_url}")
             mycelia_memories = await _query_mycelia_memories(
                 mycelia_url,

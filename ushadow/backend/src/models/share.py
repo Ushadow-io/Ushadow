@@ -66,8 +66,8 @@ class ShareToken(Document):
     resource_type: str = Field(..., description="Type of shared resource")
     resource_id: str = Field(..., description="ID of the shared resource")
 
-    # Ownership
-    created_by: PydanticObjectId = Field(..., description="User who created the share")
+    # Ownership (str to support both MongoDB ObjectId and Keycloak UUID)
+    created_by: str = Field(..., description="User ID who created the share")
 
     # Keycloak-compatible policies
     policies: List[KeycloakPolicy] = Field(

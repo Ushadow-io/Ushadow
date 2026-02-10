@@ -41,6 +41,8 @@ export interface ServiceDeployment {
  */
 export interface LeaderInfo {
   hostname: string;
+  envname?: string;
+  display_name?: string;
   tailscale_ip: string;
   capabilities: LeaderCapabilities;
   api_port: number;
@@ -74,6 +76,8 @@ export interface DiscoveredLeader {
 export interface UNode {
   id: string;
   hostname: string;
+  envname?: string;
+  display_name?: string;
   tailscale_ip: string;
   status: 'online' | 'offline' | 'unknown';
   role: 'leader' | 'worker';

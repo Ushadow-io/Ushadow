@@ -119,12 +119,28 @@ class EnvironmentInfo:
         Check if a hostname refers to the local environment.
 
         Args:
-            hostname: Hostname to check
+            hostname: Hostname to check (can be env_name, compose_project_name,
+                     HOST_HOSTNAME, or display_name format like "Orion-orange")
 
         Returns:
             True if hostname matches current environment, False otherwise
         """
-        return hostname in [self.env_name, self.compose_project_name, "localhost", "local"]
+        # Basic matches
+        local_names = [self.env_name, self.compose_project_name, "localhost", "local"]
+
+        # Add HOST_HOSTNAME if set
+        host_hostname = os.getenv("HOST_HOSTNAME", "").strip()
+        if host_hostname:
+            local_names.append(host_hostname)
+            # Also add display_name format: {HOST_HOSTNAME}-{env_name}
+            local_names.append(f"{host_hostname}-{self.env_name}")
+
+        # Virtual unodes on same machine (e.g., ushadow-orange-public)
+        # Pattern: ushadow-{env_name}-{suffix}
+        if hostname.startswith(f"ushadow-{self.env_name}-"):
+            return True
+
+        return hostname in local_names
 
     def get_container_labels(self) -> dict:
         """

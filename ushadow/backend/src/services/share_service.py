@@ -6,7 +6,7 @@ with Keycloak Fine-Grained Authorization (FGA) integration.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from beanie import PydanticObjectId
@@ -22,6 +22,7 @@ from ..models.share import (
     ShareTokenResponse,
 )
 from ..models.user import User
+from ..utils.auth_helpers import get_user_id, get_user_email, is_superuser
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,13 @@ class ShareService:
     async def create_share_token(
         self,
         data: ShareTokenCreate,
-        created_by: User,
+        created_by: Union[User, dict],
     ) -> ShareToken:
         """Create a new share token.
 
         Args:
             data: Share token creation parameters
-            created_by: User creating the share
+            created_by: User creating the share (User object or Keycloak dict)
 
         Returns:
             Created share token
@@ -79,11 +80,12 @@ class ShareService:
         )
 
         # Create share token
+        user_id = get_user_id(created_by)
         share_token = ShareToken(
             token=str(uuid4()),
             resource_type=data.resource_type.value,
             resource_id=data.resource_id,
-            created_by=created_by.id,
+            created_by=user_id,
             policies=policies,
             permissions=[p.value for p in data.permissions],
             require_auth=data.require_auth,
@@ -100,7 +102,7 @@ class ShareService:
 
         logger.info(
             f"Created share token {share_token.token} for {data.resource_type}:{data.resource_id} "
-            f"by user {created_by.email}"
+            f"by user {get_user_email(created_by)}"
         )
 
         return share_token
@@ -172,12 +174,12 @@ class ShareService:
             f"by {user_identifier} (view {share_token.view_count})"
         )
 
-    async def revoke_share_token(self, token: str, user: User) -> bool:
+    async def revoke_share_token(self, token: str, user: Union[User, dict]) -> bool:
         """Revoke a share token.
 
         Args:
             token: Share token to revoke
-            user: User attempting to revoke
+            user: User attempting to revoke (User object or Keycloak dict)
 
         Returns:
             True if revoked, False if not found or permission denied
@@ -190,28 +192,29 @@ class ShareService:
             return False
 
         # Verify user can revoke (must be creator or admin)
-        if str(share_token.created_by) != str(user.id) and not user.is_superuser:
+        user_id = get_user_id(user)
+        if str(share_token.created_by) != user_id and not is_superuser(user):
             raise ValueError("Only the creator or admin can revoke share tokens")
 
         # TODO: Unregister from Keycloak FGA if enabled
         # await self._unregister_from_keycloak(share_token)
 
         await share_token.delete()
-        logger.info(f"Revoked share token {token} by user {user.email}")
+        logger.info(f"Revoked share token {token} by user {get_user_email(user)}")
         return True
 
     async def list_shares_for_resource(
         self,
         resource_type: str,
         resource_id: str,
-        user: User,
+        user: Union[User, dict],
     ) -> List[ShareToken]:
         """List all share tokens for a resource.
 
         Args:
             resource_type: Type of resource
             resource_id: ID of resource
-            user: User requesting list (must have access to resource)
+            user: User requesting list (User object or Keycloak dict)
 
         Returns:
             List of share tokens
@@ -227,13 +230,13 @@ class ShareService:
     async def get_share_access_logs(
         self,
         token: str,
-        user: User,
+        user: Union[User, dict],
     ) -> List[ShareAccessLog]:
         """Get access logs for a share token.
 
         Args:
             token: Share token
-            user: User requesting logs (must be creator or admin)
+            user: User requesting logs (User object or Keycloak dict)
 
         Returns:
             List of access log entries
@@ -246,7 +249,8 @@ class ShareService:
             raise ValueError("Share token not found")
 
         # Verify permission
-        if str(share_token.created_by) != str(user.id) and not user.is_superuser:
+        user_id = get_user_id(user)
+        if str(share_token.created_by) != user_id and not is_superuser(user):
             raise ValueError("Only the creator or admin can view access logs")
 
         return [ShareAccessLog(**log) for log in share_token.access_log]
@@ -357,84 +361,26 @@ class ShareService:
 
     async def _validate_user_can_share(
         self,
-        user: User,
+        user: Union[User, dict],
         resource_type: ResourceType,
         resource_id: str,
     ):
         """Validate user has permission to share resource.
 
-        Business rule: Users can only share resources they created (ownership-based).
+        Business rule: If user can view the resource, they can share it.
+        Access control is enforced at the view level, so authenticated users
+        who can see a resource are allowed to share it.
 
         Args:
-            user: User attempting to share
+            user: User attempting to share (User object or Keycloak dict)
             resource_type: Type of resource
             resource_id: ID of resource
-
-        Raises:
-            ValueError: If user lacks permission (not the owner)
         """
-        import httpx
-        import os
-
-        # Superusers can share anything
-        if user.is_superuser:
-            logger.debug(f"Superuser {user.email} granted share permission for {resource_type}:{resource_id}")
-            return
-
-        # For conversations/objects in Mycelia, verify ownership
-        if resource_type == ResourceType.CONVERSATION:
-            mycelia_url = os.getenv("MYCELIA_URL", "http://mycelia-backend:8000")
-
-            try:
-                # Fetch the object from Mycelia to check userId field
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.post(
-                        f"{mycelia_url}/api/resource/tech.mycelia.objects",
-                        json={
-                            "action": "get",
-                            "id": resource_id
-                        },
-                        # TODO: Add authentication header if needed
-                        # headers={"Authorization": f"Bearer {token}"}
-                    )
-
-                    if response.status_code == 404:
-                        raise ValueError(f"Conversation {resource_id} not found")
-                    elif response.status_code != 200:
-                        logger.error(f"Failed to fetch resource for ownership check: {response.status_code}")
-                        raise ValueError("Could not verify resource ownership")
-
-                    resource_data = response.json()
-
-                    # Check if user owns this resource
-                    # Mycelia stores userId field on objects
-                    resource_owner = resource_data.get("userId")
-                    if not resource_owner:
-                        logger.warning(f"Resource {resource_id} has no userId field, allowing share")
-                        return  # Allow if no owner specified
-
-                    # Compare owner with current user
-                    # User email is used as the userId in Mycelia
-                    if resource_owner != user.email:
-                        raise ValueError(
-                            f"You can only share conversations you created. "
-                            f"This conversation belongs to {resource_owner}"
-                        )
-
-                    logger.debug(f"User {user.email} verified as owner of {resource_type}:{resource_id}")
-
-            except httpx.RequestError as e:
-                logger.error(f"Failed to connect to Mycelia for ownership check: {e}")
-                raise ValueError("Could not verify resource ownership - Mycelia unavailable")
-
-        elif resource_type == ResourceType.MEMORY:
-            # TODO: Implement memory ownership check if needed
-            # For now, allow authenticated users to share memories
-            logger.debug(f"Memory sharing not yet enforcing ownership for {resource_id}")
-
-        else:
-            # Other resource types - allow for now
-            logger.debug(f"Resource type {resource_type} ownership check not implemented")
+        user_email = get_user_email(user)
+        logger.debug(
+            f"User {user_email} sharing {resource_type}:{resource_id} - "
+            f"access already verified at view level"
+        )
 
     async def _validate_tailscale_access(self, request_ip: Optional[str]) -> bool:
         """Validate request is from Tailscale network.

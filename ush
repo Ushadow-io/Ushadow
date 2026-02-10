@@ -302,7 +302,8 @@ def show_help(commands: dict, tag: Optional[str] = None) -> None:
         console.print("\n[dim]Usage: ush <group> <command> [args...][/dim]")
         console.print("[dim]       ush <group> --help[/dim]")
         console.print("[dim]       ush shell              # Interactive mode with Tab completion[/dim]")
-        console.print("[dim]       ush health[/dim]")
+        console.print("[dim]       ush health             # Check backend health[/dim]")
+        console.print("[dim]       ush whoami             # Show current user info[/dim]")
     else:
         # Show commands for a specific group
         if tag not in commands:
@@ -430,7 +431,7 @@ class UshCompleter(Completer):
         self.commands = commands
         self.client = client
         self.spec = spec
-        self.special_commands = {"help", "exit", "quit", "health"}
+        self.special_commands = {"help", "exit", "quit", "health", "whoami"}
 
         # Cache for resource lists: {"services": ["mem0", "chronicle", ...]}
         self._resource_cache: dict[str, list[str]] = {}
@@ -623,7 +624,7 @@ def run_shell(commands: dict, client: UshadowClient, spec: dict) -> None:
     )
 
     console.print("\n[bold cyan]ushadow shell[/bold cyan] - Type commands, Tab to complete, ↑/↓ for history")
-    console.print("[dim]Type 'help' for commands, 'exit' to quit[/dim]\n")
+    console.print("[dim]Type 'help' for commands, 'whoami' for user info, 'exit' to quit[/dim]\n")
 
     while True:
         try:
@@ -648,6 +649,20 @@ def run_shell(commands: dict, client: UshadowClient, spec: dict) -> None:
                     console.print("[green]✅ ushadow backend healthy[/green]")
                 except Exception as e:
                     console.print(f"[red]❌ Backend unreachable: {e}[/red]")
+                continue
+
+            if text == "whoami":
+                try:
+                    # Get current user info from /api/auth/me
+                    result = client.api("GET", "/api/auth/me", auth=True)
+                    console.print("\n[bold]Current User:[/bold]")
+                    console.print(f"  Email:      {result.get('email', 'N/A')}")
+                    console.print(f"  Name:       {result.get('display_name', 'N/A')}")
+                    console.print(f"  Superuser:  {result.get('is_superuser', False)}")
+                    console.print(f"  Active:     {result.get('is_active', False)}")
+                    console.print(f"  Verified:   {result.get('is_verified', False)}\n")
+                except Exception as e:
+                    console.print(f"[red]❌ Failed to get user info: {e}[/red]")
                 continue
 
             # Parse and execute command
@@ -771,6 +786,26 @@ def main():
                 console.print(json.dumps(result, indent=2))
         except Exception as e:
             console.print(f"[red]❌ Backend unreachable: {e}[/red]")
+            sys.exit(1)
+        return
+
+    if args[0] == "whoami":
+        try:
+            verbose = "--verbose" in args or "-v" in args
+            client = UshadowClient.from_env(verbose=verbose)
+            result = client.api("GET", "/api/auth/me", auth=True)
+            console.print("\n[bold]Current User:[/bold]")
+            console.print(f"  Email:      {result.get('email', 'N/A')}")
+            console.print(f"  Name:       {result.get('display_name', 'N/A')}")
+            console.print(f"  Superuser:  {result.get('is_superuser', False)}")
+            console.print(f"  Active:     {result.get('is_active', False)}")
+            console.print(f"  Verified:   {result.get('is_verified', False)}")
+
+            if verbose:
+                console.print(f"\n[dim]Full response:[/dim]")
+                console.print(json.dumps(result, indent=2))
+        except Exception as e:
+            console.print(f"[red]❌ Failed to get user info: {e}[/red]")
             sys.exit(1)
         return
 

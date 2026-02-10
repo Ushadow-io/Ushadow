@@ -6,15 +6,16 @@ export interface UseShareOptions {
 }
 
 export interface UseShareReturn {
-  isShareDialogOpen: boolean
+  isOpen: boolean
+  onClose: () => void
   openShareDialog: () => void
-  closeShareDialog: () => void
   resourceType: 'conversation' | 'memory' | 'collection'
   resourceId: string
 }
 
 /**
  * Hook for managing share dialog state.
+ * Returns props compatible with ShareDialog component.
  *
  * Usage:
  * ```tsx
@@ -28,12 +29,12 @@ export interface UseShareReturn {
  * ```
  */
 export function useShare({ resourceType, resourceId }: UseShareOptions): UseShareReturn {
-  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(false)
 
   return {
-    isShareDialogOpen,
-    openShareDialog: () => setIsShareDialogOpen(true),
-    closeShareDialog: () => setIsShareDialogOpen(false),
+    isOpen,
+    onClose: () => setIsOpen(false),
+    openShareDialog: () => setIsOpen(true),
     resourceType,
     resourceId,
   }

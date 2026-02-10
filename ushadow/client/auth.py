@@ -104,22 +104,87 @@ class UshadowClient:
         if self.verbose:
             print(f"🔐 Logging in as {self.email}...")
 
-        login_data = urlencode({"username": self.email, "password": self.password})
-        response = httpx.post(
-            f"{self.base_url}/api/auth/jwt/login",
-            content=login_data.encode(),
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=10.0,
-        )
-        response.raise_for_status()
-        result = response.json()
+        # Try Keycloak direct grant flow first
+        token = self._try_keycloak_direct_grant()
+        if token:
+            self._token = token
+            if self.verbose:
+                print("✅ Login successful (Keycloak)")
+            return self._token
 
-        self._token = result["access_token"]
+        # Fallback to legacy JWT login
+        try:
+            login_data = urlencode({"username": self.email, "password": self.password})
+            response = httpx.post(
+                f"{self.base_url}/api/auth/jwt/login",
+                content=login_data.encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            self._token = result["access_token"]
 
-        if self.verbose:
-            print("✅ Login successful")
+            if self.verbose:
+                print("✅ Login successful (legacy)")
 
-        return self._token
+            return self._token
+        except Exception as e:
+            if self.verbose:
+                print(f"❌ Login failed: {e}")
+            raise
+
+    def _try_keycloak_direct_grant(self) -> Optional[str]:
+        """Try to authenticate using Keycloak direct grant (Resource Owner Password Credentials).
+
+        Returns:
+            Access token if successful, None if Keycloak is not available or auth fails
+        """
+        try:
+            # Get Keycloak configuration from backend
+            config_response = httpx.get(
+                f"{self.base_url}/api/keycloak/config",
+                timeout=5.0,
+            )
+
+            if config_response.status_code != 200:
+                return None
+
+            kc_config = config_response.json()
+
+            # Check if Keycloak is enabled
+            if not kc_config.get("enabled"):
+                return None
+
+            # Build token endpoint URL
+            keycloak_url = kc_config.get("public_url", "http://localhost:8080")
+            realm = kc_config.get("realm", "ushadow")
+            token_url = f"{keycloak_url}/realms/{realm}/protocol/openid-connect/token"
+
+            # Use direct grant flow (Resource Owner Password Credentials)
+            token_response = httpx.post(
+                token_url,
+                data={
+                    "grant_type": "password",
+                    "client_id": "ushadow-frontend",  # Public client for direct grant
+                    "username": self.email,
+                    "password": self.password,
+                },
+                timeout=10.0,
+            )
+
+            if token_response.status_code != 200:
+                if self.verbose:
+                    print(f"⚠️  Keycloak auth failed: {token_response.status_code}")
+                return None
+
+            tokens = token_response.json()
+            return tokens.get("access_token")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Keycloak not available: {e}")
+            return None
 
     def _request(
         self,
