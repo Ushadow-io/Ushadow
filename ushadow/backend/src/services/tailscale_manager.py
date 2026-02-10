@@ -480,6 +480,38 @@ class TailscaleManager:
 
         return status
 
+    def get_peer_ip_by_hostname(self, hostname: str) -> Optional[str]:
+        """Get a peer's Tailscale IP address by hostname.
+
+        Args:
+            hostname: Tailscale hostname of the peer (case-insensitive)
+
+        Returns:
+            IPv4 address or None if not found
+        """
+        try:
+            exit_code, stdout, stderr = self.exec_command("tailscale status --json", timeout=5)
+
+            if exit_code == 0 and stdout.strip():
+                data = json.loads(stdout)
+                peers = data.get("Peer", {})
+
+                # Search peers (case-insensitive)
+                for peer_data in peers.values():
+                    peer_hostname = peer_data.get("HostName", "")
+                    if peer_hostname.lower() == hostname.lower():
+                        # Extract IPv4
+                        for ip in peer_data.get("TailscaleIPs", []):
+                            if "." in ip:  # IPv4
+                                logger.info(f"Found peer '{hostname}' with IP {ip}")
+                                return ip
+
+                logger.debug(f"Peer '{hostname}' not found in Tailscale peers")
+        except Exception as e:
+            logger.debug(f"Failed to query Tailscale peers: {e}")
+
+        return None
+
     def get_tailnet_suffix(self) -> Optional[str]:
         """Get the tailnet suffix from hostname.
 
