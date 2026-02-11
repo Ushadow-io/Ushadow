@@ -35,6 +35,7 @@ from src.services.mcp_server import setup_mcp_server
 from src.config import get_settings_store
 from src.utils.telemetry import TelemetryClient
 from src.utils.version import VERSION as BACKEND_VERSION
+from src.utils.mongodb import get_mongodb_uri
 
 # Configure logging
 logging.basicConfig(
@@ -84,7 +85,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Get settings: OS env vars take priority over OmegaConf YAML
     env_name = os.environ.get("COMPOSE_PROJECT_NAME") or await config.get("environment.name") or "ushadow"
-    mongodb_uri = os.environ.get("MONGODB_URI") or await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
+
+    # Get MongoDB URI (supports both complete URI and component-based configuration)
+    mongodb_uri = get_mongodb_uri(
+        fallback=await config.get("infrastructure.mongodb_uri") or "mongodb://mongo:27017"
+    )
     mongodb_database = os.environ.get("MONGODB_DATABASE") or await config.get("infrastructure.mongodb_database") or "ushadow"
 
     logger.info("🚀 ushadow starting up...")

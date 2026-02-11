@@ -618,6 +618,37 @@ export interface KubernetesCluster {
   tailscale_magicdns_enabled?: boolean
 }
 
+// DNS Management types
+export interface DNSMapping {
+  ip: string
+  fqdn: string
+  shortnames: string[]
+  has_tls: boolean
+  cert_ready: boolean
+}
+
+export interface DNSStatus {
+  configured: boolean
+  domain?: string
+  coredns_ip?: string
+  ingress_ip?: string
+  cert_manager_installed: boolean
+  mappings: DNSMapping[]
+  total_services: number
+}
+
+export interface CertificateStatus {
+  name: string
+  namespace: string
+  ready: boolean
+  secret_name: string
+  issuer_name: string
+  dns_names: string[]
+  not_before?: string
+  not_after?: string
+  renewal_time?: string
+}
+
 export const kubernetesApi = {
   addCluster: (data: { name: string; kubeconfig: string; context?: string; namespace?: string; labels?: Record<string, string> }) =>
     api.post<KubernetesCluster>('/api/kubernetes', data),
@@ -678,6 +709,28 @@ export const kubernetesApi = {
   getPodEvents: (clusterId: string, podName: string, namespace: string = 'ushadow') =>
     api.get<{ pod_name: string; namespace: string; events: Array<{ type: string; reason: string; message: string; count: number; first_timestamp: string | null; last_timestamp: string | null }> }>(
       `/api/kubernetes/${clusterId}/pods/${podName}/events?namespace=${namespace}`
+    ),
+
+  // DNS Management
+  getDnsStatus: (clusterId: string, domain?: string) =>
+    api.get<DNSStatus>(`/api/kubernetes/${clusterId}/dns/status${domain ? `?domain=${domain}` : ''}`),
+  setupDns: (clusterId: string, data: { domain: string; acme_email?: string; install_cert_manager?: boolean }) =>
+    api.post<{ success: boolean; message: string; domain: string; cert_manager_installed: boolean }>(
+      `/api/kubernetes/${clusterId}/dns/setup`,
+      data
+    ),
+  addServiceDns: (clusterId: string, domain: string, data: { service_name: string; namespace?: string; shortnames: string[]; use_ingress?: boolean; enable_tls?: boolean; service_port?: number }) =>
+    api.post<{ success: boolean; message: string; service_name: string; fqdn: string; shortnames: string[]; tls_enabled: boolean }>(
+      `/api/kubernetes/${clusterId}/dns/services?domain=${domain}`,
+      data
+    ),
+  removeServiceDns: (clusterId: string, serviceName: string, domain: string, namespace: string = 'default') =>
+    api.delete<{ success: boolean; message: string }>(
+      `/api/kubernetes/${clusterId}/dns/services/${serviceName}?domain=${domain}&namespace=${namespace}`
+    ),
+  listCertificates: (clusterId: string, namespace?: string) =>
+    api.get<{ certificates: CertificateStatus[]; total: number }>(
+      `/api/kubernetes/${clusterId}/dns/certificates${namespace ? `?namespace=${namespace}` : ''}`
     ),
 }
 

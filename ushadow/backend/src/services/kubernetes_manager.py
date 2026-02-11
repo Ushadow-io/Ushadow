@@ -34,7 +34,9 @@ class KubernetesManager:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.clusters_collection = db.kubernetes_clusters
-        self._kubeconfig_dir = Path("/config/kubeconfigs")
+        # Store kubeconfigs in writable directory (configurable via env var)
+        kubeconfig_dir_str = os.getenv("KUBECONFIG_DIR", "/app/data/kubeconfigs")
+        self._kubeconfig_dir = Path(kubeconfig_dir_str)
         self._kubeconfig_dir.mkdir(parents=True, exist_ok=True)
         # Initialize encryption for kubeconfig files
         self._fernet = self._init_fernet()
@@ -88,6 +90,33 @@ class KubernetesManager:
             # Generate cluster ID
             cluster_id = secrets.token_hex(8)
 
+            # Validate YAML syntax before proceeding
+            try:
+                yaml.safe_load(kubeconfig_yaml)
+            except yaml.YAMLError as e:
+                error_msg = "Invalid YAML in kubeconfig"
+                logger.error(f"YAML validation failed: {e}")
+
+                # Try to provide helpful context about the error location
+                if hasattr(e, 'problem_mark'):
+                    mark = e.problem_mark
+                    error_msg += f" at line {mark.line + 1}, column {mark.column + 1}"
+
+                # Add specific problem description
+                if hasattr(e, 'problem'):
+                    error_msg += f": {e.problem}"
+
+                # Add helpful tips for common issues
+                error_details = str(e).lower()
+                if "tab" in error_details or "\\t" in error_details:
+                    error_msg += ". Tip: Replace tab characters with spaces (YAML doesn't allow tabs)"
+                elif ":" in error_details or "colon" in error_details:
+                    error_msg += ". Tip: Check that all keys have colons (key: value)"
+                elif "indent" in error_details:
+                    error_msg += ". Tip: Ensure consistent indentation (use 2 spaces)"
+
+                return False, None, error_msg
+
             # Write to temp file for validation (kubernetes client needs a file)
             temp_kubeconfig_path = self._kubeconfig_dir / f".tmp_{cluster_id}.yaml"
             temp_kubeconfig_path.write_text(kubeconfig_yaml)
@@ -95,10 +124,13 @@ class KubernetesManager:
             os.chmod(temp_kubeconfig_path, 0o600)
 
             # Load config and extract info
-            kube_config = config.load_kube_config(
-                config_file=str(temp_kubeconfig_path),
-                context=cluster_data.context
-            )
+            try:
+                kube_config = config.load_kube_config(
+                    config_file=str(temp_kubeconfig_path),
+                    context=cluster_data.context
+                )
+            except config.ConfigException as e:
+                return False, None, f"Invalid kubeconfig format: {str(e)}"
 
             # Get cluster info
             api_client = client.ApiClient()
@@ -411,6 +443,64 @@ class KubernetesManager:
         else:
             raise FileNotFoundError(f"Kubeconfig not found for cluster {cluster_id}")
 
+    async def run_kubectl_command(self, cluster_id: str, command: str) -> str:
+        """
+        Run kubectl command for a cluster.
+
+        Args:
+            cluster_id: The cluster ID
+            command: kubectl command (without 'kubectl' prefix)
+
+        Returns:
+            Command output as string
+
+        Raises:
+            Exception: If command fails
+        """
+        import subprocess
+
+        encrypted_path = self._kubeconfig_dir / f"{cluster_id}.enc"
+        legacy_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
+
+        # Get kubeconfig path
+        temp_path = None
+        try:
+            # Try encrypted file first
+            if encrypted_path.exists():
+                encrypted_data = encrypted_path.read_bytes()
+                kubeconfig_yaml = self._decrypt_kubeconfig(encrypted_data)
+
+                # Write to temp file
+                temp_path = self._kubeconfig_dir / f".tmp_kubectl_{cluster_id}.yaml"
+                temp_path.write_text(kubeconfig_yaml)
+                os.chmod(temp_path, 0o600)
+                kubeconfig_file = str(temp_path)
+
+            elif legacy_path.exists():
+                kubeconfig_file = str(legacy_path)
+            else:
+                raise FileNotFoundError(f"Kubeconfig not found for cluster {cluster_id}")
+
+            # Run kubectl command
+            cmd = f"kubectl --kubeconfig={kubeconfig_file} {command}"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return result.stdout
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"kubectl command failed: {e.stderr}")
+            raise Exception(f"kubectl command failed: {e.stderr}")
+        finally:
+            # Clean up temp file
+            if temp_path and temp_path.exists():
+                temp_path.unlink()
+
     def _resolve_image_variables(self, image: str, environment: Dict[str, str]) -> str:
         """
         Resolve environment variables in Docker image names.
@@ -582,6 +672,46 @@ class KubernetesManager:
                         # Named volume - create PVC for persistent storage
                         # Sanitize volume name: replace dots, underscores with hyphens (K8s requirement)
                         volume_name = source.replace("_", "-").replace(".", "-")
+
+                        # Special case: compose volume should use ConfigMap (automatically generated)
+                        if source in ("ushadow-compose", "compose") or dest == "/compose":
+                            # Use the compose-files ConfigMap that was automatically generated
+                            if not any(v.get("name") == "compose-files" for v in k8s_volumes):
+                                k8s_volumes.append({
+                                    "name": "compose-files",
+                                    "configMap": {
+                                        "name": "compose-files"
+                                    }
+                                })
+                                logger.info(f"Using compose-files ConfigMap for {dest}")
+
+                            # Add volume mount for compose files
+                            volume_mounts.append({
+                                "name": "compose-files",
+                                "mountPath": dest,
+                                "readOnly": True
+                            })
+                            continue  # Skip PVC creation for compose
+
+                        # Special case: config volume should use ConfigMap (automatically generated)
+                        if source in ("ushadow-config", "config") or dest == "/config":
+                            # Use the config-files ConfigMap that was automatically generated
+                            if not any(v.get("name") == "config-files" for v in k8s_volumes):
+                                k8s_volumes.append({
+                                    "name": "config-files",
+                                    "configMap": {
+                                        "name": "config-files"
+                                    }
+                                })
+                                logger.info(f"Using config-files ConfigMap for {dest}")
+
+                            # Add volume mount for config files
+                            volume_mounts.append({
+                                "name": "config-files",
+                                "mountPath": dest,
+                                "readOnly": True
+                            })
+                            continue  # Skip PVC creation for config
 
                         # Only add PVC if not already added
                         if not any(v.get("name") == volume_name for v in k8s_volumes):
@@ -1299,6 +1429,189 @@ class KubernetesManager:
             logger.error(f"Error creating envmap: {e}")
             raise
 
+    async def _ensure_config_configmap(
+        self,
+        cluster_id: str,
+        namespace: str = "ushadow"
+    ) -> bool:
+        """
+        Ensure the config-files ConfigMap exists in the cluster.
+
+        This ConfigMap contains configuration files from the config/ directory,
+        including config.defaults.yaml with default_services configuration.
+
+        Returns True if ConfigMap was created/updated successfully.
+        """
+        try:
+            logger.info(f"Ensuring config-files ConfigMap exists in namespace {namespace}")
+
+            # Find config directory (handles both container and development paths)
+            config_dir = Path("/config") if Path("/config").exists() else Path("config")
+            if not config_dir.exists():
+                logger.warning(f"Config directory not found at {config_dir}, skipping ConfigMap creation")
+                return False
+
+            # Collect all config files
+            config_data = {}
+
+            # Add YAML files (config.defaults.yaml, config.yaml, etc.)
+            for pattern in ["*.yaml", "*.yml"]:
+                for file_path in config_dir.glob(pattern):
+                    if file_path.is_file():
+                        try:
+                            content = file_path.read_text()
+                            config_data[file_path.name] = content
+                            logger.debug(f"Added {file_path.name} to ConfigMap ({len(content)} bytes)")
+                        except Exception as e:
+                            logger.warning(f"Failed to read {file_path}: {e}")
+
+            if not config_data:
+                logger.warning("No config files found to add to ConfigMap")
+                return False
+
+            logger.info(f"Collected {len(config_data)} config files for ConfigMap (total size: {sum(len(v) for v in config_data.values())} bytes)")
+
+            # Create ConfigMap manifest
+            configmap = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "config-files",
+                    "namespace": namespace,
+                    "labels": {
+                        "app": "ushadow",
+                        "component": "backend"
+                    }
+                },
+                "data": config_data
+            }
+
+            # Get API client
+            core_api, _ = self._get_kube_client(cluster_id)
+
+            # Try to create or update the ConfigMap
+            try:
+                core_api.create_namespaced_config_map(
+                    namespace=namespace,
+                    body=configmap
+                )
+                logger.info(f"✅ Created config-files ConfigMap in namespace {namespace}")
+                return True
+            except ApiException as e:
+                if e.status == 409:  # Already exists, update it
+                    core_api.patch_namespaced_config_map(
+                        name="config-files",
+                        namespace=namespace,
+                        body=configmap
+                    )
+                    logger.info(f"✅ Updated config-files ConfigMap in namespace {namespace}")
+                    return True
+                else:
+                    raise
+
+        except Exception as e:
+            logger.error(f"Failed to ensure config-files ConfigMap: {e}")
+            # Don't fail the deployment, just log the error
+            return False
+
+    async def _ensure_compose_configmap(
+        self,
+        cluster_id: str,
+        namespace: str = "ushadow"
+    ) -> bool:
+        """
+        Ensure the compose-files ConfigMap exists in the cluster.
+
+        This ConfigMap contains all compose files from the compose/ directory,
+        which are needed by ushadow-backend for service management.
+
+        Returns True if ConfigMap was created/updated successfully.
+        """
+        try:
+            logger.info(f"Ensuring compose-files ConfigMap exists in namespace {namespace}")
+
+            # Find compose directory (handles both container and development paths)
+            compose_dir = Path("/compose") if Path("/compose").exists() else Path("compose")
+            if not compose_dir.exists():
+                logger.warning(f"Compose directory not found at {compose_dir}, skipping ConfigMap creation")
+                return False
+
+            # Collect all compose files
+            compose_data = {}
+
+            # Add YAML files
+            for pattern in ["*.yaml", "*.yml", "*.md"]:
+                for file_path in compose_dir.glob(pattern):
+                    if file_path.is_file():
+                        try:
+                            content = file_path.read_text()
+                            compose_data[file_path.name] = content
+                            logger.debug(f"Added {file_path.name} to ConfigMap ({len(content)} bytes)")
+                        except Exception as e:
+                            logger.warning(f"Failed to read {file_path}: {e}")
+
+            # Add scripts directory if exists
+            scripts_dir = compose_dir / "scripts"
+            if scripts_dir.exists():
+                for script_path in scripts_dir.iterdir():
+                    if script_path.is_file():
+                        try:
+                            content = script_path.read_text()
+                            # Prefix with "script-" to avoid conflicts
+                            compose_data[f"script-{script_path.name}"] = content
+                            logger.debug(f"Added script {script_path.name} to ConfigMap")
+                        except Exception as e:
+                            logger.warning(f"Failed to read script {script_path}: {e}")
+
+            if not compose_data:
+                logger.warning("No compose files found to add to ConfigMap")
+                return False
+
+            logger.info(f"Collected {len(compose_data)} files for ConfigMap (total size: {sum(len(v) for v in compose_data.values())} bytes)")
+
+            # Create ConfigMap manifest
+            configmap = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "compose-files",
+                    "namespace": namespace,
+                    "labels": {
+                        "app": "ushadow",
+                        "component": "backend"
+                    }
+                },
+                "data": compose_data
+            }
+
+            # Get API client
+            core_api, _ = self._get_kube_client(cluster_id)
+
+            # Try to create or update the ConfigMap
+            try:
+                core_api.create_namespaced_config_map(
+                    namespace=namespace,
+                    body=configmap
+                )
+                logger.info(f"✅ Created compose-files ConfigMap in namespace {namespace}")
+                return True
+            except ApiException as e:
+                if e.status == 409:  # Already exists, update it
+                    core_api.patch_namespaced_config_map(
+                        name="compose-files",
+                        namespace=namespace,
+                        body=configmap
+                    )
+                    logger.info(f"✅ Updated compose-files ConfigMap in namespace {namespace}")
+                    return True
+                else:
+                    raise
+
+        except Exception as e:
+            logger.error(f"Failed to ensure compose-files ConfigMap: {e}")
+            # Don't fail the deployment, just log the error
+            return False
+
     async def deploy_to_kubernetes(
         self,
         cluster_id: str,
@@ -1330,6 +1643,12 @@ class KubernetesManager:
                     f"Timeout connecting to Kubernetes cluster. "
                     f"The cluster may be unreachable. Check network connectivity and kubeconfig."
                 )
+
+            # For ushadow-backend, ensure compose-files and config-files ConfigMaps exist
+            if "ushadow-backend" in service_name.lower() or "backend" in service_def.get("service_id", ""):
+                logger.info("Detected ushadow-backend deployment, ensuring ConfigMaps...")
+                await self._ensure_compose_configmap(cluster_id, namespace)
+                await self._ensure_config_configmap(cluster_id, namespace)
 
             # Compile manifests
             logger.info(f"Compiling K8s manifests for {service_name}...")

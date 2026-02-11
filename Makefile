@@ -7,7 +7,7 @@
         go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
-        chronicle-push mycelia-push openmemory-push \
+        ushadow-push ushadow-push-local chronicle-push mycelia-push openmemory-push \
         release env-sync env-sync-apply env-info
 
 # Read .env for display purposes only (actual logic is in run.py)
@@ -45,10 +45,12 @@ help:
 	@echo "  make chronicle-down-local   - Stop local Chronicle"
 	@echo "  make chronicle-dev          - Build + run (full dev cycle)"
 	@echo ""
-	@echo "Build & Push to GHCR:"
-	@echo "  make chronicle-push [TAG=latest]   - Build and push Chronicle (backend+workers+webui)"
-	@echo "  make mycelia-push [TAG=latest]     - Build and push Mycelia backend"
-	@echo "  make openmemory-push [TAG=latest]  - Build and push OpenMemory server"
+	@echo "Build & Push:"
+	@echo "  make ushadow-push [TAG=latest]            - Build and push ushadow to ghcr.io"
+	@echo "  K8S_REGISTRY=host:port make ushadow-push-local - Build and push ushadow to local K8s registry"
+	@echo "  make chronicle-push [TAG=latest]          - Build and push Chronicle to ghcr.io"
+	@echo "  make mycelia-push [TAG=latest]            - Build and push Mycelia to ghcr.io"
+	@echo "  make openmemory-push [TAG=latest]         - Build and push OpenMemory to ghcr.io"
 	@echo ""
 	@echo "Service management:"
 	@echo "  make rebuild <service>  - Rebuild service from compose/<service>-compose.yml"
@@ -216,6 +218,35 @@ chronicle-dev: chronicle-build-local chronicle-up-local
 # =============================================================================
 # Build and push multi-arch images to GitHub Container Registry
 # Requires: docker login ghcr.io -u USERNAME --password-stdin
+
+# ushadow - Build and push backend + frontend to ghcr.io
+ushadow-push:
+	@./scripts/build-push-images.sh ushadow $(TAG)
+
+# ushadow - Build and push to local K8s registry
+# Set K8S_REGISTRY environment variable to your registry (e.g., localhost:32000, registry.local:5000)
+ushadow-push-local:
+	@if [ -z "$(K8S_REGISTRY)" ]; then \
+		echo "❌ Error: K8S_REGISTRY not set"; \
+		echo ""; \
+		echo "Usage: K8S_REGISTRY=localhost:32000 make ushadow-push-local"; \
+		echo ""; \
+		echo "Example registries:"; \
+		echo "  - localhost:32000 (microk8s)"; \
+		echo "  - registry.local:5000 (custom registry)"; \
+		exit 1; \
+	fi
+	@echo "🏗️  Building for $(K8S_REGISTRY) (amd64)..."
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-backend:latest ushadow/backend/
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-frontend:latest ushadow/frontend/
+	@echo "📤 Pushing to $(K8S_REGISTRY)..."
+	@docker push $(K8S_REGISTRY)/ushadow-backend:latest
+	@docker push $(K8S_REGISTRY)/ushadow-frontend:latest
+	@echo "✅ Images pushed to $(K8S_REGISTRY)"
+	@echo ""
+	@echo "To update K8s deployments:"
+	@echo "  kubectl delete pod -n ushadow -l app.kubernetes.io/name=ushadow-backend"
+	@echo "  kubectl delete pod -n ushadow -l app.kubernetes.io/name=ushadow-frontend"
 
 # Chronicle - Build and push backend + webui
 chronicle-push:
