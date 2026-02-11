@@ -32,7 +32,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tailscale", tags=["tailscale"])
 
 # Docker client for container management (legacy - being phased out)
-docker_client = docker.from_env()
+# Only initialize if Docker socket is available (not in K8s)
+try:
+    docker_client = docker.from_env()
+except (docker.errors.DockerException, FileNotFoundError):
+    logger.warning("Docker socket not available (running in K8s?) - some Tailscale features may be limited")
+    docker_client = None
 
 def get_environment_name() -> str:
     """Get the current environment name from COMPOSE_PROJECT_NAME or default to 'ushadow'"""

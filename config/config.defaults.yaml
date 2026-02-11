@@ -19,14 +19,13 @@ auth:
 
 # Keycloak OAuth Configuration
 keycloak:
-  enabled: true
-  url: http://keycloak:8080  # Internal Docker URL (Keycloak's container port)
-  # public_url: Dynamically constructed from Tailscale hostname in keycloak_settings.py
-  # If needed, can override in config.overrides.yaml
-  realm: ushadow
-  backend_client_id: ushadow-backend
-  frontend_client_id: ushadow-frontend
-  admin_user: admin
+  enabled: ${oc.env:KEYCLOAK_ENABLED,true}
+  url: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}  # Internal Docker/K8s URL
+  public_url: ${oc.env:KEYCLOAK_PUBLIC_URL,http://localhost:8081}  # External browser URL
+  realm: ${oc.env:KEYCLOAK_REALM,ushadow}
+  backend_client_id: ${oc.env:KEYCLOAK_BACKEND_CLIENT_ID,ushadow-backend}
+  frontend_client_id: ${oc.env:KEYCLOAK_FRONTEND_CLIENT_ID,ushadow-frontend}
+  admin_user: ${oc.env:KEYCLOAK_ADMIN_USER,admin}
 
 # Speech Detection Settings
 speech_detection:
@@ -92,9 +91,9 @@ security:
 
 # Infrastructure Services
 infrastructure:
-  mongodb_uri: mongodb://mongo:27017
-  mongodb_database: ushadow  # Default database name (NOT a URI!)
-  redis_url: redis://redis:6379/0
+  mongodb_uri: ${oc.env:MONGODB_URI,mongodb://mongo:27017}
+  mongodb_database: ${oc.env:MONGODB_DATABASE,ushadow}  # Default database name (NOT a URI!)
+  redis_url: ${oc.env:REDIS_URL,redis://redis:6379/0}
   
   qdrant_base_url: qdrant
   qdrant_port: '6333'

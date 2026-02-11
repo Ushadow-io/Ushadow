@@ -99,9 +99,17 @@ services:
       - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
 
-      # Database Configuration - uses shared mongo from infra
+      # MongoDB Configuration (component-based)
+      - MONGODB_HOST=${MONGODB_HOST:-mongo}
+      - MONGODB_PORT=${MONGODB_PORT:-27017}
+      - MONGODB_USER=${MONGODB_USER:-}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-mycelia}
+      - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
+      # Database name (Mycelia uses DATABASE_NAME)
       - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
-      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia?directConnection=true}
+      # Constructed URI - set MONGO_URL directly or it will be built from components
+      - MONGO_URL=${MONGO_URL}
 
       # Redis Configuration - uses shared redis from infra
       - REDIS_HOST=redis

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket } from 'lucide-react'
+import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket, Globe, Copy, Check } from 'lucide-react'
 import { kubernetesApi, KubernetesCluster, DeployTarget, deploymentsApi } from '../services/api'
 import Modal from '../components/Modal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DeployModal from '../components/DeployModal'
+import DNSManagementPanel from '../components/kubernetes/DNSManagementPanel'
 
 interface InfraService {
   found: boolean
@@ -18,6 +19,48 @@ interface InfraScanResults {
   cluster_id: string
   namespace: string
   infra_services: Record<string, InfraService>
+}
+
+// Helper component for displaying copyable commands
+function KubeconfigCommand({ label, command, platform }: { label: string; command: string; platform: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
+  return (
+    <div className="flex items-start gap-2 p-2 bg-white dark:bg-neutral-800 rounded border border-blue-100 dark:border-blue-800">
+      <div className="flex-1 min-w-0">
+        {label && (
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-medium text-neutral-900 dark:text-neutral-100">{label}</span>
+            {platform && <span className="text-neutral-500 dark:text-neutral-400">({platform})</span>}
+          </div>
+        )}
+        <code className="block text-xs text-neutral-700 dark:text-neutral-300 font-mono break-all">
+          {command}
+        </code>
+      </div>
+      <button
+        onClick={handleCopy}
+        className="flex-shrink-0 p-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded transition-colors"
+        title="Copy command"
+      >
+        {copied ? (
+          <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+        ) : (
+          <Copy className="h-4 w-4 text-neutral-600 dark:text-neutral-400" />
+        )}
+      </button>
+    </div>
+  )
 }
 
 export default function KubernetesClustersPage() {
@@ -36,6 +79,10 @@ export default function KubernetesClustersPage() {
   // Deployment
   const [showDeployModal, setShowDeployModal] = useState(false)
   const [selectedClusterForDeploy, setSelectedClusterForDeploy] = useState<KubernetesCluster | null>(null)
+
+  // DNS Management
+  const [showDnsModal, setShowDnsModal] = useState(false)
+  const [selectedClusterForDns, setSelectedClusterForDns] = useState<KubernetesCluster | null>(null)
 
   // Form state
   const [clusterName, setClusterName] = useState('')
@@ -466,6 +513,19 @@ export default function KubernetesClustersPage() {
                       <Rocket className="h-4 w-4" />
                       <span>Deploy</span>
                     </button>
+
+                    <button
+                      onClick={() => {
+                        setSelectedClusterForDns(cluster)
+                        setShowDnsModal(true)
+                      }}
+                      disabled={cluster.status !== 'connected'}
+                      className="btn-secondary flex items-center space-x-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      data-testid={`manage-dns-${cluster.cluster_id}`}
+                    >
+                      <Globe className="h-4 w-4" />
+                      <span>DNS</span>
+                    </button>
                   </div>
 
                   <button
@@ -650,6 +710,24 @@ export default function KubernetesClustersPage() {
                 </p>
               </div>
 
+              {/* Quick Commands Section */}
+              <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                <h3 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-3 flex items-center">
+                  <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Copy kubeconfig to clipboard
+                </h3>
+                <KubeconfigCommand
+                  label="kubectl"
+                  command="kubectl config view --minify --flatten --raw | pbcopy"
+                  platform=""
+                />
+                <p className="text-xs text-blue-700 dark:text-blue-300 mt-3">
+                  💡 Run this command in your terminal, then click "Paste from Clipboard" below
+                </p>
+              </div>
+
               {/* Kubeconfig Upload */}
               <div>
                 <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">
@@ -747,6 +825,25 @@ export default function KubernetesClustersPage() {
           </div>
         </div>,
         document.body
+      )}
+
+      {/* DNS Management Modal */}
+      {showDnsModal && selectedClusterForDns && (
+        <Modal
+          isOpen={showDnsModal}
+          onClose={() => {
+            setShowDnsModal(false)
+            setSelectedClusterForDns(null)
+          }}
+          title={`DNS Management - ${selectedClusterForDns.name}`}
+          maxWidth="2xl"
+          testId="dns-management-modal"
+        >
+          <DNSManagementPanel
+            clusterId={selectedClusterForDns.cluster_id}
+            clusterName={selectedClusterForDns.name}
+          />
+        </Modal>
       )}
     </div>
   )

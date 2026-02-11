@@ -57,9 +57,15 @@ services:
     ports:
       - "${CHRONICLE_BACKEND_PORT:-8090}:8000"
     environment:
-      # Infrastructure connections (from CapabilityResolver or defaults)
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
-      - MONGODB_DATABASE=${MONGODB_DATABASE}
+      # MongoDB Configuration (component-based)
+      - MONGODB_HOST=${MONGODB_HOST:-mongo}
+      - MONGODB_PORT=${MONGODB_PORT:-27017}
+      - MONGODB_USER=${MONGODB_USER:-}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-chronicle}
+      - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
+      # Constructed URI - set MONGODB_URI directly or it will be built from components
+      - MONGODB_URI=${MONGODB_URI}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
       - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}
@@ -133,8 +139,15 @@ services:
       # Infrastructure connections
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017}
-      - MONGODB_DATABASE=${MONGODB_DATABASE}
+      # MongoDB Configuration (component-based)
+      - MONGODB_HOST=${MONGODB_HOST:-mongo}
+      - MONGODB_PORT=${MONGODB_PORT:-27017}
+      - MONGODB_USER=${MONGODB_USER:-}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-chronicle}
+      - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
+      # Constructed URI - set MONGODB_URI directly or it will be built from components
+      - MONGODB_URI=${MONGODB_URI}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
       - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}

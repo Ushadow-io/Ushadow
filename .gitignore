@@ -189,3 +189,4 @@ robot_results/
 output.xml
 log.html
 report.html
+config/service_configs.yaml

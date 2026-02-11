@@ -149,15 +149,43 @@ case "$SERVICE" in
         info "============================================="
         ;;
 
+    ushadow)
+        info "============================================="
+        info "Building ushadow (tag: ${TAG})"
+        info "============================================="
+        ensure_builder
+
+        # Build backend
+        build_and_push \
+            "ushadow/backend" \
+            "ushadow/backend/Dockerfile" \
+            "ushadow-backend"
+
+        # Build frontend
+        build_and_push \
+            "ushadow/frontend" \
+            "ushadow/frontend/Dockerfile" \
+            "ushadow-frontend"
+
+        info "============================================="
+        info "ushadow images pushed successfully!"
+        info "  ${REGISTRY}/ushadow-backend:${TAG}"
+        info "  ${REGISTRY}/ushadow-frontend:${TAG}"
+        info "============================================="
+        ;;
+
     *)
         echo "Usage: $0 <service> [tag]"
         echo ""
         echo "Available services:"
+        echo "  ushadow     - Build ushadow backend + frontend"
         echo "  chronicle   - Build Chronicle backend + workers + webui"
         echo "  mycelia     - Build Mycelia backend"
         echo "  openmemory  - Build OpenMemory server"
         echo ""
         echo "Examples:"
+        echo "  $0 ushadow"
+        echo "  $0 ushadow v0.1.0"
         echo "  $0 chronicle"
         echo "  $0 chronicle v1.0.0"
         echo "  $0 mycelia latest"
