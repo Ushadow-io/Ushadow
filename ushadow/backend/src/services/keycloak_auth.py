@@ -29,9 +29,13 @@ def get_jwks_client() -> PyJWKClient:
     """Get cached JWKS client for fetching Keycloak's public keys."""
     global _jwks_client
     if _jwks_client is None:
-        kc_client = get_keycloak_client()
+        from src.config.keycloak_settings import get_keycloak_connection
+
+        # Get server URL and realm from connection object
+        connection = get_keycloak_connection()
+
         # Construct JWKS URL from Keycloak server URL
-        jwks_url = f"{kc_client.server_url}/realms/{kc_client.realm}/protocol/openid-connect/certs"
+        jwks_url = f"{connection.server_url}/realms/{connection.realm_name}/protocol/openid-connect/certs"
         _jwks_client = PyJWKClient(jwks_url)
         logger.info(f"[KC-AUTH] Initialized JWKS client: {jwks_url}")
     return _jwks_client
