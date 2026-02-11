@@ -1,7 +1,9 @@
 """
 Keycloak Admin API Service
 
-Manages Keycloak configuration programmatically via Admin REST API.
+Refactored to use official python-keycloak KeycloakAdmin.
+Provides backward-compatible wrapper for existing code.
+
 Primary use case: Dynamic redirect URI registration for multi-environment worktrees.
 
 Each Ushadow environment (worktree) runs on a different port:
@@ -14,66 +16,31 @@ This service ensures Keycloak accepts redirects from all active environments.
 
 import os
 import logging
-import httpx
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+
+from keycloak import KeycloakAdmin
+from keycloak.exceptions import KeycloakError
 
 logger = logging.getLogger(__name__)
 
 
 class KeycloakAdminClient:
-    """Keycloak Admin API client for managing realm configuration."""
+    """
+    Keycloak Admin API client wrapper.
 
-    def __init__(
-        self,
-        keycloak_url: str,
-        realm: str,
-        admin_user: str,
-        admin_password: str,
-    ):
-        self.keycloak_url = keycloak_url
-        self.realm = realm
-        self.admin_user = admin_user
-        self.admin_password = admin_password
-        self._access_token: Optional[str] = None
+    Provides backward-compatible interface using official python-keycloak library.
+    This wrapper maintains the existing API while using the official KeycloakAdmin underneath.
+    """
 
-    async def _get_admin_token(self) -> str:
+    def __init__(self, admin: KeycloakAdmin):
         """
-        Get admin access token for Keycloak Admin API.
+        Initialize wrapper with official KeycloakAdmin instance.
 
-        Uses master realm admin credentials to authenticate.
-        Token is cached and reused until it expires.
+        Args:
+            admin: KeycloakAdmin instance from keycloak_settings
         """
-        if self._access_token:
-            # TODO: Check token expiration and refresh if needed
-            return self._access_token
-
-        token_url = f"{self.keycloak_url}/realms/master/protocol/openid-connect/token"
-
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    token_url,
-                    data={
-                        "grant_type": "password",
-                        "client_id": "admin-cli",
-                        "username": self.admin_user,
-                        "password": self.admin_password,
-                    },
-                    timeout=10.0,
-                )
-
-                if response.status_code != 200:
-                    logger.error(f"[KC-ADMIN] Failed to get admin token: {response.text}")
-                    raise Exception(f"Failed to authenticate as Keycloak admin: {response.status_code}")
-
-                tokens = response.json()
-                self._access_token = tokens["access_token"]
-                logger.info("[KC-ADMIN] ✓ Authenticated as Keycloak admin")
-                return self._access_token
-
-            except httpx.RequestError as e:
-                logger.error(f"[KC-ADMIN] Failed to connect to Keycloak: {e}")
-                raise Exception(f"Failed to connect to Keycloak Admin API: {e}")
+        self.admin = admin
+        logger.debug("[KC-ADMIN] Initialized KeycloakAdminClient wrapper")
 
     async def get_client_by_client_id(self, client_id: str) -> Optional[dict]:
         """
@@ -85,32 +52,21 @@ class KeycloakAdminClient:
         Returns:
             Client configuration dict if found, None otherwise
         """
-        token = await self._get_admin_token()
-        url = f"{self.keycloak_url}/admin/realms/{self.realm}/clients"
+        try:
+            # get_clients() returns all clients - we filter manually
+            all_clients = self.admin.get_clients()
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url,
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"clientId": client_id},
-                    timeout=10.0,
-                )
+            # Filter by clientId
+            for client in all_clients:
+                if client.get("clientId") == client_id:
+                    return client
 
-                if response.status_code != 200:
-                    logger.error(f"[KC-ADMIN] Failed to get client: {response.text}")
-                    return None
+            logger.warning(f"[KC-ADMIN] Client '{client_id}' not found")
+            return None
 
-                clients = response.json()
-                if not clients or len(clients) == 0:
-                    logger.warning(f"[KC-ADMIN] Client '{client_id}' not found")
-                    return None
-
-                return clients[0]  # Returns first match
-
-            except httpx.RequestError as e:
-                logger.error(f"[KC-ADMIN] Failed to get client: {e}")
-                return None
+        except KeycloakError as e:
+            logger.error(f"[KC-ADMIN] Failed to get client: {e}")
+            return None
 
     async def update_client_redirect_uris(
         self,
@@ -131,90 +87,70 @@ class KeycloakAdminClient:
         Returns:
             True if successful, False otherwise
         """
-        # Get current client configuration
-        client = await self.get_client_by_client_id(client_id)
-        if not client:
-            logger.error(f"[KC-ADMIN] Cannot update redirect URIs - client '{client_id}' not found")
-            return False
+        try:
+            # Get current client configuration
+            client = await self.get_client_by_client_id(client_id)
+            if not client:
+                logger.error(f"[KC-ADMIN] Cannot update redirect URIs - client '{client_id}' not found")
+                return False
 
-        client_uuid = client["id"]  # Internal UUID, not the client_id
+            client_uuid = client["id"]  # Internal UUID, not the client_id
 
-        # Merge or replace redirect URIs
-        if merge:
-            existing_uris = set(client.get("redirectUris", []))
-            new_uris = existing_uris.union(set(redirect_uris))
-            final_uris = list(new_uris)
-            logger.info(f"[KC-ADMIN] Merging redirect URIs: {len(existing_uris)} existing + {len(redirect_uris)} new = {len(final_uris)} total")
-        else:
-            final_uris = redirect_uris
-            logger.info(f"[KC-ADMIN] Replacing redirect URIs with {len(final_uris)} URIs")
-
-        # Get webOrigins (CORS)
-        if web_origins is not None:
-            # Use provided web origins
-            final_origins_set = set(web_origins)
+            # Merge or replace redirect URIs
             if merge:
-                existing_origins = set(client.get("webOrigins", []))
-                final_origins_set = final_origins_set.union(existing_origins)
-            final_origins = list(final_origins_set)
-            logger.info(f"[KC-ADMIN] Using {len(final_origins)} provided webOrigins")
-            for origin in sorted(final_origins):
-                logger.info(f"[KC-ADMIN]   - {origin}")
-        else:
-            # Extract origins from redirect URIs for CORS
-            origins_set = set()
-            for uri in final_uris:
-                # Extract origin from redirect URI (e.g., http://localhost:3020/oauth/callback -> http://localhost:3020)
-                if uri.startswith("http"):
-                    from urllib.parse import urlparse
-                    parsed = urlparse(uri)
-                    origin = f"{parsed.scheme}://{parsed.netloc}"
-                    origins_set.add(origin)
+                existing_uris = set(client.get("redirectUris", []))
+                new_uris = existing_uris.union(set(redirect_uris))
+                final_uris = list(new_uris)
+                logger.info(f"[KC-ADMIN] Merging redirect URIs: {len(existing_uris)} existing + {len(redirect_uris)} new = {len(final_uris)} total")
+            else:
+                final_uris = redirect_uris
+                logger.info(f"[KC-ADMIN] Replacing redirect URIs with {len(final_uris)} URIs")
 
-            # Merge with existing webOrigins if merge=True
-            if merge:
-                existing_origins = set(client.get("webOrigins", []))
-                origins_set = origins_set.union(existing_origins)
+            # Get webOrigins (CORS)
+            if web_origins is not None:
+                # Use provided web origins
+                final_origins_set = set(web_origins)
+                if merge:
+                    existing_origins = set(client.get("webOrigins", []))
+                    final_origins_set = final_origins_set.union(existing_origins)
+                final_origins = list(final_origins_set)
+                logger.info(f"[KC-ADMIN] Using {len(final_origins)} provided webOrigins")
+            else:
+                # Extract origins from redirect URIs for CORS
+                origins_set = set()
+                for uri in final_uris:
+                    # Extract origin from redirect URI (e.g., http://localhost:3020/oauth/callback -> http://localhost:3020)
+                    if uri.startswith("http"):
+                        from urllib.parse import urlparse
+                        parsed = urlparse(uri)
+                        origin = f"{parsed.scheme}://{parsed.netloc}"
+                        origins_set.add(origin)
 
-            final_origins = list(origins_set)
-            logger.info(f"[KC-ADMIN] Extracted {len(final_origins)} webOrigins from redirect URIs")
+                # Merge with existing webOrigins if merge=True
+                if merge:
+                    existing_origins = set(client.get("webOrigins", []))
+                    origins_set = origins_set.union(existing_origins)
 
-        # Update client configuration
-        token = await self._get_admin_token()
-        url = f"{self.keycloak_url}/admin/realms/{self.realm}/clients/{client_uuid}"
+                final_origins = list(origins_set)
+                logger.info(f"[KC-ADMIN] Extracted {len(final_origins)} webOrigins from redirect URIs")
 
-        async with httpx.AsyncClient() as client_http:
-            try:
-                # Prepare update payload (redirect URIs + webOrigins)
-                update_payload = {
-                    "id": client_uuid,
-                    "clientId": client_id,
+            # Update client using official library method
+            self.admin.update_client(
+                client_uuid,
+                {
                     "redirectUris": final_uris,
                     "webOrigins": final_origins,
                 }
+            )
 
-                response = await client_http.put(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=update_payload,
-                    timeout=10.0,
-                )
+            logger.info(f"[KC-ADMIN] ✓ Updated redirect URIs for client '{client_id}'")
+            for uri in final_uris:
+                logger.info(f"[KC-ADMIN]   - {uri}")
+            return True
 
-                if response.status_code != 204:  # Keycloak returns 204 No Content on success
-                    logger.error(f"[KC-ADMIN] Failed to update client: {response.status_code} - {response.text}")
-                    return False
-
-                logger.info(f"[KC-ADMIN] ✓ Updated redirect URIs for client '{client_id}'")
-                for uri in final_uris:
-                    logger.info(f"[KC-ADMIN]   - {uri}")
-                return True
-
-            except httpx.RequestError as e:
-                logger.error(f"[KC-ADMIN] Failed to update client: {e}")
-                return False
+        except KeycloakError as e:
+            logger.error(f"[KC-ADMIN] Failed to update client: {e}")
+            return False
 
     async def register_redirect_uri(self, client_id: str, redirect_uri: str) -> bool:
         """
@@ -250,65 +186,45 @@ class KeycloakAdminClient:
         Returns:
             True if successful, False otherwise
         """
-        # Get client UUID
-        client = await self.get_client_by_client_id(client_id)
-        if not client:
-            logger.error(f"[KC-ADMIN] Client '{client_id}' not found")
-            return False
-
-        client_uuid = client["id"]
-
-        # Merge or replace post-logout redirect URIs
-        if merge:
-            existing_uris = set(client.get("attributes", {}).get("post.logout.redirect.uris", "").split("##"))
-            # Remove empty strings from the set
-            existing_uris = {uri for uri in existing_uris if uri}
-            new_uris = existing_uris.union(set(post_logout_redirect_uris))
-            final_uris = list(new_uris)
-            logger.info(f"[KC-ADMIN] Merging post-logout redirect URIs: {len(existing_uris)} existing + {len(post_logout_redirect_uris)} new = {len(final_uris)} total")
-        else:
-            final_uris = post_logout_redirect_uris
-            logger.info(f"[KC-ADMIN] Replacing post-logout redirect URIs with {len(final_uris)} URIs")
-
-        # Update client configuration
-        token = await self._get_admin_token()
-        url = f"{self.keycloak_url}/admin/realms/{self.realm}/clients/{client_uuid}"
-
-        async with httpx.AsyncClient() as client_http:
-            try:
-                # Prepare update payload
-                # Post-logout redirect URIs are stored as a ## delimited string in attributes
-                attributes = client.get("attributes", {})
-                attributes["post.logout.redirect.uris"] = "##".join(final_uris)
-
-                update_payload = {
-                    "id": client_uuid,
-                    "clientId": client_id,
-                    "attributes": attributes,
-                }
-
-                response = await client_http.put(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=update_payload,
-                    timeout=10.0,
-                )
-
-                if response.status_code != 204:  # Keycloak returns 204 No Content on success
-                    logger.error(f"[KC-ADMIN] Failed to update post-logout redirect URIs: {response.status_code} - {response.text}")
-                    return False
-
-                logger.info(f"[KC-ADMIN] ✓ Updated post-logout redirect URIs for client '{client_id}'")
-                for uri in final_uris:
-                    logger.info(f"[KC-ADMIN]   - {uri}")
-                return True
-
-            except httpx.RequestError as e:
-                logger.error(f"[KC-ADMIN] Failed to update post-logout redirect URIs: {e}")
+        try:
+            # Get client UUID
+            client = await self.get_client_by_client_id(client_id)
+            if not client:
+                logger.error(f"[KC-ADMIN] Client '{client_id}' not found")
                 return False
+
+            client_uuid = client["id"]
+
+            # Merge or replace post-logout redirect URIs
+            if merge:
+                existing_uris = set(client.get("attributes", {}).get("post.logout.redirect.uris", "").split("##"))
+                # Remove empty strings from the set
+                existing_uris = {uri for uri in existing_uris if uri}
+                new_uris = existing_uris.union(set(post_logout_redirect_uris))
+                final_uris = list(new_uris)
+                logger.info(f"[KC-ADMIN] Merging post-logout redirect URIs: {len(existing_uris)} existing + {len(post_logout_redirect_uris)} new = {len(final_uris)} total")
+            else:
+                final_uris = post_logout_redirect_uris
+                logger.info(f"[KC-ADMIN] Replacing post-logout redirect URIs with {len(final_uris)} URIs")
+
+            # Post-logout redirect URIs are stored as a ## delimited string in attributes
+            attributes = client.get("attributes", {})
+            attributes["post.logout.redirect.uris"] = "##".join(final_uris)
+
+            # Update using official library
+            self.admin.update_client(
+                client_uuid,
+                {"attributes": attributes}
+            )
+
+            logger.info(f"[KC-ADMIN] ✓ Updated post-logout redirect URIs for client '{client_id}'")
+            for uri in final_uris:
+                logger.info(f"[KC-ADMIN]   - {uri}")
+            return True
+
+        except KeycloakError as e:
+            logger.error(f"[KC-ADMIN] Failed to update post-logout redirect URIs: {e}")
+            return False
 
 
 async def register_current_environment_redirect_uri() -> bool:
@@ -324,18 +240,11 @@ async def register_current_environment_redirect_uri() -> bool:
         - ushadow-orange (PORT_OFFSET=20): Registers http://localhost:3020/auth/callback
         - With Tailscale: Also registers https://ushadow.spangled-kettle.ts.net/auth/callback
     """
-    from src.config.keycloak_settings import get_keycloak_config
+    from src.config.keycloak_settings import get_keycloak_config, get_keycloak_admin
 
-    # Get configuration from settings (config.defaults.yaml + secrets.yaml)
-    # Settings system handles env var interpolation via OmegaConf
+    # Get configuration from settings
     config = get_keycloak_config()
-    keycloak_url = config["url"]
-    keycloak_realm = config["realm"]
     keycloak_client_id = config["frontend_client_id"]
-
-    # Admin credentials
-    admin_keycloak_user = config["admin_keycloak_user"]
-    admin_keycloak_password = config["admin_keycloak_password"]
 
     # Calculate frontend port from PORT_OFFSET
     port_offset = int(os.getenv("PORT_OFFSET", "0"))
@@ -354,17 +263,19 @@ async def register_current_environment_redirect_uri() -> bool:
 
     # Check if Tailscale is configured and add Tailscale URIs
     try:
-        from src.utils.tailscale_serve import get_tailscale_status
-        ts_status = get_tailscale_status()
-        if ts_status.hostname and ts_status.authenticated:
+        from src.config import get_settings_store
+        settings = get_settings_store()
+        ts_hostname = settings.get_sync("tailscale.hostname")
+
+        if ts_hostname:
             # Add Tailscale URIs (HTTPS through Tailscale serve)
-            tailscale_redirect_uri = f"https://{ts_status.hostname}/oauth/callback"
-            tailscale_logout_uri = f"https://{ts_status.hostname}/"
+            tailscale_redirect_uri = f"https://{ts_hostname}/oauth/callback"
+            tailscale_logout_uri = f"https://{ts_hostname}/"
 
             redirect_uris.append(tailscale_redirect_uri)
             post_logout_redirect_uris.append(tailscale_logout_uri)
 
-            logger.info(f"[KC-ADMIN] Detected Tailscale hostname: {ts_status.hostname}")
+            logger.info(f"[KC-ADMIN] Detected Tailscale hostname: {ts_hostname}")
     except Exception as e:
         logger.debug(f"[KC-ADMIN] Could not detect Tailscale hostname: {e}")
 
@@ -375,13 +286,9 @@ async def register_current_environment_redirect_uri() -> bool:
     for uri in post_logout_redirect_uris:
         logger.info(f"[KC-ADMIN]   - {uri}")
 
-    # Create admin client and register URIs
-    admin_client = KeycloakAdminClient(
-        keycloak_url=keycloak_url,
-        realm=keycloak_realm,
-        admin_user=admin_keycloak_user,
-        admin_password=admin_keycloak_password,
-    )
+    # Get official KeycloakAdmin and wrap it
+    admin = get_keycloak_admin()
+    admin_client = KeycloakAdminClient(admin)
 
     # Register login redirect URIs
     success = await admin_client.update_client_redirect_uris(
@@ -415,26 +322,17 @@ _keycloak_admin_client: Optional[KeycloakAdminClient] = None
 
 def get_keycloak_admin() -> KeycloakAdminClient:
     """
-    Get the Keycloak admin client singleton.
+    Get the Keycloak admin client singleton (backward-compatible wrapper).
 
-    Configuration is loaded from settings (config.defaults.yaml + secrets.yaml).
+    Returns wrapped official KeycloakAdmin for existing code compatibility.
     """
-    from src.config.keycloak_settings import get_keycloak_config
+    from src.config.keycloak_settings import get_keycloak_admin as get_official_admin
 
     global _keycloak_admin_client
 
     if _keycloak_admin_client is None:
-        config = get_keycloak_config()
-        keycloak_url = config["url"]
-        keycloak_realm = config["realm"]
-        admin_keycloak_user = config["admin_keycloak_user"]
-        admin_keycloak_password = config["admin_keycloak_password"]
-
-        _keycloak_admin_client = KeycloakAdminClient(
-            keycloak_url=keycloak_url,
-            realm=keycloak_realm,
-            admin_user=admin_keycloak_user,
-            admin_password=admin_keycloak_password,
-        )
+        # Get official KeycloakAdmin and wrap it
+        official_admin = get_official_admin()
+        _keycloak_admin_client = KeycloakAdminClient(official_admin)
 
     return _keycloak_admin_client

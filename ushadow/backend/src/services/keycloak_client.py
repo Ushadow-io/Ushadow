@@ -3,6 +3,8 @@ Keycloak Client Service
 
 Standard OAuth2/OIDC implementation using python-keycloak library.
 Handles token exchange, refresh, validation, and user info retrieval.
+
+Refactored to use shared KeycloakOpenID instance from keycloak_settings.
 """
 
 import logging
@@ -23,35 +25,24 @@ class KeycloakClient:
     - Token refresh
     - Token introspection
     - User info retrieval
+
+    Uses shared KeycloakOpenID instance from keycloak_settings for consistency.
     """
 
     def __init__(self):
-        """Initialize Keycloak OpenID client from settings configuration."""
-        from src.config.keycloak_settings import get_keycloak_config
+        """Initialize Keycloak OpenID client from shared settings."""
+        from src.config.keycloak_settings import get_keycloak_openid, get_keycloak_connection
 
-        # Load configuration from settings (config.defaults.yaml + secrets.yaml)
-        # Settings system handles env var interpolation via OmegaConf
-        config = get_keycloak_config()
+        # Use shared KeycloakOpenID instance (follows DRY principle)
+        self.keycloak_openid = get_keycloak_openid()
 
-        # Use internal Docker URL for server-to-server communication
-        # The backend runs in Docker and needs to use the internal network
-        self.server_url = config["url"]
-        self.realm = config["realm"]
-        self.client_id = config["frontend_client_id"]  # Used for token validation
-        self.client_secret = config.get("backend_client_secret")
+        # Get server URL from connection object for logging
+        connection = get_keycloak_connection()
 
-        logger.info(f"[KC-CLIENT] Using Keycloak public URL: {self.server_url}")
-
-        # Initialize KeycloakOpenID client
-        self.keycloak_openid = KeycloakOpenID(
-            server_url=self.server_url,
-            realm_name=self.realm,
-            client_id=self.client_id,
-            client_secret_key=self.client_secret,
-            verify=True  # Verify SSL in production
+        logger.info(
+            f"[KC-CLIENT] ✅ Initialized Keycloak client for realm "
+            f"'{connection.realm_name}' at {connection.server_url}"
         )
-
-        logger.info(f"[KC-CLIENT] ✅ Initialized Keycloak client for realm '{self.realm}' at {self.server_url}")
 
     def exchange_code_for_tokens(
         self,

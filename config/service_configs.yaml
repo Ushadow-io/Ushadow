@@ -1,7 +1,0 @@
-instances:
-  chronicle-backend-ushadow--leader-:
-    template_id: chronicle-backend
-    name: chronicle-backend (ushadow (Leader))
-    description: Docker deployment to ushadow (Leader)
-    created_at: '2026-02-03T00:39:13.236265+00:00'
-    updated_at: '2026-02-03T00:39:13.236265+00:00'

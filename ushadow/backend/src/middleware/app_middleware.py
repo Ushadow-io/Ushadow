@@ -119,6 +119,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         "/api/auth/login",
         "/api/auth/logout",
         "/api/auth/me",
+        "/api/unodes/heartbeat",  # Silence heartbeat logs
         "/docs",
         "/redoc",
         "/openapi.json",

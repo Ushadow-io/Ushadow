@@ -20,8 +20,9 @@ auth:
 # Keycloak OAuth Configuration
 keycloak:
   enabled: true
-  url: http://keycloak:8080  # Internal Docker URL
-  # public_url comes from tailscale.yaml (auto-generated)
+  url: http://keycloak:8080  # Internal Docker URL (Keycloak's container port)
+  # public_url: Dynamically constructed from Tailscale hostname in keycloak_settings.py
+  # If needed, can override in config.overrides.yaml
   realm: ushadow
   backend_client_id: ushadow-backend
   frontend_client_id: ushadow-frontend

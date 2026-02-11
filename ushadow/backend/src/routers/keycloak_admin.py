@@ -37,12 +37,13 @@ async def get_keycloak_public_config():
     """
     config = get_keycloak_config()
 
+    # No redundant defaults - get_keycloak_config() already provides them
     return KeycloakConfigResponse(
         enabled=is_keycloak_enabled(),
-        public_url=config.get("public_url", "http://localhost:8080"),
-        realm=config.get("realm", "ushadow"),
-        frontend_client_id=config.get("frontend_client_id", "ushadow-frontend"),
-        backend_client_id=config.get("backend_client_id", "ushadow-backend"),
+        public_url=config["public_url"],  # Dynamic from Tailscale or config
+        realm=config["realm"],
+        frontend_client_id=config["frontend_client_id"],
+        backend_client_id=config["backend_client_id"],
     )
 
 

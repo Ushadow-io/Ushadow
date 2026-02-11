@@ -1030,17 +1030,17 @@ class DeploymentManager:
         if unode_hostname:
             query["hostname"] = unode_hostname
 
-        logger.info(f"[list_deployments] Querying unodes with: {query}")
+        logger.debug(f"[list_deployments] Querying unodes with: {query}")
         cursor = self.unodes_collection.find(query)
         unode_count = 0
         async for unode_dict in cursor:
             unode_count += 1
             unode = UNode(**unode_dict)
-            logger.info(f"[list_deployments] Found unode: hostname={unode.hostname}, status={unode.status.value}")
+            logger.debug(f"[list_deployments] Found unode: hostname={unode.hostname}, status={unode.status.value}")
 
             # Skip if not online
             if unode.status.value != "online":
-                logger.info(f"[list_deployments] Skipping unode {unode.hostname} - not online")
+                logger.debug(f"[list_deployments] Skipping unode {unode.hostname} - not online")
                 continue
 
             # Create deployment target
@@ -1065,10 +1065,10 @@ class DeploymentManager:
             # Query platform for deployments
             platform = get_deploy_platform(target)
             deployments = await platform.list_deployments(target, service_id=service_id)
-            logger.info(f"[list_deployments] Platform returned {len(deployments)} deployments for unode {unode.hostname}")
+            logger.debug(f"[list_deployments] Platform returned {len(deployments)} deployments for unode {unode.hostname}")
             all_deployments.extend(deployments)
 
-        logger.info(f"[list_deployments] Checked {unode_count} unodes, returning {len(all_deployments)} total deployments")
+        logger.debug(f"[list_deployments] Checked {unode_count} unodes, returning {len(all_deployments)} total deployments")
         return all_deployments
 
     async def get_deployment_logs(
