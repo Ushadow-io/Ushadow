@@ -707,6 +707,7 @@ class TailscaleManager:
         Sets up:
         - /api/* → backend (REST APIs through generic proxy)
         - /auth/* → backend (authentication)
+        - /keycloak/* → keycloak (OIDC authentication)
         - /* → frontend (SPA catch-all)
 
         Note: Chronicle and other deployed services are accessed via their own ports,
@@ -744,6 +745,11 @@ class TailscaleManager:
             target = f"{backend_base}{route}"
             if not self.add_serve_route(route, target):
                 success = False
+
+        # Keycloak authentication service
+        keycloak_target = "http://keycloak:8080"
+        if not self.add_serve_route("/keycloak", keycloak_target):
+            success = False
 
         # Chronicle WebSocket routes removed - Chronicle is now a deployed service
         # accessed via its own port (e.g., http://localhost:8090)

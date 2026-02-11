@@ -160,13 +160,6 @@ export function ProjectConfigEditor({ isOpen, projectRoot, onClose, onSave }: Pr
     try {
       // TODO: Call Rust backend to save config
       // await tauri.saveProjectConfig(projectRoot, config)
-      console.log('Saving config:', {
-        config,
-        selectedInfra,
-        managedPorts: managedPorts.map(p => p.name),
-        sharedInfraPorts: sharedInfraPorts.map(p => p.name),
-        appendEnvName
-      })
 
       if (onSave) onSave()
       onClose()

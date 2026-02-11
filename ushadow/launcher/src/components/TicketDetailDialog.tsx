@@ -123,7 +123,6 @@ export function TicketDetailDialog({
   }
 
   const handleCreateWorktree = async () => {
-    console.log('[TicketDetail] Creating worktree for ticket:', ticket.id)
     setError(null)
     setCreatingWorktree(true)
 
@@ -132,12 +131,6 @@ export function TicketDetailDialog({
 
       // Get epic for base branch if ticket has one
       const epic = epicId ? epics.find((e) => e.id === epicId) : null
-      console.log('[TicketDetail] Epic info:', epic ? {
-        id: epic.id,
-        title: epic.title,
-        baseBranch: epic.base_branch,
-        branchName: epic.branch_name
-      } : 'No epic')
 
       const request = {
         ticketId: ticket.id,
@@ -147,13 +140,10 @@ export function TicketDetailDialog({
         baseBranch: epic?.base_branch || 'main',
         epicBranch: epic?.branch_name || undefined,
       }
-      console.log('[TicketDetail] Creating worktree with request:', request)
 
       const result = await tauri.createTicketWorktree(request)
-      console.log('[TicketDetail] Worktree created successfully:', result)
 
       // Update ticket with worktree info
-      console.log('[TicketDetail] Updating ticket with worktree info...')
       await tauri.updateTicket(
         ticket.id,
         undefined, // title
@@ -168,10 +158,8 @@ export function TicketDetailDialog({
         result.tmux_window_name, // tmuxWindowName
         result.tmux_session_name // tmuxSessionName
       )
-      console.log('[TicketDetail] Ticket updated successfully')
 
       // Start coding agent in the tmux window
-      console.log('[TicketDetail] Starting coding agent for ticket:', ticket.id)
       try {
         await tauri.startCodingAgentForTicket(
           ticket.id,
@@ -179,7 +167,6 @@ export function TicketDetailDialog({
           result.tmux_session_name,
           result.worktree_path
         )
-        console.log('[TicketDetail] ✓ Coding agent started')
       } catch (agentErr) {
         console.error('[TicketDetail] Failed to start coding agent:', agentErr)
         // Don't fail the whole operation if agent fails to start
@@ -206,25 +193,15 @@ export function TicketDetailDialog({
       return
     }
 
-    console.log('[TicketDetail] Assigning ticket to environment:', {
-      ticketId: ticket.id,
-      envName: env.name,
-      envPath: env.path,
-      envBranch: env.branch
-    })
-
     setError(null)
     setAssigningEnv(true)
 
     try {
       const { tauri } = await import('../hooks/useTauri')
 
-      console.log('[TicketDetail] Calling attachTicketToWorktree...')
       const result = await tauri.attachTicketToWorktree(ticket.id, env.path, env.branch)
-      console.log('[TicketDetail] attachTicketToWorktree succeeded:', result)
 
       // Update ticket with environment info
-      console.log('[TicketDetail] Updating ticket with worktree info and environment name...')
       await tauri.updateTicket(
         ticket.id,
         undefined, // title
@@ -240,10 +217,8 @@ export function TicketDetailDialog({
         result.tmux_session_name, // tmuxSessionName
         env.name // environmentName - save the environment name!
       )
-      console.log('[TicketDetail] Ticket updated successfully')
 
       // Start coding agent in the tmux window
-      console.log('[TicketDetail] Starting coding agent for ticket:', ticket.id)
       try {
         await tauri.startCodingAgentForTicket(
           ticket.id,
@@ -251,7 +226,6 @@ export function TicketDetailDialog({
           result.tmux_session_name,
           result.worktree_path
         )
-        console.log('[TicketDetail] ✓ Coding agent started')
       } catch (agentErr) {
         console.error('[TicketDetail] Failed to start coding agent:', agentErr)
         // Don't fail the whole operation if agent fails to start

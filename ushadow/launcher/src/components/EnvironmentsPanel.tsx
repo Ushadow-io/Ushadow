@@ -111,14 +111,12 @@ export function EnvironmentsPanel({
   // Auto-open browser view when selecting running environment
   useEffect(() => {
     if (selectedEnv) {
-      console.log('[EnvironmentsPanel] Setting showBrowserView to:', selectedEnv.running)
       setShowBrowserView(selectedEnv.running)
     }
   }, [selectedEnv?.name, selectedEnv?.running])
 
   // Handle environment selection
   const handleEnvSelect = (env: UshadowEnvironment) => {
-    console.log('[EnvironmentsPanel] Environment selected:', env.name, 'running:', env.running)
     setSelectedEnv(env)
   }
 
@@ -393,12 +391,9 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
   useEffect(() => {
     setIframeError(false)
     setIframeLoading(true)
-    console.log(`[BrowserView] Loading environment: ${environment.name}`)
-    console.log(`[BrowserView] URL: ${url}`)
   }, [environment.name, url])
 
   const handleIframeLoad = () => {
-    console.log(`[BrowserView] Iframe loaded successfully for ${environment.name}`)
     setIframeLoading(false)
     setIframeError(false)
   }

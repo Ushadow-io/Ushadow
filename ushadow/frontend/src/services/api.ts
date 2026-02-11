@@ -62,8 +62,8 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  // Check for Keycloak token first (in sessionStorage)
-  const kcToken = sessionStorage.getItem('kc_access_token')
+  // Check for Keycloak token first (in localStorage)
+  const kcToken = localStorage.getItem('kc_access_token')
 
   // Check for native login token (in localStorage - persists)
   const nativeToken = localStorage.getItem('ushadow_access_token')
@@ -71,7 +71,7 @@ api.interceptors.request.use((config) => {
   // Fallback to legacy JWT token (in localStorage)
   const legacyToken = localStorage.getItem(getStorageKey('token'))
 
-  // Priority: Keycloak (session) > Native (persistent) > Legacy
+  // Priority: Keycloak > Native > Legacy (all in localStorage now)
   const token = kcToken || nativeToken || legacyToken
 
   if (token) {
@@ -97,20 +97,13 @@ api.interceptors.response.use(
         // Let the component handle the service-specific auth error
       } else {
         // Token expired or invalid on core ushadow endpoints, redirect to login
-        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing all tokens and redirecting to login')
-
-        // Clear legacy token
+        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
         localStorage.removeItem(getStorageKey('token'))
-
-        // Clear Keycloak tokens (IMPORTANT: prevents infinite loop with invalid tokens)
-        sessionStorage.removeItem('kc_access_token')
-        sessionStorage.removeItem('kc_refresh_token')
-        sessionStorage.removeItem('kc_id_token')
-        sessionStorage.removeItem('kc_expires_at')
-        sessionStorage.removeItem('kc_refresh_expires_at')
-
         localStorage.removeItem('ushadow_access_token')
         localStorage.removeItem('ushadow_user')
+        localStorage.removeItem('kc_access_token')
+        localStorage.removeItem('kc_refresh_token')
+        localStorage.removeItem('kc_id_token')
         window.location.href = '/login'
       }
     } else if (error.code === 'ECONNABORTED') {
@@ -487,45 +480,6 @@ export const usersApi = {
   create: (userData: any) => api.post('/api/users', userData),
   update: (id: string, userData: any) => api.put(`/api/users/${id}`, userData),
   delete: (id: string) => api.delete(`/api/users/${id}`),
-}
-
-// Dashboard types
-export enum ActivityType {
-  CONVERSATION = 'conversation',
-  MEMORY = 'memory',
-}
-
-export interface ActivityEvent {
-  id: string
-  type: ActivityType
-  title: string
-  description?: string
-  timestamp: string
-  metadata: Record<string, any>
-  source?: string
-}
-
-export interface DashboardStats {
-  conversation_count: number
-  memory_count: number
-}
-
-export interface DashboardData {
-  stats: DashboardStats
-  recent_conversations: ActivityEvent[]
-  recent_memories: ActivityEvent[]
-  last_updated: string
-}
-
-// Dashboard endpoints
-export const dashboardApi = {
-  getDashboardData: (conversationLimit: number = 10, memoryLimit: number = 10) =>
-    api.get<DashboardData>('/api/dashboard/', {
-      params: {
-        conversation_limit: conversationLimit,
-        memory_limit: memoryLimit,
-      },
-    }),
 }
 
 // HuggingFace status response type
@@ -2079,5 +2033,44 @@ export const githubImportApi = {
       branch,
       tag,
       compose_path
+    }),
+}
+
+// Dashboard API types
+export enum ActivityType {
+  CONVERSATION = 'conversation',
+  MEMORY = 'memory',
+}
+
+export interface ActivityEvent {
+  id: string
+  type: ActivityType
+  title: string
+  description?: string
+  timestamp: string
+  metadata: Record<string, any>
+  source?: string
+}
+
+export interface DashboardStats {
+  conversation_count: number
+  memory_count: number
+}
+
+export interface DashboardData {
+  stats: DashboardStats
+  recent_conversations: ActivityEvent[]
+  recent_memories: ActivityEvent[]
+  last_updated: string
+}
+
+// Dashboard API endpoints
+export const dashboardApi = {
+  getDashboardData: (conversationLimit: number = 10, memoryLimit: number = 10) =>
+    api.get<DashboardData>('/api/dashboard', {
+      params: {
+        conversation_limit: conversationLimit,
+        memory_limit: memoryLimit,
+      },
     }),
 }

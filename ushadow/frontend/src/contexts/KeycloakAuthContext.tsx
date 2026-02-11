@@ -21,7 +21,7 @@ interface KeycloakAuthContextType {
   login: (redirectUri?: string) => void
   register: (redirectUri?: string) => void
   logout: (redirectUri?: string) => void
-  getAccessToken: () => string | null
+  getAccessToken: () => Promise<string | null>
   handleCallback: (code: string, state: string) => Promise<void>
 }
 
@@ -65,7 +65,7 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
         setRefreshTimeoutId(null)
       }
 
-      const token = TokenManager.getAccessToken()
+      const token = TokenManager.getAccessTokenSync()
       const refreshToken = TokenManager.getRefreshToken()
 
       if (!token || !refreshToken) {
@@ -288,10 +288,10 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
 
     // Store tokens
     TokenManager.storeTokens(tokens)
-    console.log('[KC-AUTH] Tokens stored in sessionStorage')
+    console.log('[KC-AUTH] Tokens stored in localStorage')
 
     // Verify storage worked
-    const storedToken = sessionStorage.getItem('kc_access_token')
+    const storedToken = localStorage.getItem('kc_access_token')
     console.log('[KC-AUTH] Verified storage:', {
       hasStoredToken: !!storedToken,
       storedTokenPreview: storedToken?.substring(0, 30) + '...'
@@ -312,8 +312,8 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem('oauth_state')
   }
 
-  const getAccessToken = () => {
-    return TokenManager.getAccessToken()
+  const getAccessToken = async () => {
+    return await TokenManager.getAccessToken()
   }
 
   return (

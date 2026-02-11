@@ -36,6 +36,14 @@
   "actionTokenGeneratedByUserLifespan": 300,
   "oauth2DeviceCodeLifespan": 600,
   "oauth2DevicePollingInterval": 5,
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http: https: tauri:; object-src 'none';",
+    "xContentTypeOptions": "nosniff",
+    "xRobotsTag": "none",
+    "xFrameOptions": "",
+    "xXSSProtection": "1; mode=block",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  },
   "clientScopes": [
     {
       "name": "openid",
@@ -165,11 +173,13 @@
       "fullScopeAllowed": true,
       "redirectUris": [
         "http://localhost:3000/oauth/callback",
-        "http://localhost:*/oauth/callback"
+        "http://localhost:*/oauth/callback",
+        "tauri://oauth-callback"
       ],
       "webOrigins": [
         "http://localhost:3000",
-        "http://localhost:*"
+        "http://localhost:*",
+        "tauri://localhost"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",

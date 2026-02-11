@@ -2,7 +2,7 @@
  * Token Manager
  *
  * Handles OIDC token storage, retrieval, and validation.
- * Uses sessionStorage for security (tokens cleared when tab closes).
+ * Uses localStorage for persistence across browser sessions.
  */
 
 import { jwtDecode } from 'jwt-decode'
@@ -50,73 +50,143 @@ interface DecodedToken {
 
 export class TokenManager {
   /**
-   * Store tokens in sessionStorage with expiry times
+   * Check if running inside launcher iframe
+   */
+  private static isInLauncher(): boolean {
+    return window.parent !== window && window.location.search.includes('launcher=true')
+  }
+
+  /**
+   * Store tokens in localStorage with expiry times
    */
   static storeTokens(tokens: TokenResponse): void {
     const now = Math.floor(Date.now() / 1000)
 
     if (tokens.access_token) {
-      sessionStorage.setItem(TOKEN_KEY, tokens.access_token)
+      localStorage.setItem(TOKEN_KEY, tokens.access_token)
     }
     if (tokens.refresh_token) {
-      sessionStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token)
+      localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token)
     }
     if (tokens.id_token) {
-      sessionStorage.setItem(ID_TOKEN_KEY, tokens.id_token)
+      localStorage.setItem(ID_TOKEN_KEY, tokens.id_token)
     }
 
     // Store expiry times (OAuth2 standard: use expires_in from token response)
     if (tokens.expires_in) {
       const expiresAt = now + tokens.expires_in
-      sessionStorage.setItem(EXPIRES_AT_KEY, expiresAt.toString())
+      localStorage.setItem(EXPIRES_AT_KEY, expiresAt.toString())
       console.log('[TokenManager] Access token expires in:', tokens.expires_in, 'seconds')
     }
 
     // Store refresh token expiry if provided
     if (tokens.refresh_expires_in) {
       const refreshExpiresAt = now + tokens.refresh_expires_in
-      sessionStorage.setItem(REFRESH_EXPIRES_AT_KEY, refreshExpiresAt.toString())
+      localStorage.setItem(REFRESH_EXPIRES_AT_KEY, refreshExpiresAt.toString())
       console.log('[TokenManager] Refresh token expires in:', tokens.refresh_expires_in, 'seconds')
     }
   }
 
   /**
-   * Get access token from storage
+   * Get access token from storage (or from launcher if in iframe)
    */
-  static getAccessToken(): string | null {
-    return sessionStorage.getItem(TOKEN_KEY)
+  static async getAccessToken(): Promise<string | null> {
+    // If in launcher iframe, request token from parent
+    if (this.isInLauncher()) {
+      return this.getTokenFromLauncher()
+    }
+
+    // Otherwise use localStorage
+    return localStorage.getItem(TOKEN_KEY)
+  }
+
+  /**
+   * Get access token synchronously (for backwards compatibility)
+   */
+  static getAccessTokenSync(): string | null {
+    return localStorage.getItem(TOKEN_KEY)
+  }
+
+  /**
+   * Request token from launcher via postMessage
+   * Caches tokens in localStorage for synchronous access
+   */
+  private static async getTokenFromLauncher(): Promise<string | null> {
+    return new Promise((resolve) => {
+      console.log('[TokenManager] Requesting token from launcher...')
+
+      // Send request to launcher
+      window.parent.postMessage({ type: 'GET_KC_TOKEN' }, '*')
+
+      // Listen for response
+      const handler = (event: MessageEvent) => {
+        if (event.data.type === 'KC_TOKEN_RESPONSE') {
+          window.removeEventListener('message', handler)
+
+          const tokens = event.data.tokens
+          console.log('[TokenManager] Received tokens from launcher:', {
+            hasToken: !!tokens.token,
+            hasRefresh: !!tokens.refreshToken,
+            hasId: !!tokens.idToken
+          })
+
+          // Cache tokens in iframe localStorage for synchronous access
+          if (tokens.token) {
+            localStorage.setItem(TOKEN_KEY, tokens.token)
+          }
+          if (tokens.refreshToken) {
+            localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken)
+          }
+          if (tokens.idToken) {
+            localStorage.setItem(ID_TOKEN_KEY, tokens.idToken)
+          }
+
+          console.log('[TokenManager] ✓ Tokens cached in iframe localStorage')
+          resolve(tokens.token)
+        }
+      }
+
+      window.addEventListener('message', handler)
+
+      // Timeout after 5 seconds
+      setTimeout(() => {
+        window.removeEventListener('message', handler)
+        console.warn('[TokenManager] ⚠️ Timeout requesting token from launcher')
+        resolve(null)
+      }, 5000)
+    })
   }
 
   /**
    * Get refresh token from storage
    */
   static getRefreshToken(): string | null {
-    return sessionStorage.getItem(REFRESH_TOKEN_KEY)
+    return localStorage.getItem(REFRESH_TOKEN_KEY)
   }
 
   /**
    * Get ID token from storage
    */
   static getIdToken(): string | null {
-    return sessionStorage.getItem(ID_TOKEN_KEY)
+    return localStorage.getItem(ID_TOKEN_KEY)
   }
 
   /**
    * Clear all tokens from storage
    */
   static clearTokens(): void {
-    sessionStorage.removeItem(TOKEN_KEY)
-    sessionStorage.removeItem(REFRESH_TOKEN_KEY)
-    sessionStorage.removeItem(ID_TOKEN_KEY)
-    sessionStorage.removeItem(EXPIRES_AT_KEY)
-    sessionStorage.removeItem(REFRESH_EXPIRES_AT_KEY)
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+    localStorage.removeItem(ID_TOKEN_KEY)
+    localStorage.removeItem(EXPIRES_AT_KEY)
+    localStorage.removeItem(REFRESH_EXPIRES_AT_KEY)
   }
 
   /**
    * Get access token expiry info from storage (OAuth2 standard)
    */
   static getTokenExpiry(): { expiresAt: number; expiresIn: number } | null {
-    const expiresAtStr = sessionStorage.getItem(EXPIRES_AT_KEY)
+    const expiresAtStr = localStorage.getItem(EXPIRES_AT_KEY)
     if (!expiresAtStr) return null
 
     const expiresAt = parseInt(expiresAtStr, 10)
@@ -130,7 +200,7 @@ export class TokenManager {
    * Get refresh token expiry info from storage (OAuth2 standard)
    */
   static getRefreshTokenExpiry(): { expiresAt: number; expiresIn: number } | null {
-    const expiresAtStr = sessionStorage.getItem(REFRESH_EXPIRES_AT_KEY)
+    const expiresAtStr = localStorage.getItem(REFRESH_EXPIRES_AT_KEY)
     if (!expiresAtStr) return null
 
     const expiresAt = parseInt(expiresAtStr, 10)
@@ -142,10 +212,12 @@ export class TokenManager {
 
   /**
    * Check if user is authenticated (has valid token)
+   * Note: This is a synchronous check using localStorage only.
+   * For launcher mode, tokens must be cached in localStorage first.
    */
   static isAuthenticated(): boolean {
-    // Check for Keycloak token first (sessionStorage)
-    let token = this.getAccessToken()
+    // Check for Keycloak token first (localStorage)
+    let token = localStorage.getItem(TOKEN_KEY)
 
     // Check for native token (localStorage - persists)
     if (!token) {
@@ -153,7 +225,7 @@ export class TokenManager {
     }
 
     if (!token) {
-      console.log('[TokenManager] No access token found')
+      console.log('[TokenManager] No access token found in localStorage')
       return false
     }
 
@@ -184,10 +256,10 @@ export class TokenManager {
   }
 
   /**
-   * Get user info from decoded token
+   * Get user info from decoded token (synchronous - uses localStorage)
    */
   static getUserInfo(): any | null {
-    const token = this.getAccessToken()
+    const token = localStorage.getItem(TOKEN_KEY)
     if (!token) return null
 
     try {

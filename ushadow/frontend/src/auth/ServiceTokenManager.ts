@@ -44,13 +44,13 @@ export async function getServiceToken(
 
 /**
  * Get a Chronicle-compatible token for the current user.
- * Automatically retrieves the Keycloak token from session storage.
- * 
+ * Automatically retrieves the Keycloak token from local storage.
+ *
  * @returns Service token ready to use with Chronicle WebSocket
  */
 export async function getChronicleToken(): Promise<string> {
-  const keycloakToken = sessionStorage.getItem('kc_access_token')
-  
+  const keycloakToken = localStorage.getItem('kc_access_token')
+
   if (!keycloakToken) {
     throw new Error('No Keycloak token found. Please log in first.')
   }

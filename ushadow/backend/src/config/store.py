@@ -104,8 +104,9 @@ class SettingsStore:
 
         self.config_dir = Path(config_dir)
 
-        # File paths (merge order: defaults → secrets → overrides → instance_overrides)
+        # File paths (merge order: defaults → tailscale → secrets → overrides → instance_overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
+        self.tailscale_path = self.config_dir / "tailscale.yaml"
         self.secrets_path = self.config_dir / "SECRETS" / "secrets.yaml"
         self.overrides_path = self.config_dir / "config.overrides.yaml"
         self.instance_overrides_path = self.config_dir / "instance-overrides.yaml"
@@ -137,9 +138,10 @@ class SettingsStore:
 
         Merge order (later overrides earlier):
         1. config.defaults.yaml - All default values
-        2. secrets.yaml - API keys, passwords (gitignored)
-        3. config.overrides.yaml - Template-level overrides (gitignored)
-        4. instance-overrides.yaml - Instance-level overrides (gitignored)
+        2. tailscale.yaml - Tailscale configuration (hostname, etc.)
+        3. secrets.yaml - API keys, passwords (gitignored)
+        4. config.overrides.yaml - Template-level overrides (gitignored)
+        5. instance-overrides.yaml - Instance-level overrides (gitignored)
 
         Returns:
             OmegaConf DictConfig with all values merged
@@ -157,6 +159,10 @@ class SettingsStore:
         if cfg := self._load_yaml_if_exists(self.defaults_path):
             configs.append(cfg)
             logger.debug(f"Loaded defaults from {self.defaults_path}")
+
+        if cfg := self._load_yaml_if_exists(self.tailscale_path):
+            configs.append(cfg)
+            logger.debug(f"Loaded tailscale config from {self.tailscale_path}")
 
         if cfg := self._load_yaml_if_exists(self.secrets_path):
             configs.append(cfg)

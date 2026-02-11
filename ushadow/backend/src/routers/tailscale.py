@@ -85,6 +85,7 @@ class DeploymentMode(BaseModel):
 class TailscaleConfig(BaseModel):
     """Complete Tailscale configuration"""
     hostname: str = Field(..., description="Tailscale hostname (e.g., machine-name.tail12345.ts.net)")
+    ip_address: Optional[str] = Field(None, description="Tailscale IP address (e.g., 100.105.225.45)")
     deployment_mode: DeploymentMode
     https_enabled: bool = True
     use_caddy_proxy: bool = Field(..., description="True for multi-env, False for single-env")
@@ -410,6 +411,7 @@ async def generate_serve_config(config: TailscaleConfig) -> Dict[str, str]:
         f"tailscale serve https / http://localhost:{frontend_port}",
         f"tailscale serve https /api http://localhost:{backend_port}",
         f"tailscale serve https /auth http://localhost:{backend_port}",
+        f"tailscale serve https /keycloak http://localhost:8081",
         "",
         "# To view current configuration:",
         "tailscale serve status",
@@ -1382,6 +1384,14 @@ async def configure_tailscale_serve(
     """
     try:
         manager = get_tailscale_manager()
+
+        # Get container status to capture IP address
+        container_status = manager.get_container_status()
+        if container_status.ip_address:
+            config.ip_address = container_status.ip_address
+            logger.info(f"Captured Tailscale IP: {container_status.ip_address}")
+        else:
+            logger.warning("Could not capture Tailscale IP address")
 
         # Save configuration to disk first
         config_data = config.model_dump()

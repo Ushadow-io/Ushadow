@@ -16,6 +16,7 @@ import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
 import { ProjectManager } from './components/ProjectManager'
+import { AuthButton } from './components/AuthButton'
 import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2, Trello } from 'lucide-react'
 import { getColors } from './utils/colors'
 import { KanbanBoard } from './components/KanbanBoard'
@@ -170,10 +171,52 @@ function App() {
 
   // Enable native clipboard operations (undo/redo/copy/paste/cut/select-all)
   // Tauri webview supports standard browser clipboard API
+  // All native keyboard shortcuts work by default: Cmd/Ctrl+Z (undo), Cmd/Ctrl+Shift+Z (redo), Cmd/Ctrl+A (select all), etc.
+
+  // Token sharing API: Listen for token requests from environment iframes
   useEffect(() => {
-    // Allow all native keyboard shortcuts to work by not interfering
-    // This enables: Cmd/Ctrl+Z (undo), Cmd/Ctrl+Shift+Z (redo), Cmd/Ctrl+A (select all), etc.
-    console.log('Native keyboard shortcuts enabled (clipboard API available:', !!navigator.clipboard, ')')
+    const handleMessage = (event: MessageEvent) => {
+      // Security: Only respond to messages from embedded environments
+      // TODO: Add origin validation if needed
+
+      if (event.data.type === 'GET_KC_TOKEN') {
+        // Get tokens from localStorage
+        const token = localStorage.getItem('kc_access_token')
+        const refreshToken = localStorage.getItem('kc_refresh_token')
+        const idToken = localStorage.getItem('kc_id_token')
+
+        // Send tokens back to requesting iframe
+        event.source?.postMessage(
+          {
+            type: 'KC_TOKEN_RESPONSE',
+            tokens: { token, refreshToken, idToken },
+          },
+          '*' // TODO: Restrict to specific origins in production
+        )
+      }
+
+      if (event.data.type === 'REFRESH_KC_TOKEN') {
+        // TODO: Implement token refresh logic
+        // For now, just return current tokens
+        const token = localStorage.getItem('kc_access_token')
+        const refreshToken = localStorage.getItem('kc_refresh_token')
+        const idToken = localStorage.getItem('kc_id_token')
+
+        event.source?.postMessage(
+          {
+            type: 'KC_TOKEN_REFRESHED',
+            tokens: { token, refreshToken, idToken },
+          },
+          '*'
+        )
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+
+    return () => {
+      window.removeEventListener('message', handleMessage)
+    }
   }, [])
 
   // Apply spoofed values to prerequisites
@@ -272,22 +315,16 @@ function App() {
     const init = async () => {
       try {
         log('Initializing...', 'step')
-        console.log('[Init] Starting initialization...')
 
         const os = await tauri.getOsType()
-        console.log('[Init] OS:', os)
         setPlatform(os)
         log(`Platform: ${os}`)
 
         // Load prerequisites configuration for this platform
-        console.log('[Init] Loading prerequisites config...')
         const config = await tauri.getPlatformPrerequisitesConfig(os)
-        console.log('[Init] Prerequisites config:', config)
         setPrerequisitesConfig(config)
 
-        console.log('[Init] Getting default project dir...')
         const defaultDir = await tauri.getDefaultProjectDir()
-        console.log('[Init] Default dir:', defaultDir)
 
         // Track if this is first time setup (showing project dialog)
         let isFirstTimeSetup = false
@@ -300,22 +337,18 @@ function App() {
           log('Please configure your repository location', 'step')
         } else {
           // Sync existing project root to Rust backend
-          console.log('[Init] Setting project root:', projectRoot)
           await tauri.setProjectRoot(projectRoot)
         }
 
         // Check prerequisites immediately (system-wide, no project needed)
-        console.log('[Init] Checking prerequisites...')
         await refreshPrerequisites()
 
         // Only run discovery if we have a valid project root
         if (!isFirstTimeSetup) {
-          console.log('[Init] Running discovery...')
           await refreshDiscovery()
         }
 
         log('Ready', 'success')
-        console.log('[Init] Initialization complete')
       } catch (err) {
         console.error('[Init] Initialization error:', err)
         log(`Initialization failed: ${err}`, 'error')
@@ -358,7 +391,6 @@ function App() {
   // Sync active project root to Rust backend when it changes (multi-project mode)
   useEffect(() => {
     if (effectiveProjectRoot && effectiveProjectRoot !== projectRoot) {
-      console.log('[Multi-Project] Syncing active project to backend:', effectiveProjectRoot)
       tauri.setProjectRoot(effectiveProjectRoot).catch(err => {
         console.error('Failed to sync project root to backend:', err)
       })
@@ -547,7 +579,6 @@ function App() {
 
   // Environment handlers
   const handleStartEnv = async (envName: string, explicitPath?: string) => {
-    console.log(`DEBUG: handleStartEnv called for ${envName}`)
     setLoadingEnv({ name: envName, action: 'starting' })
     log(`Starting ${envName}...`, 'step')
 
@@ -623,9 +654,7 @@ function App() {
           }
         })
       } else {
-        console.log(`DEBUG: Calling tauri.startEnvironment(${envName}, ${envPath})`)
         const result = await tauri.startEnvironment(envName, envPath)
-        console.log(`DEBUG: tauri.startEnvironment returned: ${result}`)
         // Only log summary to activity log (full detail is in console/detail pane)
         log(`✓ Environment ${envName} started successfully`, 'success')
 
@@ -1172,12 +1201,8 @@ function App() {
 
   const handleClone = async (path: string, branch?: string) => {
     try {
-      console.log('DEBUG handleClone: Starting clone for path:', path, 'branch:', branch)
-      console.log('DEBUG handleClone: dryRunMode =', dryRunMode)
-
       // Check if repo already exists at this location
       const status = await tauri.checkProjectDir(path)
-      console.log('DEBUG handleClone: checkProjectDir status =', status)
 
       if (status.exists && status.is_valid_repo) {
         // Repo exists - pull latest instead of cloning
@@ -1202,9 +1227,7 @@ function App() {
           await new Promise(r => setTimeout(r, 2000))
           log('[DRY RUN] Clone simulated', 'success')
         } else {
-          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path, 'branch:', branch)
           const result = await tauri.cloneUshadowRepo(path, branch)
-          console.log('DEBUG handleClone: Clone result from Rust:', result)
           log(result, 'success')
         }
       }
@@ -1239,7 +1262,6 @@ function App() {
 
   // Quick launch (for quick mode)
   const handleQuickLaunch = async () => {
-    console.log('DEBUG: handleQuickLaunch started')
     setIsLaunching(true)
     setLogExpanded(true)
     log('🚀 Starting Ushadow quick launch...', 'step')
@@ -1517,6 +1539,12 @@ function App() {
             <Terminal className="w-4 h-4" />
           </button>
 
+          {/* Auth Button */}
+          <AuthButton
+            environment={discovery?.environments.find(e => e.running) || null}
+            variant="header"
+          />
+
           {/* Settings Button */}
           <button
             onClick={() => setShowSettingsDialog(true)}
@@ -1653,7 +1681,6 @@ function App() {
                 projectRoot={effectiveProjectRoot}
                 selectedInfraServices={selectedInfraServices}
                 onSave={(config) => {
-                  console.log('Infra config saved:', config)
                   // TODO: Save to backend
                 }}
               />
