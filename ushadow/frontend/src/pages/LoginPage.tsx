@@ -10,8 +10,10 @@ export default function LoginPage() {
   const location = useLocation()
   const { isAuthenticated, isLoading, login, register } = useKeycloakAuth()
 
+  // Parse URL search parameters once
+  const searchParams = new URLSearchParams(location.search)
+
   // Check if running in launcher mode (embedded iframe)
-  const searchParams = new URLSearchParams(window.location.search)
   const isLauncherMode = searchParams.get('launcher') === 'true'
 
   // Native login state
@@ -22,7 +24,6 @@ export default function LoginPage() {
 
   // Get the intended destination from router state (set by ProtectedRoute)
   // or from query param (used by share pages and other public routes)
-  const searchParams = new URLSearchParams(location.search)
   const returnTo = searchParams.get('returnTo')
   const from = (location.state as { from?: string })?.from || returnTo || '/'
 

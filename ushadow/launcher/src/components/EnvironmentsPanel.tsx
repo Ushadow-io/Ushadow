@@ -259,10 +259,6 @@ export function EnvironmentsPanel({
 
       {/* Right Column - Detail Panel or Browser View */}
       <div className="flex-1 bg-surface-800 rounded-lg overflow-hidden ml-4">
-        {(() => {
-          console.log('[EnvironmentsPanel] Render - selectedEnv:', selectedEnv?.name, 'showBrowserView:', showBrowserView, 'running:', selectedEnv?.running)
-          return null
-        })()}
         {selectedEnv ? (
           showBrowserView && selectedEnv.running ? (
             <BrowserView

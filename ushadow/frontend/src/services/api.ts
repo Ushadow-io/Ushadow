@@ -489,6 +489,45 @@ export const usersApi = {
   delete: (id: string) => api.delete(`/api/users/${id}`),
 }
 
+// Dashboard types
+export enum ActivityType {
+  CONVERSATION = 'conversation',
+  MEMORY = 'memory',
+}
+
+export interface ActivityEvent {
+  id: string
+  type: ActivityType
+  title: string
+  description?: string
+  timestamp: string
+  metadata: Record<string, any>
+  source?: string
+}
+
+export interface DashboardStats {
+  conversation_count: number
+  memory_count: number
+}
+
+export interface DashboardData {
+  stats: DashboardStats
+  recent_conversations: ActivityEvent[]
+  recent_memories: ActivityEvent[]
+  last_updated: string
+}
+
+// Dashboard endpoints
+export const dashboardApi = {
+  getDashboardData: (conversationLimit: number = 10, memoryLimit: number = 10) =>
+    api.get<DashboardData>('/api/dashboard/', {
+      params: {
+        conversation_limit: conversationLimit,
+        memory_limit: memoryLimit,
+      },
+    }),
+}
+
 // HuggingFace status response type
 export interface HuggingFaceStatus {
   connected: boolean
