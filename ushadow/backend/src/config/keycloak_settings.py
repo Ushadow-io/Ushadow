@@ -6,10 +6,18 @@ All sensitive values (passwords, client secrets) are stored in secrets.yaml.
 
 import os
 import logging
+from typing import Optional
+
+from keycloak import KeycloakAdmin, KeycloakOpenID, KeycloakOpenIDConnection
 
 from src.config import get_settings_store as get_settings
 
 logger = logging.getLogger(__name__)
+
+# Global instances (initialized on first use)
+_keycloak_connection: Optional[KeycloakOpenIDConnection] = None
+_keycloak_admin: Optional[KeycloakAdmin] = None
+_keycloak_openid: Optional[KeycloakOpenID] = None
 
 
 def get_keycloak_public_url() -> str:
@@ -187,7 +195,13 @@ def get_keycloak_openid(client_id: Optional[str] = None) -> KeycloakOpenID:
 
     if _keycloak_openid is None:
         settings = get_settings()
-        connection = get_keycloak_connection()
+
+        # Internal URL for backend-to-Keycloak communication
+        internal_url = (
+            os.environ.get("KEYCLOAK_URL") or
+            settings.get_sync("keycloak.url") or
+            "http://keycloak:8080"
+        )
 
         # Use provided client_id or default to frontend
         if client_id is None:
@@ -201,7 +215,7 @@ def get_keycloak_openid(client_id: Optional[str] = None) -> KeycloakOpenID:
         logger.info(f"[KC-SETTINGS] Initializing KeycloakOpenID for client: {client_id}")
 
         _keycloak_openid = KeycloakOpenID(
-            server_url=connection.server_url,
+            server_url=internal_url,
             realm_name=app_realm,  # Use application realm for token operations
             client_id=client_id,
             client_secret_key=client_secret,
@@ -234,10 +248,11 @@ def get_keycloak_config() -> dict:
     # Application realm (not master realm used for admin connection)
     app_realm = settings.get_sync("keycloak.realm", "ushadow")
 
-    return {
+    # Build config dict
+    config = {
         "enabled": settings.get_sync("keycloak.enabled", False),
         "url": settings.get_sync("keycloak.url", "http://keycloak:8080"),
-        "public_url": connection.server_url,  # From connection (dynamic)
+        "public_url": get_keycloak_public_url(),  # Dynamic public URL
         "realm": app_realm,  # Application realm (ushadow), not master
         "backend_client_id": settings.get_sync("keycloak.backend_client_id", "ushadow-backend"),
         "frontend_client_id": settings.get_sync("keycloak.frontend_client_id", "ushadow-frontend"),

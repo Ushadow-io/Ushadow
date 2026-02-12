@@ -170,29 +170,39 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    // Re-check auth state on mount (in case token expired between initial check and mount)
-    const authenticated = TokenManager.isAuthenticated()
-    if (authenticated !== isAuthenticated) {
-      setIsAuthenticated(authenticated)
-      if (authenticated) {
-        const info = TokenManager.getUserInfo()
-        setUserInfo(info)
-        // Fetch MongoDB user data
+    // Check auth state with launcher support (async)
+    const checkAuth = async () => {
+      console.log('[KC-AUTH] Checking authentication (launcher-aware)...')
+      const authenticated = await TokenManager.isAuthenticatedAsync()
+      console.log('[KC-AUTH] Authentication result:', authenticated)
+
+      if (authenticated !== isAuthenticated) {
+        setIsAuthenticated(authenticated)
+        if (authenticated) {
+          const info = TokenManager.getUserInfo()
+          setUserInfo(info)
+          // Fetch MongoDB user data
+          fetchUserData()
+          // Set up token refresh
+          setupTokenRefresh()
+        } else {
+          setUserInfo(null)
+          setUser(null)
+          setIsLoading(false)
+        }
+      } else if (authenticated && !user) {
+        // If already authenticated but no user data, fetch it
         fetchUserData()
-        // Set up token refresh
-        setupTokenRefresh()
-      } else {
-        setUserInfo(null)
-        setUser(null)
-      }
-    } else if (authenticated && !user) {
-      // If already authenticated but no user data, fetch it
-      fetchUserData()
-      // Set up token refresh if not already set
-      if (!refreshTimeoutId) {
-        setupTokenRefresh()
+        // Set up token refresh if not already set
+        if (!refreshTimeoutId) {
+          setupTokenRefresh()
+        }
+      } else if (!authenticated) {
+        setIsLoading(false)
       }
     }
+
+    checkAuth()
 
     // Clean up on unmount
     return () => {

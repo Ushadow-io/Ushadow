@@ -72,6 +72,40 @@ function App() {
   const [isResizing, setIsResizing] = useState(false)
   const [environmentConflict, setEnvironmentConflict] = useState<EnvironmentConflict | null>(null)
   const [pendingEnvCreation, setPendingEnvCreation] = useState<{ name: string; branch: string } | null>(null)
+  const [selectedEnvironment, setSelectedEnvironment] = useState<UshadowEnvironment | null>(null)
+
+  // Auto-select environment matching current directory's ENV_NAME, or first running
+  useEffect(() => {
+    if (!selectedEnvironment && discovery?.environments) {
+      // Try to find environment matching the current project root
+      const currentEnv = discovery.environments.find(e =>
+        e.running && e.path === projectRoot
+      )
+      // Fallback to first running environment
+      const envToSelect = currentEnv || discovery.environments.find(e => e.running)
+      if (envToSelect) {
+        console.log('[App] Auto-selecting environment:', {
+          name: envToSelect.name,
+          backend_port: envToSelect.backend_port,
+          path: envToSelect.path,
+          projectRoot,
+          matched: !!currentEnv
+        })
+        setSelectedEnvironment(envToSelect)
+      }
+    }
+  }, [discovery?.environments, selectedEnvironment, projectRoot])
+
+  // Debug: expose selectedEnvironment to console
+  useEffect(() => {
+    if (selectedEnvironment) {
+      (window as any).selectedEnv = selectedEnvironment
+      console.log('[App] Selected environment updated:', {
+        name: selectedEnvironment.name,
+        backend_port: selectedEnvironment.backend_port
+      })
+    }
+  }, [selectedEnvironment])
 
   // Window focus detection for smart polling
   const isWindowFocused = useWindowFocus()
@@ -1541,7 +1575,7 @@ function App() {
 
           {/* Auth Button */}
           <AuthButton
-            environment={discovery?.environments.find(e => e.running) || null}
+            environment={selectedEnvironment}
             variant="header"
           />
 
@@ -1702,6 +1736,11 @@ function App() {
               onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
               loadingEnv={loadingEnv}
               tmuxStatuses={tmuxStatuses}
+              selectedEnvironment={selectedEnvironment}
+              onSelectEnvironment={(env) => {
+                console.log('[App] onSelectEnvironment called with:', env?.name)
+                setSelectedEnvironment(env)
+              }}
             />
           </div>
         ) : appMode === 'kanban' && kanbanEnabled ? (

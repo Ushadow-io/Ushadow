@@ -51,9 +51,12 @@ interface DecodedToken {
 export class TokenManager {
   /**
    * Check if running inside launcher iframe
+   *
+   * Simple check: if we're in an iframe, assume it's the launcher.
+   * Will attempt to request tokens via postMessage (worst case: 5s timeout if wrong).
    */
   private static isInLauncher(): boolean {
-    return window.parent !== window && window.location.search.includes('launcher=true')
+    return window.parent !== window
   }
 
   /**
@@ -212,8 +215,65 @@ export class TokenManager {
 
   /**
    * Check if user is authenticated (has valid token)
-   * Note: This is a synchronous check using localStorage only.
-   * For launcher mode, tokens must be cached in localStorage first.
+   *
+   * If running in launcher, attempts to get token from parent first.
+   * This is an async operation that will resolve quickly (cached or from launcher).
+   */
+  static async isAuthenticatedAsync(): Promise<boolean> {
+    // If in launcher, request token from parent first
+    if (this.isInLauncher()) {
+      const token = await this.getTokenFromLauncher()
+      if (!token) {
+        console.log('[TokenManager] No token from launcher')
+        return false
+      }
+      // Token is now cached in localStorage, continue with validation below
+    }
+
+    // Check for Keycloak token (localStorage)
+    let token = localStorage.getItem(TOKEN_KEY)
+
+    // Check for native token (localStorage - persists)
+    if (!token) {
+      token = localStorage.getItem('ushadow_access_token')
+    }
+
+    if (!token) {
+      console.log('[TokenManager] No access token found in localStorage')
+      return false
+    }
+
+    try {
+      const decoded = jwtDecode<DecodedToken>(token)
+      const now = Math.floor(Date.now() / 1000)
+      const isValid = decoded.exp > now
+      const expiresIn = decoded.exp - now
+
+      console.log('[TokenManager] Token check:', {
+        isValid,
+        expiresIn: `${Math.floor(expiresIn / 60)}m ${expiresIn % 60}s`,
+        expiresAt: new Date(decoded.exp * 1000).toISOString(),
+        now: new Date(now * 1000).toISOString()
+      })
+
+      if (!isValid) {
+        console.warn('[TokenManager] ⚠️ Token EXPIRED!', {
+          expiredAgo: `${Math.floor(Math.abs(expiresIn) / 60)}m ${Math.abs(expiresIn) % 60}s ago`
+        })
+      }
+
+      return isValid
+    } catch (error) {
+      console.error('[TokenManager] Invalid token:', error)
+      return false
+    }
+  }
+
+  /**
+   * Check if user is authenticated (synchronous version)
+   *
+   * Note: This only checks localStorage and won't request from launcher.
+   * Use isAuthenticatedAsync() for launcher-aware check.
    */
   static isAuthenticated(): boolean {
     // Check for Keycloak token first (localStorage)

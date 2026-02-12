@@ -26,6 +26,8 @@ interface EnvironmentsPanelProps {
   onAttachTmux?: (env: UshadowEnvironment) => void
   loadingEnv: { name: string; action: 'starting' | 'stopping' | 'deleting' | 'merging' } | null
   tmuxStatuses?: { [envName: string]: TmuxStatus }
+  selectedEnvironment?: UshadowEnvironment | null
+  onSelectEnvironment?: (env: UshadowEnvironment | null) => void
 }
 
 export function EnvironmentsPanel({
@@ -41,10 +43,14 @@ export function EnvironmentsPanel({
   onAttachTmux,
   loadingEnv,
   tmuxStatuses = {},
+  selectedEnvironment,
+  onSelectEnvironment,
 }: EnvironmentsPanelProps) {
   const [activeTab, setActiveTab] = useState<'running' | 'detected'>('running')
   const [showTmuxManager, setShowTmuxManager] = useState(false)
-  const [selectedEnv, setSelectedEnv] = useState<UshadowEnvironment | null>(null)
+  // Use parent's selected environment, fallback to local state for backward compat
+  const selectedEnv = selectedEnvironment
+  const setSelectedEnv = onSelectEnvironment || (() => {})
   const [showBrowserView, setShowBrowserView] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(320)
   const [isResizing, setIsResizing] = useState(false)
@@ -117,7 +123,12 @@ export function EnvironmentsPanel({
 
   // Handle environment selection
   const handleEnvSelect = (env: UshadowEnvironment) => {
+    console.log('[EnvironmentsPanel] Selecting environment:', env.name, {
+      hasCallback: !!onSelectEnvironment,
+      callbackType: typeof onSelectEnvironment
+    })
     setSelectedEnv(env)
+    console.log('[EnvironmentsPanel] Called setSelectedEnv')
   }
 
   // Handle creating ticket from environment

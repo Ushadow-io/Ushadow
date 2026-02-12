@@ -59,15 +59,17 @@ export function InfrastructurePanel({
       })
   }, [])
 
-  // Debug: log discovered services
-  if (services.length > 0) {
-    console.log('[InfrastructurePanel] Discovered services:', services.map(s => ({
-      name: s.name,
-      display_name: s.display_name,
-      running: s.running,
-      ports: s.ports
-    })))
-  }
+  // Debug: log discovered services (only once when services change)
+  useEffect(() => {
+    if (services.length > 0) {
+      console.log('[InfrastructurePanel] Discovered services:', services.map(s => ({
+        name: s.name,
+        display_name: s.display_name,
+        running: s.running,
+        ports: s.ports
+      })))
+    }
+  }, [services.length])
 
   // Build unified list of services (now composeServices already includes running status)
   const predefinedServices = composeServices.map(composeSvc => {

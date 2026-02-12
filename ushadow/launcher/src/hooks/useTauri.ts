@@ -177,6 +177,10 @@ export const tauri = {
   // Utilities
   openBrowser: (url: string) => invoke<void>('open_browser', { url }),
 
+  // OAuth server
+  startOAuthServer: () => invoke<[number, string]>('start_oauth_server'),
+  waitForOAuthCallback: (port: number) => invoke<{success: boolean, code?: string, state?: string, error?: string}>('wait_for_oauth_callback', { port }),
+
   // Worktree management
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
   listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),

@@ -14,6 +14,8 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     start_environment, stop_environment, check_ports,
     check_backend_health, check_webui_health, open_browser, focus_window, set_project_root,
     create_environment,
+    // OAuth server commands
+    start_oauth_server, wait_for_oauth_callback,
     // Project/repo management (from repository.rs)
     get_default_project_dir, check_project_dir, clone_ushadow_repo,
     update_ushadow_repo, get_current_branch, checkout_branch, get_base_branch,
@@ -248,6 +250,9 @@ fn main() {
             scan_all_env_vars,
             // Infrastructure discovery
             get_infra_services_from_compose,
+            // OAuth server
+            start_oauth_server,
+            wait_for_oauth_callback,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

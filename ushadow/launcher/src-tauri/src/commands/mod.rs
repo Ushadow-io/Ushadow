@@ -12,6 +12,7 @@ mod bundled;  // Bundled resources locator
 pub mod worktree;
 pub mod platform;  // Platform abstraction layer
 mod kanban;  // Kanban ticket integration
+mod oauth_server;  // OAuth callback server for desktop auth
 // Embedded terminal module (PTY-based) - DEPRECATED in favor of native terminal integration (iTerm2/Terminal.app/gnome-terminal)
 // pub mod terminal;
 mod config_commands;
@@ -30,6 +31,7 @@ pub use permissions::*;
 pub use settings::*;
 pub use worktree::*;
 pub use kanban::*;  // Export kanban ticket functions
+pub use oauth_server::*;  // Export OAuth server functions
 // pub use terminal::*;
 pub use config_commands::*;
 pub use container_discovery::*;

@@ -28,8 +28,6 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
   useEffect(() => {
     setIframeError(false)
     setIframeLoading(true)
-    console.log(`[EmbeddedView] Loading environment: ${envName}`)
-    console.log(`[EmbeddedView] URL: ${iframeUrl}`)
   }, [envName, iframeUrl])
 
   const handleIframeLoad = () => {
