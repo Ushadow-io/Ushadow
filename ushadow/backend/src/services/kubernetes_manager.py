@@ -339,6 +339,31 @@ class KubernetesManager:
             logger.error(f"Error updating cluster infra scan: {e}")
             return False
 
+    async def delete_cluster_infra_scan(
+        self,
+        cluster_id: str,
+        namespace: str
+    ) -> bool:
+        """
+        Delete cached infrastructure scan for a specific namespace.
+
+        Args:
+            cluster_id: The cluster ID
+            namespace: The namespace scan to delete
+
+        Returns:
+            True if deletion was successful
+        """
+        try:
+            result = await self.clusters_collection.update_one(
+                {"cluster_id": cluster_id},
+                {"$unset": {f"infra_scans.{namespace}": ""}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error deleting cluster infra scan: {e}")
+            return False
+
     async def update_cluster(
         self,
         cluster_id: str,

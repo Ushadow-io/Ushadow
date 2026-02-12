@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Ushadow",
-    "version": "0.7.15"
+    "version": "0.8.0"
   },
   "tauri": {
     "allowlist": {
@@ -59,6 +59,20 @@
       },
       "notification": {
         "all": true
+      },
+      "window": {
+        "all": false,
+        "create": true,
+        "center": true,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "setFocus": true,
+        "setTitle": true,
+        "setSize": true,
+        "setPosition": true,
+        "setResizable": true,
+        "setAlwaysOnTop": true
       }
     },
     "bundle": {
@@ -95,7 +109,14 @@
       }
     },
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* https://localhost:* ws://localhost:* wss://localhost:*; img-src 'self' data: http://localhost:* https://localhost:*; style-src 'self' 'unsafe-inline'; frame-src http://localhost:* https://localhost:*"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* https://localhost:* ws://localhost:* wss://localhost:*; img-src 'self' data: http://localhost:* https://localhost:*; style-src 'self' 'unsafe-inline'; frame-src http://localhost:* https://localhost:*",
+      "dangerousRemoteDomainIpcAccess": [
+        {
+          "domain": "localhost",
+          "windows": ["main", "oauth-window"],
+          "enableTauriAPI": false
+        }
+      ]
     },
     "systemTray": {
       "iconPath": "icons/icon.png",

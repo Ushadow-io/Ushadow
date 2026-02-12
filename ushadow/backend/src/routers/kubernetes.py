@@ -238,6 +238,14 @@ async def scan_cluster_for_infra(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
+    # Don't allow scanning the target namespace - it contains deployed services, not infrastructure
+    if request.namespace == cluster.namespace:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot scan target namespace '{cluster.namespace}' for infrastructure. "
+                   f"This namespace contains deployed services. Scan a different namespace where infrastructure services are located."
+        )
+
     results = await k8s_manager.scan_cluster_for_infra_services(
         cluster_id,
         request.namespace
@@ -254,6 +262,41 @@ async def scan_cluster_for_infra(
         "cluster_id": cluster_id,
         "namespace": request.namespace,
         "infra_services": results
+    }
+
+
+@router.delete("/{cluster_id}/scan-infra/{namespace}")
+async def delete_infra_scan(
+    cluster_id: str,
+    namespace: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete an infrastructure scan for a specific namespace.
+
+    Useful for removing stale or incorrect scan data.
+    """
+    k8s_manager = await get_kubernetes_manager()
+
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    # Check if scan exists
+    if not cluster.infra_scans or namespace not in cluster.infra_scans:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No infrastructure scan found for namespace '{namespace}'"
+        )
+
+    # Remove the scan
+    await k8s_manager.delete_cluster_infra_scan(cluster_id, namespace)
+
+    return {
+        "cluster_id": cluster_id,
+        "namespace": namespace,
+        "message": f"Infrastructure scan for namespace '{namespace}' deleted successfully"
     }
 
 

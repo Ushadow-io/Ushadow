@@ -26,6 +26,7 @@ class KubernetesCluster(BaseModel):
     version: Optional[str] = Field(None, description="Kubernetes version")
     node_count: Optional[int] = Field(None, description="Number of nodes in cluster")
     namespace: str = Field("default", description="Default namespace for deployments")
+    infra_namespace: Optional[str] = Field(None, description="Namespace where infrastructure services (mongo, redis, etc.) are located")
 
     # Infrastructure scan results (cached per namespace)
     infra_scans: Dict[str, Dict[str, Any]] = Field(
@@ -153,6 +154,7 @@ class KubernetesClusterUpdate(BaseModel):
 
     name: Optional[str] = None
     namespace: Optional[str] = None
+    infra_namespace: Optional[str] = None
     labels: Optional[Dict[str, str]] = None
     ingress_domain: Optional[str] = None
     ingress_class: Optional[str] = None

@@ -104,8 +104,9 @@ class SettingsStore:
 
         self.config_dir = Path(config_dir)
 
-        # File paths (merge order: defaults → secrets → overrides → instance_overrides)
+        # File paths (merge order: defaults → tailscale → secrets → overrides → instance_overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
+        self.tailscale_path = self.config_dir / "tailscale.yaml"
         self.secrets_path = self.config_dir / "SECRETS" / "secrets.yaml"
         self.overrides_path = self.config_dir / "config.overrides.yaml"
         self.instance_overrides_path = self.config_dir / "instance-overrides.yaml"
@@ -137,9 +138,10 @@ class SettingsStore:
 
         Merge order (later overrides earlier):
         1. config.defaults.yaml - All default values
-        2. secrets.yaml - API keys, passwords (gitignored)
-        3. config.overrides.yaml - Template-level overrides (gitignored)
-        4. instance-overrides.yaml - Instance-level overrides (gitignored)
+        2. tailscale.yaml - Tailscale configuration (hostname, etc.)
+        3. secrets.yaml - API keys, passwords (gitignored)
+        4. config.overrides.yaml - Template-level overrides (gitignored)
+        5. instance-overrides.yaml - Instance-level overrides (gitignored)
 
         Returns:
             OmegaConf DictConfig with all values merged
@@ -157,6 +159,10 @@ class SettingsStore:
         if cfg := self._load_yaml_if_exists(self.defaults_path):
             configs.append(cfg)
             logger.debug(f"Loaded defaults from {self.defaults_path}")
+
+        if cfg := self._load_yaml_if_exists(self.tailscale_path):
+            configs.append(cfg)
+            logger.debug(f"Loaded tailscale config from {self.tailscale_path}")
 
         if cfg := self._load_yaml_if_exists(self.secrets_path):
             configs.append(cfg)
@@ -191,6 +197,18 @@ class SettingsStore:
             Resolved value (interpolations are automatically resolved)
             Converts OmegaConf containers to regular Python dicts/lists
         """
+        # Special handling for dynamic service_urls.{service_name} pattern
+        if key_path.startswith("service_urls."):
+            service_name = key_path[len("service_urls."):]
+            try:
+                from src.utils.service_urls import get_internal_proxy_url
+                internal_url = get_internal_proxy_url(service_name)
+                logger.debug(f"Dynamically resolved {key_path} -> {internal_url}")
+                return internal_url
+            except Exception as e:
+                logger.warning(f"Failed to resolve dynamic service URL for {service_name}: {e}")
+                # Fall through to normal config lookup
+
         config = await self.load_config()
         value = OmegaConf.select(config, key_path, default=default)
 
@@ -207,6 +225,18 @@ class SettingsStore:
         Use this when you need config values at import time (e.g., SECRET_KEY).
         For async contexts, prefer the async get() method.
         """
+        # Special handling for dynamic service_urls.{service_name} pattern
+        if key_path.startswith("service_urls."):
+            service_name = key_path[len("service_urls."):]
+            try:
+                from src.utils.service_urls import get_internal_proxy_url
+                internal_url = get_internal_proxy_url(service_name)
+                logger.debug(f"Dynamically resolved {key_path} -> {internal_url}")
+                return internal_url
+            except Exception as e:
+                logger.warning(f"Failed to resolve dynamic service URL for {service_name}: {e}")
+                # Fall through to normal config lookup
+
         if self._cache is None:
             # Force sync load - _load_yaml_if_exists is already sync
             configs = []

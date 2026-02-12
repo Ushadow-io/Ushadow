@@ -39,7 +39,7 @@ class AudioRelayConnection:
             import websockets
 
             # Add token to URL (use & if URL already has query params)
-            separator = '&' if '?' in self.url else '?'
+            separator = "&" if "?" in self.url else "?"
             url_with_token = f"{self.url}{separator}token={self.token}"
 
             # Detect endpoint type for logging
@@ -205,33 +205,26 @@ async def audio_relay_websocket(
     try:
         destinations_param = websocket.query_params.get("destinations")
         token = websocket.query_params.get("token")
+        codec = websocket.query_params.get("codec", "pcm")  # Default to PCM if not specified
 
         if not destinations_param or not token:
             await websocket.close(code=1008, reason="Missing destinations or token parameter")
             return
-
-        # Bridge Keycloak token to service token for destinations
-        from src.services.token_bridge import bridge_to_service_token
-        service_token = await bridge_to_service_token(
-            token,
-            audiences=["ushadow", "chronicle", "mycelia"]
-        )
-
-        if not service_token:
-            logger.error("[AudioRelay] Token bridging failed")
-            await websocket.close(code=1008, reason="Authentication failed")
-            return
-
-        logger.info("[AudioRelay] ✓ Token bridged successfully")
-        # Use service token for downstream connections
-        token = service_token
 
         destinations = json.loads(destinations_param)
         if not isinstance(destinations, list) or len(destinations) == 0:
             await websocket.close(code=1008, reason="destinations must be a non-empty array")
             return
 
+        # Add codec parameter to destination URLs if not already present
+        for dest in destinations:
+            if "codec=" not in dest['url']:
+                separator = "&" if "?" in dest['url'] else "?"
+                dest['url'] = f"{dest['url']}{separator}codec={codec}"
+
         logger.info(f"[AudioRelay] Destinations: {[d['name'] for d in destinations]}")
+        logger.info(f"[AudioRelay] Using codec: {codec}")
+
         # Log exact URLs received from client for debugging
         for dest in destinations:
             # Detect endpoint type (check for old formats first, then new)
@@ -284,6 +277,17 @@ async def audio_relay_websocket(
                 message = await websocket.receive()
             except WebSocketDisconnect:
                 logger.info("[AudioRelay] Client disconnected")
+                break
+            except RuntimeError as e:
+                # Handle "Cannot call receive once a disconnect message has been received"
+                if "disconnect" in str(e).lower():
+                    logger.info("[AudioRelay] Client disconnected (disconnect message received)")
+                    break
+                raise
+
+            # Check for disconnect message type
+            if message.get("type") == "websocket.disconnect":
+                logger.info("[AudioRelay] Client disconnected (disconnect message)")
                 break
 
             # Relay text messages (Wyoming protocol headers)

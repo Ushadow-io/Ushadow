@@ -62,14 +62,17 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  // Check for Keycloak token first (in sessionStorage)
-  const kcToken = sessionStorage.getItem('kc_access_token')
+  // Check for Keycloak token first (in localStorage)
+  const kcToken = localStorage.getItem('kc_access_token')
+
+  // Check for native login token (in localStorage - persists)
+  const nativeToken = localStorage.getItem('ushadow_access_token')
 
   // Fallback to legacy JWT token (in localStorage)
   const legacyToken = localStorage.getItem(getStorageKey('token'))
 
-  // Prefer Keycloak token if both are present
-  const token = kcToken || legacyToken
+  // Priority: Keycloak > Native > Legacy (all in localStorage now)
+  const token = kcToken || nativeToken || legacyToken
 
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -94,18 +97,13 @@ api.interceptors.response.use(
         // Let the component handle the service-specific auth error
       } else {
         // Token expired or invalid on core ushadow endpoints, redirect to login
-        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing all tokens and redirecting to login')
-
-        // Clear legacy token
+        console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
         localStorage.removeItem(getStorageKey('token'))
-
-        // Clear Keycloak tokens (IMPORTANT: prevents infinite loop with invalid tokens)
-        sessionStorage.removeItem('kc_access_token')
-        sessionStorage.removeItem('kc_refresh_token')
-        sessionStorage.removeItem('kc_id_token')
-        sessionStorage.removeItem('kc_expires_at')
-        sessionStorage.removeItem('kc_refresh_expires_at')
-
+        localStorage.removeItem('ushadow_access_token')
+        localStorage.removeItem('ushadow_user')
+        localStorage.removeItem('kc_access_token')
+        localStorage.removeItem('kc_refresh_token')
+        localStorage.removeItem('kc_id_token')
         window.location.href = '/login'
       }
     } else if (error.code === 'ECONNABORTED') {
@@ -660,7 +658,16 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
-  updateCluster: (clusterId: string, updates: Partial<Pick<KubernetesCluster, 'name' | 'namespace' | 'labels' | 'ingress_domain' | 'ingress_class' | 'ingress_enabled_by_default' | 'tailscale_magicdns_enabled'>>) =>
+  updateCluster: (clusterId: string, updates: {
+    name?: string
+    namespace?: string
+    infra_namespace?: string
+    labels?: Record<string, string>
+    ingress_domain?: string
+    ingress_class?: string
+    ingress_enabled_by_default?: boolean
+    tailscale_magicdns_enabled?: boolean
+  }) =>
     api.patch<KubernetesCluster>(`/api/kubernetes/${clusterId}`, updates),
 
   // Service management
@@ -674,6 +681,10 @@ export const kubernetesApi = {
     api.post<{ cluster_id: string; namespace: string; infra_services: Record<string, any> }>(
       `/api/kubernetes/${clusterId}/scan-infra`,
       { namespace }
+    ),
+  deleteInfraScan: (clusterId: string, namespace: string) =>
+    api.delete<{ cluster_id: string; namespace: string; message: string }>(
+      `/api/kubernetes/${clusterId}/scan-infra/${namespace}`
     ),
   createEnvmap: (clusterId: string, data: { service_name: string; namespace?: string; env_vars: Record<string, string> }) =>
     api.post<{ success: boolean; configmap: string | null; secret: string | null; namespace: string }>(
@@ -1620,14 +1631,7 @@ export const tailscaleApi = {
   provisionCertInContainer: (hostname: string) =>
     api.post<CertificateStatus>('/api/tailscale/container/provision-cert', null, { params: { hostname } }),
   configureServe: (config: TailscaleConfig) =>
-    api.post<{
-      status: string;
-      message: string;
-      routes?: string;
-      hostname?: string;
-      keycloak_registered?: boolean;
-      keycloak_message?: string;
-    }>('/api/tailscale/configure-serve', config),
+    api.post<{ status: string; message: string; routes?: string; hostname?: string }>('/api/tailscale/configure-serve', config),
   getServeStatus: () =>
     api.get<{ status: string; routes: string | null; error?: string }>('/api/tailscale/serve-status'),
   updateCorsOrigins: (hostname: string) =>
@@ -2085,10 +2089,7 @@ export const githubImportApi = {
     }),
 }
 
-// =============================================================================
-// Dashboard API - Chronicle activity monitoring
-// =============================================================================
-
+// Dashboard API types
 export enum ActivityType {
   CONVERSATION = 'conversation',
   MEMORY = 'memory',
@@ -2116,13 +2117,13 @@ export interface DashboardData {
   last_updated: string
 }
 
+// Dashboard API endpoints
 export const dashboardApi = {
-  /** Get complete dashboard data (stats + recent conversations & memories) */
-  getDashboardData: (conversationLimit?: number, memoryLimit?: number) =>
-    api.get<DashboardData>('/api/dashboard/', {
+  getDashboardData: (conversationLimit: number = 10, memoryLimit: number = 10) =>
+    api.get<DashboardData>('/api/dashboard', {
       params: {
         conversation_limit: conversationLimit,
-        memory_limit: memoryLimit
+        memory_limit: memoryLimit,
       },
     }),
 }

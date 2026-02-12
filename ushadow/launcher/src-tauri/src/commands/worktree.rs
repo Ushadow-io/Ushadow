@@ -1,4 +1,4 @@
-use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus};
+use crate::models::{WorktreeInfo, TmuxSessionInfo, TmuxWindowInfo, ClaudeStatus, EnvironmentConflict};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -30,6 +30,35 @@ pub fn get_colors_for_name(name: &str) -> (String, String) {
 
     // Return the environment name itself so frontend can hash it
     (name.to_string(), name.to_string())
+}
+
+/// Delete a git branch (best effort - won't fail if branch doesn't exist)
+fn delete_branch(main_repo: &str, branch_name: &str) {
+    eprintln!("[delete_branch] Attempting to delete branch '{}'", branch_name);
+
+    // Try to delete the branch with -D (force delete)
+    let output = silent_command("git")
+        .args(["branch", "-D", branch_name])
+        .current_dir(main_repo)
+        .output();
+
+    match output {
+        Ok(result) if result.status.success() => {
+            eprintln!("[delete_branch] ✓ Successfully deleted branch '{}'", branch_name);
+        }
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            // Don't error if branch doesn't exist
+            if !stderr.contains("not found") && !stderr.contains("does not exist") {
+                eprintln!("[delete_branch] Warning: Failed to delete branch '{}': {}", branch_name, stderr);
+            } else {
+                eprintln!("[delete_branch] Branch '{}' already deleted or doesn't exist", branch_name);
+            }
+        }
+        Err(e) => {
+            eprintln!("[delete_branch] Warning: Failed to run git branch -D: {}", e);
+        }
+    }
 }
 
 /// Check if a worktree exists for a given branch
@@ -100,6 +129,32 @@ pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<
                 name,
             }));
         }
+    }
+
+    Ok(None)
+}
+
+/// Check if an environment with this name already exists and return conflict info
+#[tauri::command]
+pub async fn check_environment_conflict(
+    main_repo: String,
+    env_name: String,
+) -> Result<Option<EnvironmentConflict>, String> {
+    let env_name = env_name.to_lowercase();
+
+    // Check if a worktree with this name exists
+    let worktrees = list_worktrees(main_repo.clone()).await?;
+
+    if let Some(worktree) = worktrees.iter().find(|wt| wt.name == env_name) {
+        // Worktree exists - return conflict info
+        // Note: is_running will be set to false here, but the frontend can check
+        // the actual running status from its discovery data
+        return Ok(Some(EnvironmentConflict {
+            name: env_name,
+            current_branch: worktree.branch.clone(),
+            path: worktree.path.clone(),
+            is_running: false,  // Frontend will populate this from discovery
+        }));
     }
 
     Ok(None)
@@ -347,6 +402,48 @@ pub async fn create_worktree(
         .map_err(|e| format!("Failed to check branch: {}", e))?;
 
     let branch_exists = check_output.status.success();
+
+    // Check for branch naming conflicts (e.g., can't create test/foo if test exists, or vice versa)
+    if !branch_exists {
+        // Check if any part of the branch path conflicts with existing branches
+        let all_branches_output = silent_command("git")
+            .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+            .current_dir(&main_repo)
+            .output()
+            .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+        let all_branches = String::from_utf8_lossy(&all_branches_output.stdout);
+
+        for existing_branch in all_branches.lines() {
+            // Check if desired_branch would conflict with existing_branch
+            // Conflict cases:
+            // 1. Want to create "test/foo" but "test" exists
+            // 2. Want to create "test" but "test/foo" exists
+            if desired_branch.starts_with(&format!("{}/", existing_branch)) {
+                return Err(format!(
+                    "Cannot create branch '{}' because branch '{}' already exists. Git doesn't allow 'foo' and 'foo/bar' to both exist as branches.",
+                    desired_branch, existing_branch
+                ));
+            }
+            if existing_branch.starts_with(&format!("{}/", desired_branch)) {
+                return Err(format!(
+                    "Cannot create branch '{}' because branch '{}' already exists. Git doesn't allow 'foo' and 'foo/bar' to both exist as branches.",
+                    desired_branch, existing_branch
+                ));
+            }
+        }
+    }
+
+    // Before creating, clean up any locked/missing worktrees at this path
+    eprintln!("[create_worktree] Checking for locked/missing worktrees...");
+    let _ = silent_command("git")
+        .args(["worktree", "unlock", worktree_path.to_str().unwrap()])
+        .current_dir(&main_repo)
+        .output();
+    let _ = silent_command("git")
+        .args(["worktree", "prune"])
+        .current_dir(&main_repo)
+        .output();
 
     let (output, final_branch) = if branch_exists {
         // Branch exists - checkout directly into worktree
@@ -644,7 +741,12 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
         .find(|wt| wt.name == name)
         .ok_or_else(|| format!("Worktree '{}' not found", name))?;
 
-    // Remove the worktree
+    eprintln!("[remove_worktree] Removing worktree at: {}", worktree.path);
+
+    // Store branch name for deletion after worktree removal
+    let branch_name = worktree.branch.clone();
+
+    // Try to remove the worktree
     let output = silent_command("git")
         .args(["worktree", "remove", &worktree.path])
         .current_dir(&main_repo)
@@ -653,8 +755,63 @@ pub async fn remove_worktree(main_repo: String, name: String) -> Result<(), Stri
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // If it contains modified/untracked files, use --force
+        if stderr.contains("modified or untracked files") || stderr.contains("use --force") {
+            eprintln!("[remove_worktree] Worktree has uncommitted changes, forcing removal...");
+
+            let force_output = silent_command("git")
+                .args(["worktree", "remove", "--force", &worktree.path])
+                .current_dir(&main_repo)
+                .output()
+                .map_err(|e| format!("Failed to force remove worktree: {}", e))?;
+
+            if force_output.status.success() {
+                eprintln!("[remove_worktree] ✓ Successfully force-removed worktree");
+                // Delete the associated branch
+                delete_branch(&main_repo, &branch_name);
+                return Ok(());
+            } else {
+                let force_stderr = String::from_utf8_lossy(&force_output.stderr);
+                return Err(format!("Failed to force remove worktree: {}", force_stderr));
+            }
+        }
+
+        // If it's locked or missing, try to unlock and prune
+        if stderr.contains("locked") || stderr.contains("missing") {
+            eprintln!("[remove_worktree] Worktree is locked/missing, attempting to unlock and prune...");
+
+            // Try to unlock
+            let _ = silent_command("git")
+                .args(["worktree", "unlock", &worktree.path])
+                .current_dir(&main_repo)
+                .output();
+
+            // Try to prune
+            let prune_output = silent_command("git")
+                .args(["worktree", "prune"])
+                .current_dir(&main_repo)
+                .output()
+                .map_err(|e| format!("Failed to prune worktrees: {}", e))?;
+
+            if prune_output.status.success() {
+                eprintln!("[remove_worktree] ✓ Successfully pruned locked/missing worktree");
+                // Delete the associated branch
+                delete_branch(&main_repo, &branch_name);
+                return Ok(());
+            } else {
+                let prune_stderr = String::from_utf8_lossy(&prune_output.stderr);
+                return Err(format!("Failed to prune worktree: {}", prune_stderr));
+            }
+        }
+
         return Err(format!("Git command failed: {}", stderr));
     }
+
+    eprintln!("[remove_worktree] ✓ Worktree removed successfully");
+
+    // Delete the associated branch
+    delete_branch(&main_repo, &branch_name);
 
     Ok(())
 }
@@ -761,10 +918,15 @@ pub async fn create_worktree_with_workmux(
     // Use the launcher's own worktree creation logic instead of workmux
     // This ensures consistent directory structure
     let main_repo_path = PathBuf::from(&main_repo);
+
+    // Calculate worktrees directory: ../worktrees (sibling to project root)
     let worktrees_dir = main_repo_path.parent()
-        .ok_or("Could not determine worktrees directory")?
+        .ok_or("Could not determine parent directory")?
+        .join("worktrees")
         .to_string_lossy()
         .to_string();
+
+    eprintln!("[create_worktree_with_workmux] Worktrees directory: {}", worktrees_dir);
 
     // Create the worktree directly
     let worktree = create_worktree(main_repo.clone(), worktrees_dir, name.clone(), base_branch).await?;
@@ -1244,12 +1406,9 @@ pub async fn open_tmux_in_terminal(window_name: String, worktree_path: String) -
             let temp_script = format!("/tmp/ushadow_iterm_{}.sh", window_name.replace("/", "_"));
 
             let script_content = format!(
-                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Create dedicated session for this environment if it doesn't exist\ntmux has-session -t {} 2>/dev/null || tmux new-session -d -s {} -c '{}'\n# Attach to this environment's dedicated session\nexec tmux attach-session -t {}\n",
+                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Attach to the workmux session and select the specific window\nexec tmux attach-session -t workmux:{}\n",
                 display_name,
                 r, g, b,
-                window_name,
-                window_name,
-                worktree_path,
                 window_name
             );
             fs::write(&temp_script, script_content)
@@ -1259,16 +1418,38 @@ pub async fn open_tmux_in_terminal(window_name: String, worktree_path: String) -
                 .output()
                 .map_err(|e| format!("Failed to chmod: {}", e))?;
 
-            // Simple iTerm2 AppleScript that executes the script
+            // iTerm2 AppleScript that reuses existing windows with matching name
             let applescript = format!(
                 r#"tell application "iTerm"
     activate
-    set newWindow to (create window with default profile)
-    tell current session of newWindow
-        set name to "{}"
-        write text "{} && exit"
-    end tell
+
+    -- Try to find existing window with this name
+    set foundWindow to false
+    repeat with aWindow in windows
+        repeat with aTab in tabs of aWindow
+            repeat with aSession in sessions of aTab
+                if name of aSession is "{}" then
+                    -- Found existing window, select it
+                    select aSession
+                    set foundWindow to true
+                    exit repeat
+                end if
+            end repeat
+            if foundWindow then exit repeat
+        end repeat
+        if foundWindow then exit repeat
+    end repeat
+
+    -- If no existing window found, create new one
+    if not foundWindow then
+        set newWindow to (create window with default profile)
+        tell current session of newWindow
+            set name to "{}"
+            write text "{} && exit"
+        end tell
+    end if
 end tell"#,
+                display_name,
                 display_name,
                 temp_script
             );

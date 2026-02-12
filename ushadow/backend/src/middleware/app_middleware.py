@@ -84,17 +84,32 @@ def setup_cors_middleware(app: FastAPI) -> None:
             allowed_origins.append(tailscale_origin)
             logger.info(f"Added Tailscale origin to CORS: {tailscale_origin}")
 
-    # Build Tailscale origin regex for any tailnet
+    # Build regex patterns for CORS
+    regex_patterns = []
+
+    # Tailscale origin regex for any tailnet
     tailscale_regex = _get_tailscale_origin_regex()
     if tailscale_regex:
+        regex_patterns.append(tailscale_regex)
         logger.info(f"Tailscale CORS regex: {tailscale_regex}")
+
+    # In development mode, allow any localhost port for launcher/dev tools
+    dev_mode = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
+    env_mode = os.getenv("ENVIRONMENT_MODE", "")
+    if dev_mode or env_mode == "development":
+        localhost_regex = r"http://(localhost|127\.0\.0\.1):\d+"
+        regex_patterns.append(localhost_regex)
+        logger.info(f"Development mode: allowing all localhost ports via regex")
+
+    # Combine regex patterns
+    combined_regex = "|".join(f"({pattern})" for pattern in regex_patterns) if regex_patterns else None
 
     logger.info(f"CORS configured with origins: {allowed_origins}")
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_origin_regex=tailscale_regex,
+        allow_origin_regex=combined_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

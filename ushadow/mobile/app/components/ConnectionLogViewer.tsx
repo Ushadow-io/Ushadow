@@ -219,6 +219,7 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
       ? `${Math.floor(item.durationSeconds / 60)}m ${item.durationSeconds % 60}s`
       : 'In progress';
     const startTime = new Date(item.startTime).toLocaleString();
+    const endTime = item.endTime ? new Date(item.endTime).toLocaleString() : null;
     const hasError = !!item.error;
 
     // Format end reason
@@ -244,7 +245,7 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
             <Text style={styles.sessionSource}>
               {item.source.type === 'phone' ? 'Phone Microphone' : `OMI Device (${item.source.deviceName})`}
             </Text>
-            <Text style={styles.sessionTime}>{startTime}</Text>
+            <Text style={styles.sessionTime}>Started: {startTime}</Text>
           </View>
           {hasError && (
             <Ionicons name="alert-circle" size={20} color={colors.error.default} />
@@ -255,6 +256,12 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
             <Text style={styles.sessionDetailLabel}>Duration:</Text>
             <Text style={styles.sessionDetailValue}>{duration}</Text>
           </View>
+          {endTime && (
+            <View style={styles.sessionDetailRow}>
+              <Text style={styles.sessionDetailLabel}>Ended:</Text>
+              <Text style={styles.sessionDetailValue}>{endTime}</Text>
+            </View>
+          )}
           <View style={styles.sessionDetailRow}>
             <Text style={styles.sessionDetailLabel}>Codec:</Text>
             <Text style={styles.sessionDetailValue}>{item.codec.toUpperCase()}</Text>
@@ -267,7 +274,7 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
           </View>
           {item.endTime && (
             <View style={styles.sessionDetailRow}>
-              <Text style={styles.sessionDetailLabel}>Ended:</Text>
+              <Text style={styles.sessionDetailLabel}>Reason:</Text>
               <Text style={[styles.sessionDetailValue, hasError && { color: colors.error.default }]}>
                 {endReasonText}
               </Text>

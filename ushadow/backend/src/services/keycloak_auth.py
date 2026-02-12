@@ -33,21 +33,21 @@ def get_jwks_client() -> PyJWKClient:
         from src.config import get_settings_store
 
         settings = get_settings_store()
+        app_realm = settings.get_sync("keycloak.realm", "ushadow")
 
-        # Get Keycloak internal URL
+        # IMPORTANT: Backend must use internal URL for JWKS, never external/proxy URLs
+        # Priority: KEYCLOAK_URL env var > config setting > Docker default
         internal_url = (
             os.environ.get("KEYCLOAK_URL") or
             settings.get_sync("keycloak.url") or
             "http://keycloak:8080"
         )
 
-        # Get application realm (where tokens are issued)
-        app_realm = settings.get_sync("keycloak.realm", "ushadow")
-
-        # Construct JWKS URL from application realm (not master)
+        # Construct JWKS URL from internal Keycloak URL
+        # IMPORTANT: Use application realm (ushadow), not admin realm (master)
         jwks_url = f"{internal_url}/realms/{app_realm}/protocol/openid-connect/certs"
         _jwks_client = PyJWKClient(jwks_url)
-        logger.info(f"[KC-AUTH] Initialized JWKS client: {jwks_url}")
+        logger.info(f"[KC-AUTH] Initialized JWKS client for realm '{app_realm}': {jwks_url}")
     return _jwks_client
 
 

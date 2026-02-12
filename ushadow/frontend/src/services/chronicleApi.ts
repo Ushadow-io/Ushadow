@@ -402,7 +402,7 @@ export async function getChronicleAudioUrl(conversationId: string, cropped: bool
   const proxyUrl = await getChronicleProxyUrl()
 
   // Get auth token - prefer Keycloak token, fallback to legacy token
-  const kcToken = sessionStorage.getItem('kc_access_token')
+  const kcToken = localStorage.getItem('kc_access_token')
   const legacyToken = localStorage.getItem(getStorageKey('token'))
   const token = kcToken || legacyToken || ''
 

@@ -3,10 +3,11 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
 use tauri::State;
-use crate::models::{ContainerStatus, ServiceInfo};
+use crate::models::{ContainerStatus, ServiceInfo, InfraService};
 use super::utils::{silent_command, shell_command, quote_path_buf};
 use super::platform::{Platform, PlatformOps};
 use super::bundled;
+use serde_yaml::Value;
 
 /// Recursively copy a directory and all its contents
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -122,12 +123,16 @@ fn find_available_ports(default_backend: u16, default_webui: u16) -> (u16, u16) 
 /// Application state
 pub struct AppState {
     pub project_root: Mutex<Option<String>>,
+    pub containers_running: Mutex<bool>,
+    pub config: Mutex<Option<crate::config::LauncherConfig>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             project_root: Mutex::new(None),
+            containers_running: Mutex::new(false),
+            config: Mutex::new(None),
         }
     }
 }
@@ -154,7 +159,7 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
     log_messages.push("Creating Docker networks...".to_string());
 
     // Create Docker networks directly (don't require uv/Python)
-    let networks = vec!["ushadow-network""];
+    let networks = vec!["ushadow-network", "infra-network"];
     for network in networks {
         log_messages.push(format!("Checking network: {}", network));
 
@@ -835,6 +840,135 @@ pub async fn create_environment(state: State<'_, AppState>, name: String, mode: 
     };
 
     Ok(format!("Environment '{}' started{}", name, port_info))
+}
+
+/// Parse docker-compose.infra.yml to get list of available services
+#[tauri::command]
+pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<InfraService>, String> {
+    let root = state.project_root.lock().map_err(|e| e.to_string())?;
+    let project_root = root.clone().ok_or("Project root not set")?;
+    drop(root);
+
+    // Try to find compose file (bundled or working directory)
+    let bundled_compose_file = bundled::get_compose_file(&project_root, "docker-compose.infra.yml");
+
+    // Also check working directory
+    let working_compose_file = std::path::Path::new(&project_root)
+        .join("compose")
+        .join("docker-compose.infra.yml");
+
+    let compose_file = if working_compose_file.exists() {
+        working_compose_file
+    } else {
+        bundled_compose_file
+    };
+
+    if !compose_file.exists() {
+        return Err(format!("docker-compose.infra.yml not found at {:?}", compose_file));
+    }
+
+    // Read and parse YAML
+    let contents = std::fs::read_to_string(&compose_file)
+        .map_err(|e| format!("Failed to read compose file: {}", e))?;
+
+    let yaml: Value = serde_yaml::from_str(&contents)
+        .map_err(|e| format!("Failed to parse compose YAML: {}", e))?;
+
+    // Extract services
+    let services = yaml.get("services")
+        .ok_or("No 'services' section found in compose file")?
+        .as_mapping()
+        .ok_or("'services' is not a mapping")?;
+
+    let mut result = Vec::new();
+
+    // Map of service IDs to display names
+    let display_names: HashMap<&str, &str> = [
+        ("postgres", "PostgreSQL"),
+        ("mongodb", "MongoDB"),
+        ("mongo", "MongoDB"),
+        ("redis", "Redis"),
+        ("mysql", "MySQL"),
+        ("elasticsearch", "Elasticsearch"),
+        ("rabbitmq", "RabbitMQ"),
+        ("kafka", "Kafka"),
+        ("qdrant", "Qdrant"),
+        ("neo4j", "Neo4j"),
+    ].iter().copied().collect();
+
+    for (service_id, service_config) in services {
+        let service_name = service_id.as_str()
+            .ok_or("Service name is not a string")?
+            .to_string();
+
+        // Get display name (capitalize if not in map)
+        let display_name = display_names.get(service_name.as_str())
+            .copied()
+            .unwrap_or_else(|| &service_name)
+            .to_string();
+
+        // Extract default port from exposed ports
+        let default_port = service_config.get("ports")
+            .and_then(|ports| ports.as_sequence())
+            .and_then(|seq| seq.first())
+            .and_then(|port_mapping| port_mapping.as_str())
+            .and_then(|mapping| {
+                // Parse port mapping like "5432:5432" or "5432"
+                let parts: Vec<&str> = mapping.split(':').collect();
+                parts.first().and_then(|p| p.parse::<u16>().ok())
+            });
+
+        // Extract profiles
+        let profiles = service_config.get("profiles")
+            .and_then(|p| p.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_else(Vec::new);
+
+        // Check if this service is actually running
+        let running = check_service_running(&service_name);
+
+        // Format ports string
+        let ports_str = default_port.map(|p| p.to_string());
+
+        result.push(InfraService {
+            name: service_name,
+            display_name,
+            running,
+            ports: ports_str,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Check if a service container is running
+fn check_service_running(service_name: &str) -> bool {
+    use std::process::Command;
+
+    // Check if container exists and is running
+    let output = Command::new("docker")
+        .args([
+            "ps",
+            "--filter",
+            &format!("name={}", service_name),
+            "--filter",
+            "status=running",
+            "--format",
+            "{{.Names}}",
+        ])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.lines().any(|line| line.contains(service_name))
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,43 @@
+#!/bin/bash
+# Wrapper for Claude Code that automatically updates Kanban status
+#
+# Usage: claude-with-kanban [claude args...]
+#
+# What it does:
+# 1. Moves tickets to "in_progress" when agent starts
+# 2. Runs claude with all your arguments
+# 3. Moves tickets to "in_review" when agent finishes
+#
+# Install:
+#   chmod +x claude-with-kanban
+#   cp claude-with-kanban ~/.local/bin/
+#   alias claude='claude-with-kanban'
+
+# Get the current branch
+BRANCH=$(git branch --show-current 2>/dev/null)
+
+if [ -z "$BRANCH" ]; then
+    echo "⚠ Not in a git repository, skipping kanban updates"
+    # Run claude without status updates
+    exec claude "$@"
+fi
+
+echo "🤖 Starting agent for branch: $BRANCH"
+echo "   Moving tickets to 'in_progress'..."
+
+# Move to in_progress
+kanban-cli move-to-progress "$BRANCH" 2>/dev/null
+
+# Run the actual claude command
+# Use exec to replace this process
+claude "$@"
+EXIT_CODE=$?
+
+# After claude finishes
+echo ""
+echo "💬 Agent finished, moving tickets to 'in_review'..."
+kanban-cli move-to-review "$BRANCH" 2>/dev/null
+
+echo "✓ Tickets updated and ready for review"
+
+exit $EXIT_CODE

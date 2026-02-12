@@ -213,8 +213,8 @@ export const useAudioManager = ({
 
       const finalWebSocketUrl = buildWebSocketUrl(webSocketUrl);
 
-      // Start custom WebSocket streaming first
-      await audioStreamer.startStreaming(finalWebSocketUrl);
+      // Start custom WebSocket streaming first (OMI uses Opus codec)
+      await audioStreamer.startStreaming(finalWebSocketUrl, 'streaming', 'opus');
 
       // Initialize previous state
       previousWsReadyStateRef.current = audioStreamer.getWebSocketReadyState();
@@ -281,8 +281,8 @@ export const useAudioManager = ({
         endpoint: '/ws_pcm',
       });
 
-      // Start WebSocket streaming first
-      await audioStreamer.startStreaming(finalWebSocketUrl);
+      // Start WebSocket streaming first (Phone microphone uses PCM codec)
+      await audioStreamer.startStreaming(finalWebSocketUrl, 'streaming', 'pcm');
 
       // Start phone audio recording
       await phoneAudioRecorder.startRecording(async (pcmBuffer: Uint8Array) => {

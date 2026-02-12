@@ -78,20 +78,22 @@ async def list_deployment_targets(
         logger.info(f"  → Adding K8s cluster: {cluster.name} (status: {cluster.status})")
         parsed = parse_deployment_target_id(cluster.deployment_target_id)
 
-        # Get infrastructure - try cluster's namespace first, then any available namespace
+        # Get infrastructure - skip target namespace as it contains deployed services, not infra
         infra = {}
         if cluster.infra_scans:
-            # Try cluster's configured namespace first
-            if cluster.namespace in cluster.infra_scans:
-                infra = cluster.infra_scans[cluster.namespace]
-                logger.info(f"    ✓ Using infrastructure from namespace '{cluster.namespace}'")
+            # Filter out scans of the target namespace
+            infra_scans_filtered = {
+                ns: scan for ns, scan in cluster.infra_scans.items()
+                if ns != cluster.namespace
+            }
+
+            if not infra_scans_filtered:
+                logger.info(f"    ⚠️ No infrastructure scans available (target namespace '{cluster.namespace}' excluded)")
             else:
-                # Use first available namespace with infrastructure
-                for ns, ns_infra in cluster.infra_scans.items():
-                    if ns_infra:  # Non-empty infrastructure
-                        infra = ns_infra
-                        logger.info(f"    ✓ Using infrastructure from namespace '{ns}' (cluster namespace '{cluster.namespace}' not found)")
-                        break
+                # Use the first available infrastructure scan
+                infra_ns = next(iter(infra_scans_filtered.keys()))
+                infra = infra_scans_filtered[infra_ns]
+                logger.info(f"    ✓ Using infrastructure from namespace '{infra_ns}'")
 
             if infra:
                 logger.info(f"    Infrastructure services: {list(infra.keys())}")

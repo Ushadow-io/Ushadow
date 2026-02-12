@@ -87,7 +87,7 @@ network:
 # Security Configuration
 security:
   # Merges CORS_ORIGINS env var with defaults (deduplicates)
-  cors_origins: ${merge_csv:${oc.env:CORS_ORIGINS},http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000}
+  cors_origins: ${merge_csv:${oc.env:CORS_ORIGINS},http://localhost:5173,http://localhost:3000,http://localhost:1421,http://127.0.0.1:5173,http://127.0.0.1:3000}
 
 # Infrastructure Services
 infrastructure:
@@ -104,6 +104,9 @@ infrastructure:
 
   ollama_base_url: http://ollama:11434
   openai_base_url: https://api.openai.com/v1
+  # DEPRECATED: This default is for local dev only. The backend should dynamically
+  # set this to the internal proxy URL when starting Chronicle.
+  # TODO: Remove this once backend sets MEMORY_SERVER_URL dynamically
   memory_server_url: http://mem0:8765
 
 # Miscellaneous Settings

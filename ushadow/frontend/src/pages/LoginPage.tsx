@@ -2,35 +2,72 @@ import React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 import AuthHeader from '../components/auth/AuthHeader'
-import { LogIn } from 'lucide-react'
+import { LogIn, ExternalLink, UserPlus } from 'lucide-react'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { isAuthenticated, isLoading, login, register } = useKeycloakAuth()
 
-  // Get the intended destination from router state (set by ProtectedRoute)
-  // or from query param (used by share pages and other public routes)
+  // Parse query parameters once
   const searchParams = new URLSearchParams(location.search)
+  const isLauncherMode = searchParams.get('launcher') === 'true'
   const returnTo = searchParams.get('returnTo')
-  const from = (location.state as { from?: string })?.from || returnTo || '/'
+
+  // Get the intended destination from router state (set by ProtectedRoute) or from query param
+  // Default to /cluster instead of / to avoid redirect loop
+  const from = (location.state as { from?: string })?.from || returnTo || '/cluster'
 
   // After successful login, redirect to intended destination
   // Note: Don't redirect if we're on the callback page - that's handled by OAuthCallback component
   React.useEffect(() => {
     if (isAuthenticated && location.pathname !== '/oauth/callback') {
+      console.log('[LoginPage] Already authenticated, redirecting to:', from)
       navigate(from, { replace: true, state: { fromAuth: true } })
     }
   }, [isAuthenticated, navigate, from, location.pathname])
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
+    console.log('[LoginPage] Login button clicked')
+
+    // If in launcher mode, open in external browser
+    if (isLauncherMode) {
+      console.log('[LoginPage] Launcher mode detected, opening in browser')
+      const url = new URL(window.location.href)
+      url.searchParams.delete('launcher')
+      window.open(url.toString(), '_blank')
+      return
+    }
+
     // Redirect to Keycloak login page
-    login(from)
+    console.log('[LoginPage] Starting Keycloak SSO login, redirect target:', from)
+    try {
+      await login(from)
+    } catch (error) {
+      console.error('[LoginPage] Login failed:', error)
+    }
   }
 
-  const handleRegister = () => {
+  const handleRegister = async () => {
+    console.log('[LoginPage] Register button clicked')
+
+    // If in launcher mode, open in external browser
+    if (isLauncherMode) {
+      console.log('[LoginPage] Launcher mode detected, opening in browser')
+      const url = new URL(window.location.href)
+      url.searchParams.delete('launcher')
+      url.searchParams.set('register', 'true')
+      window.open(url.toString(), '_blank')
+      return
+    }
+
     // Redirect to Keycloak registration page
-    register(from)
+    console.log('[LoginPage] Starting Keycloak SSO registration, redirect target:', from)
+    try {
+      await register(from)
+    } catch (error) {
+      console.error('[LoginPage] Registration failed:', error)
+    }
   }
 
   // Show loading while checking authentication
@@ -95,6 +132,26 @@ export default function LoginPage() {
               border: '1px solid #27272a',
             }}
           >
+            {isLauncherMode && (
+              <div
+                className="rounded-lg p-4 mb-4"
+                style={{
+                  backgroundColor: '#3b82f6',
+                  color: '#ffffff',
+                }}
+              >
+                <div className="flex items-start space-x-3">
+                  <ExternalLink className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="font-semibold mb-1">Authentication Required</p>
+                    <p className="opacity-90">
+                      Authentication must be completed in your browser. Click below to continue.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="text-center space-y-2">
               <h2 className="text-xl font-semibold" style={{ color: '#ffffff' }}>
                 Welcome to Ushadow
@@ -105,50 +162,40 @@ export default function LoginPage() {
             </div>
 
             {/* Sign in with Keycloak Button */}
-            <button
-              onClick={handleLogin}
-              className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
-              style={{
-                backgroundColor: '#3b82f6',
-                color: '#ffffff',
-                border: 'none',
-              }}
-              data-testid="login-button-keycloak"
-            >
-              <LogIn className="h-5 w-5" />
-              <span>Sign in with Keycloak</span>
-            </button>
+            <div className="space-y-4">
+              <button
+                onClick={handleLogin}
+                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
+                style={{
+                  backgroundColor: '#3b82f6',
+                  color: '#ffffff',
+                  border: 'none',
+                }}
+                data-testid="login-button-keycloak"
+              >
+                <LogIn className="h-5 w-5" />
+                <span>Sign in with Keycloak</span>
+              </button>
 
-            <div className="text-center">
-              <p className="text-xs" style={{ color: '#71717a' }}>
-                You'll be redirected to Keycloak for secure authentication
-              </p>
-            </div>
+              <button
+                onClick={handleRegister}
+                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
+                style={{
+                  backgroundColor: '#9333ea',
+                  color: '#ffffff',
+                  border: 'none',
+                }}
+                data-testid="register-button-keycloak"
+              >
+                <UserPlus className="h-5 w-5" />
+                <span>Register with Keycloak</span>
+              </button>
 
-            {/* Divider */}
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t" style={{ borderColor: '#27272a' }}></div>
+              <div className="text-center">
+                <p className="text-xs" style={{ color: '#71717a' }}>
+                  You'll be redirected to Keycloak for authentication
+                </p>
               </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span style={{ backgroundColor: '#1a1a1a', color: '#71717a', padding: '0 8px' }}>
-                  Or
-                </span>
-              </div>
-            </div>
-
-            <div className="text-center">
-              <p className="text-sm" style={{ color: '#a1a1aa' }}>
-                Don't have an account?{' '}
-                <button
-                  onClick={handleRegister}
-                  className="font-medium hover:underline transition-colors"
-                  style={{ color: '#3b82f6' }}
-                  data-testid="register-link"
-                >
-                  Create one now
-                </button>
-              </p>
             </div>
           </div>
 

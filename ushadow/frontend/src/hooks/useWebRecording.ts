@@ -303,7 +303,7 @@ export const useWebRecording = (): WebRecordingReturn => {
 
       // Get auth token - prefer Keycloak token, fallback to legacy token
       // This matches the pattern used in api.ts request interceptor
-      const kcToken = sessionStorage.getItem('kc_access_token')
+      const kcToken = localStorage.getItem('kc_access_token')
       const legacyToken = localStorage.getItem(getStorageKey('token'))
       const token = kcToken || legacyToken
 

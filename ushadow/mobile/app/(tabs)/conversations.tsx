@@ -1,7 +1,8 @@
 /**
  * Conversations Tab - Ushadow Mobile
  *
- * Displays user's conversations from the Chronicle backend.
+ * Displays user's conversations from Chronicle and/or Mycelia backends.
+ * Supports single-source (Chronicle only) and dual-source modes via feature flag.
  * Shows transcripts, speaker segments, and conversation metadata.
  */
 
@@ -20,63 +21,73 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
-import { fetchConversations, Conversation, getChronicleAudioUrl } from '../services/chronicleApi';
+import { Conversation, getChronicleAudioUrl } from '../services/chronicleApi';
 import { isAuthenticated } from '../_utils/authStorage';
 import ConversationAudioPlayer from '../components/AudioPlayer';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import {
+  useChronicleConversations,
+  useMultiSourceConversations,
+  type ConversationSource,
+} from '../hooks/useConversations';
+
+// Type to add source info to conversations
+type ConversationWithSource = Conversation & { source?: ConversationSource };
 
 export default function ConversationsScreen() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedDetailedSummary, setExpandedDetailedSummary] = useState<Set<string>>(new Set());
 
-  const loadConversations = useCallback(async (showRefreshIndicator = false) => {
-    try {
-      if (showRefreshIndicator) {
-        setIsRefreshing(true);
-      }
-      setError(null);
+  // Check if dual-source mode is enabled
+  const isDualSourceEnabled = useFeatureFlag('mobile_dual_source_conversations');
 
+  // Determine which sources to enable
+  const enabledSources: ConversationSource[] = isDualSourceEnabled
+    ? ['chronicle', 'mycelia']
+    : ['chronicle'];
+
+  // Use the appropriate hook based on feature flag
+  const dualSourceData = useMultiSourceConversations(enabledSources, {
+    enabled: isDualSourceEnabled,
+    limit: 50,
+  });
+
+  const singleSourceData = useChronicleConversations({
+    enabled: !isDualSourceEnabled,
+    limit: 50,
+  });
+
+  // Select the active data source
+  const activeData = isDualSourceEnabled ? dualSourceData : singleSourceData;
+
+  // Get conversations and loading state
+  const conversations: ConversationWithSource[] = isDualSourceEnabled
+    ? dualSourceData.data
+    : singleSourceData.data.map((conv) => ({ ...conv, source: 'chronicle' as ConversationSource }));
+
+  const isLoading = activeData.loading;
+  const error = activeData.error;
+
+  // Check authentication status
+  useEffect(() => {
+    const checkAuth = async () => {
       const loggedIn = await isAuthenticated();
       setIsLoggedIn(loggedIn);
-
-      if (!loggedIn) {
-        setConversations([]);
-        return;
-      }
-
-      const response = await fetchConversations(1, 50);
-      console.log(`[Conversations] Raw response:`, JSON.stringify(response, null, 2));
-      console.log(`[Conversations] First conversation:`, JSON.stringify(response.conversations[0], null, 2));
-      setConversations(response.conversations);
-      console.log(`[Conversations] Loaded ${response.conversations.length} conversations`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load conversations';
-      setError(message);
-      console.error('[Conversations] Error:', err);
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
+    };
+    checkAuth();
   }, []);
-
-  useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
 
   // Refresh when screen regains focus (e.g., after scanning QR code)
   useFocusEffect(
     useCallback(() => {
-      loadConversations();
-    }, [loadConversations])
+      activeData.refetch();
+    }, [activeData.refetch])
   );
 
   const handleRefresh = useCallback(() => {
-    loadConversations(true);
-  }, [loadConversations]);
+    activeData.refetch();
+  }, [activeData.refetch]);
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
@@ -125,7 +136,7 @@ export default function ConversationsScreen() {
     }
   };
 
-  const renderConversation = ({ item }: { item: Conversation }) => {
+  const renderConversation = ({ item }: { item: ConversationWithSource }) => {
     const itemId = item.id || item.conversation_id;
     const isExpanded = expandedId === itemId;
     const isDetailedExpanded = expandedDetailedSummary.has(itemId);
@@ -136,6 +147,14 @@ export default function ConversationsScreen() {
 
     // Determine status from has_memory or default
     const hasContent = item.has_memory || (item.memory_count && item.memory_count > 0);
+
+    // Get source badge info
+    const sourceBadge = item.source
+      ? {
+          label: item.source === 'chronicle' ? 'Chronicle' : 'Mycelia',
+          color: item.source === 'chronicle' ? colors.primary[400] : colors.accent[400],
+        }
+      : null;
 
     return (
       <TouchableOpacity
@@ -148,6 +167,11 @@ export default function ConversationsScreen() {
           <View style={styles.cardHeaderLeft}>
             <View style={[styles.statusDot, { backgroundColor: hasContent ? colors.success.default : colors.primary[400] }]} />
             <Text style={styles.cardDate}>{formatDate(item.created_at)}</Text>
+            {isDualSourceEnabled && sourceBadge && (
+              <View style={[styles.sourceBadge, { backgroundColor: sourceBadge.color }]}>
+                <Text style={styles.sourceBadgeText}>{sourceBadge.label}</Text>
+              </View>
+            )}
           </View>
           <View style={styles.cardHeaderRight}>
             {item.segment_count !== undefined && (
@@ -289,7 +313,11 @@ export default function ConversationsScreen() {
       {isLoading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary[400]} />
-          <Text style={styles.loadingText}>Loading conversations...</Text>
+          <Text style={styles.loadingText}>
+            {isDualSourceEnabled
+              ? 'Loading conversations from Chronicle and Mycelia...'
+              : 'Loading conversations...'}
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -300,7 +328,7 @@ export default function ConversationsScreen() {
           ListEmptyComponent={renderEmptyState}
           refreshControl={
             <RefreshControl
-              refreshing={isRefreshing}
+              refreshing={isLoading}
               onRefresh={handleRefresh}
               tintColor={colors.primary[400]}
               colors={[colors.primary[400]]}
@@ -509,5 +537,18 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     textAlign: 'center',
     paddingHorizontal: spacing.xl,
+  },
+  sourceBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    marginLeft: spacing.sm,
+  },
+  sourceBadgeText: {
+    fontSize: 10,
+    color: '#FFFFFF',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
 });

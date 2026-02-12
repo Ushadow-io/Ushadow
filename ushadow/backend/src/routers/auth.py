@@ -526,3 +526,89 @@ async def refresh_access_token(request: TokenRefreshRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+# Dynamic Redirect URI Registration
+class RedirectUriRequest(BaseModel):
+    """Request for registering a redirect URI with Keycloak."""
+    redirect_uri: str = Field(..., description="OAuth redirect URI to register (e.g., http://localhost:3500/oauth/callback)")
+    post_logout_redirect_uri: Optional[str] = Field(None, description="Optional post-logout redirect URI")
+
+
+class RedirectUriResponse(BaseModel):
+    """Response after registering redirect URI."""
+    success: bool
+    redirect_uri: str
+    message: str
+
+
+@router.post("/register-redirect-uri", response_model=RedirectUriResponse)
+async def register_redirect_uri_endpoint(request: RedirectUriRequest):
+    """Register this environment's redirect URI with Keycloak.
+
+    Called by frontend on startup to dynamically register its OAuth callback URL.
+    This allows multiple environments to run on different ports without pre-configuring
+    all possible redirect URIs in Keycloak.
+
+    Uses the existing KeycloakAdminClient.register_redirect_uri() service method.
+
+    Args:
+        request: Contains redirect URI to register
+
+    Returns:
+        Success status and registered URI
+
+    Raises:
+        400: If redirect URI is invalid
+        500: If Keycloak registration fails
+    """
+    from src.services.keycloak_admin import get_keycloak_admin
+
+    # Validate redirect URI format
+    # Allow http://, https://, tauri:// (desktop app), ushadow:// (mobile), exp:// (Expo)
+    allowed_schemes = ('http://', 'https://', 'tauri://', 'ushadow://', 'exp://')
+    if not request.redirect_uri.startswith(allowed_schemes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"redirect_uri must start with one of: {', '.join(allowed_schemes)}"
+        )
+
+    try:
+        kc_admin = get_keycloak_admin()
+
+        # Use existing service method to register redirect URI
+        success = await kc_admin.register_redirect_uri(
+            client_id="ushadow-frontend",
+            redirect_uri=request.redirect_uri
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to register redirect URI with Keycloak"
+            )
+
+        # Optionally register post-logout redirect URI
+        if request.post_logout_redirect_uri:
+            await kc_admin.update_post_logout_redirect_uris(
+                client_id="ushadow-frontend",
+                post_logout_redirect_uris=[request.post_logout_redirect_uri],
+                merge=True
+            )
+
+        logger.info(f"[REDIRECT-URI] ✓ Registered redirect URI: {request.redirect_uri}")
+
+        return RedirectUriResponse(
+            success=True,
+            redirect_uri=request.redirect_uri,
+            message=f"Redirect URI registered successfully"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[REDIRECT-URI] Failed to register: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to register redirect URI: {str(e)}"
+        )

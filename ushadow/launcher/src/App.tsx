@@ -1,21 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, type PlatformPrerequisitesConfig } from './hooks/useTauri'
+import { tauri, type Prerequisites, type Discovery, type UshadowEnvironment, type PlatformPrerequisitesConfig, type EnvironmentConflict } from './hooks/useTauri'
 import { useAppStore, type BranchType } from './store/appStore'
 import { useWindowFocus } from './hooks/useWindowFocus'
 import { useTmuxMonitoring } from './hooks/useTmuxMonitoring'
-import { writeText, readText } from '@tauri-apps/api/clipboard'
 import { DevToolsPanel } from './components/DevToolsPanel'
 import { PrerequisitesPanel } from './components/PrerequisitesPanel'
 import { InfrastructurePanel } from './components/InfrastructurePanel'
+import { InfraConfigPanel } from './components/InfraConfigPanel'
 import { EnvironmentsPanel } from './components/EnvironmentsPanel'
 import { LogPanel, type LogEntry, type LogLevel } from './components/LogPanel'
 import { ProjectSetupDialog } from './components/ProjectSetupDialog'
 import { NewEnvironmentDialog } from './components/NewEnvironmentDialog'
+import { EnvironmentConflictDialog } from './components/EnvironmentConflictDialog'
 import { TmuxManagerDialog } from './components/TmuxManagerDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2 } from 'lucide-react'
+import { ProjectManager } from './components/ProjectManager'
+import { AuthButton } from './components/AuthButton'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2, Trello } from 'lucide-react'
 import { getColors } from './utils/colors'
+import { KanbanBoard } from './components/KanbanBoard'
 
 function App() {
   // Store
@@ -33,7 +37,18 @@ function App() {
     setProjectRoot,
     worktreesDir,
     setWorktreesDir,
+    multiProjectMode,
+    kanbanEnabled,
+    projects,
+    activeProjectId,
   } = useAppStore()
+
+  // Get active project in multi-project mode, or use legacy projectRoot
+  const activeProject = multiProjectMode && activeProjectId
+    ? projects.find(p => p.id === activeProjectId)
+    : null
+  const effectiveProjectRoot = activeProject?.rootPath || projectRoot
+  const effectiveWorktreesDir = activeProject?.worktreesPath || worktreesDir
 
   // State
   const [platform, setPlatform] = useState<string>('')
@@ -45,7 +60,7 @@ function App() {
   const [installingItem, setInstallingItem] = useState<string | null>(null)
   const [isLaunching, setIsLaunching] = useState(false)
   const [loadingInfra, setLoadingInfra] = useState(false)
-  const [loadingEnv, setLoadingEnv] = useState<string | null>(null)
+  const [loadingEnv, setLoadingEnv] = useState<{ name: string; action: 'starting' | 'stopping' | 'deleting' | 'merging' } | null>(null)
   const [showProjectDialog, setShowProjectDialog] = useState(false)
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
@@ -55,6 +70,42 @@ function App() {
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
   const [isResizing, setIsResizing] = useState(false)
+  const [environmentConflict, setEnvironmentConflict] = useState<EnvironmentConflict | null>(null)
+  const [pendingEnvCreation, setPendingEnvCreation] = useState<{ name: string; branch: string } | null>(null)
+  const [selectedEnvironment, setSelectedEnvironment] = useState<UshadowEnvironment | null>(null)
+
+  // Auto-select environment matching current directory's ENV_NAME, or first running
+  useEffect(() => {
+    if (!selectedEnvironment && discovery?.environments) {
+      // Try to find environment matching the current project root
+      const currentEnv = discovery.environments.find(e =>
+        e.running && e.path === projectRoot
+      )
+      // Fallback to first running environment
+      const envToSelect = currentEnv || discovery.environments.find(e => e.running)
+      if (envToSelect) {
+        console.log('[App] Auto-selecting environment:', {
+          name: envToSelect.name,
+          backend_port: envToSelect.backend_port,
+          path: envToSelect.path,
+          projectRoot,
+          matched: !!currentEnv
+        })
+        setSelectedEnvironment(envToSelect)
+      }
+    }
+  }, [discovery?.environments, selectedEnvironment, projectRoot])
+
+  // Debug: expose selectedEnvironment to console
+  useEffect(() => {
+    if (selectedEnvironment) {
+      (window as any).selectedEnv = selectedEnvironment
+      console.log('[App] Selected environment updated:', {
+        name: selectedEnvironment.name,
+        backend_port: selectedEnvironment.backend_port
+      })
+    }
+  }, [selectedEnvironment])
 
   // Window focus detection for smart polling
   const isWindowFocused = useWindowFocus()
@@ -62,6 +113,40 @@ function App() {
   // Tmux monitoring for agent status (only when window is focused and worktrees exist)
   const environmentNames = discovery?.environments.map(e => e.name) ?? []
   const tmuxStatuses = useTmuxMonitoring(environmentNames, isWindowFocused && environmentNames.length > 0)
+
+  // Infrastructure service selection
+  const [selectedInfraServices, setSelectedInfraServices] = useState<string[]>([])
+
+  // Auto-select running infrastructure services
+  useEffect(() => {
+    if (discovery?.infrastructure) {
+      const runningServiceIds = discovery.infrastructure
+        .filter(service => service.running)
+        .map(service => service.name)
+
+      // Only update if the running services have changed
+      setSelectedInfraServices(prev => {
+        const prevSet = new Set(prev)
+        const newSet = new Set(runningServiceIds)
+
+        // Check if sets are different
+        if (prevSet.size !== newSet.size) return runningServiceIds
+        for (const id of runningServiceIds) {
+          if (!prevSet.has(id)) return runningServiceIds
+        }
+
+        return prev // No change needed
+      })
+    }
+  }, [discovery?.infrastructure])
+
+  const handleToggleInfraService = (serviceId: string) => {
+    setSelectedInfraServices(prev =>
+      prev.includes(serviceId)
+        ? prev.filter(id => id !== serviceId)
+        : [...prev, serviceId]
+    )
+  }
 
   const logIdRef = useRef(0)
   const lastStateRef = useRef<string>('')
@@ -118,85 +203,54 @@ function App() {
     }
   }, [isResizing, handleMouseMove, handleMouseUp])
 
-  // Enable keyboard shortcuts for copy/paste
+  // Enable native clipboard operations (undo/redo/copy/paste/cut/select-all)
+  // Tauri webview supports standard browser clipboard API
+  // All native keyboard shortcuts work by default: Cmd/Ctrl+Z (undo), Cmd/Ctrl+Shift+Z (redo), Cmd/Ctrl+A (select all), etc.
+
+  // Token sharing API: Listen for token requests from environment iframes
   useEffect(() => {
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
-      const modifier = isMac ? e.metaKey : e.ctrlKey
+    const handleMessage = (event: MessageEvent) => {
+      // Security: Only respond to messages from embedded environments
+      // TODO: Add origin validation if needed
 
-      // Only handle copy/paste/cut if modifier key is pressed
-      if (!modifier) return
+      if (event.data.type === 'GET_KC_TOKEN') {
+        // Get tokens from localStorage
+        const token = localStorage.getItem('kc_access_token')
+        const refreshToken = localStorage.getItem('kc_refresh_token')
+        const idToken = localStorage.getItem('kc_id_token')
 
-      // Get the active element
-      const target = e.target as HTMLElement
-      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+        // Send tokens back to requesting iframe
+        event.source?.postMessage(
+          {
+            type: 'KC_TOKEN_RESPONSE',
+            tokens: { token, refreshToken, idToken },
+          },
+          '*' // TODO: Restrict to specific origins in production
+        )
+      }
 
-      try {
-        if (e.key.toLowerCase() === 'c') {
-          // Copy: get selection from input field or window selection
-          let textToCopy = ''
-          if (isInputField && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
-            const start = target.selectionStart || 0
-            const end = target.selectionEnd || 0
-            textToCopy = target.value.substring(start, end)
-          } else {
-            const selection = window.getSelection()
-            textToCopy = selection?.toString() || ''
-          }
+      if (event.data.type === 'REFRESH_KC_TOKEN') {
+        // TODO: Implement token refresh logic
+        // For now, just return current tokens
+        const token = localStorage.getItem('kc_access_token')
+        const refreshToken = localStorage.getItem('kc_refresh_token')
+        const idToken = localStorage.getItem('kc_id_token')
 
-          if (textToCopy) {
-            await writeText(textToCopy)
-            e.preventDefault()
-          }
-        } else if (e.key.toLowerCase() === 'v') {
-          // Paste: handle input fields specially, but allow pasting anywhere
-          const text = await readText()
-          if (!text) return
-
-          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-            // Paste into input/textarea
-            const start = target.selectionStart || 0
-            const end = target.selectionEnd || 0
-            const currentValue = target.value
-            target.value = currentValue.substring(0, start) + text + currentValue.substring(end)
-            target.selectionStart = target.selectionEnd = start + text.length
-
-            // Trigger input event so React state updates
-            const event = new Event('input', { bubbles: true })
-            target.dispatchEvent(event)
-            e.preventDefault()
-          } else if (target.isContentEditable) {
-            // Paste into contenteditable
-            document.execCommand('insertText', false, text)
-            e.preventDefault()
-          }
-        } else if (e.key.toLowerCase() === 'x') {
-          // Cut: only from input fields
-          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-            const start = target.selectionStart || 0
-            const end = target.selectionEnd || 0
-            const selectedText = target.value.substring(start, end)
-            if (selectedText) {
-              await writeText(selectedText)
-              const currentValue = target.value
-              target.value = currentValue.substring(0, start) + currentValue.substring(end)
-              target.selectionStart = target.selectionEnd = start
-
-              // Trigger input event so React state updates
-              const event = new Event('input', { bubbles: true })
-              target.dispatchEvent(event)
-              e.preventDefault()
-            }
-          }
-        }
-      } catch (err) {
-        // Silently fail if clipboard access is denied
-        console.warn('Clipboard access failed:', err)
+        event.source?.postMessage(
+          {
+            type: 'KC_TOKEN_REFRESHED',
+            tokens: { token, refreshToken, idToken },
+          },
+          '*'
+        )
       }
     }
 
-    document.addEventListener('keydown', handleKeyDown, true) // Use capture phase
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('message', handleMessage)
+
+    return () => {
+      window.removeEventListener('message', handleMessage)
+    }
   }, [])
 
   // Apply spoofed values to prerequisites
@@ -295,22 +349,16 @@ function App() {
     const init = async () => {
       try {
         log('Initializing...', 'step')
-        console.log('[Init] Starting initialization...')
 
         const os = await tauri.getOsType()
-        console.log('[Init] OS:', os)
         setPlatform(os)
         log(`Platform: ${os}`)
 
         // Load prerequisites configuration for this platform
-        console.log('[Init] Loading prerequisites config...')
         const config = await tauri.getPlatformPrerequisitesConfig(os)
-        console.log('[Init] Prerequisites config:', config)
         setPrerequisitesConfig(config)
 
-        console.log('[Init] Getting default project dir...')
         const defaultDir = await tauri.getDefaultProjectDir()
-        console.log('[Init] Default dir:', defaultDir)
 
         // Track if this is first time setup (showing project dialog)
         let isFirstTimeSetup = false
@@ -323,22 +371,18 @@ function App() {
           log('Please configure your repository location', 'step')
         } else {
           // Sync existing project root to Rust backend
-          console.log('[Init] Setting project root:', projectRoot)
           await tauri.setProjectRoot(projectRoot)
         }
 
         // Check prerequisites immediately (system-wide, no project needed)
-        console.log('[Init] Checking prerequisites...')
         await refreshPrerequisites()
 
         // Only run discovery if we have a valid project root
         if (!isFirstTimeSetup) {
-          console.log('[Init] Running discovery...')
           await refreshDiscovery()
         }
 
         log('Ready', 'success')
-        console.log('[Init] Initialization complete')
       } catch (err) {
         console.error('[Init] Initialization error:', err)
         log(`Initialization failed: ${err}`, 'error')
@@ -377,6 +421,15 @@ function App() {
 
     return () => clearInterval(interval)
   }, [refreshPrerequisites, refreshDiscovery, isWindowFocused, projectRoot])
+
+  // Sync active project root to Rust backend when it changes (multi-project mode)
+  useEffect(() => {
+    if (effectiveProjectRoot && effectiveProjectRoot !== projectRoot) {
+      tauri.setProjectRoot(effectiveProjectRoot).catch(err => {
+        console.error('Failed to sync project root to backend:', err)
+      })
+    }
+  }, [effectiveProjectRoot, projectRoot])
 
   // Install handlers
   const handleInstall = async (item: string) => {
@@ -560,8 +613,7 @@ function App() {
 
   // Environment handlers
   const handleStartEnv = async (envName: string, explicitPath?: string) => {
-    console.log(`DEBUG: handleStartEnv called for ${envName}`)
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'starting' })
     log(`Starting ${envName}...`, 'step')
 
     // Use explicit path if provided, otherwise look up the environment
@@ -636,9 +688,7 @@ function App() {
           }
         })
       } else {
-        console.log(`DEBUG: Calling tauri.startEnvironment(${envName}, ${envPath})`)
         const result = await tauri.startEnvironment(envName, envPath)
-        console.log(`DEBUG: tauri.startEnvironment returned: ${result}`)
         // Only log summary to activity log (full detail is in console/detail pane)
         log(`✓ Environment ${envName} started successfully`, 'success')
 
@@ -673,7 +723,7 @@ function App() {
   }
 
   const handleStopEnv = async (envName: string) => {
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'stopping' })
     log(`Stopping ${envName}...`, 'step')
 
     try {
@@ -728,7 +778,7 @@ function App() {
 
     if (!confirmed) return
 
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'merging' })
     log(`Merging worktree "${envName}" to main...`, 'step')
 
     try {
@@ -776,24 +826,24 @@ function App() {
       ? `Delete environment "${envName}"?\n\n` +
         `This will:\n` +
         `• Stop all containers\n` +
-        `• Remove the worktree\n` +
+        `• Remove the worktree (including any uncommitted changes)\n` +
         `• Close the tmux session\n\n` +
-        `This action cannot be undone!`
+        `⚠️  This action cannot be undone!`
       : `Delete environment "${envName}"?\n\n` +
         `This will:\n` +
         `• Stop all containers\n` +
         `• Close the tmux session\n\n` +
-        `This action cannot be undone!`
+        `⚠️  This action cannot be undone!`
 
     const confirmed = window.confirm(message)
 
     if (!confirmed) return
 
-    setLoadingEnv(envName)
+    setLoadingEnv({ name: envName, action: 'deleting' })
     log(`Deleting environment "${envName}"...`, 'step')
 
     try {
-      const result = await tauri.deleteEnvironment(projectRoot, envName)
+      const result = await tauri.deleteEnvironment(effectiveProjectRoot, envName)
       log(result, 'success')
       log(`✓ Environment "${envName}" deleted`, 'success')
 
@@ -832,7 +882,7 @@ function App() {
     // Force lowercase to avoid Docker Compose naming issues
     name = name.toLowerCase()
 
-    const envPath = `${projectRoot}/../${name}` // Expected clone location
+    const envPath = `${effectiveProjectRoot}/../${name}` // Expected clone location
     const modeLabel = serverMode === 'dev' ? 'hot reload' : 'production'
 
     // Check port availability in dev mode (non-quick launch)
@@ -889,17 +939,17 @@ function App() {
     name = name.toLowerCase()
     branch = branch.toLowerCase()
 
-    if (!worktreesDir) {
+    if (!effectiveWorktreesDir) {
       log('Worktrees directory not configured', 'error')
       throw new Error('Worktrees directory not configured')
     }
 
     log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
-    log(`Project root: ${projectRoot}`, 'info')
-    log(`Worktrees dir: ${worktreesDir}`, 'info')
+    log(`Project root: ${effectiveProjectRoot}`, 'info')
+    log(`Worktrees dir: ${effectiveWorktreesDir}`, 'info')
 
     try {
-      const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch, true)
+      const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch, true)
       log(`✓ Worktree created successfully`, 'success')
       log(`Path: ${worktree.path}`, 'info')
       log(`Branch: ${worktree.branch}`, 'info')
@@ -937,12 +987,30 @@ function App() {
     name = name.toLowerCase()
     branch = branch.toLowerCase()
 
-    if (!worktreesDir) {
+    if (!effectiveWorktreesDir) {
       log('Worktrees directory not configured', 'error')
       return
     }
 
-    const envPath = `${worktreesDir}/${name}`
+    // Check for conflicts first
+    try {
+      const conflict = await tauri.checkEnvironmentConflict(effectiveProjectRoot, name)
+      if (conflict) {
+        // Check if the environment is actually running (from discovery data)
+        const env = discovery?.environments.find(e => e.name === name)
+        conflict.is_running = env?.running || false
+
+        // Show conflict dialog
+        setEnvironmentConflict(conflict)
+        setPendingEnvCreation({ name, branch })
+        return
+      }
+    } catch (err) {
+      log(`Failed to check for conflicts: ${err}`, 'warning')
+      // Continue anyway
+    }
+
+    const envPath = `${effectiveWorktreesDir}/${name}`
 
     // Add to creating environments list
     setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
@@ -957,7 +1025,7 @@ function App() {
       } else {
         // Step 1: Create the git worktree with workmux (includes tmux integration)
         log(`Creating git worktree at ${envPath}...`, 'info')
-        const worktree = await tauri.createWorktreeWithWorkmux(projectRoot, name, branch || undefined, true)
+        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, true)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
 
         // Step 1.5: Write default admin credentials if configured
@@ -1015,6 +1083,120 @@ function App() {
     }
   }
 
+  // Conflict resolution handlers
+  const handleConflictStartExisting = async () => {
+    if (!environmentConflict) return
+
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+    log(`Starting existing environment "${environmentConflict.name}"...`, 'step')
+
+    // Start the existing environment
+    await handleStartEnv(environmentConflict.name, environmentConflict.path)
+  }
+
+  const handleConflictSwitchBranch = async () => {
+    if (!environmentConflict || !pendingEnvCreation) return
+
+    const { name, branch } = pendingEnvCreation
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+
+    log(`Switching "${name}" to branch "${branch}"...`, 'step')
+
+    try {
+      // Stop if running
+      if (environmentConflict.is_running) {
+        log('Stopping environment before switching branch...', 'info')
+        await tauri.stopEnvironment(name)
+      }
+
+      // Checkout the new branch
+      log(`Checking out branch ${branch}...`, 'info')
+      await tauri.checkoutBranch(environmentConflict.path, branch)
+      log(`✓ Switched to ${branch}`, 'success')
+
+      // Start the environment
+      await handleStartEnv(name, environmentConflict.path)
+    } catch (err) {
+      log(`Failed to switch branch: ${err}`, 'error')
+    }
+  }
+
+  const handleConflictDeleteAndRecreate = async () => {
+    if (!environmentConflict || !pendingEnvCreation) return
+
+    const { name, branch } = pendingEnvCreation
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+
+    log(`Deleting and recreating "${name}"...`, 'step')
+
+    try {
+      // Delete the old environment (stops containers, removes worktree, closes tmux)
+      await tauri.deleteEnvironment(effectiveProjectRoot, name)
+      log(`✓ Old environment deleted`, 'success')
+
+      // Wait a moment for cleanup
+      await new Promise(r => setTimeout(r, 1000))
+
+      // Now create the new environment (reuse existing logic from handleNewEnvWorktree)
+      const envPath = `${effectiveWorktreesDir}/${name}`
+      setCreatingEnvs(prev => [...prev, { name, status: 'cloning', path: envPath }])
+      log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
+
+      if (dryRunMode) {
+        log(`[DRY RUN] Would create worktree "${name}" for branch "${branch}"`, 'warning')
+        setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting' } : e))
+        await new Promise(r => setTimeout(r, 2000))
+        log(`[DRY RUN] Worktree environment "${name}" created`, 'success')
+      } else {
+        log(`Creating git worktree at ${envPath}...`, 'info')
+        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, true)
+        log(`✓ Worktree created at ${worktree.path}`, 'success')
+
+        // Write credentials if configured
+        try {
+          const settings = await tauri.loadLauncherSettings()
+          if (settings.default_admin_email && settings.default_admin_password) {
+            log(`Writing admin credentials to secrets.yaml...`, 'info')
+            await tauri.writeCredentialsToWorktree(
+              worktree.path,
+              settings.default_admin_email,
+              settings.default_admin_password,
+              settings.default_admin_name || undefined
+            )
+            log(`✓ Admin credentials configured`, 'success')
+          }
+        } catch (err) {
+          log(`Could not write credentials: ${err}`, 'warning')
+        }
+
+        setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'starting', path: worktree.path } : e))
+
+        // Start the environment
+        log(`Starting environment "${name}"...`, 'step')
+        await handleStartEnv(name, worktree.path)
+
+        log(`✓ Worktree environment "${name}" created and started!`, 'success')
+      }
+
+      setTimeout(() => {
+        setCreatingEnvs(prev => prev.filter(e => e.name !== name))
+      }, 15000)
+
+      await refreshDiscovery()
+    } catch (err) {
+      log(`Failed to delete and recreate: ${err}`, 'error')
+      setCreatingEnvs(prev => prev.map(e => e.name === name ? { ...e, status: 'error', error: String(err) } : e))
+    }
+  }
+
+  const handleConflictCancel = () => {
+    setEnvironmentConflict(null)
+    setPendingEnvCreation(null)
+  }
+
   // Project setup handler - saves paths, doesn't clone yet
   const handleProjectSetup = async (path: string, worktreesPath: string) => {
     setShowProjectDialog(false)
@@ -1053,12 +1235,8 @@ function App() {
 
   const handleClone = async (path: string, branch?: string) => {
     try {
-      console.log('DEBUG handleClone: Starting clone for path:', path, 'branch:', branch)
-      console.log('DEBUG handleClone: dryRunMode =', dryRunMode)
-
       // Check if repo already exists at this location
       const status = await tauri.checkProjectDir(path)
-      console.log('DEBUG handleClone: checkProjectDir status =', status)
 
       if (status.exists && status.is_valid_repo) {
         // Repo exists - pull latest instead of cloning
@@ -1083,9 +1261,7 @@ function App() {
           await new Promise(r => setTimeout(r, 2000))
           log('[DRY RUN] Clone simulated', 'success')
         } else {
-          console.log('DEBUG handleClone: Calling tauri.cloneUshadowRepo with path:', path, 'branch:', branch)
           const result = await tauri.cloneUshadowRepo(path, branch)
-          console.log('DEBUG handleClone: Clone result from Rust:', result)
           log(result, 'success')
         }
       }
@@ -1120,7 +1296,6 @@ function App() {
 
   // Quick launch (for quick mode)
   const handleQuickLaunch = async () => {
-    console.log('DEBUG: handleQuickLaunch started')
     setIsLaunching(true)
     setLogExpanded(true)
     log('🚀 Starting Ushadow quick launch...', 'step')
@@ -1347,7 +1522,7 @@ function App() {
             <button
               onClick={() => setAppMode('install')}
               className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                appMode === 'infra' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                appMode === 'install' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
               }`}
               data-testid="nav-install"
             >
@@ -1374,6 +1549,18 @@ function App() {
               <FolderGit2 className="w-3 h-3 inline mr-1" />
               Environments
             </button>
+            {kanbanEnabled && (
+              <button
+                onClick={() => setAppMode('kanban')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  appMode === 'kanban' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                }`}
+                data-testid="nav-kanban"
+              >
+                <Trello className="w-3 h-3 inline mr-1" />
+                Kanban
+              </button>
+            )}
           </div>
 
           {/* Tmux Manager */}
@@ -1386,15 +1573,21 @@ function App() {
             <Terminal className="w-4 h-4" />
           </button>
 
-          {/* Settings / Credentials Button */}
+          {/* Auth Button */}
+          <AuthButton
+            environment={selectedEnvironment}
+            variant="header"
+          />
+
+          {/* Settings Button */}
           <button
             onClick={() => setShowSettingsDialog(true)}
             className="px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors flex items-center gap-2 font-medium text-sm"
-            title="Configure default credentials"
+            title="Configure launcher settings"
             data-testid="open-settings-button"
           >
             <Sliders className="w-4 h-4" />
-            Credentials
+            Settings
           </button>
 
           {/* Refresh */}
@@ -1412,53 +1605,71 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-hidden p-4">
         {appMode === 'install' ? (
-          /* Install Page - One-Click Launch (Landing Page) */
-          <div className="h-full flex flex-col items-center justify-center">
-            <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
-              <p className="text-text-secondary">
-                Automatically install prerequisites and start Ushadow
-              </p>
-            </div>
+          /* Install Page - Project Configuration */
+          <div className="h-full flex flex-col overflow-y-auto p-8">
+            {multiProjectMode ? (
+              /* Multi-Project Mode - Project Manager */
+              <>
+                <div className="text-center mb-8">
+                  <h2 className="text-2xl font-bold mb-2">Project Management</h2>
+                  <p className="text-text-secondary">
+                    Manage multiple projects with independent configurations
+                  </p>
+                </div>
+                <div className="max-w-4xl mx-auto w-full">
+                  <ProjectManager />
+                </div>
+              </>
+            ) : (
+              /* Single-Project Mode - One-Click Launch */
+              <div className="flex flex-col items-center justify-center flex-1">
+                <div className="text-center mb-8">
+                  <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
+                  <p className="text-text-secondary">
+                    Automatically install prerequisites and start Ushadow
+                  </p>
+                </div>
 
-            {/* Project Folder Display */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
-              <FolderOpen className="w-4 h-4 text-text-muted" />
-              <span className="text-text-muted">Project folder:</span>
-              <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
-                {projectRoot || 'Not set'}
-              </span>
-              <button
-                onClick={() => setShowProjectDialog(true)}
-                className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
-                title="Change folder locations"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                {/* Project Folder Display */}
+                <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
+                  <FolderOpen className="w-4 h-4 text-text-muted" />
+                  <span className="text-text-muted">Project folder:</span>
+                  <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
+                    {projectRoot || 'Not set'}
+                  </span>
+                  <button
+                    onClick={() => setShowProjectDialog(true)}
+                    className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
+                    title="Change folder locations"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
 
-            <button
-              onClick={handleQuickLaunch}
-              disabled={isLaunching}
-              className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
-                isLaunching
-                  ? 'bg-surface-600 cursor-not-allowed'
-                  : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
-              }`}
-              data-testid="quick-launch-button"
-            >
-              {isLaunching ? (
-                <>
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  Launching...
-                </>
-              ) : (
-                <>
-                  <Zap className="w-6 h-6" />
-                  Launch Ushadow
-                </>
-              )}
-            </button>
+                <button
+                  onClick={handleQuickLaunch}
+                  disabled={isLaunching}
+                  className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
+                    isLaunching
+                      ? 'bg-surface-600 cursor-not-allowed'
+                      : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
+                  }`}
+                  data-testid="quick-launch-button"
+                >
+                  {isLaunching ? (
+                    <>
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                      Launching...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-6 h-6" />
+                      Launch Ushadow
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         ) : appMode === 'infra' ? (
           /* Infra Page - Prerequisites & Infrastructure Setup */
@@ -1466,7 +1677,7 @@ function App() {
             <div className="text-center mb-4">
               <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
               <p className="text-text-secondary">
-                Install prerequisites and configure your single environment
+                Install prerequisites and configure shared infrastructure
               </p>
             </div>
 
@@ -1493,70 +1704,23 @@ function App() {
                 onStop={handleStopInfra}
                 onRestart={handleRestartInfra}
                 isLoading={loadingInfra}
+                selectedServices={selectedInfraServices}
+                onToggleService={handleToggleInfraService}
               />
             </div>
 
-            {/* Single Environment Section for Consumers */}
-            <div className="bg-surface-800 rounded-lg p-6 border border-surface-700">
-              <h3 className="text-lg font-semibold mb-4">Your Environment</h3>
-              {!discovery || discovery.environments.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-text-muted mb-4">No environment created yet</p>
-                  <button
-                    onClick={() => handleNewEnvClone('main', 'dev')}
-                    className="px-6 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 transition-colors font-medium"
-                  >
-                    Create Main Environment
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {discovery.environments.map(env => (
-                    <div key={env.name} className="flex items-center justify-between p-4 bg-surface-700 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-3 h-3 rounded-full"
-                          style={{ backgroundColor: getColors(env.color || env.name).primary }}
-                        />
-                        <span className="font-medium">{env.name}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${
-                          env.running ? 'bg-success-500/20 text-success-400' : 'bg-surface-600 text-text-muted'
-                        }`}>
-                          {env.status}
-                        </span>
-                      </div>
-                      <div className="flex gap-2">
-                        {env.running ? (
-                          <>
-                            <button
-                              onClick={() => handleOpenInApp(env)}
-                              className="px-3 py-1 rounded bg-primary-500 hover:bg-primary-600 transition-colors text-sm"
-                            >
-                              Open
-                            </button>
-                            <button
-                              onClick={() => handleStopEnv(env.name)}
-                              className="px-3 py-1 rounded bg-surface-600 hover:bg-surface-500 transition-colors text-sm"
-                            >
-                              Stop
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            onClick={() => handleStartEnv(env.name, env.path || undefined)}
-                            className="px-3 py-1 rounded bg-success-500 hover:bg-success-600 transition-colors text-sm"
-                          >
-                            Start
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Infrastructure Configuration */}
+            {effectiveProjectRoot && (
+              <InfraConfigPanel
+                projectRoot={effectiveProjectRoot}
+                selectedInfraServices={selectedInfraServices}
+                onSave={(config) => {
+                  // TODO: Save to backend
+                }}
+              />
+            )}
           </div>
-        ) : (
+        ) : appMode === 'environments' ? (
           /* Environments Page - Worktree Management */
           <div className="h-full flex flex-col overflow-hidden p-4">
             <EnvironmentsPanel
@@ -1572,9 +1736,30 @@ function App() {
               onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
               loadingEnv={loadingEnv}
               tmuxStatuses={tmuxStatuses}
+              selectedEnvironment={selectedEnvironment}
+              onSelectEnvironment={(env) => {
+                console.log('[App] onSelectEnvironment called with:', env?.name)
+                setSelectedEnvironment(env)
+              }}
             />
           </div>
-        )}
+        ) : appMode === 'kanban' && kanbanEnabled ? (
+          /* Kanban Page - Ticket Management */
+          (() => {
+            // Use the first available backend (running or not)
+            const backendUrl = discovery?.environments.find(e => e.running)?.localhost_url
+                            || discovery?.environments[0]?.localhost_url
+                            || 'http://localhost:8000'
+
+            return (
+              <KanbanBoard
+                projectId={projectRoot}
+                backendUrl={backendUrl}
+                projectRoot={projectRoot || ''}
+              />
+            )
+          })()
+        ) : null}
       </main>
 
       {/* Log Panel - Bottom */}
@@ -1601,7 +1786,7 @@ function App() {
       {/* New Environment Dialog */}
       <NewEnvironmentDialog
         isOpen={showNewEnvDialog}
-        projectRoot={projectRoot}
+        projectRoot={effectiveProjectRoot}
         onClose={() => setShowNewEnvDialog(false)}
         onLink={handleNewEnvLink}
         onWorktree={handleNewEnvWorktree}
@@ -1618,6 +1803,16 @@ function App() {
       <SettingsDialog
         isOpen={showSettingsDialog}
         onClose={() => setShowSettingsDialog(false)}
+      />
+
+      {/* Environment Conflict Dialog */}
+      <EnvironmentConflictDialog
+        conflict={environmentConflict}
+        newBranch={pendingEnvCreation?.branch || ''}
+        onStartExisting={handleConflictStartExisting}
+        onSwitchBranch={handleConflictSwitchBranch}
+        onDeleteAndRecreate={handleConflictDeleteAndRecreate}
+        onCancel={handleConflictCancel}
       />
     </div>
   )

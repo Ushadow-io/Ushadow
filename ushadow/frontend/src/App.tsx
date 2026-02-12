@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -72,6 +73,9 @@ function AppContent() {
 
   const { backendError, checkSetupStatus, isLoading, token } = useAuth()
 
+  // Note: Redirect URI registration moved to login flow (KeycloakAuthContext)
+  // to avoid unnecessary calls on every app mount
+
   // Show error page if backend has configuration errors
   if (backendError) {
     return <ErrorPage error={backendError} onRetry={checkSetupStatus} />
@@ -126,7 +130,7 @@ function AppContent() {
                 <Route path="wizard/mobile-app" element={<MobileAppWizard />} />
                 <Route path="wizard/speaker-recognition" element={<SpeakerRecognitionWizard />} />
                 <Route path="wizard/mycelia" element={<MyceliaWizard />} />
-                <Route path="chronicle" element={<ChroniclePage />} />
+                <Route path="chronicle" element={<FeatureRoute featureFlag="chronicle_page"><ChroniclePage /></FeatureRoute>} />
                 <Route path="conversations" element={<ConversationsPage />} />
                 <Route path="conversations/:id" element={<ConversationDetailPage />} />
                 <Route path="recording" element={<RecordingPage />} />

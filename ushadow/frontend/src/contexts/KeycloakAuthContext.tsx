@@ -21,7 +21,7 @@ interface KeycloakAuthContextType {
   login: (redirectUri?: string) => void
   register: (redirectUri?: string) => void
   logout: (redirectUri?: string) => void
-  getAccessToken: () => string | null
+  getAccessToken: () => Promise<string | null>
   handleCallback: (code: string, state: string) => Promise<void>
 }
 
@@ -65,7 +65,7 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
         setRefreshTimeoutId(null)
       }
 
-      const token = TokenManager.getAccessToken()
+      const token = TokenManager.getAccessTokenSync()
       const refreshToken = TokenManager.getRefreshToken()
 
       if (!token || !refreshToken) {
@@ -170,32 +170,53 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    // Re-check auth state on mount (in case token expired between initial check and mount)
-    const authenticated = TokenManager.isAuthenticated()
-    if (authenticated !== isAuthenticated) {
-      setIsAuthenticated(authenticated)
-      if (authenticated) {
-        const info = TokenManager.getUserInfo()
-        setUserInfo(info)
-        // Fetch MongoDB user data
+    // Check auth state with launcher support (async)
+    const checkAuth = async () => {
+      console.log('[KC-AUTH] Checking authentication (launcher-aware)...')
+      const authenticated = await TokenManager.isAuthenticatedAsync()
+      console.log('[KC-AUTH] Authentication result:', authenticated)
+
+      if (authenticated !== isAuthenticated) {
+        setIsAuthenticated(authenticated)
+        if (authenticated) {
+          const info = TokenManager.getUserInfo()
+          setUserInfo(info)
+          // Fetch MongoDB user data
+          fetchUserData()
+          // Set up token refresh
+          setupTokenRefresh()
+        } else {
+          setUserInfo(null)
+          setUser(null)
+          setIsLoading(false)
+        }
+      } else if (authenticated && !user) {
+        // If already authenticated but no user data, fetch it
         fetchUserData()
-        // Set up token refresh
-        setupTokenRefresh()
-      } else {
-        setUserInfo(null)
-        setUser(null)
-      }
-    } else if (authenticated && !user) {
-      // If already authenticated but no user data, fetch it
-      fetchUserData()
-      // Set up token refresh if not already set
-      if (!refreshTimeoutId) {
-        setupTokenRefresh()
+        // Set up token refresh if not already set
+        if (!refreshTimeoutId) {
+          setupTokenRefresh()
+        }
+      } else if (!authenticated) {
+        setIsLoading(false)
       }
     }
 
+    checkAuth()
+
+    // Listen for token updates from launcher
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'KC_TOKENS_UPDATED') {
+        console.log('[KC-AUTH] Received token update notification from launcher, re-checking auth...')
+        checkAuth()
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+
     // Clean up on unmount
     return () => {
+      window.removeEventListener('message', handleMessage)
       if (refreshTimeoutId) {
         console.log('[KC-AUTH] Cleaning up token refresh timeout on unmount')
         clearTimeout(refreshTimeoutId)
@@ -288,10 +309,10 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
 
     // Store tokens
     TokenManager.storeTokens(tokens)
-    console.log('[KC-AUTH] Tokens stored in sessionStorage')
+    console.log('[KC-AUTH] Tokens stored in localStorage')
 
     // Verify storage worked
-    const storedToken = sessionStorage.getItem('kc_access_token')
+    const storedToken = localStorage.getItem('kc_access_token')
     console.log('[KC-AUTH] Verified storage:', {
       hasStoredToken: !!storedToken,
       storedTokenPreview: storedToken?.substring(0, 30) + '...'
@@ -312,8 +333,8 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem('oauth_state')
   }
 
-  const getAccessToken = () => {
-    return TokenManager.getAccessToken()
+  const getAccessToken = async () => {
+    return await TokenManager.getAccessToken()
   }
 
   return (

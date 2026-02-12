@@ -226,7 +226,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
     reconnectTimeoutRef.current = setTimeout(() => {
       if (!manuallyStoppedRef.current) {
-        startStreaming(currentUrlRef.current, currentModeRef.current)
+        startStreaming(currentUrlRef.current, currentModeRef.current, currentCodecRef.current)
           .then(() => {
             // Connection successful, reset retry state
             setStateSafe(setIsRetrying, false);
@@ -253,10 +253,19 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       return Promise.reject(new Error(errorMsg));
     }
 
-    currentUrlRef.current = trimmed;
     currentModeRef.current = mode;
     currentCodecRef.current = codec;
     manuallyStoppedRef.current = false;
+
+    // Add codec parameter to URL if not already present
+    let finalUrl = trimmed;
+    if (!finalUrl.includes('codec=')) {
+      const separator = finalUrl.includes('?') ? '&' : '?';
+      finalUrl = `${finalUrl}${separator}codec=${codec}`;
+      console.log(`[AudioStreamer] Added codec parameter: ${codec}`);
+    }
+
+    currentUrlRef.current = finalUrl;
 
     // Network gate
     const netState = await NetInfo.fetch();
@@ -266,9 +275,9 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       return Promise.reject(new Error(errorMsg));
     }
 
-    console.log(`[AudioStreamer] Initializing WebSocket: ${trimmed}`);
+    console.log(`[AudioStreamer] Initializing WebSocket: ${finalUrl}`);
     console.log(`[AudioStreamer] Network state:`, netState);
-    onLog?.('connecting', 'Initializing WebSocket connection', trimmed);
+    onLog?.('connecting', 'Initializing WebSocket connection', finalUrl);
     if (websocketRef.current) await stopStreaming();
 
     setStateSafe(setIsConnecting, true);
@@ -277,7 +286,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     return new Promise<void>((resolve, reject) => {
       try {
         console.log(`[AudioStreamer] Creating WebSocket connection...`);
-        const ws = new WebSocket(trimmed);
+        const ws = new WebSocket(finalUrl);
         console.log(`[AudioStreamer] WebSocket object created, waiting for connection...`);
 
         ws.onopen = async () => {

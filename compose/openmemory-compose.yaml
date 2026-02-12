@@ -52,7 +52,9 @@ services:
     volumes:
       - mem0_data:/app/data
     networks:
-      - ushadow-network
+      ushadow-network:
+        aliases:
+          - mem0  # Allow other containers to reach via http://mem0:8765
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/v1/config/'); exit(0)"]
       interval: 10s

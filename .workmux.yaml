@@ -53,8 +53,6 @@ panes:
   # Main pane - ready for commands or agent interaction
   - command: "echo '🚀 Ushadow Environment: $(basename $(pwd))' && echo '' && echo 'Quick commands:' && echo '  ./dev.sh    - Start in dev mode' && echo '  ./go.sh     - Start in prod mode' && echo '  make test   - Run tests' && echo '  code .      - Open in VSCode' && echo '' && $SHELL"
     focus: true
-    split: horizontal
-    size: 75%
 
 # Agent status icons (shown in tmux status bar)
 status_icons:
