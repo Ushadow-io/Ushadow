@@ -4,7 +4,6 @@ This module provides configuration for Keycloak integration using OmegaConf.
 All sensitive values (passwords, client secrets) are stored in secrets.yaml.
 """
 
-import os
 import logging
 from typing import Optional
 
@@ -23,58 +22,18 @@ _keycloak_openid: Optional[KeycloakOpenID] = None
 def get_keycloak_public_url() -> str:
     """Get the Keycloak public URL.
 
-    Priority:
-    1. KEYCLOAK_PUBLIC_URL environment variable (for explicit override)
-    2. Query Tailscale to find the host's IP address (for development)
-    3. Config setting (keycloak.public_url from config.defaults.yaml)
-    4. Fallback to localhost
+    Returns the URL that browsers/frontends use to access Keycloak.
+
+    Resolution handled by OmegaConf in config.defaults.yaml:
+    - keycloak.public_url: ${oc.env:KEYCLOAK_PUBLIC_URL,http://localhost:8081}
+
+    This automatically checks KEYCLOAK_PUBLIC_URL env var and falls back to localhost:8081.
 
     Returns:
-        Public URL like "http://keycloak.root.svc.cluster.local:8080" or "http://localhost:8080"
+        Public URL like "http://localhost:8081"
     """
-    import os
-
-    # Check environment variable first (highest priority)
-    env_url = os.environ.get("KEYCLOAK_PUBLIC_URL")
-    if env_url:
-        logger.info(f"[KC-SETTINGS] Using KEYCLOAK_PUBLIC_URL from env: {env_url}")
-        return env_url
-
-    # Try Tailscale discovery (for development environments)
-    host_hostname = os.environ.get("HOST_HOSTNAME")
-    if host_hostname:
-        try:
-            from src.services.tailscale_manager import get_tailscale_manager
-
-            manager = get_tailscale_manager()
-
-            # Check if Tailscale is running and authenticated
-            status = manager.get_container_status()
-            if status.running and status.authenticated:
-                # Query Tailscale peers for host's IP
-                host_ip = manager.get_peer_ip_by_hostname(host_hostname)
-
-                if host_ip:
-                    url = f"http://{host_ip}:8081"
-                    logger.info(f"[KC-SETTINGS] Using Tailscale IP for Keycloak: {url}")
-                    return url
-                else:
-                    logger.warning(f"[KC-SETTINGS] Could not find host '{host_hostname}' in Tailscale peers")
-            else:
-                logger.debug("[KC-SETTINGS] Tailscale not running or not authenticated")
-        except Exception as e:
-            logger.warning(f"[KC-SETTINGS] Failed to query Tailscale: {e}")
-
-    # Check config setting
     settings = get_settings()
-    config_url = settings.get_sync("keycloak.public_url")
-    if config_url:
-        logger.info(f"[KC-SETTINGS] Using keycloak.public_url from config: {config_url}")
-        return config_url
-
-    # Fallback to localhost
-    logger.info("[KC-SETTINGS] Using localhost for Keycloak (fallback)")
-    return "http://localhost:8080"
+    return settings.get_sync("keycloak.public_url", "http://localhost:8081")
 
 
 def get_keycloak_connection() -> KeycloakOpenIDConnection:
@@ -99,12 +58,8 @@ def get_keycloak_connection() -> KeycloakOpenIDConnection:
         settings = get_settings()
 
         # Backend uses internal URL for direct connection to Keycloak
-        # Priority: KEYCLOAK_URL env var > config setting > default
-        internal_url = (
-            os.environ.get("KEYCLOAK_URL") or
-            settings.get_sync("keycloak.url") or
-            "http://keycloak:8080"
-        )
+        # Resolved by OmegaConf: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}
+        internal_url = settings.get_sync("keycloak.url", "http://keycloak:8080")
 
         # Admin user authenticates against master realm, not application realm
         # This allows cross-realm admin operations (managing ushadow realm)
@@ -148,14 +103,11 @@ def get_keycloak_admin() -> KeycloakAdmin:
         settings = get_settings()
 
         # Get application realm to manage
-        app_realm = settings.get_sync("keycloak.realm", "ushadow")
+        app_realm = settings.get_sync("keycloak.realm", "master")
 
         # Internal URL for backend-to-Keycloak communication
-        internal_url = (
-            os.environ.get("KEYCLOAK_URL") or
-            settings.get_sync("keycloak.url") or
-            "http://keycloak:8080"
-        )
+        # Resolved by OmegaConf: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}
+        internal_url = settings.get_sync("keycloak.url", "http://keycloak:8080")
 
         # Admin credentials from master realm
         admin_user = settings.get_sync("keycloak.admin_user", "admin")
@@ -197,11 +149,8 @@ def get_keycloak_openid(client_id: Optional[str] = None) -> KeycloakOpenID:
         settings = get_settings()
 
         # Internal URL for backend-to-Keycloak communication
-        internal_url = (
-            os.environ.get("KEYCLOAK_URL") or
-            settings.get_sync("keycloak.url") or
-            "http://keycloak:8080"
-        )
+        # Resolved by OmegaConf: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}
+        internal_url = settings.get_sync("keycloak.url", "http://keycloak:8080")
 
         # Use provided client_id or default to frontend
         if client_id is None:

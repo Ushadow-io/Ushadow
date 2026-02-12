@@ -135,13 +135,13 @@ class KeycloakAdminClient:
                 logger.info(f"[KC-ADMIN] Extracted {len(final_origins)} webOrigins from redirect URIs")
 
             # Update client using official library method
-            self.admin.update_client(
-                client_uuid,
-                {
-                    "redirectUris": final_uris,
-                    "webOrigins": final_origins,
-                }
-            )
+            # IMPORTANT: Must update the full client object, not partial update
+            # Partial updates cause Hibernate to try INSERT instead of REPLACE,
+            # leading to duplicate key violations on redirectUris
+            client["redirectUris"] = final_uris
+            client["webOrigins"] = final_origins
+
+            self.admin.update_client(client_uuid, client)
 
             logger.info(f"[KC-ADMIN] ✓ Updated redirect URIs for client '{client_id}'")
             for uri in final_uris:
@@ -208,14 +208,13 @@ class KeycloakAdminClient:
                 logger.info(f"[KC-ADMIN] Replacing post-logout redirect URIs with {len(final_uris)} URIs")
 
             # Post-logout redirect URIs are stored as a ## delimited string in attributes
-            attributes = client.get("attributes", {})
-            attributes["post.logout.redirect.uris"] = "##".join(final_uris)
+            # Update full client object to avoid Hibernate collection merge issues
+            if "attributes" not in client:
+                client["attributes"] = {}
+            client["attributes"]["post.logout.redirect.uris"] = "##".join(final_uris)
 
-            # Update using official library
-            self.admin.update_client(
-                client_uuid,
-                {"attributes": attributes}
-            )
+            # Update using official library with full client object
+            self.admin.update_client(client_uuid, client)
 
             logger.info(f"[KC-ADMIN] ✓ Updated post-logout redirect URIs for client '{client_id}'")
             for uri in final_uris:
@@ -225,6 +224,37 @@ class KeycloakAdminClient:
         except KeycloakError as e:
             logger.error(f"[KC-ADMIN] Failed to update post-logout redirect URIs: {e}")
             return False
+
+    def update_realm_browser_security_headers(self, headers: dict) -> None:
+        """
+        Update realm's browser security headers (CSP, X-Frame-Options, etc.).
+
+        Args:
+            headers: Dictionary of browser security headers to update
+        """
+        from ..config.keycloak_settings import get_keycloak_config
+
+        try:
+            # Get realm from config
+            config = get_keycloak_config()
+            realm = config["realm"]
+
+            # Get current realm configuration
+            realm_config = self.admin.get_realm(realm)
+
+            # Update browserSecurityHeaders
+            realm_config["browserSecurityHeaders"] = headers
+
+            # Update realm
+            self.admin.update_realm(realm, realm_config)
+
+            logger.info(f"[KC-ADMIN] ✓ Updated realm browser security headers for realm: {realm}")
+            for key, value in headers.items():
+                logger.info(f"[KC-ADMIN]   {key}: {value[:50]}...")  # Truncate long values
+
+        except KeycloakError as e:
+            logger.error(f"[KC-ADMIN] Failed to update realm: {e}")
+            raise
 
 
 async def register_current_environment_redirect_uri() -> bool:

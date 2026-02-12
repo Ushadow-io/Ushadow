@@ -152,6 +152,7 @@ def get_web_origins() -> List[str]:
         if cors_origins and cors_origins.strip():
             # Split comma-separated origins and strip whitespace
             origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+            logger.info(f"[KC_STARTUP] CORS: {cors_origins}")
             logger.info(f"[KC-STARTUP] Using {len(origins)} web origins from settings")
             return origins
     except Exception as e:
@@ -221,6 +222,23 @@ async def register_current_environment():
             logger.info("[KC-STARTUP] ✅ Redirect URIs registered successfully")
         else:
             logger.warning("[KC-STARTUP] ⚠️  Failed to register post-logout redirect URIs")
+
+        # Update realm CSP to allow embedding from any origin (Tauri, Tailscale, etc.)
+        try:
+            logger.info("[KC-STARTUP] 🔒 Updating realm CSP to allow embedding...")
+            headers = {
+                "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http: https: tauri:; object-src 'none';",
+                "xContentTypeOptions": "nosniff",
+                "xRobotsTag": "none",
+                "xFrameOptions": "",  # Remove X-Frame-Options (conflicts with CSP frame-ancestors)
+                "xXSSProtection": "1; mode=block",
+                "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+            }
+            admin_client.update_realm_browser_security_headers(headers)
+            logger.info("[KC-STARTUP] ✅ Realm CSP updated successfully")
+        except Exception as csp_error:
+            logger.warning(f"[KC-STARTUP] ⚠️  Failed to update realm CSP: {csp_error}")
+            logger.warning("[KC-STARTUP] You may need to manually configure CSP in Keycloak admin console")
 
     except Exception as e:
         logger.warning(f"[KC-STARTUP] ⚠️  Failed to auto-register Keycloak URIs: {e}")

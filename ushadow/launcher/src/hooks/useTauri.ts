@@ -181,6 +181,10 @@ export const tauri = {
   startOAuthServer: () => invoke<[number, string]>('start_oauth_server'),
   waitForOAuthCallback: (port: number) => invoke<{success: boolean, code?: string, state?: string, error?: string}>('wait_for_oauth_callback', { port }),
 
+  // HTTP client (bypasses CORS restrictions)
+  httpRequest: (url: string, method: string, headers?: Record<string, string>, body?: string) =>
+    invoke<{status: number, body: string, headers: Record<string, string>}>('http_request', { url, method, headers, body }),
+
   // Worktree management
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
   listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),

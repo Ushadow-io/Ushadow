@@ -16,6 +16,8 @@ use commands::{AppState, check_prerequisites, discover_environments, get_os_type
     create_environment,
     // OAuth server commands
     start_oauth_server, wait_for_oauth_callback,
+    // HTTP client
+    http_request,
     // Project/repo management (from repository.rs)
     get_default_project_dir, check_project_dir, clone_ushadow_repo,
     update_ushadow_repo, get_current_branch, checkout_branch, get_base_branch,
@@ -253,6 +255,8 @@ fn main() {
             // OAuth server
             start_oauth_server,
             wait_for_oauth_callback,
+            // HTTP client
+            http_request,
         ])
         .setup(|app| {
             let window = app.get_window("main").unwrap();

@@ -116,12 +116,14 @@ export class TokenManager {
       })
 
       if (!isValid) {
-        console.warn('[TokenManager] ⚠️ Token EXPIRED!')
+        console.warn('[TokenManager] ⚠️ Token EXPIRED! Clearing expired tokens...')
+        this.clearTokens()
       }
 
       return isValid
     } catch (error) {
       console.error('[TokenManager] Invalid token:', error)
+      this.clearTokens()
       return false
     }
   }

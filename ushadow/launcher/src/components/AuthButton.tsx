@@ -25,6 +25,13 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
     }
 
     checkAuthStatus()
+
+    // Periodically check for token expiration (every 30 seconds)
+    const intervalId = setInterval(() => {
+      checkAuthStatus()
+    }, 30000)
+
+    return () => clearInterval(intervalId)
   }, [environment])
 
   const checkAuthStatus = () => {
@@ -51,38 +58,42 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
 
       // Get backend URL from environment
       const backendUrl = `http://localhost:${environment.backend_port}`
+      console.log('[AuthButton] Backend URL:', backendUrl)
 
-      // Fetch Keycloak config from backend
+      // Declare variables at function scope
+      let keycloakUrl: string
+      let port: number
+      let callbackUrl: string
+
+      // Fetch Keycloak config from backend (using Tauri HTTP client to bypass CORS)
       console.log('[AuthButton] Fetching Keycloak config from backend...')
-      const configResponse = await fetch(`${backendUrl}/api/settings/config`)
-      if (!configResponse.ok) {
-        throw new Error('Failed to fetch config from backend')
+      const configResponse = await tauri.httpRequest(`${backendUrl}/api/settings/config`, 'GET')
+      console.log('[AuthButton] Config response status:', configResponse.status)
+      if (configResponse.status !== 200) {
+        throw new Error(`Failed to fetch config from backend: ${configResponse.status} - ${configResponse.body}`)
       }
-      const config = await configResponse.json()
-      const keycloakUrl = config.keycloak?.public_url || 'http://localhost:8081'
+      const config = JSON.parse(configResponse.body)
+      keycloakUrl = config.keycloak?.public_url || 'http://localhost:8081'
       console.log('[AuthButton] Using Keycloak URL:', keycloakUrl)
 
       // Start OAuth callback server
       console.log('[AuthButton] Starting OAuth callback server...')
-      const [port, callbackUrl] = await tauri.startOAuthServer()
+      ;[port, callbackUrl] = await tauri.startOAuthServer()
       console.log('[AuthButton] ✓ Callback server running on port:', port)
       console.log('[AuthButton] Callback URL:', callbackUrl)
 
-      // Register callback URL with Keycloak
+      // Register callback URL with Keycloak (using Tauri HTTP client to bypass CORS)
       console.log('[AuthButton] Registering callback URL with Keycloak...')
-      const registerResponse = await fetch(`${backendUrl}/api/auth/register-redirect-uri`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          redirect_uri: callbackUrl,
-        }),
-      })
+      const registerResponse = await tauri.httpRequest(
+        `${backendUrl}/api/auth/register-redirect-uri`,
+        'POST',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ redirect_uri: callbackUrl })
+      )
 
-      if (!registerResponse.ok) {
-        const error = await registerResponse.text()
-        throw new Error(`Failed to register callback URL: ${error}`)
+      console.log('[AuthButton] Register response status:', registerResponse.status)
+      if (registerResponse.status !== 200) {
+        throw new Error(`Failed to register callback URL: ${registerResponse.status} - ${registerResponse.body}`)
       }
       console.log('[AuthButton] ✓ Callback URL registered')
 
@@ -133,24 +144,22 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
       }
 
       console.log('[AuthButton] Exchanging code for tokens...')
-      const tokenResponse = await fetch(`${backendUrl}/api/auth/token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      const tokenResponse = await tauri.httpRequest(
+        `${backendUrl}/api/auth/token`,
+        'POST',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({
           code: result.code,
           code_verifier: savedCodeVerifier,
           redirect_uri: callbackUrl,
-        }),
-      })
+        })
+      )
 
-      if (!tokenResponse.ok) {
-        const error = await tokenResponse.text()
-        throw new Error(`Token exchange failed: ${error}`)
+      if (tokenResponse.status !== 200) {
+        throw new Error(`Token exchange failed: ${tokenResponse.body}`)
       }
 
-      const tokens = await tokenResponse.json()
+      const tokens = JSON.parse(tokenResponse.body)
 
       // Store tokens
       TokenManager.storeTokens(tokens)
@@ -160,6 +169,16 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
       localStorage.removeItem('oauth_state')
       localStorage.removeItem('pkce_code_verifier')
       localStorage.removeItem('oauth_backend_url')
+
+      // Notify embedded environments that tokens are now available
+      const iframe = document.getElementById('embedded-iframe') as HTMLIFrameElement
+      if (iframe && iframe.contentWindow) {
+        console.log('[AuthButton] Notifying embedded environment to refresh authentication')
+        iframe.contentWindow.postMessage(
+          { type: 'KC_TOKENS_UPDATED' },
+          '*' // Send to iframe regardless of origin
+        )
+      }
 
       // Update UI
       checkAuthStatus()
@@ -179,9 +198,9 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
     if (environment) {
       try {
         const backendUrl = `http://localhost:${environment.backend_port}`
-        const configResponse = await fetch(`${backendUrl}/api/settings/config`)
-        if (configResponse.ok) {
-          const config = await configResponse.json()
+        const configResponse = await tauri.httpRequest(`${backendUrl}/api/settings/config`, 'GET')
+        if (configResponse.status === 200) {
+          const config = JSON.parse(configResponse.body)
           const keycloakUrl = config.keycloak?.public_url || 'http://localhost:8081'
           const logoutUrl = `${keycloakUrl}/realms/ushadow/protocol/openid-connect/logout`
           await tauri.openBrowser(logoutUrl)

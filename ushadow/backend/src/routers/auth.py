@@ -565,10 +565,12 @@ async def register_redirect_uri_endpoint(request: RedirectUriRequest):
     from src.services.keycloak_admin import get_keycloak_admin
 
     # Validate redirect URI format
-    if not request.redirect_uri.startswith(('http://', 'https://')):
+    # Allow http://, https://, tauri:// (desktop app), ushadow:// (mobile), exp:// (Expo)
+    allowed_schemes = ('http://', 'https://', 'tauri://', 'ushadow://', 'exp://')
+    if not request.redirect_uri.startswith(allowed_schemes):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="redirect_uri must start with http:// or https://"
+            detail=f"redirect_uri must start with one of: {', '.join(allowed_schemes)}"
         )
 
     try:

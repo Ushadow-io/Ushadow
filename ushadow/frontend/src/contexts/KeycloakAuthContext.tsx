@@ -204,8 +204,19 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
 
     checkAuth()
 
+    // Listen for token updates from launcher
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'KC_TOKENS_UPDATED') {
+        console.log('[KC-AUTH] Received token update notification from launcher, re-checking auth...')
+        checkAuth()
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+
     // Clean up on unmount
     return () => {
+      window.removeEventListener('message', handleMessage)
       if (refreshTimeoutId) {
         console.log('[KC-AUTH] Cleaning up token refresh timeout on unmount')
         clearTimeout(refreshTimeoutId)
