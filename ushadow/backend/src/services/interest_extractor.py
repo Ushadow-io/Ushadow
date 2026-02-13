@@ -1,11 +1,12 @@
 """Interest Extractor - Derives user interests from OpenMemory's stored memories.
 
-Fetches user facts via mem0's /api/v1/memories/filter endpoint, aggregates
-categories and entities across memories, and maps them to fediverse hashtags.
+Fetches user facts via mem0's /api/v1/memories/filter/enriched endpoint,
+which returns graph-enriched data with entity types (PERSON, LOCATION, etc.)
+and relationships. Uses entity types to filter out private/irrelevant entities.
 
 Two layers of signal:
   - Categories (broad): "ai, ml & technology" → #ai #ml #technology
-  - Entities (specific): "Mac mini" → #macmini #apple
+  - Entities (specific, type-filtered): "Mac mini" → #macmini #apple
 """
 
 import hashlib
@@ -13,7 +14,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 
@@ -23,15 +24,37 @@ from src.models.feed import Interest
 logger = logging.getLogger(__name__)
 
 # Categories too personal/broad to produce useful fediverse search results
-EXCLUDED_CATEGORIES = {"personal", "relationships", "health", "finance"}
+EXCLUDED_CATEGORIES: Set[str] = {
+    # Too personal
+    "personal", "relationships", "health", "finance",
+    # Too broad — no useful fediverse hashtag signal
+    "preferences", "work", "daily life", "communication",
+    "lifestyle", "general", "other", "miscellaneous",
+    "activities", "hobbies", "interests", "entertainment",
+    "education", "learning", "professional", "career",
+    "social", "culture", "news", "media",
+    "goals", "projects", "products", "shopping",
+    "home", "organization", "company affiliation",
+    "technical support", "customer support",
+}
+
+# Entity types from Neo4j graph that are NOT useful for fediverse content discovery
+EXCLUDED_ENTITY_TYPES: Set[str] = {
+    "PERSON", "DATE", "EVENT", "ADDRESS",
+    "__USER__", "USER",
+}
 
 # Simple in-memory cache: user_id → (timestamp, interests)
 _interest_cache: Dict[str, Tuple[float, List[Interest]]] = {}
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
+# Maximum number of interests to return (drops low-signal tail)
+MAX_INTERESTS = 25
+
 # Known product/brand → hashtag expansions (poor man's LLM)
 PRODUCT_HASHTAGS: Dict[str, List[str]] = {
     "strix halo": ["strixhalo", "amd", "ryzen"],
+    "strix halo box": ["strixhalo", "amd", "ryzen"],
     "mac mini": ["macmini", "apple", "homelab"],
     "raspberry pi": ["raspberrypi", "homelab", "sbc"],
     "home assistant": ["homeassistant", "smarthome", "iot"],
@@ -48,6 +71,7 @@ ABBREVIATIONS: Dict[str, str] = {
     "large language models": "llm",
     "language model": "llm",
     "language models": "llm",
+    "lms": "llm",
     "kubernetes": "k8s",
     "javascript": "js",
     "typescript": "ts",
@@ -57,6 +81,14 @@ ABBREVIATIONS: Dict[str, str] = {
     "home server": "homeserver",
     "mac mini": "macmini",
     "raspberry pi": "raspberrypi",
+}
+
+# Words too generic to be useful as standalone hashtags
+# (only filtered when splitting multi-word names into individual words)
+GENERIC_SUBWORDS: Set[str] = {
+    "box", "the", "and", "for", "old", "new", "big", "set",
+    "pro", "max", "mini", "road", "street", "house", "office",
+    "post", "party", "blue", "red", "green", "white", "black",
 }
 
 
@@ -102,11 +134,12 @@ class InterestExtractor:
             merged.values(),
             key=lambda i: i.relationship_count,
             reverse=True,
-        )
+        )[:MAX_INTERESTS]
 
         logger.info(
             f"Extracted {len(interests)} interests from {len(memories)} memories "
-            f"({len(category_interests)} categories, {len(entity_interests)} entities)"
+            f"({len(category_interests)} categories, {len(entity_interests)} entities, "
+            f"capped at {MAX_INTERESTS})"
         )
 
         # Update cache
@@ -124,9 +157,13 @@ class InterestExtractor:
     async def _fetch_memories(
         self, user_id: str, limit: int
     ) -> List[Dict[str, Any]]:
-        """Fetch user memories from mem0 via the backend proxy."""
+        """Fetch user memories from mem0 via the backend proxy.
+
+        Uses the /filter/enriched endpoint when available, which returns
+        graph-enriched data with entity types and relationships.
+        Falls back to /filter if enrichment fails.
+        """
         proxy_url = get_localhost_proxy_url("mem0")
-        url = f"{proxy_url}/api/v1/memories/filter"
         # mem0's Params model enforces size <= 100
         body = {
             "user_id": user_id,
@@ -137,7 +174,33 @@ class InterestExtractor:
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(url, json=body)
+                # Try enriched endpoint first (includes entity types from graph)
+                resp = await client.post(
+                    f"{proxy_url}/api/v1/memories/filter/enriched",
+                    json=body,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                items = data.get("items", [])
+                if items:
+                    enriched_count = sum(
+                        1 for m in items if m.get("graph_enriched")
+                    )
+                    logger.info(
+                        f"Fetched {len(items)} memories "
+                        f"({enriched_count} graph-enriched)"
+                    )
+                return items
+        except httpx.HTTPError as e:
+            logger.warning(f"Enriched endpoint failed, falling back: {e}")
+
+        # Fallback to plain filter
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{proxy_url}/api/v1/memories/filter",
+                    json=body,
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 return data.get("items", [])
@@ -197,34 +260,83 @@ class InterestExtractor:
     def _aggregate_entities(
         self, memories: List[Dict[str, Any]]
     ) -> List[Interest]:
-        """Aggregate metadata entities into specific interests."""
+        """Aggregate entities into specific interests.
+
+        Uses two sources of entity data:
+        1. Graph-enriched entities (from /filter/enriched) — have type info
+        2. Flat metadata entities (fallback) — no type info, heuristic filter
+        """
         agg: Dict[str, Dict[str, Any]] = {}
 
+        # Build a type lookup from graph-enriched entity data
+        entity_types: Dict[str, str] = {}  # name_lower → type (e.g. "PERSON")
         for mem in memories:
-            metadata = mem.get("metadata_", {}) or {}
-            entities = metadata.get("entities", [])
+            for ent in mem.get("entities", []):
+                name = ent.get("name", "").strip()
+                etype = ent.get("type", "ENTITY").upper()
+                if name:
+                    entity_types[name.lower()] = etype
+
+        for mem in memories:
             ts = _parse_created_at(mem.get("created_at"))
 
-            if isinstance(entities, list):
-                entity_list = entities
-            elif isinstance(entities, dict):
-                # Some mem0 versions return {type: [names]}
-                entity_list = []
-                for names in entities.values():
-                    if isinstance(names, list):
-                        entity_list.extend(names)
+            # Prefer graph-enriched entities (have type info)
+            graph_entities = mem.get("entities", [])
+            if graph_entities:
+                for ent in graph_entities:
+                    name = ent.get("name", "").strip()
+                    etype = ent.get("type", "ENTITY").upper()
+                    if not name or len(name) < 2:
+                        continue
+                    if etype in EXCLUDED_ENTITY_TYPES:
+                        continue
+                    key = name.lower()
+                    if key not in agg:
+                        agg[key] = {
+                            "count": 0, "latest": ts,
+                            "original": name, "type": etype,
+                        }
+                    agg[key]["count"] += 1
+                    if ts and (agg[key]["latest"] is None or ts > agg[key]["latest"]):
+                        agg[key]["latest"] = ts
             else:
-                continue
+                # Fallback: flat metadata entities (no type info)
+                metadata = mem.get("metadata_", {}) or {}
+                entities = metadata.get("entities", [])
 
-            for entity in entity_list:
-                if not isinstance(entity, str) or len(entity.strip()) < 2:
+                if isinstance(entities, list):
+                    entity_list = entities
+                elif isinstance(entities, dict):
+                    entity_list = []
+                    for names in entities.values():
+                        if isinstance(names, list):
+                            entity_list.extend(names)
+                else:
                     continue
-                key = entity.strip().lower()
-                if key not in agg:
-                    agg[key] = {"count": 0, "latest": ts, "original": entity.strip()}
-                agg[key]["count"] += 1
-                if ts and (agg[key]["latest"] is None or ts > agg[key]["latest"]):
-                    agg[key]["latest"] = ts
+
+                for entity in entity_list:
+                    if not isinstance(entity, str) or len(entity.strip()) < 2:
+                        continue
+                    name = entity.strip()
+                    key = name.lower()
+
+                    # Use graph type lookup if available
+                    etype = entity_types.get(key, "ENTITY")
+                    if etype in EXCLUDED_ENTITY_TYPES:
+                        continue
+
+                    # Heuristic filter for un-typed entities
+                    if etype == "ENTITY" and _is_likely_private(name):
+                        continue
+
+                    if key not in agg:
+                        agg[key] = {
+                            "count": 0, "latest": ts,
+                            "original": name, "type": etype,
+                        }
+                    agg[key]["count"] += 1
+                    if ts and (agg[key]["latest"] is None or ts > agg[key]["latest"]):
+                        agg[key]["latest"] = ts
 
         interests = []
         for key, info in agg.items():
@@ -240,7 +352,7 @@ class InterestExtractor:
                 Interest(
                     name=info["original"],
                     node_id=_deterministic_id(key),
-                    labels=["entity"],
+                    labels=["entity", info.get("type", "ENTITY").lower()],
                     relationship_count=int(round(weight)),
                     last_active=info["latest"],
                     hashtags=hashtags,
@@ -284,8 +396,9 @@ class InterestExtractor:
         """Convert an entity/interest name to fediverse hashtags.
 
         'Mac mini' → ['macmini', 'apple', 'homelab']
-        'LMs' → ['lms']
+        'LMs' → ['lms', 'llm']
         'Kubernetes' → ['kubernetes', 'k8s']
+        'Strix Halo box' → ['strixhalobox', 'strixhalo', 'amd', 'ryzen']
         """
         clean = re.sub(r"[^a-zA-Z0-9\s]", "", name).strip().lower()
         joined = clean.replace(" ", "")
@@ -294,11 +407,15 @@ class InterestExtractor:
         if joined and len(joined) >= 2:
             hashtags.append(joined)
 
-        # Individual words for multi-word names
+        # Individual words for multi-word names (skip generic subwords)
         words = clean.split()
         if len(words) > 1:
             for word in words:
-                if len(word) >= 3 and word not in hashtags:
+                if (
+                    len(word) >= 3
+                    and word not in hashtags
+                    and word not in GENERIC_SUBWORDS
+                ):
                     hashtags.append(word)
 
         # Common abbreviations
@@ -306,8 +423,14 @@ class InterestExtractor:
         if abbrev and abbrev not in hashtags:
             hashtags.append(abbrev)
 
-        # Known product/brand expansions
+        # Known product/brand expansions — try full name then partial matches
         product_tags = PRODUCT_HASHTAGS.get(clean, [])
+        if not product_tags:
+            # Try matching a known product prefix (e.g. "strix halo box" → "strix halo")
+            for product_key, tags in PRODUCT_HASHTAGS.items():
+                if clean.startswith(product_key) or product_key.startswith(clean):
+                    product_tags = tags
+                    break
         for tag in product_tags:
             if tag not in hashtags:
                 hashtags.append(tag)
@@ -359,6 +482,27 @@ def _compute_weight(
 def _deterministic_id(name: str) -> str:
     """Generate a stable short ID from a name string."""
     return hashlib.md5(name.lower().encode()).hexdigest()[:12]
+
+
+_PRIVATE_PATTERNS = re.compile(
+    r"\b(road|street|avenue|lane|drive|court|place|blvd|way)\b"
+    r"|\b(party|birthday|wedding|anniversary|funeral)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_likely_private(name: str) -> bool:
+    """Heuristic: is this entity likely a private person/place/event?
+
+    Used as fallback when graph entity types are not available.
+    """
+    # Very short single-word names are often first names (ambiguous)
+    if len(name) <= 3 and " " not in name:
+        return True
+    # Address/event patterns
+    if _PRIVATE_PATTERNS.search(name):
+        return True
+    return False
 
 
 def _parse_created_at(value: Any) -> Optional[datetime]:

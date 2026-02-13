@@ -110,8 +110,9 @@ flags:
 
   # Social Feed - Personalized fediverse content curation
   social_feed:
-    enabled: false
-    description: "Social Feed - Curated fediverse posts ranked by your OpenMemory interest graph"
+    enabled: true
+    description: "Social Feed - Curated fediverse posts ranked by your OpenMemory
+      interest graph"
     type: release
 
   # Add your feature flags here following this format:

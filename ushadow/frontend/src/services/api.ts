@@ -71,7 +71,8 @@ api.interceptors.request.use((config) => {
   // Prefer Keycloak token if both are present
   const token = kcToken || legacyToken
 
-  if (token) {
+  // Only add Authorization header if we have a valid token (not null, not empty)
+  if (token && token !== 'null' && token !== 'undefined') {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config

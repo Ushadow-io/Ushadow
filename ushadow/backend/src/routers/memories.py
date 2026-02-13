@@ -9,7 +9,8 @@ This module provides a single API for querying memories across different sources
 The routing is source-aware and queries the appropriate backend(s).
 """
 import logging
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any
+from datetime import datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -43,6 +44,39 @@ class ConversationMemoriesResponse(BaseModel):
     memories: List[MemoryItem]
     count: int
     sources_queried: List[str]  # Which memory systems were checked
+
+
+class UserInterestsResponse(BaseModel):
+    """Response for user interests query"""
+    user_id: str
+    interests: List[str]  # Top interests
+    sentiment: Dict[str, str]  # Interest -> sentiment mapping
+    intensity: Dict[str, str]  # Interest -> intensity mapping
+    trending: List[str]  # Interests mentioned more recently
+    content_types: List[str]  # Preferred content formats
+    interest_counts: Dict[str, int]  # Interest -> count mapping
+    days_analyzed: int  # Number of days analyzed
+
+
+class MemoriesFilterRequest(BaseModel):
+    """Request for filtering memories by metadata"""
+    user_id: Optional[str] = None
+    from_date: Optional[int] = None  # Unix timestamp
+    to_date: Optional[int] = None  # Unix timestamp
+    search_query: Optional[str] = None
+    app_ids: Optional[List[str]] = None
+    category_ids: Optional[List[str]] = None
+    page: int = 1
+    size: int = 100
+
+
+class MemoriesFilterResponse(BaseModel):
+    """Response for filtered memories query"""
+    items: List[MemoryItem]
+    total: int
+    page: int
+    size: int
+    pages: int
 
 
 @router.get("/{memory_id}")
@@ -83,7 +117,7 @@ async def get_memory_by_id(
             # Get specific memory by ID
             response = await client.get(
                 f"{openmemory_url}/api/v1/memories/{memory_id}",
-                params={"user_id": get_user_email(current_user)}
+                params={"user_id": get_user_email(current_user), "output_format": "v1.1"}
             )
 
             if response.status_code == 200:
@@ -254,6 +288,234 @@ async def get_memories_by_conversation(
     )
 
 
+@router.post("/filter")
+async def filter_memories(
+    filter_request: MemoriesFilterRequest,
+    current_user: User = Depends(get_current_user)
+) -> MemoriesFilterResponse:
+    """
+    Filter memories by metadata with advanced search capabilities.
+
+    Supports filtering by:
+    - Date range (from_date, to_date as Unix timestamps)
+    - Search query (semantic search)
+    - App IDs (app_ids filter)
+    - Category IDs (category_ids filter)
+    - Pagination (page, size)
+
+    This endpoint leverages OpenMemory's v1.1 output format for enhanced metadata.
+
+    Args:
+        filter_request: Filter criteria
+        current_user: Authenticated user
+
+    Returns:
+        Paginated list of memories matching filter criteria
+
+    Access Control:
+        - Regular users: Only their own memories
+        - Admins: Can query all users if user_id specified
+    """
+    try:
+        openmemory_url = get_localhost_proxy_url("mem0")
+        user_email = filter_request.user_id or get_user_email(current_user)
+
+        logger.info(f"[MEMORIES] Filtering memories for user: {user_email}")
+
+        async with httpx.AsyncClient() as client:
+            # Build filter request for OpenMemory
+            payload = {
+                "user_id": user_email,
+                "page": filter_request.page,
+                "size": filter_request.size,
+                "output_format": "v1.1"
+            }
+
+            # Add optional filters
+            if filter_request.from_date:
+                payload["from_date"] = filter_request.from_date
+            if filter_request.to_date:
+                payload["to_date"] = filter_request.to_date
+            if filter_request.search_query:
+                payload["search_query"] = filter_request.search_query
+            if filter_request.app_ids:
+                payload["app_ids"] = filter_request.app_ids
+            if filter_request.category_ids:
+                payload["category_ids"] = filter_request.category_ids
+
+            response = await client.post(
+                f"{openmemory_url}/api/v1/memories/filter",
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Convert to unified format
+            memories = []
+            for item in data.get("items", []):
+                metadata = item.get("metadata_", {})
+                content = item.get("text") or item.get("content", "")
+
+                # Include categories in metadata if they exist
+                if "categories" in item and item["categories"]:
+                    metadata["categories"] = item["categories"]
+
+                memories.append(MemoryItem(
+                    id=str(item.get("id")),
+                    content=content,
+                    created_at=str(item.get("created_at", "")),
+                    metadata=metadata,
+                    source="openmemory",
+                    score=None
+                ))
+
+            return MemoriesFilterResponse(
+                items=memories,
+                total=data.get("total", len(memories)),
+                page=filter_request.page,
+                size=filter_request.size,
+                pages=data.get("pages", 1)
+            )
+
+    except Exception as e:
+        logger.error(f"[MEMORIES] Filter query failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to filter memories: {str(e)}"
+        )
+
+
+@router.get("/interests")
+async def get_user_interests(
+    days_recent: int = Query(30, description="Number of recent days to analyze"),
+    current_user: User = Depends(get_current_user)
+) -> UserInterestsResponse:
+    """
+    Extract and aggregate user interests from recent memories.
+
+    This endpoint analyzes recent memories to build a user interest profile for:
+    - Personalized feed ranking
+    - Content recommendations
+    - Trending topic detection
+
+    Based on the interest extraction pattern from docs/INTEREST_EXTRACTION.md,
+    this aggregates interests stored in memory metadata during write-time.
+
+    Args:
+        days_recent: Number of days to look back (default: 30)
+        current_user: Authenticated user
+
+    Returns:
+        Aggregated user interests with intensity, sentiment, and trending indicators
+
+    Access Control:
+        - Regular users: Only their own interests
+        - Admins: Can query specific user if user_id provided
+    """
+    try:
+        openmemory_url = get_localhost_proxy_url("mem0")
+        user_email = get_user_email(current_user)
+
+        logger.info(f"[MEMORIES] Extracting interests for user: {user_email} (last {days_recent} days)")
+
+        # Calculate date range
+        cutoff_date = int((datetime.now() - timedelta(days=days_recent)).timestamp())
+        mid_point_date = int((datetime.now() - timedelta(days=days_recent // 2)).timestamp())
+
+        async with httpx.AsyncClient() as client:
+            # Query recent memories
+            response = await client.post(
+                f"{openmemory_url}/api/v1/memories/filter",
+                json={
+                    "user_id": user_email,
+                    "from_date": cutoff_date,
+                    "page": 1,
+                    "size": 100,
+                    "output_format": "v1.1"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            memories = data.get("items", [])
+
+            logger.info(f"[MEMORIES] Analyzing {len(memories)} memories for interests")
+
+            # Aggregate interests from metadata
+            from collections import Counter
+
+            all_interests = []
+            interest_sentiments = {}
+            interest_intensities = {}
+            content_types = set()
+            interest_timestamps: Dict[str, List[int]] = {}
+
+            for memory in memories:
+                metadata = memory.get("metadata_", {})
+                interests = metadata.get("interests", {})
+                timestamp = memory.get("created_at", cutoff_date)
+
+                # Convert timestamp to int if it's a string
+                if isinstance(timestamp, str):
+                    try:
+                        timestamp = int(datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp())
+                    except:
+                        timestamp = cutoff_date
+
+                # Collect specific interests
+                for interest in interests.get("specific", []):
+                    all_interests.append(interest)
+
+                    # Track when interest was mentioned
+                    if interest not in interest_timestamps:
+                        interest_timestamps[interest] = []
+                    interest_timestamps[interest].append(timestamp)
+
+                # Collect sentiment
+                for topic, sentiment in interests.get("sentiment", {}).items():
+                    interest_sentiments[topic] = sentiment
+
+                # Collect intensity
+                for topic, intensity in interests.get("intensity", {}).items():
+                    interest_intensities[topic] = intensity
+
+                # Collect content types
+                content_types.update(interests.get("content_types", []))
+
+            # Count frequency
+            interest_counts = Counter(all_interests)
+            top_interests = [interest for interest, _ in interest_counts.most_common(10)]
+
+            # Calculate trending (mentioned more in recent half vs older half)
+            trending = []
+            for interest, timestamps in interest_timestamps.items():
+                recent_mentions = sum(1 for ts in timestamps if ts > mid_point_date)
+                older_mentions = sum(1 for ts in timestamps if ts <= mid_point_date)
+
+                # 50% more mentions recently indicates trending
+                if recent_mentions > older_mentions * 1.5 and older_mentions > 0:
+                    trending.append(interest)
+
+            logger.info(f"[MEMORIES] Extracted {len(top_interests)} top interests, {len(trending)} trending")
+
+            return UserInterestsResponse(
+                user_id=user_email,
+                interests=top_interests,
+                sentiment=interest_sentiments,
+                intensity=interest_intensities,
+                trending=trending,
+                content_types=list(content_types),
+                interest_counts=dict(interest_counts),
+                days_analyzed=days_recent
+            )
+
+    except Exception as e:
+        logger.error(f"[MEMORIES] Interest extraction failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to extract user interests: {str(e)}"
+        )
+
+
 async def _query_openmemory_by_source_id(
     openmemory_url: str,
     source_id: str,
@@ -271,7 +533,7 @@ async def _query_openmemory_by_source_id(
     async with httpx.AsyncClient() as client:
         # Query all memories for user
         query_url = f"{openmemory_url}/api/v1/memories/"
-        params = {"user_id": user_email, "limit": 100}
+        params = {"user_id": user_email, "limit": 100, "output_format": "v1.1"}
         logger.info(f"[MEMORIES] Querying: {query_url} with params: {params}")
 
         response = await client.get(query_url, params=params)
