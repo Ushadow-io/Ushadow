@@ -170,14 +170,11 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
       localStorage.removeItem('pkce_code_verifier')
       localStorage.removeItem('oauth_backend_url')
 
-      // Notify embedded environments that tokens are now available
+      // Refresh the embedded environment view
       const iframe = document.getElementById('embedded-iframe') as HTMLIFrameElement
-      if (iframe && iframe.contentWindow) {
-        console.log('[AuthButton] Notifying embedded environment to refresh authentication')
-        iframe.contentWindow.postMessage(
-          { type: 'KC_TOKENS_UPDATED' },
-          '*' // Send to iframe regardless of origin
-        )
+      if (iframe) {
+        console.log('[AuthButton] Refreshing environment view...')
+        iframe.src = iframe.src // Reload to pick up new tokens
       }
 
       // Update UI

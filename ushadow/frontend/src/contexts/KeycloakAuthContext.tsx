@@ -206,13 +206,16 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
 
     // Listen for token updates from launcher
     const handleMessage = (event: MessageEvent) => {
+      console.log('[KC-AUTH] Received postMessage:', event.data.type)
       if (event.data.type === 'KC_TOKENS_UPDATED') {
-        console.log('[KC-AUTH] Received token update notification from launcher, re-checking auth...')
+        console.log('[KC-AUTH] 🔄 Token update notification received from launcher!')
+        console.log('[KC-AUTH] Re-checking authentication...')
         checkAuth()
       }
     }
 
     window.addEventListener('message', handleMessage)
+    console.log('[KC-AUTH] ✓ Message listener registered for KC_TOKENS_UPDATED')
 
     // Clean up on unmount
     return () => {

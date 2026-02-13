@@ -581,6 +581,7 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
               </div>
             )}
             <iframe
+              id="embedded-iframe"
               key={environment.name}
               src={url}
               className="absolute inset-0 w-full h-full border-0"

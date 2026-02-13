@@ -34,6 +34,16 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
     console.log(`[EmbeddedView] Iframe loaded successfully for ${envName}`)
     setIframeLoading(false)
     setIframeError(false)
+
+    // Notify the iframe to check for tokens (in case user logged in before opening this view)
+    const iframe = document.getElementById('embedded-iframe') as HTMLIFrameElement
+    if (iframe && iframe.contentWindow) {
+      console.log('[EmbeddedView] Sending KC_TOKENS_UPDATED to newly loaded iframe')
+      iframe.contentWindow.postMessage(
+        { type: 'KC_TOKENS_UPDATED' },
+        '*'
+      )
+    }
   }
 
   const handleIframeError = () => {
