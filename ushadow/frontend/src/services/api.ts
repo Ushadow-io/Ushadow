@@ -74,7 +74,8 @@ api.interceptors.request.use((config) => {
   // Priority: Keycloak > Native > Legacy (all in localStorage now)
   const token = kcToken || nativeToken || legacyToken
 
-  if (token) {
+  // Only add Authorization header if we have a valid token (not null, not empty)
+  if (token && token !== 'null' && token !== 'undefined') {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
