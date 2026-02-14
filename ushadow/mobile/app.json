@@ -18,6 +18,7 @@
       "bundleIdentifier": "io.ushadow.mobile",
       "infoPlist": {
         "NSCameraUsageDescription": "Ushadow needs camera access to scan QR codes for connecting to your leader node.",
+        "NSPhotoLibraryUsageDescription": "Ushadow may save images shared in conversations to your photo library.",
         "NSBluetoothAlwaysUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device.",
         "NSBluetoothPeripheralUsageDescription": "Ushadow uses Bluetooth to connect to and stream audio from your OMI device.",
         "NSSpeechRecognitionUsageDescription": "Ushadow uses speech recognition for voice input in chat.",
