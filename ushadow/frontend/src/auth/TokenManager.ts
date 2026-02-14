@@ -65,14 +65,23 @@ export class TokenManager {
   static storeTokens(tokens: TokenResponse): void {
     const now = Math.floor(Date.now() / 1000)
 
+    // Store tokens (or remove if not provided)
     if (tokens.access_token) {
       localStorage.setItem(TOKEN_KEY, tokens.access_token)
+    } else {
+      localStorage.removeItem(TOKEN_KEY)
     }
+
     if (tokens.refresh_token) {
       localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token)
+    } else {
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
     }
+
     if (tokens.id_token) {
       localStorage.setItem(ID_TOKEN_KEY, tokens.id_token)
+    } else {
+      localStorage.removeItem(ID_TOKEN_KEY)
     }
 
     // Store expiry times (OAuth2 standard: use expires_in from token response)
@@ -80,6 +89,8 @@ export class TokenManager {
       const expiresAt = now + tokens.expires_in
       localStorage.setItem(EXPIRES_AT_KEY, expiresAt.toString())
       console.log('[TokenManager] Access token expires in:', tokens.expires_in, 'seconds')
+    } else {
+      localStorage.removeItem(EXPIRES_AT_KEY)
     }
 
     // Store refresh token expiry if provided
@@ -87,6 +98,8 @@ export class TokenManager {
       const refreshExpiresAt = now + tokens.refresh_expires_in
       localStorage.setItem(REFRESH_EXPIRES_AT_KEY, refreshExpiresAt.toString())
       console.log('[TokenManager] Refresh token expires in:', tokens.refresh_expires_in, 'seconds')
+    } else {
+      localStorage.removeItem(REFRESH_EXPIRES_AT_KEY)
     }
   }
 
@@ -183,6 +196,24 @@ export class TokenManager {
     localStorage.removeItem(ID_TOKEN_KEY)
     localStorage.removeItem(EXPIRES_AT_KEY)
     localStorage.removeItem(REFRESH_EXPIRES_AT_KEY)
+  }
+
+  /**
+   * Clean up stale token values (removes "null" or "undefined" strings)
+   *
+   * This handles cases where tokens were accidentally set to the string "null"
+   * instead of being removed. Should be called on app initialization.
+   */
+  static cleanupStaleTokens(): void {
+    const keys = [TOKEN_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY, EXPIRES_AT_KEY, REFRESH_EXPIRES_AT_KEY]
+
+    for (const key of keys) {
+      const value = sessionStorage.getItem(key)
+      if (value === 'null' || value === 'undefined' || value === '') {
+        sessionStorage.removeItem(key)
+        console.log(`[TokenManager] Cleaned up stale value for ${key}`)
+      }
+    }
   }
 
   /**

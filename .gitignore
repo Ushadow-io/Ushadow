@@ -189,5 +189,6 @@ robot_results/
 output.xml
 log.html
 report.html
-config/service_configs.yaml
+config/kubeconfigs
 config/wiring.yaml
+config/service_configs.yaml

@@ -323,18 +323,27 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const toggleEnabled = useCallback(async (serviceId: string, currentEnabled: boolean) => {
-    setTogglingEnabled(serviceId)
-    try {
-      const newEnabled = !currentEnabled
-      await servicesApi.setEnabled(serviceId, newEnabled)
+    const newEnabled = !currentEnabled
 
-      setServiceServiceConfigs(prev =>
-        prev.map(s => s.service_id === serviceId ? { ...s, enabled: newEnabled } : s)
-      )
+    // Optimistically update the UI immediately
+    setServiceServiceConfigs(prev =>
+      prev.map(s => s.service_id === serviceId ? { ...s, enabled: newEnabled } : s)
+    )
+
+    // Set toggling state to show pending appearance
+    setTogglingEnabled(serviceId)
+
+    try {
+      // Make the API call
+      await servicesApi.setEnabled(serviceId, newEnabled)
 
       const action = newEnabled ? 'enabled' : 'disabled'
       setMessage({ type: 'success', text: `Service ${action}` })
     } catch (error: any) {
+      // Revert the optimistic update on error
+      setServiceServiceConfigs(prev =>
+        prev.map(s => s.service_id === serviceId ? { ...s, enabled: currentEnabled } : s)
+      )
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Failed to toggle service' })
     } finally {
       setTogglingEnabled(null)

@@ -1669,20 +1669,20 @@ class DockerManager:
 
             import subprocess
             try:
-                # Run docker compose build using container paths
-                # Unset PROJECT_ROOT so compose file uses relative path (../mycelia)
-                # which resolves correctly from the mounted /mycelia directory
+                # Run docker compose build - use container path for compose file
+                # Docker compose reads from mounted /compose directory
+                # PROJECT_ROOT env var ensures build contexts resolve to host paths
                 cmd = ["docker", "compose", "-f", compose_file, "build", service_name]
-                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ with PROJECT_ROOT unset")
+                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ with PROJECT_ROOT={project_root}")
 
-                # Create environment without PROJECT_ROOT
+                # Use environment with PROJECT_ROOT set to host path
                 env = os.environ.copy()
-                env.pop('PROJECT_ROOT', None)
+                env['PROJECT_ROOT'] = project_root
 
                 result = subprocess.run(
                     cmd,
                     cwd="/",  # Use root of container filesystem
-                    env=env,  # Use environment without PROJECT_ROOT
+                    env=env,  # Use environment with PROJECT_ROOT set to host path
                     capture_output=True,
                     text=True,
                     timeout=600  # 10 minute timeout for builds

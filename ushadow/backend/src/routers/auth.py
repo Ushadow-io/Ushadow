@@ -484,6 +484,10 @@ async def refresh_access_token(request: TokenRefreshRequest):
 
     Standard OAuth 2.0 refresh token flow using python-keycloak.
 
+    IMPORTANT: Extracts the issuer from the refresh token to ensure
+    we use the same Keycloak URL that issued the token (handles multi-domain
+    scenarios where browser uses Tailscale hostname but backend sees IP).
+
     Args:
         request: Contains refresh token
 
@@ -494,14 +498,45 @@ async def refresh_access_token(request: TokenRefreshRequest):
         401: If refresh token is invalid or expired
         503: If Keycloak is unreachable
     """
-    from src.services.keycloak_client import get_keycloak_client
+    from keycloak import KeycloakOpenID
     from keycloak.exceptions import KeycloakError
+    from src.config.keycloak_settings import get_keycloak_connection
+    import jwt
 
     try:
-        kc_client = get_keycloak_client()
+        # Decode refresh token WITHOUT validation to extract issuer
+        # This is safe - we're only reading metadata, not trusting the token yet
+        decoded = jwt.decode(request.refresh_token, options={"verify_signature": False})
+        issuer = decoded.get("iss")
 
-        # Refresh token
-        tokens = kc_client.refresh_token(request.refresh_token)
+        if not issuer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token missing issuer claim"
+            )
+
+        # Extract server_url from issuer (removes /realms/xxx suffix)
+        # e.g., "https://orange.spangled-kettle.ts.net/realms/ushadow" -> "https://orange.spangled-kettle.ts.net"
+        if "/realms/" in issuer:
+            server_url = issuer.split("/realms/")[0]
+        else:
+            server_url = issuer
+
+        logger.info(f"[TOKEN-REFRESH] Using issuer from token: {server_url}")
+
+        # Get connection for realm info
+        connection = get_keycloak_connection()
+
+        # Create KeycloakOpenID client with the SAME URL that issued the token
+        # This ensures issuer validation succeeds
+        keycloak_openid = KeycloakOpenID(
+            server_url=server_url,  # Use issuer from token, not backend config!
+            realm_name=connection.realm_name,
+            client_id="ushadow-frontend",  # Public client (no secret needed for refresh)
+        )
+
+        # Refresh token using the correct issuer URL
+        tokens = keycloak_openid.refresh_token(request.refresh_token)
 
         logger.info("[TOKEN-REFRESH] ✓ Successfully refreshed access token")
 
@@ -520,6 +555,8 @@ async def refresh_access_token(request: TokenRefreshRequest):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token refresh failed: {str(e)}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[TOKEN-REFRESH] Unexpected error: {e}", exc_info=True)
         raise HTTPException(

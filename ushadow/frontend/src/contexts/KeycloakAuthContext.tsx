@@ -170,6 +170,9 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    // Clean up any stale "null" or "undefined" string values in sessionStorage
+    TokenManager.cleanupStaleTokens()
+
     // Check auth state with launcher support (async)
     const checkAuth = async () => {
       console.log('[KC-AUTH] Checking authentication (launcher-aware)...')

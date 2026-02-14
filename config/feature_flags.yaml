@@ -89,7 +89,7 @@ flags:
 
   # Service Configs - Show custom service instance configurations
   service_configs:
-    enabled: false
+    enabled: true
     description: "Show custom service config instances in the Services tab (multi-instance
       per template)"
     type: release
@@ -103,7 +103,7 @@ flags:
 
   # Legacy Services Page - Old Docker service configuration page
   legacy_services_page:
-    enabled: false
+    enabled: true
     description: "Legacy Services page (replaced by Instances page) - Docker service
       configuration"
     type: release

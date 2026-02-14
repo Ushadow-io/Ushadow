@@ -145,6 +145,9 @@ export default function ServiceConfigsPage() {
   const [loadingProviderCard, setLoadingProviderCard] = useState(false)
   const [savingProviderCard, setSavingProviderCard] = useState(false)
 
+  // Track toggling deployments (for spinner state)
+  const [togglingDeployments, setTogglingDeployments] = useState<Set<string>>(new Set())
+
   // Unified deploy modal state
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
@@ -1184,20 +1187,33 @@ export default function ServiceConfigsPage() {
 
   // Deployment action handlers
   const handleStopDeployment = async (deploymentId: string) => {
+    // Add to toggling set
+    setTogglingDeployments(prev => new Set(prev).add(deploymentId))
+
     try {
       await deploymentActions.stopDeployment(deploymentId)
-      refreshData()
+      await refreshData()
       setMessage({ type: 'success', text: 'Deployment stopped' })
     } catch (error: any) {
       console.error('Failed to stop deployment:', error)
       setMessage({ type: 'error', text: 'Failed to stop deployment' })
+    } finally {
+      // Remove from toggling set
+      setTogglingDeployments(prev => {
+        const next = new Set(prev)
+        next.delete(deploymentId)
+        return next
+      })
     }
   }
 
   const handleRestartDeployment = async (deploymentId: string) => {
+    // Add to toggling set
+    setTogglingDeployments(prev => new Set(prev).add(deploymentId))
+
     try {
       await deploymentActions.restartDeployment(deploymentId)
-      refreshData()
+      await refreshData()
       setMessage({ type: 'success', text: 'Deployment restarted' })
     } catch (error: any) {
       console.error('Failed to restart deployment:', error)
@@ -1235,6 +1251,13 @@ export default function ServiceConfigsPage() {
       }
 
       setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to restart deployment') })
+    } finally {
+      // Remove from toggling set
+      setTogglingDeployments(prev => {
+        const next = new Set(prev)
+        next.delete(deploymentId)
+        return next
+      })
     }
   }
 
@@ -1527,6 +1550,7 @@ export default function ServiceConfigsPage() {
           providerTemplates={providerTemplates}
           serviceStatuses={serviceStatuses}
           deployments={filteredDeployments}
+          togglingDeployments={togglingDeployments}
           splitServicesEnabled={isEnabled('split_services')}
           onAddConfig={showServiceConfigs ? handleAddConfig : () => {}}
           onWiringChange={handleWiringChange}

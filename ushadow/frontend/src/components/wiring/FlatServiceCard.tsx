@@ -76,6 +76,8 @@ export interface FlatServiceCardProps {
   instanceCount?: number
   /** Active deployments for this service */
   deployments?: any[]
+  /** Set of deployment IDs currently being toggled */
+  togglingDeployments?: Set<string>
   /** Called to stop a deployment */
   onStopDeployment?: (deploymentId: string) => Promise<void>
   /** Called to restart a deployment */
@@ -428,6 +430,7 @@ export function FlatServiceCard({
   initialConfigs,
   instanceCount = 0,
   deployments = [],
+  togglingDeployments = new Set(),
   onStopDeployment,
   onRestartDeployment,
   onRemoveDeployment,
@@ -842,20 +845,26 @@ export function FlatServiceCard({
                                       onRestartDeployment(deployment.id)
                                     }
                                   }}
-                                  className={`relative flex-shrink-0 w-8 h-4 rounded-full transition-colors ${
-                                    isRunning
-                                      ? 'bg-success-500'
-                                      : 'bg-neutral-300 dark:bg-neutral-600'
+                                  disabled={togglingDeployments.has(deployment.id)}
+                                  className={`relative flex-shrink-0 w-8 h-4 rounded-full transition-all ${
+                                    togglingDeployments.has(deployment.id)
+                                      ? 'bg-neutral-400 dark:bg-neutral-500 opacity-60'
+                                      : isRunning
+                                        ? 'bg-success-500'
+                                        : 'bg-neutral-300 dark:bg-neutral-600'
                                   }`}
-                                  title={isRunning ? 'Stop' : 'Start'}
+                                  title={togglingDeployments.has(deployment.id) ? 'Updating...' : isRunning ? 'Stop' : 'Start'}
                                   data-testid={`toggle-deployment-${deployment.id}`}
                                 >
                                   <span
-                                    className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${
+                                    className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-all ${
                                       isRunning ? 'translate-x-4' : ''
-                                    }`}
+                                    } ${togglingDeployments.has(deployment.id) ? 'opacity-70' : ''}`}
                                   />
                                 </button>
+                                {togglingDeployments.has(deployment.id) && (
+                                  <Loader2 className="h-3 w-3 animate-spin text-neutral-400 flex-shrink-0" />
+                                )}
                                 <span className="text-xs font-mono text-neutral-600 dark:text-neutral-400 truncate">
                                   {shortContainerName}
                                 </span>
@@ -1166,19 +1175,26 @@ export function FlatServiceCard({
                                       onRestartDeployment(dep.id)
                                     }
                                   }}
-                                  className={`relative flex-shrink-0 w-8 h-4 rounded-full transition-colors ${
-                                    isDepRunning
-                                      ? 'bg-success-500'
-                                      : 'bg-neutral-300 dark:bg-neutral-600'
+                                  disabled={togglingDeployments.has(dep.id)}
+                                  className={`relative flex-shrink-0 w-8 h-4 rounded-full transition-all ${
+                                    togglingDeployments.has(dep.id)
+                                      ? 'bg-neutral-400 dark:bg-neutral-500 opacity-60'
+                                      : isDepRunning
+                                        ? 'bg-success-500'
+                                        : 'bg-neutral-300 dark:bg-neutral-600'
                                   }`}
-                                  title={isDepRunning ? 'Stop' : 'Start'}
+                                  title={togglingDeployments.has(dep.id) ? 'Updating...' : isDepRunning ? 'Stop' : 'Start'}
+                                  data-testid={`toggle-worker-deployment-${dep.id}`}
                                 >
                                   <span
-                                    className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${
+                                    className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-all ${
                                       isDepRunning ? 'translate-x-4' : ''
-                                    }`}
+                                    } ${togglingDeployments.has(dep.id) ? 'opacity-70' : ''}`}
                                   />
                                 </button>
+                                {togglingDeployments.has(dep.id) && (
+                                  <Loader2 className="h-3 w-3 animate-spin text-neutral-400 flex-shrink-0" />
+                                )}
                                 <span className="text-xs font-mono text-neutral-600 dark:text-neutral-400 truncate">
                                   {shortName}
                                 </span>
