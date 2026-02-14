@@ -1,12 +1,12 @@
 /**
  * useFeed Hooks
  *
- * React Query hooks for the personalized fediverse feed feature.
+ * React Query hooks for the personalized multi-platform feed feature.
  * Provides hooks for posts, interests, sources, refresh, and post actions.
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { feedApi, type FeedPost } from '../services/feedApi'
+import { feedApi, type FeedPost, type SourceCreateData } from '../services/feedApi'
 import { useAuth } from '../contexts/AuthContext'
 import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 
@@ -31,14 +31,21 @@ export function useFeedPosts(
   pageSize: number = 20,
   interest?: string,
   showSeen: boolean = true,
+  platformType?: string,
 ) {
   const { userId, isLoadingUser } = useUserId()
   const queryClient = useQueryClient()
 
   const postsQuery = useQuery({
-    queryKey: ['feedPosts', userId, page, pageSize, interest, showSeen],
+    queryKey: ['feedPosts', userId, page, pageSize, interest, showSeen, platformType],
     queryFn: () =>
-      feedApi.getPosts({ page, page_size: pageSize, interest, show_seen: showSeen }).then(r => r.data),
+      feedApi.getPosts({
+        page,
+        page_size: pageSize,
+        interest,
+        show_seen: showSeen,
+        platform_type: platformType,
+      }).then(r => r.data),
     staleTime: 60_000,
     enabled: !isLoadingUser,
   })
@@ -125,7 +132,7 @@ export function useFeedSources() {
   })
 
   const addMutation = useMutation({
-    mutationFn: (data: { name: string; instance_url: string; platform_type?: string }) =>
+    mutationFn: (data: SourceCreateData) =>
       feedApi.addSource(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feedSources'] })
@@ -158,11 +165,11 @@ export function useFeedSources() {
 // Refresh
 // ---------------------------------------------------------------------------
 
-export function useRefreshFeed() {
+export function useRefreshFeed(platformType?: string) {
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
-    mutationFn: () => feedApi.refresh().then(r => r.data),
+    mutationFn: () => feedApi.refresh(platformType).then(r => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feedPosts'] })
       queryClient.invalidateQueries({ queryKey: ['feedInterests'] })

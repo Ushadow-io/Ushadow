@@ -1,6 +1,6 @@
 """Feed Service - Orchestrates interest extraction, post fetching, scoring, and storage.
 
-Business logic layer for the personalized fediverse feed feature.
+Business logic layer for the personalized multi-platform feed feature.
 Router -> FeedService -> InterestExtractor / PostFetcher / PostScorer / MongoDB
 """
 
@@ -14,7 +14,6 @@ from src.models.feed import (
     Interest,
     Post,
     PostSource,
-    PostUpdate,
     SourceCreate,
 )
 from src.services.interest_extractor import InterestExtractor
@@ -38,15 +37,18 @@ class FeedService:
     # =========================================================================
 
     async def add_source(self, user_id: str, data: SourceCreate) -> PostSource:
-        """Add a Mastodon-compatible server as a post source."""
+        """Add a content source (Mastodon instance or YouTube API key)."""
         source = PostSource(
             user_id=user_id,
             name=data.name,
-            instance_url=data.instance_url.rstrip("/"),
             platform_type=data.platform_type,
+            instance_url=data.instance_url.rstrip("/") if data.instance_url else None,
+            api_key=data.api_key,
         )
         await source.insert()
-        logger.info(f"Added source '{data.name}' for user {user_id}")
+        logger.info(
+            f"Added {data.platform_type} source '{data.name}' for user {user_id}"
+        )
         return source
 
     async def list_sources(self, user_id: str) -> List[PostSource]:
@@ -77,8 +79,14 @@ class FeedService:
     # Feed Refresh Pipeline
     # =========================================================================
 
-    async def refresh(self, user_id: str) -> Dict[str, Any]:
+    async def refresh(
+        self, user_id: str, platform_type: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Full pipeline: extract interests -> fetch posts -> score -> save.
+
+        Args:
+            user_id: Owner email.
+            platform_type: If set, only refresh sources of this platform.
 
         Returns summary of what was fetched and stored.
         """
@@ -95,23 +103,26 @@ class FeedService:
                 "posts_new": 0,
             }
 
-        # 2. Get configured sources
+        # 2. Get configured sources (optionally filtered by platform)
         sources = await self.list_sources(user_id)
+        if platform_type:
+            sources = [s for s in sources if s.platform_type == platform_type]
         if not sources:
             return {
                 "status": "no_sources",
-                "message": "No post sources configured. "
-                "Add a Mastodon instance to start.",
+                "message": f"No {platform_type or 'post'} sources configured.",
                 "interests_count": len(interests),
                 "posts_fetched": 0,
                 "posts_new": 0,
             }
 
-        # 3. Fetch posts from fediverse
-        raw_posts = await self._fetcher.fetch_for_interests(sources, interests)
+        # 3. Fetch posts from all platforms (returns List[Post])
+        posts = await self._fetcher.fetch_for_interests(
+            sources, interests, user_id
+        )
 
         # 4. Score posts against interests
-        scored_posts = self._scorer.score_posts(raw_posts, interests, user_id)
+        scored_posts = self._scorer.score_posts(posts, interests)
 
         # 5. Save new posts to DB (skip duplicates)
         new_count = 0
@@ -133,7 +144,7 @@ class FeedService:
 
         logger.info(
             f"Feed refresh for {user_id}: {len(interests)} interests, "
-            f"{len(raw_posts)} fetched, {new_count} new posts saved"
+            f"{len(posts)} fetched, {new_count} new posts saved"
         )
 
         return {
@@ -143,7 +154,7 @@ class FeedService:
                 {"name": i.name, "hashtags": i.hashtags, "weight": i.relationship_count}
                 for i in interests[:10]
             ],
-            "posts_fetched": len(raw_posts),
+            "posts_fetched": len(posts),
             "posts_scored": len(scored_posts),
             "posts_new": new_count,
         }
@@ -159,21 +170,25 @@ class FeedService:
         page_size: int = 20,
         filter_interest: Optional[str] = None,
         show_seen: bool = True,
+        platform_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get the ranked feed of posts for a user.
 
         Returns paginated posts sorted by relevance_score descending.
+        Optional platform_type filter for tab-based UI (social vs videos).
         """
-        query = Post.find(Post.user_id == user_id)
+        filters: Dict[str, Any] = {"user_id": user_id}
 
         if not show_seen:
-            query = Post.find(Post.user_id == user_id, Post.seen == False)  # noqa: E712
+            filters["seen"] = False
 
         if filter_interest:
-            query = Post.find(
-                Post.user_id == user_id,
-                {"matched_interests": filter_interest},
-            )
+            filters["matched_interests"] = filter_interest
+
+        if platform_type:
+            filters["platform_type"] = platform_type
+
+        query = Post.find(filters)
 
         total = await query.count()
         posts = (

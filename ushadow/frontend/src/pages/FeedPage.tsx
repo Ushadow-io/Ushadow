@@ -1,8 +1,9 @@
 /**
  * FeedPage
  *
- * Personalized fediverse feed ranked by your OpenMemory knowledge graph interests.
- * Features: interest filter chips, ranked post cards, source management, refresh.
+ * Multi-platform feed ranked by your OpenMemory knowledge graph interests.
+ * Features: Social/Videos tabs, interest filter chips, ranked post cards,
+ * source management, refresh.
  */
 
 import { useState } from 'react'
@@ -17,8 +18,11 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  MessageSquare,
+  Play,
 } from 'lucide-react'
 import PostCard from '../components/feed/PostCard'
+import YouTubePostCard from '../components/feed/YouTubePostCard'
 import InterestChip from '../components/feed/InterestChip'
 import AddSourceModal from '../components/feed/AddSourceModal'
 import FeedEmptyState from '../components/feed/FeedEmptyState'
@@ -30,18 +34,38 @@ import {
   useFeedStats,
 } from '../hooks/useFeed'
 
+type FeedTab = 'social' | 'videos'
+
+const TAB_TO_PLATFORM: Record<FeedTab, string> = {
+  social: 'mastodon',
+  videos: 'youtube',
+}
+
 export default function FeedPage() {
+  const [activeTab, setActiveTab] = useState<FeedTab>('social')
   const [page, setPage] = useState(1)
   const [selectedInterest, setSelectedInterest] = useState<string | undefined>()
   const [showSeen, setShowSeen] = useState(true)
   const [showAddSource, setShowAddSource] = useState(false)
 
+  const platformType = TAB_TO_PLATFORM[activeTab]
+
   const { posts, total, totalPages, isLoading, isFetching, error, markSeen, toggleBookmark } =
-    useFeedPosts(page, 20, selectedInterest, showSeen)
+    useFeedPosts(page, 20, selectedInterest, showSeen, platformType)
   const { interests } = useFeedInterests()
   const { sources, addSource, isAdding, removeSource, isRemoving } = useFeedSources()
-  const { refresh, isRefreshing, lastResult } = useRefreshFeed()
+  const { refresh, isRefreshing, lastResult } = useRefreshFeed(platformType)
   const { stats } = useFeedStats()
+
+  // Filter sources for the active tab
+  const tabSources = sources.filter((s) => s.platform_type === platformType)
+  const hasTabSources = tabSources.length > 0
+
+  const handleTabChange = (tab: FeedTab) => {
+    setActiveTab(tab)
+    setPage(1)
+    setSelectedInterest(undefined)
+  }
 
   const handleRefresh = async () => {
     try {
@@ -60,13 +84,13 @@ export default function FeedPage() {
   return (
     <div data-testid="feed-page">
       {/* Page header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <Radio className="h-6 w-6 text-primary-500" />
           <div>
             <h1 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">Feed</h1>
             <p className="text-sm text-neutral-500 dark:text-neutral-400">
-              Posts ranked by your knowledge graph interests
+              Content ranked by your knowledge graph interests
             </p>
           </div>
         </div>
@@ -107,10 +131,11 @@ export default function FeedPage() {
             <Plus className="h-4 w-4" />
           </button>
 
-          {/* Refresh */}
+          {/* Refresh — scoped to active tab's platform */}
           <button
             onClick={handleRefresh}
-            disabled={isRefreshing}
+            disabled={isRefreshing || !hasTabSources}
+            title={hasTabSources ? `Refresh ${activeTab}` : `Add a ${platformType} source first`}
             className="inline-flex items-center gap-2 px-3 py-2 bg-primary-600 text-white text-sm rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
             data-testid="feed-refresh"
           >
@@ -122,6 +147,34 @@ export default function FeedPage() {
             Refresh
           </button>
         </div>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex gap-1 mb-4 border-b border-neutral-200 dark:border-neutral-700" data-testid="feed-tabs">
+        <button
+          onClick={() => handleTabChange('social')}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'social'
+              ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300'
+          }`}
+          data-testid="tab-social"
+        >
+          <MessageSquare className="h-4 w-4" />
+          Social
+        </button>
+        <button
+          onClick={() => handleTabChange('videos')}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'videos'
+              ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300'
+          }`}
+          data-testid="tab-videos"
+        >
+          <Play className="h-4 w-4" />
+          Videos
+        </button>
       </div>
 
       {/* Refresh result banner */}
@@ -168,29 +221,36 @@ export default function FeedPage() {
         </div>
       )}
 
-      {/* Sources list (collapsible) */}
-      {sources.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-2 items-center" data-testid="feed-sources-list">
-          <span className="text-xs text-neutral-400 dark:text-neutral-500">Sources:</span>
-          {sources.map((s) => (
-            <span
-              key={s.source_id}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300"
+      {/* Sources list — scoped to active tab */}
+      <div className="mb-4 flex flex-wrap gap-2 items-center" data-testid="feed-sources-list">
+        <span className="text-xs text-neutral-400 dark:text-neutral-500">Sources:</span>
+        {tabSources.map((s) => (
+          <span
+            key={s.source_id}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300"
+          >
+            {s.platform_type === 'youtube' && <Play className="h-3 w-3 text-red-500" />}
+            {s.name}
+            <button
+              onClick={() => removeSource(s.source_id)}
+              disabled={isRemoving}
+              className="ml-0.5 p-0.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-600 text-neutral-400 hover:text-red-500 transition-colors"
+              title="Remove source"
+              data-testid={`feed-remove-source-${s.source_id}`}
             >
-              {s.name}
-              <button
-                onClick={() => removeSource(s.source_id)}
-                disabled={isRemoving}
-                className="ml-0.5 p-0.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-600 text-neutral-400 hover:text-red-500 transition-colors"
-                title="Remove source"
-                data-testid={`feed-remove-source-${s.source_id}`}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <button
+          onClick={() => setShowAddSource(true)}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs border border-dashed border-neutral-300 dark:border-neutral-600 text-neutral-400 hover:text-primary-500 hover:border-primary-400 transition-colors"
+          data-testid="feed-add-source-inline"
+        >
+          <Plus className="h-3 w-3" />
+          Add {platformType === 'youtube' ? 'YouTube' : 'Mastodon'} source
+        </button>
+      </div>
 
       {/* Loading state */}
       {isLoading && (
@@ -202,24 +262,34 @@ export default function FeedPage() {
       {/* Empty state */}
       {!isLoading && posts.length === 0 && (
         <FeedEmptyState
-          hasSources={sources.length > 0}
+          hasSources={hasTabSources}
+          platformType={platformType}
           onAddSource={() => setShowAddSource(true)}
           onRefresh={handleRefresh}
           isRefreshing={isRefreshing}
         />
       )}
 
-      {/* Post list */}
+      {/* Post list — conditional card type */}
       {!isLoading && posts.length > 0 && (
         <div className="space-y-3" data-testid="feed-post-list">
-          {posts.map((post) => (
-            <PostCard
-              key={post.post_id}
-              post={post}
-              onBookmark={toggleBookmark}
-              onMarkSeen={markSeen}
-            />
-          ))}
+          {posts.map((post) =>
+            post.platform_type === 'youtube' ? (
+              <YouTubePostCard
+                key={post.post_id}
+                post={post}
+                onBookmark={toggleBookmark}
+                onMarkSeen={markSeen}
+              />
+            ) : (
+              <PostCard
+                key={post.post_id}
+                post={post}
+                onBookmark={toggleBookmark}
+                onMarkSeen={markSeen}
+              />
+            ),
+          )}
         </div>
       )}
 
@@ -264,6 +334,7 @@ export default function FeedPage() {
         onClose={() => setShowAddSource(false)}
         onAdd={addSource}
         isAdding={isAdding}
+        defaultPlatform={platformType as 'mastodon' | 'youtube'}
       />
     </div>
   )

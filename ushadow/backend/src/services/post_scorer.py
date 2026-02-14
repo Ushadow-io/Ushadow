@@ -1,4 +1,7 @@
-"""Post Scorer - Ranks fediverse posts by relevance to the user's interest graph.
+"""Post Scorer - Ranks posts by relevance to the user's interest graph.
+
+Platform-agnostic scoring: works on Post objects regardless of whether
+they came from Mastodon, YouTube, or any future platform.
 
 Scoring signals:
 - Hashtag overlap with interest keywords (direct match)
@@ -12,76 +15,56 @@ import logging
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Set
 
 from src.models.feed import Interest, Post
 
 logger = logging.getLogger(__name__)
 
-# Strip HTML tags for text matching
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class PostScorer:
-    """Scores fediverse posts against the user's interest graph."""
+    """Scores posts against the user's interest graph."""
 
     def score_posts(
         self,
-        raw_posts: List[Dict[str, Any]],
+        posts: List[Post],
         interests: List[Interest],
-        user_id: str,
     ) -> List[Post]:
-        """Score each raw Mastodon status against user interests.
+        """Score pre-transformed Post objects against user interests.
 
         For each post:
-        1. Extract hashtags and plain text from the Mastodon status
-        2. Find which interests match (hashtag overlap + content keywords)
-        3. Compute relevance_score from matched interest weights
-        4. Create Post objects sorted by relevance_score descending
+        1. Find which interests match (hashtag overlap + content keywords)
+        2. Compute relevance_score from matched interest weights
+        3. Add recency boost
+        4. Return sorted by relevance_score descending
         """
         if not interests:
             logger.info("No interests to score against")
-            return []
+            return posts
 
-        # Build lookup: hashtag -> Interest
-        tag_to_interests: Dict[str, List[Interest]] = {}
-        for interest in interests:
-            for tag in interest.hashtags:
-                tag_to_interests.setdefault(tag.lower(), []).append(interest)
-
-        # Build keyword set for content matching
-        keyword_to_interests: Dict[str, List[Interest]] = {}
-        for interest in interests:
-            # Use the interest name words as keywords
-            words = interest.name.lower().split()
-            for word in words:
-                if len(word) >= 3:
-                    keyword_to_interests.setdefault(word, []).append(interest)
+        # Build lookups
+        tag_to_interests = _build_tag_lookup(interests)
+        kw_to_interests = _build_keyword_lookup(interests)
 
         now = datetime.now(timezone.utc)
-        scored_posts: List[Post] = []
 
-        for status in raw_posts:
-            post = _status_to_post(status, user_id)
-            if not post:
-                continue
-
+        for post in posts:
             matched: Set[str] = set()
             score = 0.0
 
             # 1. Hashtag matching
-            for post_tag in post.hashtags:
-                tag_lower = post_tag.lower()
-                if tag_lower in tag_to_interests:
-                    for interest in tag_to_interests[tag_lower]:
-                        if interest.name not in matched:
-                            matched.add(interest.name)
-                            score += _interest_score(interest, now)
+            for tag in post.hashtags:
+                for interest in tag_to_interests.get(tag.lower(), []):
+                    if interest.name not in matched:
+                        matched.add(interest.name)
+                        score += _interest_score(interest, now)
 
             # 2. Content keyword matching (weaker signal)
-            plain_text = _strip_html(post.content).lower()
-            for keyword, kw_interests in keyword_to_interests.items():
-                if keyword in plain_text:
+            plain = _strip_html(post.content).lower()
+            for keyword, kw_interests in kw_to_interests.items():
+                if keyword in plain:
                     for interest in kw_interests:
                         if interest.name not in matched:
                             matched.add(interest.name)
@@ -92,28 +75,51 @@ class PostScorer:
 
             post.relevance_score = round(score, 3)
             post.matched_interests = sorted(matched)
-            scored_posts.append(post)
 
-        # Sort by relevance descending
-        scored_posts.sort(key=lambda p: p.relevance_score, reverse=True)
+        posts.sort(key=lambda p: p.relevance_score, reverse=True)
 
         logger.info(
-            f"Scored {len(scored_posts)} posts, "
-            f"top score: {scored_posts[0].relevance_score if scored_posts else 0}"
+            f"Scored {len(posts)} posts, "
+            f"top score: {posts[0].relevance_score if posts else 0}"
         )
-        return scored_posts
+        return posts
+
+
+# ======================================================================
+# Helpers
+# ======================================================================
+
+
+def _build_tag_lookup(
+    interests: List[Interest],
+) -> Dict[str, List[Interest]]:
+    """Map hashtag → list of interests that use it."""
+    lookup: Dict[str, List[Interest]] = {}
+    for interest in interests:
+        for tag in interest.hashtags:
+            lookup.setdefault(tag.lower(), []).append(interest)
+    return lookup
+
+
+def _build_keyword_lookup(
+    interests: List[Interest],
+) -> Dict[str, List[Interest]]:
+    """Map interest name words → list of interests (for text matching)."""
+    lookup: Dict[str, List[Interest]] = {}
+    for interest in interests:
+        for word in interest.name.lower().split():
+            if len(word) >= 3:
+                lookup.setdefault(word, []).append(interest)
+    return lookup
 
 
 def _interest_score(interest: Interest, now: datetime) -> float:
     """Score contribution from a single matched interest.
 
-    Uses log of relationship_count (diminishing returns for very connected nodes)
-    plus a recency bonus if the interest was recently active.
+    log2(relationship_count + 1) + recency bonus if active recently.
     """
-    # Base: log(relationship_count + 1) so a node with 10 rels ≈ 2.4, 100 rels ≈ 4.6
     base = math.log(interest.relationship_count + 1, 2)
 
-    # Recency bonus: interests active in the last 7 days get up to +2.0
     recency_bonus = 0.0
     if interest.last_active:
         days_since = (now - interest.last_active).total_seconds() / 86400
@@ -124,10 +130,7 @@ def _interest_score(interest: Interest, now: datetime) -> float:
 
 
 def _recency_boost(published_at: datetime, now: datetime) -> float:
-    """Boost for recent posts. Posts lose relevance over days.
-
-    24h old -> +1.0, 48h -> +0.5, 7 days -> ~0.14, older -> ~0
-    """
+    """Boost for recent posts — decays logarithmically over hours."""
     hours_old = max((now - published_at).total_seconds() / 3600, 0)
     if hours_old < 1:
         return 1.5
@@ -137,48 +140,3 @@ def _recency_boost(published_at: datetime, now: datetime) -> float:
 def _strip_html(html: str) -> str:
     """Remove HTML tags for plain text matching."""
     return _HTML_TAG_RE.sub(" ", html).strip()
-
-
-def _status_to_post(
-    status: Dict[str, Any], user_id: str
-) -> Optional[Post]:
-    """Convert a Mastodon Status JSON object to a Post model."""
-    try:
-        account = status.get("account", {})
-        tags = status.get("tags", [])
-
-        # Build full handle: @user@instance
-        acct = account.get("acct", "unknown")
-        if "@" not in acct:
-            # Local account — append instance from URL
-            instance_url = status.get("_source_instance", "")
-            domain = instance_url.replace("https://", "").replace("http://", "").rstrip("/")
-            acct = f"{acct}@{domain}" if domain else acct
-
-        published_at_str = status.get("created_at", "")
-        try:
-            published_at = datetime.fromisoformat(
-                published_at_str.replace("Z", "+00:00")
-            )
-        except (ValueError, AttributeError):
-            published_at = datetime.now(timezone.utc)
-
-        return Post(
-            user_id=user_id,
-            source_id=status.get("_source_id", ""),
-            external_id=status.get("uri") or status.get("id", ""),
-            author_handle=f"@{acct}",
-            author_display_name=account.get("display_name", ""),
-            author_avatar=account.get("avatar", None),
-            content=status.get("content", ""),
-            url=status.get("url") or status.get("uri", ""),
-            published_at=published_at,
-            hashtags=[t.get("name", "") for t in tags if t.get("name")],
-            language=status.get("language"),
-            boosts_count=status.get("reblogs_count", 0),
-            favourites_count=status.get("favourites_count", 0),
-            replies_count=status.get("replies_count", 0),
-        )
-    except Exception as e:
-        logger.warning(f"Failed to parse status: {e}")
-        return None

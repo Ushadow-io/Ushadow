@@ -1,7 +1,7 @@
-"""Feed models for personalized fediverse content curation.
+"""Feed models for multi-platform content curation.
 
-PostSource: a Mastodon-compatible server to fetch posts from.
-Post: a single fediverse post, scored against the user's interests.
+PostSource: a content platform to fetch posts from (Mastodon, YouTube, etc.).
+Post: a single content item, scored against the user's interests.
 Interest: a topic/entity derived from the user's stored memories (not persisted).
 """
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class PostSource(Document):
-    """A Mastodon-compatible server to fetch posts from."""
+    """A content platform to fetch posts from (Mastodon, YouTube, etc.)."""
 
     source_id: str = Field(
         default_factory=lambda: str(uuid4()),
@@ -30,11 +30,14 @@ class PostSource(Document):
     )
     user_id: str = Field(..., description="Owner email")
     name: str = Field(..., min_length=1, max_length=200, description="Display name")
-    instance_url: str = Field(
-        ..., description="Server URL (e.g., https://mastodon.social)"
-    )
     platform_type: str = Field(
-        default="mastodon", description="Platform type: mastodon (future: bluesky)"
+        default="mastodon", description="mastodon | youtube"
+    )
+    instance_url: Optional[str] = Field(
+        default=None, description="Server URL (required for mastodon)"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="API key (required for youtube)"
     )
     enabled: bool = Field(default=True)
 
@@ -50,7 +53,7 @@ class PostSource(Document):
 
 
 class Post(Document):
-    """A single fediverse post, scored against the user's interest graph."""
+    """A content item from any platform, scored against the user's interests."""
 
     post_id: str = Field(
         default_factory=lambda: str(uuid4()),
@@ -58,24 +61,35 @@ class Post(Document):
     )
     user_id: str = Field(..., description="Owner who fetched this post")
     source_id: str = Field(..., description="PostSource this came from")
-    external_id: str = Field(..., description="Mastodon status ID (for dedup)")
+    external_id: str = Field(..., description="Platform-specific ID (for dedup)")
+    platform_type: str = Field(
+        default="mastodon", description="mastodon | youtube"
+    )
 
     # Author
     author_handle: str = Field(..., description="e.g., @user@mastodon.social")
     author_display_name: str = Field(default="")
     author_avatar: Optional[str] = Field(default=None)
 
-    # Content
-    content: str = Field(..., description="HTML content from Mastodon")
-    url: str = Field(..., description="Link to original post")
+    # Content (shared across platforms)
+    content: str = Field(..., description="HTML content or description text")
+    url: str = Field(..., description="Link to original post/video")
     published_at: datetime = Field(..., description="When the author posted it")
     hashtags: List[str] = Field(default_factory=list)
     language: Optional[str] = Field(default=None)
 
-    # Engagement (from Mastodon API)
-    boosts_count: int = Field(default=0)
-    favourites_count: int = Field(default=0)
-    replies_count: int = Field(default=0)
+    # Mastodon engagement (optional — only set for mastodon)
+    boosts_count: Optional[int] = Field(default=None)
+    favourites_count: Optional[int] = Field(default=None)
+    replies_count: Optional[int] = Field(default=None)
+
+    # YouTube-specific (optional — only set for youtube)
+    thumbnail_url: Optional[str] = Field(default=None)
+    video_id: Optional[str] = Field(default=None)
+    channel_title: Optional[str] = Field(default=None)
+    view_count: Optional[int] = Field(default=None)
+    like_count: Optional[int] = Field(default=None)
+    duration: Optional[str] = Field(default=None, description="ISO 8601 or HH:MM:SS")
 
     # Scoring
     relevance_score: float = Field(default=0.0, description="Computed by PostScorer")
@@ -97,6 +111,7 @@ class Post(Document):
             "post_id",
             "external_id",
             [("user_id", 1), ("relevance_score", -1)],  # Feed query: ranked
+            [("user_id", 1), ("platform_type", 1), ("relevance_score", -1)],
             [("user_id", 1), ("bookmarked", 1)],  # Bookmarked posts
             [("user_id", 1), ("external_id", 1)],  # Dedup check
         ]
@@ -134,10 +149,13 @@ class SourceCreate(BaseModel):
     """Request model for adding a post source."""
 
     name: str = Field(..., min_length=1, max_length=200)
-    instance_url: str = Field(
-        ..., description="Mastodon-compatible server URL"
+    platform_type: str = Field(default="mastodon", description="mastodon | youtube")
+    instance_url: Optional[str] = Field(
+        default=None, description="Server URL (required for mastodon)"
     )
-    platform_type: str = Field(default="mastodon")
+    api_key: Optional[str] = Field(
+        default=None, description="API key (required for youtube)"
+    )
 
     model_config = {"extra": "forbid"}
 

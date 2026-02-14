@@ -1,7 +1,7 @@
 /**
  * Feed API Client
  *
- * HTTP functions for the personalized fediverse feed feature.
+ * HTTP functions for the personalized multi-platform feed feature.
  * Uses the shared `api` axios instance (includes JWT auth automatically).
  */
 
@@ -12,6 +12,7 @@ export interface FeedPost {
   user_id: string
   source_id: string
   external_id: string
+  platform_type: string // 'mastodon' | 'youtube'
   author_handle: string
   author_display_name: string
   author_avatar: string | null
@@ -20,9 +21,18 @@ export interface FeedPost {
   published_at: string
   hashtags: string[]
   language: string | null
-  boosts_count: number
-  favourites_count: number
-  replies_count: number
+  // Mastodon engagement (optional — null for non-mastodon)
+  boosts_count: number | null
+  favourites_count: number | null
+  replies_count: number | null
+  // YouTube-specific (optional — null for non-youtube)
+  thumbnail_url?: string | null
+  video_id?: string | null
+  channel_title?: string | null
+  view_count?: number | null
+  like_count?: number | null
+  duration?: string | null
+  // Scoring & interaction
   relevance_score: number
   matched_interests: string[]
   seen: boolean
@@ -43,8 +53,9 @@ export interface FeedSource {
   source_id: string
   user_id: string
   name: string
-  instance_url: string
   platform_type: string
+  instance_url: string | null
+  api_key: string | null
   enabled: boolean
   created_at: string
 }
@@ -67,6 +78,13 @@ export interface RefreshResult {
   message?: string
 }
 
+export interface SourceCreateData {
+  name: string
+  platform_type: string
+  instance_url?: string
+  api_key?: string
+}
+
 export const feedApi = {
   // Posts
   getPosts: (params: {
@@ -74,10 +92,14 @@ export const feedApi = {
     page_size?: number
     interest?: string
     show_seen?: boolean
+    platform_type?: string
   }) => api.get<FeedResponse>('/api/feed/posts', { params }),
 
-  // Refresh
-  refresh: () => api.post<RefreshResult>('/api/feed/refresh'),
+  // Refresh (optionally scoped to one platform)
+  refresh: (platformType?: string) =>
+    api.post<RefreshResult>('/api/feed/refresh', null, {
+      params: platformType ? { platform_type: platformType } : undefined,
+    }),
 
   // Interests
   getInterests: () =>
@@ -87,7 +109,7 @@ export const feedApi = {
   getSources: () =>
     api.get<{ sources: FeedSource[] }>('/api/feed/sources'),
 
-  addSource: (data: { name: string; instance_url: string; platform_type?: string }) =>
+  addSource: (data: SourceCreateData) =>
     api.post<FeedSource>('/api/feed/sources', data),
 
   removeSource: (sourceId: string) =>

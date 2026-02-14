@@ -1,11 +1,24 @@
 /**
  * FeedEmptyState — shown when no sources are configured or no posts are available.
+ * Platform-aware: messaging adapts to whether the user is on Social or Videos tab.
  */
 
-import { Radio, Plus, Loader2 } from 'lucide-react'
+import { Radio, Plus, Loader2, MessageSquare, Play } from 'lucide-react'
+
+const PLATFORM_LABELS: Record<string, { name: string; guidance: string }> = {
+  mastodon: {
+    name: 'Mastodon',
+    guidance: 'Add a Mastodon-compatible server to start curating your personalized feed based on your knowledge graph interests.',
+  },
+  youtube: {
+    name: 'YouTube',
+    guidance: 'Add a YouTube API key to discover videos ranked by your knowledge graph interests.',
+  },
+}
 
 interface FeedEmptyStateProps {
   hasSources: boolean
+  platformType?: string
   onAddSource: () => void
   onRefresh: () => void
   isRefreshing: boolean
@@ -13,20 +26,23 @@ interface FeedEmptyStateProps {
 
 export default function FeedEmptyState({
   hasSources,
+  platformType,
   onAddSource,
   onRefresh,
   isRefreshing,
 }: FeedEmptyStateProps) {
+  const label = platformType ? PLATFORM_LABELS[platformType] : undefined
+  const Icon = platformType === 'youtube' ? Play : MessageSquare
+
   if (!hasSources) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center" data-testid="feed-empty-no-sources">
-        <Radio className="h-12 w-12 text-neutral-300 dark:text-neutral-600 mb-4" />
+        <Icon className="h-12 w-12 text-neutral-300 dark:text-neutral-600 mb-4" />
         <h3 className="text-lg font-semibold text-neutral-700 dark:text-neutral-200 mb-2">
-          No sources configured
+          No {label?.name ?? ''} sources configured
         </h3>
         <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-6 max-w-md">
-          Add a Mastodon-compatible server to start curating your personalized feed
-          based on your knowledge graph interests.
+          {label?.guidance ?? 'Add a content source to get started.'}
         </p>
         <button
           onClick={onAddSource}
@@ -34,7 +50,7 @@ export default function FeedEmptyState({
           data-testid="feed-empty-add-source"
         >
           <Plus className="h-4 w-4" />
-          Add Source
+          Add {label?.name ?? ''} Source
         </button>
       </div>
     )
@@ -42,9 +58,9 @@ export default function FeedEmptyState({
 
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center" data-testid="feed-empty-no-posts">
-      <Radio className="h-12 w-12 text-neutral-300 dark:text-neutral-600 mb-4" />
+      <Icon className="h-12 w-12 text-neutral-300 dark:text-neutral-600 mb-4" />
       <h3 className="text-lg font-semibold text-neutral-700 dark:text-neutral-200 mb-2">
-        No posts yet
+        No {label?.name ? `${label.name} ` : ''}posts yet
       </h3>
       <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-6 max-w-md">
         Hit refresh to fetch posts from your sources and score them against your interests.

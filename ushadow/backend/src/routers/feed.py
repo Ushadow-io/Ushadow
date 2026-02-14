@@ -48,7 +48,21 @@ async def add_source(
     service: FeedService = Depends(get_feed_service),
     current_user=Depends(get_current_user),
 ):
-    """Add a Mastodon-compatible server as a post source."""
+    """Add a content source (Mastodon instance or YouTube API key)."""
+    # Validate platform-specific required fields
+    if data.platform_type == "mastodon" and not data.instance_url:
+        raise HTTPException(
+            status_code=422, detail="instance_url is required for mastodon sources"
+        )
+    if data.platform_type == "youtube" and not data.api_key:
+        raise HTTPException(
+            status_code=422, detail="api_key is required for youtube sources"
+        )
+    if data.platform_type not in ("mastodon", "youtube"):
+        raise HTTPException(
+            status_code=422, detail=f"Unknown platform_type: {data.platform_type}"
+        )
+
     user_id = get_user_email(current_user)
     source = await service.add_source(user_id, data)
     return source
@@ -95,22 +109,30 @@ async def get_feed(
     page_size: int = Query(default=20, ge=1, le=100),
     interest: Optional[str] = Query(default=None, description="Filter by interest name"),
     show_seen: bool = Query(default=True),
+    platform_type: Optional[str] = Query(
+        default=None, description="Filter: mastodon | youtube"
+    ),
     service: FeedService = Depends(get_feed_service),
     current_user=Depends(get_current_user),
 ):
     """Get ranked feed of posts, sorted by relevance to your interests."""
     user_id = get_user_email(current_user)
-    return await service.get_feed(user_id, page, page_size, interest, show_seen)
+    return await service.get_feed(
+        user_id, page, page_size, interest, show_seen, platform_type
+    )
 
 
 @router.post("/refresh")
 async def refresh_feed(
+    platform_type: Optional[str] = Query(
+        default=None, description="Refresh only this platform: mastodon | youtube"
+    ),
     service: FeedService = Depends(get_feed_service),
     current_user=Depends(get_current_user),
 ):
-    """Trigger a full feed refresh: extract interests, fetch posts, score."""
+    """Trigger a feed refresh, optionally scoped to one platform."""
     user_id = get_user_email(current_user)
-    result = await service.refresh(user_id)
+    result = await service.refresh(user_id, platform_type)
     return result
 
 
