@@ -347,12 +347,9 @@ health:
 # Development commands
 install:
 	@echo "📦 Installing dependencies..."
-	@cd ushadow/backend && \
-		if [ ! -d .venv ]; then uv venv --python 3.12; fi && \
-		uv pip install -e ".[dev]" --python .venv/bin/python && \
-		uv pip install -r ../../robot_tests/requirements.txt --python .venv/bin/python
-	cd ushadow/frontend && npm install
-	@echo "✅ Dependencies installed"
+	@echo "⚠️  Use 'pixi run install' instead for shared pixi environment"
+	@echo "   Or run: pixi shell, then run make targets"
+	@exit 1
 
 # =============================================================================
 # Backend Tests (pytest) - Test Pyramid Base
@@ -361,22 +358,22 @@ install:
 # Fast unit tests only (no services needed) - should complete in seconds
 test:
 	@echo "🧪 Running unit tests..."
-	@cd ushadow/backend && .venv/bin/pytest -m "unit and not tdd" -q --tb=short
+	@cd ushadow/backend && pytest -m "unit and not tdd" -q --tb=short
 
 # Integration tests (need MongoDB, Redis running)
 test-integration:
 	@echo "🧪 Running integration tests..."
-	@cd ushadow/backend && .venv/bin/pytest -m "integration and not tdd" -v --tb=short
+	@cd ushadow/backend && pytest -m "integration and not tdd" -v --tb=short
 
 # TDD tests (expected to fail - for tracking progress)
 test-tdd:
 	@echo "🧪 Running TDD tests (expected failures)..."
-	@cd ushadow/backend && .venv/bin/pytest -m "tdd" -v
+	@cd ushadow/backend && pytest -m "tdd" -v
 
 # All backend tests (unit + integration, excludes TDD)
 test-all:
 	@echo "🧪 Running all backend tests..."
-	@cd ushadow/backend && .venv/bin/pytest -m "not tdd" -v --tb=short
+	@cd ushadow/backend && pytest -m "not tdd" -v --tb=short
 
 # =============================================================================
 # Robot Framework Tests (API/E2E) - Test Pyramid Top
@@ -385,43 +382,38 @@ test-all:
 # Quick smoke tests - health checks and critical paths (~30 seconds)
 test-robot-quick:
 	@echo "🤖 Running quick smoke tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --include quick \
-		      ../../robot_tests/api/api_health_check.robot \
-		      ../../robot_tests/api/service_config_scenarios.robot
+	@robot --outputdir robot_results \
+	      --include quick \
+	      robot_tests/api/api_health_check.robot \
+	      robot_tests/api/service_config_scenarios.robot
 
 # Critical path tests only - must-pass scenarios
 test-robot-critical:
 	@echo "🤖 Running critical path tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --include critical \
-		      ../../robot_tests/api/
+	@robot --outputdir robot_results \
+	      --include critical \
+	      robot_tests/api/
 
 # All API integration tests
 test-robot-api:
 	@echo "🤖 Running all API tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --exclude wip \
-		      ../../robot_tests/api/
+	@robot --outputdir robot_results \
+	      --exclude wip \
+	      robot_tests/api/
 
 # Feature-level tests (memory feedback, etc.)
 test-robot-features:
 	@echo "🤖 Running feature tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --exclude wip \
-		      ../../robot_tests/features/
+	@robot --outputdir robot_results \
+	      --exclude wip \
+	      robot_tests/features/
 
 # All Robot tests (full suite) - may take several minutes
 test-robot:
 	@echo "🤖 Running full Robot test suite..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --exclude wip \
-		      ../../robot_tests/
+	@robot --outputdir robot_results \
+	      --exclude wip \
+	      robot_tests/
 
 # View last test report in browser
 test-report:

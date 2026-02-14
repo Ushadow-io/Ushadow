@@ -175,6 +175,9 @@ env = [
     # Use /tmp for config to avoid read-only /config mount
     "CONFIG_DIR=/tmp/pytest_config",
     "PROJECT_ROOT=/tmp",
+    "KUBECONFIG_DIR=/tmp/pytest_kubeconfigs",
+    # Auth secret key for testing
+    "AUTH_SECRET_KEY=test-secret-key-for-testing-only-not-secure-32-chars-min",
     # Infrastructure: Use localhost (tests run on host, not in Docker)
     # directConnection=true needed for MongoDB replica set
     "MONGODB_URI=mongodb://localhost:27017/?directConnection=true",

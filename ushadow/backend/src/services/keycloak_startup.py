@@ -6,6 +6,7 @@ when the backend starts. This ensures multi-worktree setups work without
 manual Keycloak configuration.
 """
 
+import asyncio
 import logging
 import os
 from typing import List, Optional
@@ -15,6 +16,9 @@ from ..config.keycloak_settings import is_keycloak_enabled
 from .tailscale_manager import TailscaleManager
 
 logger = logging.getLogger(__name__)
+
+# Lock to prevent concurrent registration (avoids duplicate key errors in Keycloak)
+_registration_lock = asyncio.Lock()
 
 
 def get_tailscale_hostname() -> Optional[str]:
@@ -175,6 +179,9 @@ async def register_current_environment():
     Skip if:
     - Keycloak is not enabled in config
     - KEYCLOAK_AUTO_REGISTER=false environment variable is set
+
+    Uses a lock to prevent concurrent registration which can cause
+    duplicate key errors in Keycloak's database.
     """
     # Check if Keycloak is enabled
     if not is_keycloak_enabled():
@@ -186,60 +193,62 @@ async def register_current_environment():
         logger.info("[KC-STARTUP] Keycloak auto-registration disabled via KEYCLOAK_AUTO_REGISTER=false")
         return
 
-    try:
-        # Get admin client
-        admin_client = get_keycloak_admin()
-
-        # Get URIs to register
-        redirect_uris = get_current_redirect_uris()
-        post_logout_uris = get_current_post_logout_uris()
-        web_origins = get_web_origins()  # Get CORS origins from settings
-
-        logger.info("[KC-STARTUP] 🔐 Registering redirect URIs with Keycloak...")
-        logger.info(f"[KC-STARTUP] Environment: PORT_OFFSET={os.getenv('PORT_OFFSET', '10')}")
-
-        # Register redirect URIs and webOrigins (CORS)
-        success = await admin_client.update_client_redirect_uris(
-            client_id="ushadow-frontend",
-            redirect_uris=redirect_uris,
-            web_origins=web_origins,  # Pass CORS origins from settings
-            merge=True  # Merge with existing URIs
-        )
-
-        if not success:
-            logger.warning("[KC-STARTUP] ⚠️  Failed to register redirect URIs (Keycloak may not be ready yet)")
-            logger.warning("[KC-STARTUP] You may need to manually configure redirect URIs in Keycloak admin console")
-            return
-
-        # Register post-logout redirect URIs
-        logout_success = await admin_client.update_post_logout_redirect_uris(
-            client_id="ushadow-frontend",
-            post_logout_redirect_uris=post_logout_uris,
-            merge=True
-        )
-
-        if logout_success:
-            logger.info("[KC-STARTUP] ✅ Redirect URIs registered successfully")
-        else:
-            logger.warning("[KC-STARTUP] ⚠️  Failed to register post-logout redirect URIs")
-
-        # Update realm CSP to allow embedding from any origin (Tauri, Tailscale, etc.)
+    # Use lock to prevent concurrent registration (avoids duplicate key errors)
+    async with _registration_lock:
         try:
-            logger.info("[KC-STARTUP] 🔒 Updating realm CSP to allow embedding...")
-            headers = {
-                "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http: https: tauri:; object-src 'none';",
-                "xContentTypeOptions": "nosniff",
-                "xRobotsTag": "none",
-                "xFrameOptions": "",  # Remove X-Frame-Options (conflicts with CSP frame-ancestors)
-                "xXSSProtection": "1; mode=block",
-                "strictTransportSecurity": "max-age=31536000; includeSubDomains"
-            }
-            admin_client.update_realm_browser_security_headers(headers)
-            logger.info("[KC-STARTUP] ✅ Realm CSP updated successfully")
-        except Exception as csp_error:
-            logger.warning(f"[KC-STARTUP] ⚠️  Failed to update realm CSP: {csp_error}")
-            logger.warning("[KC-STARTUP] You may need to manually configure CSP in Keycloak admin console")
+            # Get admin client
+            admin_client = get_keycloak_admin()
 
-    except Exception as e:
-        logger.warning(f"[KC-STARTUP] ⚠️  Failed to auto-register Keycloak URIs: {e}")
-        logger.warning("[KC-STARTUP] This is non-critical - you can manually configure URIs in Keycloak admin console")
+            # Get URIs to register
+            redirect_uris = get_current_redirect_uris()
+            post_logout_uris = get_current_post_logout_uris()
+            web_origins = get_web_origins()  # Get CORS origins from settings
+
+            logger.info("[KC-STARTUP] 🔐 Registering redirect URIs with Keycloak...")
+            logger.info(f"[KC-STARTUP] Environment: PORT_OFFSET={os.getenv('PORT_OFFSET', '10')}")
+
+            # Register redirect URIs and webOrigins (CORS)
+            success = await admin_client.update_client_redirect_uris(
+                client_id="ushadow-frontend",
+                redirect_uris=redirect_uris,
+                web_origins=web_origins,  # Pass CORS origins from settings
+                merge=True  # Merge with existing URIs
+            )
+
+            if not success:
+                logger.warning("[KC-STARTUP] ⚠️  Failed to register redirect URIs (Keycloak may not be ready yet)")
+                logger.warning("[KC-STARTUP] You may need to manually configure redirect URIs in Keycloak admin console")
+                return
+
+            # Register post-logout redirect URIs
+            logout_success = await admin_client.update_post_logout_redirect_uris(
+                client_id="ushadow-frontend",
+                post_logout_redirect_uris=post_logout_uris,
+                merge=True
+            )
+
+            if logout_success:
+                logger.info("[KC-STARTUP] ✅ Redirect URIs registered successfully")
+            else:
+                logger.warning("[KC-STARTUP] ⚠️  Failed to register post-logout redirect URIs")
+
+            # Update realm CSP to allow embedding from any origin (Tauri, Tailscale, etc.)
+            try:
+                logger.info("[KC-STARTUP] 🔒 Updating realm CSP to allow embedding...")
+                headers = {
+                    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http: https: tauri:; object-src 'none';",
+                    "xContentTypeOptions": "nosniff",
+                    "xRobotsTag": "none",
+                    "xFrameOptions": "",  # Remove X-Frame-Options (conflicts with CSP frame-ancestors)
+                    "xXSSProtection": "1; mode=block",
+                    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+                }
+                admin_client.update_realm_browser_security_headers(headers)
+                logger.info("[KC-STARTUP] ✅ Realm CSP updated successfully")
+            except Exception as csp_error:
+                logger.warning(f"[KC-STARTUP] ⚠️  Failed to update realm CSP: {csp_error}")
+                logger.warning("[KC-STARTUP] You may need to manually configure CSP in Keycloak admin console")
+
+        except Exception as e:
+            logger.warning(f"[KC-STARTUP] ⚠️  Failed to auto-register Keycloak URIs: {e}")
+            logger.warning("[KC-STARTUP] This is non-critical - you can manually configure URIs in Keycloak admin console")
