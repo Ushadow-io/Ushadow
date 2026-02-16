@@ -12,6 +12,7 @@ from src.models.deployment import ResolvedServiceDefinition, Deployment, Deploym
 from src.models.deploy_target import DeployTarget
 from src.services.kubernetes_manager import KubernetesManager
 from src.utils.environment import get_environment_info, is_local_deployment
+from src.utils.docker_helpers import parse_port_config, map_docker_status
 
 logger = logging.getLogger(__name__)
 
@@ -200,42 +201,11 @@ class DockerDeployPlatform(DeployPlatform):
                     logger.warning(f"Cannot force rebuild - no compose file information available for {resolved_service.service_id}")
 
 
-            # ===== PORT CONFIGURATION =====
-            # Parse all port-related configuration in one place
-            logger.info(f"[PORT DEBUG] Starting port parsing for {resolved_service.service_id}")
-            logger.info(f"[PORT DEBUG] Input ports from resolved_service.ports: {resolved_service.ports}")
-
-            port_bindings = {}
-            exposed_ports = {}
-            exposed_port = None  # First host port for deployment tracking
-
-            for port_str in resolved_service.ports:
-                logger.info(f"[PORT DEBUG] Processing port_str: {port_str}")
-                if ":" in port_str:
-                    host_port, container_port = port_str.split(":")
-                    port_key = f"{container_port}/tcp"
-                    port_bindings[port_key] = int(host_port)
-                    exposed_ports[port_key] = {}
-
-                    # Save first host port for deployment tracking
-                    if exposed_port is None:
-                        exposed_port = int(host_port)
-
-                    logger.info(f"[PORT DEBUG] Mapped: host={host_port} -> container={container_port} (key={port_key})")
-                else:
-                    port_key = f"{port_str}/tcp"
-                    exposed_ports[port_key] = {}
-
-                    # Save first port for deployment tracking
-                    if exposed_port is None:
-                        exposed_port = int(port_str)
-
-                    logger.info(f"[PORT DEBUG] Exposed only: {port_key}")
-
-            logger.info(f"[PORT DEBUG] Final port_bindings: {port_bindings}")
-            logger.info(f"[PORT DEBUG] Final exposed_ports: {exposed_ports}")
-            logger.info(f"[PORT DEBUG] Tracking exposed_port: {exposed_port}")
-            # ===== END PORT CONFIGURATION =====
+            # Parse port configuration using utility function
+            port_bindings, exposed_ports, exposed_port = parse_port_config(
+                resolved_service.ports,
+                service_id=resolved_service.service_id
+            )
 
             # Create container with ushadow labels for stateless tracking
             from datetime import datetime, timezone
@@ -527,14 +497,8 @@ class DockerDeployPlatform(DeployPlatform):
                 response.raise_for_status()
                 result = response.json()
 
-                status_map = {
-                    "running": DeploymentStatus.RUNNING,
-                    "exited": DeploymentStatus.STOPPED,
-                    "dead": DeploymentStatus.FAILED,
-                    "paused": DeploymentStatus.STOPPED,
-                }
-
-                return status_map.get(result.get("status", ""), DeploymentStatus.FAILED)
+                docker_status = result.get("status", "")
+                return map_docker_status(docker_status)
 
             except Exception as e:
                 logger.error(f"Failed to get status: {e}")
@@ -635,16 +599,8 @@ class DockerDeployPlatform(DeployPlatform):
                         continue
 
                     # Map container status to deployment status
-                    status_map = {
-                        "running": DeploymentStatus.RUNNING,
-                        "exited": DeploymentStatus.STOPPED,
-                        "created": DeploymentStatus.PENDING,
-                        "dead": DeploymentStatus.FAILED,
-                        "paused": DeploymentStatus.STOPPED,
-                    }
-
                     container_status = container.status.lower()
-                    deployment_status = status_map.get(container_status, DeploymentStatus.FAILED)
+                    deployment_status = map_docker_status(container_status)
 
                     # Extract exposed port
                     exposed_port = None
