@@ -247,6 +247,7 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
                 "com.docker.compose.project": project_name,
+                "com.docker.compose.service": resolved_service.service_id,  # Required for docker_manager to find services
             }
 
             # Use ushadow-network to communicate with infrastructure (mongo, redis, qdrant)
@@ -436,6 +437,7 @@ class DockerDeployPlatform(DeployPlatform):
             "ushadow.unode_hostname": hostname,
             "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
             "ushadow.backend_type": "docker",
+            "com.docker.compose.service": resolved_service.service_id,  # Required for docker_manager to find services
         }
 
         payload = {

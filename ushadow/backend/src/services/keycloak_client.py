@@ -48,7 +48,8 @@ class KeycloakClient:
         self,
         code: str,
         redirect_uri: str,
-        code_verifier: Optional[str] = None
+        code_verifier: Optional[str] = None,
+        client_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Exchange authorization code for access/refresh tokens.
@@ -59,6 +60,7 @@ class KeycloakClient:
             code: Authorization code from Keycloak
             redirect_uri: Redirect URI used in authorization request
             code_verifier: PKCE code verifier (if PKCE was used)
+            client_id: OAuth client ID (must match the one used in authorization request)
 
         Returns:
             Token response with access_token, refresh_token, id_token, etc.
@@ -67,7 +69,7 @@ class KeycloakClient:
             KeycloakError: If token exchange fails
         """
         try:
-            logger.info("[KC-CLIENT] Exchanging authorization code for tokens")
+            logger.info(f"[KC-CLIENT] Exchanging authorization code for tokens (client_id={client_id})")
 
             # Build token request parameters
             token_params = {
@@ -80,8 +82,15 @@ class KeycloakClient:
                 token_params["code_verifier"] = code_verifier
                 logger.debug("[KC-CLIENT] Using PKCE code_verifier")
 
+            # Use client-specific KeycloakOpenID instance if client_id provided
+            if client_id:
+                from src.config.keycloak_settings import get_keycloak_openid
+                keycloak_openid = get_keycloak_openid(client_id=client_id)
+            else:
+                keycloak_openid = self.keycloak_openid
+
             # Exchange code for tokens
-            tokens = self.keycloak_openid.token(
+            tokens = keycloak_openid.token(
                 grant_type="authorization_code",
                 **token_params
             )

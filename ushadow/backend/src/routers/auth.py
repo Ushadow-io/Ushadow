@@ -406,6 +406,7 @@ class TokenExchangeRequest(BaseModel):
     code: str = Field(..., description="Authorization code from Keycloak")
     code_verifier: str = Field(..., description="PKCE code verifier")
     redirect_uri: str = Field(..., description="Redirect URI used in authorization request")
+    client_id: Optional[str] = Field(None, description="OAuth client ID (defaults to frontend client)")
 
 
 class TokenExchangeResponse(BaseModel):
@@ -437,6 +438,8 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
     from src.services.keycloak_client import get_keycloak_client
     from keycloak.exceptions import KeycloakError
 
+    logger.info(f"[TOKEN-EXCHANGE] Request received with client_id={request.client_id}")
+
     try:
         kc_client = get_keycloak_client()
 
@@ -444,7 +447,8 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
         tokens = kc_client.exchange_code_for_tokens(
             code=request.code,
             redirect_uri=request.redirect_uri,
-            code_verifier=request.code_verifier
+            code_verifier=request.code_verifier,
+            client_id=request.client_id
         )
 
         logger.info("[TOKEN-EXCHANGE] ✓ Successfully exchanged code for tokens")
@@ -500,8 +504,9 @@ async def refresh_access_token(request: TokenRefreshRequest):
     """
     from keycloak import KeycloakOpenID
     from keycloak.exceptions import KeycloakError
-    from src.config.keycloak_settings import get_keycloak_connection
+    from src.config.keycloak_settings import get_keycloak_connection, get_keycloak_config
     import jwt
+    from urllib.parse import urlparse
 
     try:
         # Decode refresh token WITHOUT validation to extract issuer
@@ -522,17 +527,26 @@ async def refresh_access_token(request: TokenRefreshRequest):
         else:
             server_url = issuer
 
-        logger.info(f"[TOKEN-REFRESH] Using issuer from token: {server_url}")
+        # CRITICAL: Translate public URLs to internal Docker network URLs
+        # When backend is inside Docker, external URLs (localhost/Tailscale) don't work
+        kc_config = get_keycloak_config()
+        issuer_parsed = urlparse(server_url)
+        public_parsed = urlparse(kc_config["public_url"])
 
-        # Get connection for realm info
-        connection = get_keycloak_connection()
+        if issuer_parsed.hostname == public_parsed.hostname and issuer_parsed.port == public_parsed.port:
+            # Issuer matches public URL -> use internal Docker network URL
+            server_url = kc_config["url"]
+            logger.info(f"[TOKEN-REFRESH] Translated public → internal: {server_url}")
+        else:
+            logger.info(f"[TOKEN-REFRESH] Using issuer URL: {server_url}")
 
         # Create KeycloakOpenID client with the SAME URL that issued the token
-        # This ensures issuer validation succeeds
+        # IMPORTANT: Use application realm (ushadow), NOT admin realm (master)
         keycloak_openid = KeycloakOpenID(
-            server_url=server_url,  # Use issuer from token, not backend config!
-            realm_name=connection.realm_name,
-            client_id="ushadow-frontend",  # Public client (no secret needed for refresh)
+            server_url=server_url,
+            realm_name=kc_config["realm"],  # Application realm where tokens are issued
+            client_id=kc_config["frontend_client_id"],  # Public client (no secret needed)
+            client_secret_key=None,  # Explicit: public client has no secret
         )
 
         # Refresh token using the correct issuer URL

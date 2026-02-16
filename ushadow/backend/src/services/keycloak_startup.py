@@ -77,21 +77,14 @@ def get_current_redirect_uris() -> List[str]:
     # Tailscale hostname (auto-detect using TailscaleManager)
     tailscale_hostname = get_tailscale_hostname()
     if tailscale_hostname:
-        # Support both http and https for Tailscale
-        ts_uri_http = f"http://{tailscale_hostname}/oauth/callback"
+        # Only HTTPS for Tailscale (HTTP doesn't work with Tailscale Serve)
         ts_uri_https = f"https://{tailscale_hostname}/oauth/callback"
-        redirect_uris.append(ts_uri_http)
         redirect_uris.append(ts_uri_https)
-        logger.info(f"[KC-STARTUP] 📡 Adding Tailscale URIs: {tailscale_hostname}")
+        logger.info(f"[KC-STARTUP] 📡 Adding Tailscale URI: {tailscale_hostname}")
 
-    # Mobile app redirect URIs (React Native)
-    mobile_uris = [
-        "ushadow://*",  # Production mobile app (covers oauth/callback)
-        "exp://localhost:8081/--/oauth/callback",  # Expo Go development
-        "exp://*",  # Expo Go wildcard
-    ]
-    redirect_uris.extend(mobile_uris)
-    logger.info(f"[KC-STARTUP] 📱 Adding mobile app URIs")
+    # NOTE: Mobile app URIs are registered in a SEPARATE client (ushadow-mobile)
+    # See register_mobile_client() - mobile apps should use their own client to avoid
+    # redirect URI conflicts with web clients
 
     return redirect_uris
 
@@ -128,12 +121,7 @@ def get_current_post_logout_uris() -> List[str]:
         post_logout_uris.append(f"https://{tailscale_hostname}")
         post_logout_uris.append(f"https://{tailscale_hostname}/")
 
-    # Mobile app post-logout redirect URIs (React Native)
-    mobile_logout_uris = [
-        "ushadow://*",  # Production mobile app (covers logout/callback)
-        "exp://*",  # Expo Go wildcard
-    ]
-    post_logout_uris.extend(mobile_logout_uris)
+    # NOTE: Mobile logout URIs are registered in separate client (ushadow-mobile)
 
     return post_logout_uris
 
@@ -167,6 +155,57 @@ def get_web_origins() -> List[str]:
     port_offset = int(os.getenv("PORT_OFFSET", "10"))
     frontend_port = 3000 + port_offset
     return [f"http://localhost:{frontend_port}"]
+
+
+async def register_mobile_client():
+    """
+    Register redirect URIs for the mobile client.
+
+    Mobile client is defined in realm export with base configuration.
+    This function adds any environment-specific redirect URIs at startup.
+
+    Note: Mobile uses a SEPARATE client from web because:
+    1. Different redirect URI schemes (ushadow:// vs http://localhost)
+    2. PKCE is mandatory for mobile (public clients can't protect secrets)
+    3. Avoids redirect URI conflicts (Keycloak may default to first URI)
+    """
+    try:
+        admin_client = get_keycloak_admin()
+
+        # Mobile-specific redirect URIs (already in realm export, but add any dynamic ones here)
+        mobile_redirect_uris = [
+            "ushadow://oauth/callback",  # Production mobile app
+            # Add any environment-specific mobile URIs here if needed
+        ]
+
+        mobile_logout_uris = [
+            "ushadow://logout/callback",
+        ]
+
+        logger.info("[KC-STARTUP] 📱 Registering mobile redirect URIs...")
+
+        # Update mobile client redirect URIs (merge with existing from realm export)
+        success = await admin_client.update_client_redirect_uris(
+            client_id="ushadow-mobile",
+            redirect_uris=mobile_redirect_uris,
+            merge=True  # Add to existing URIs from realm export
+        )
+
+        if success:
+            # Update post-logout URIs
+            await admin_client.update_post_logout_redirect_uris(
+                client_id="ushadow-mobile",
+                post_logout_redirect_uris=mobile_logout_uris,
+                merge=True
+            )
+            logger.info("[KC-STARTUP] ✅ Mobile redirect URIs registered")
+            logger.info(f"[KC-STARTUP]   Client ID: ushadow-mobile")
+            logger.info(f"[KC-STARTUP]   Redirect URIs: {mobile_redirect_uris}")
+        else:
+            logger.warning("[KC-STARTUP] ⚠️  Failed to register mobile redirect URIs")
+
+    except Exception as e:
+        logger.warning(f"[KC-STARTUP] ⚠️  Failed to register mobile client: {e}")
 
 
 async def register_current_environment():
@@ -206,13 +245,19 @@ async def register_current_environment():
 
             logger.info("[KC-STARTUP] 🔐 Registering redirect URIs with Keycloak...")
             logger.info(f"[KC-STARTUP] Environment: PORT_OFFSET={os.getenv('PORT_OFFSET', '10')}")
+            logger.info(f"[KC-STARTUP] Redirect URIs to register ({len(redirect_uris)}):")
+            for uri in redirect_uris:
+                logger.info(f"[KC-STARTUP]   - {uri}")
+            logger.info(f"[KC-STARTUP] Post-logout URIs to register ({len(post_logout_uris)}):")
+            for uri in post_logout_uris:
+                logger.info(f"[KC-STARTUP]   - {uri}")
 
             # Register redirect URIs and webOrigins (CORS)
             success = await admin_client.update_client_redirect_uris(
                 client_id="ushadow-frontend",
                 redirect_uris=redirect_uris,
                 web_origins=web_origins,  # Pass CORS origins from settings
-                merge=True  # Merge with existing URIs
+                merge=True  # Merge with existing URIs for multi-environment support
             )
 
             if not success:
@@ -248,6 +293,9 @@ async def register_current_environment():
             except Exception as csp_error:
                 logger.warning(f"[KC-STARTUP] ⚠️  Failed to update realm CSP: {csp_error}")
                 logger.warning("[KC-STARTUP] You may need to manually configure CSP in Keycloak admin console")
+
+            # Register mobile client (separate from web client)
+            await register_mobile_client()
 
         except Exception as e:
             logger.warning(f"[KC-STARTUP] ⚠️  Failed to auto-register Keycloak URIs: {e}")

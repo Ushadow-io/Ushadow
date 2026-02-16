@@ -291,6 +291,9 @@ export class TokenManager {
         console.warn('[TokenManager] ⚠️ Token EXPIRED!', {
           expiredAgo: `${Math.floor(Math.abs(expiresIn) / 60)}m ${Math.abs(expiresIn) % 60}s ago`
         })
+        // CRITICAL: Clear expired token to prevent 401 errors
+        console.log('[TokenManager] Clearing expired token from storage')
+        this.clearTokens()
       }
 
       return isValid
@@ -337,6 +340,9 @@ export class TokenManager {
         console.warn('[TokenManager] ⚠️ Token EXPIRED!', {
           expiredAgo: `${Math.floor(Math.abs(expiresIn) / 60)}m ${Math.abs(expiresIn) % 60}s ago`
         })
+        // CRITICAL: Clear expired token to prevent 401 errors
+        console.log('[TokenManager] Clearing expired token from storage')
+        this.clearTokens()
       }
 
       return isValid
@@ -389,7 +395,7 @@ export class TokenManager {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
-      scope: 'openid profile email',
+      scope: 'openid profile email offline_access',
       state: state,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',

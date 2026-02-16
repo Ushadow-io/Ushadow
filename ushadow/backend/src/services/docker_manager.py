@@ -359,16 +359,26 @@ class DockerManager:
 
         Combines hardcoded CORE_SERVICES with services discovered from
         compose/*-compose.yaml files via ComposeServiceRegistry.
+
+        Cached after first access to avoid repeated compose registry lookups.
         """
+        # Return cached value if available
+        if hasattr(self, '_manageable_services_cache'):
+            return self._manageable_services_cache
+
         # Start with core services
         services = dict(self.CORE_SERVICES)
 
         # Load services from ComposeServiceRegistry (compose-first approach)
         try:
             compose_registry = get_compose_registry()
-            for service in compose_registry.get_services():
+            all_compose_services = list(compose_registry.get_services())
+            logger.info(f"[MANAGEABLE_SERVICES] Found {len(all_compose_services)} services from compose registry")
+            logger.info(f"[MANAGEABLE_SERVICES] Service names: {[s.service_name for s in all_compose_services]}")
+            for service in all_compose_services:
                 # Skip if already in core services
                 if service.service_name in services:
+                    logger.debug(f"[MANAGEABLE_SERVICES] Skipping {service.service_name} (already in core)")
                     continue
 
                 # Use service_name as the key
@@ -397,10 +407,18 @@ class DockerManager:
             logger.warning(f"Failed to load services from compose registry: {e}")
 
         logger.debug(f"Loaded {len(services)} manageable services")
+
+        # Cache the result to avoid repeated lookups
+        self._manageable_services_cache = services
         return services
 
     def reload_services(self) -> None:
-        """Force reload services from ComposeServiceRegistry."""
+        """Force reload services from ComposeServiceRegistry and clear cache."""
+        # Clear cache
+        if hasattr(self, '_manageable_services_cache'):
+            delattr(self, '_manageable_services_cache')
+
+        # Reload compose registry
         registry = get_compose_registry()
         registry.reload()
         logger.info("ComposeServiceRegistry reloaded")

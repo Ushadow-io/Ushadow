@@ -731,9 +731,7 @@ async def get_mobile_connection_qr(
             try:
                 keycloak_admin = get_keycloak_admin()
                 mobile_uris = [
-                    "ushadow://*",  # Production mobile app
-                    "exp://localhost:8081/--/oauth/callback",  # Expo Go development
-                    "exp://*",  # Expo Go wildcard
+                    "ushadow://oauth/callback",  # Production mobile app
                 ]
                 await keycloak_admin.update_client_redirect_uris(
                     client_id="ushadow-frontend",
