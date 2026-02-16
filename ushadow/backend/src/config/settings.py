@@ -450,68 +450,51 @@ class Settings:
 
     async def _load_infrastructure_defaults(
         self,
-        deploy_target: str,
+        deploy_target_id: str,
         env_vars: List[str]
     ) -> Dict[str, str]:
         """
-        Load infrastructure defaults from K8s cluster scans.
+        Load infrastructure for a deployment target.
 
-        For K8s deployment targets, fetches infrastructure scan data from the cluster
-        and builds environment variable mappings for discovered services.
+        Uses DeployTarget/DeploymentPlatform abstraction - works for K8s, Docker,
+        cloud platforms, etc. Platform-agnostic infrastructure loading.
 
         Args:
-            deploy_target: Deployment target ID (e.g., "anubis.k8s.purple")
-                          or environment name (e.g., "purple")
+            deploy_target_id: Deployment target ID (e.g., "anubis.k8s.purple")
             env_vars: List of env var names needed for the service
 
         Returns:
             Dict of env_var -> value mappings from infrastructure scans.
-            Empty dict for non-K8s targets or if no infrastructure found.
+            Empty dict if no infrastructure available.
 
         Examples:
             For a K8s cluster with mongo discovered:
             → returns {"MONGO_URL": "mongodb://mongodb.default.svc.cluster.local:27017"}
+
+            For a Docker host with external postgres:
+            → returns {"POSTGRES_URL": "postgresql://postgres.local:5432"}
         """
-        from src.utils.deployment_targets import parse_deployment_target_id
-
         try:
-            # Parse target ID to determine if it's K8s
-            parsed = parse_deployment_target_id(deploy_target)
-            if parsed["type"] != "k8s":
-                # Infrastructure defaults only apply to K8s targets
+            # 1. Get the deployment target (abstraction layer)
+            from src.models.deploy_target import DeployTarget
+            from src.services.deployment_platforms import get_deploy_platform
+
+            target = await DeployTarget.from_id(deploy_target_id)
+
+            # 2. Get platform-specific infrastructure via abstraction
+            platform = get_deploy_platform(target)
+            infrastructure_scan = await platform.get_infrastructure(target)
+
+            if not infrastructure_scan:
+                logger.debug(f"No infrastructure available for {deploy_target_id}")
                 return {}
 
-            # Get cluster and infrastructure data
-            from src.services.kubernetes_manager import get_kubernetes_manager
-            k8s_manager = get_kubernetes_manager()
-
-            cluster = k8s_manager.get_cluster(parsed["identifier"])
-            if not cluster or not cluster.infra_scans:
-                logger.debug(f"No infrastructure scans for cluster {parsed['identifier']}")
-                return {}
-
-            # Get infrastructure scan data (prefer non-target namespaces)
-            # Target namespace may contain deployed services, not infrastructure
-            infra_scans = {
-                ns: scan for ns, scan in cluster.infra_scans.items()
-                if ns != cluster.namespace
-            }
-
-            if not infra_scans:
-                # Fallback to target namespace if no other scans
-                infra_scans = cluster.infra_scans
-
-            if not infra_scans:
-                return {}
-
-            # Use first available scan
-            infra = next(iter(infra_scans.values()))
-
-            # Map infrastructure to env vars
+            # 3. Parse infrastructure using registry (platform-agnostic)
+            registry = get_infrastructure_registry()
             mapping = self._get_infrastructure_mapping()
             infrastructure_values = {}
 
-            for service_type, service_info in infra.items():
+            for service_type, service_info in infrastructure_scan.items():
                 # Only process services that were found
                 if not isinstance(service_info, dict) or not service_info.get("found"):
                     continue
@@ -520,11 +503,8 @@ class Settings:
                 if not endpoints:
                     continue
 
-                # Get the first endpoint
+                # Build URL using registry (data-driven from compose)
                 endpoint = endpoints[0]
-
-                # Build URL using infrastructure registry (data-driven)
-                registry = get_infrastructure_registry()
                 url = registry.build_url(service_type, endpoint)
 
                 if not url:
@@ -535,22 +515,22 @@ class Settings:
                         f"using generic http:// URL scheme"
                     )
 
-                # Map to all env vars for this service type that are needed
+                # Map to env vars that this service needs
                 env_var_names = mapping.get(service_type, [])
                 for env_var in env_var_names:
-                    if env_var in env_vars:  # Only include if service needs it
+                    if env_var in env_vars:
                         infrastructure_values[env_var] = url
-                        logger.info(f"[Load] [Infrastructure] {env_var} = {url}")
+                        logger.info(f"[Infrastructure] {env_var} = {url}")
 
             logger.info(
-                f"Infrastructure values for {deploy_target}: "
+                f"Loaded infrastructure for {deploy_target_id}: "
                 f"{list(infrastructure_values.keys())}"
             )
 
             return infrastructure_values
 
         except Exception as e:
-            logger.warning(f"Failed to load infrastructure for {deploy_target}: {e}")
+            logger.warning(f"Failed to load infrastructure for {deploy_target_id}: {e}")
             return {}
 
     async def _load_service_context(
