@@ -11,8 +11,9 @@ Resolution hierarchy (highest priority wins):
 2. compose_default - Default in compose file
 3. env_file - .env file (os.environ)
 4. capability - Wired provider/capability
-5. template_override - services.{service_id} in config.overrides.yaml
-6. instance_override - instances.{deployment_id} in instance-overrides.yaml
+5. infrastructure - Scanned infrastructure from DeployTarget (K8s only)
+6. template_override - services.{service_id} in config.overrides.yaml
+7. instance_override - instances.{deployment_id} in instance-overrides.yaml
 """
 
 import os
@@ -29,6 +30,7 @@ from src.config.helpers import (
     infer_setting_type,
     env_var_matches_setting,
 )
+from src.config.infrastructure_registry import get_infrastructure_registry
 from src.services.provider_registry import get_provider_registry
 from src.utils.logging import get_logger
 
@@ -45,8 +47,8 @@ class Source(str, Enum):
     COMPOSE_DEFAULT = "compose_default"
     ENV_FILE = "env_file"
     CAPABILITY = "capability"
+    INFRASTRUCTURE = "infrastructure"  # Scanned infrastructure from DeployTarget (K8s only)
     TEMPLATE_OVERRIDE = "template_override"  # services.{service_id} in config.overrides.yaml
-    INFRASTRUCTURE = "infrastructure"  # From deploy target infrastructure scan
     INSTANCE_OVERRIDE = "instance_override"  # instances.{deployment_id} in instance-overrides.yaml
     NOT_FOUND = "not_found"
 
@@ -132,6 +134,10 @@ class Settings:
 
         Resolution layers applied:
             config_default → compose_default → env_file → capability → template_override
+
+        Note:
+            Infrastructure defaults are not included since this is template-level,
+            not deployment-level. Use for_deploy_config() for infrastructure defaults.
         """
         env_vars, compose_defaults, capability_values, template_overrides = \
             await self._load_service_context(service_id)
@@ -140,6 +146,7 @@ class Settings:
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
+            infrastructure_values={},  # No infrastructure at template level
             template_overrides=template_overrides,
             infrastructure_overrides={},
             instance_overrides={},
@@ -162,7 +169,7 @@ class Settings:
 
         Resolution layers applied:
             config_default → compose_default → env_file → capability →
-            template_override → infrastructure
+            infrastructure → template_override
         """
         env_vars, compose_defaults, capability_values, template_overrides = \
             await self._load_service_context(service_id)
@@ -174,6 +181,7 @@ class Settings:
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
+            infrastructure_values={},
             template_overrides=template_overrides,
             infrastructure_overrides=infrastructure_overrides,
             instance_overrides={},
@@ -190,7 +198,11 @@ class Settings:
             Dict mapping env var names to Resolution objects
 
         Resolution layers applied:
-            ALL layers (config_default → ... → instance_override)
+            ALL layers (config_default → ... → infrastructure → ... → instance_override)
+
+        Note:
+            Infrastructure defaults are currently not loaded for deployments since we
+            don't have deploy_target information. Instance overrides take precedence anyway.
         """
         env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, deployment_target = \
             await self._load_deployment_context(deployment_id)
@@ -200,18 +212,15 @@ class Settings:
         if deployment_target and deployment_target.startswith("k8s://"):
             # Parse cluster_id from deployment_target (format: k8s://{cluster_id}/{namespace})
             try:
-                # Remove k8s:// prefix and split by /
                 parts = deployment_target[6:].split('/', 1)
                 cluster_id = parts[0] if parts else None
 
                 if cluster_id:
                     logger.info(f"[Settings] Loading infrastructure overrides for cluster: {cluster_id}")
 
-                    # Load overrides from settings paths
                     overrides_from_config = await self._store.get(f"infrastructure.overrides.{cluster_id}") or {}
                     secrets_from_config = await self._store.get(f"infrastructure.secrets.{cluster_id}") or {}
 
-                    # Merge overrides and secrets
                     infrastructure_overrides.update(overrides_from_config)
                     infrastructure_overrides.update(secrets_from_config)
 
@@ -223,6 +232,7 @@ class Settings:
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
+            infrastructure_values={},
             template_overrides=template_overrides,
             infrastructure_overrides=infrastructure_overrides,
             instance_overrides=instance_overrides,
@@ -365,6 +375,206 @@ class Settings:
         else:
             logger.warning(f"Mapping {value} not found at path: {path}")
             return None
+
+    def _get_infrastructure_mapping(self) -> Dict[str, List[str]]:
+        """
+        Get mapping of infrastructure service names to environment variable patterns.
+
+        Reads from compose/docker-compose.infra.yml to discover available services
+        and their conventional environment variable names.
+
+        Returns:
+            Dict mapping service type -> list of env var names
+
+        Examples:
+            {
+                "mongo": ["MONGO_URL", "MONGODB_URL"],
+                "redis": ["REDIS_URL"],
+                "postgres": ["POSTGRES_URL", "DATABASE_URL"],
+            }
+
+        Note:
+            Data-driven from compose definitions. Service names and URL schemes
+            are inferred from docker-compose.infra.yml, not hardcoded.
+        """
+        registry = get_infrastructure_registry()
+        return registry.get_env_var_mapping()
+
+    def _load_infrastructure_values(
+        self,
+        deploy_target: Optional['DeployTarget']
+    ) -> Dict[str, str]:
+        """
+        Load infrastructure values from DeployTarget.infrastructure.
+
+        Scans the infrastructure dict from DeployTarget and builds env var mappings
+        based on found services. Only includes services that were successfully found.
+
+        Args:
+            deploy_target: DeployTarget with infrastructure scan results
+
+        Returns:
+            Dict of env_var -> value mappings from infrastructure
+
+        Examples:
+            If deploy_target.infrastructure contains:
+            {
+                "mongo": {
+                    "found": True,
+                    "endpoints": ["mongodb.default.svc.cluster.local:27017"]
+                },
+                "redis": {"found": False}
+            }
+
+            Returns:
+            {
+                "MONGO_URL": "mongodb://mongodb.default.svc.cluster.local:27017",
+                "MONGODB_URL": "mongodb://mongodb.default.svc.cluster.local:27017"
+            }
+            (redis not included because found=False)
+        """
+        if not deploy_target or not deploy_target.infrastructure:
+            return {}
+
+        infra_values = {}
+        mapping = self._get_infrastructure_mapping()
+
+        for service_type, service_info in deploy_target.infrastructure.items():
+            # Only process services that were found
+            if not isinstance(service_info, dict) or not service_info.get("found"):
+                continue
+
+            endpoints = service_info.get("endpoints", [])
+            if not endpoints:
+                continue
+
+            # Get the first endpoint
+            endpoint = endpoints[0]
+
+            # Build URL using infrastructure registry (data-driven)
+            registry = get_infrastructure_registry()
+            url = registry.build_url(service_type, endpoint)
+
+            if not url:
+                # Unknown service type - fallback to generic http://
+                url = f"http://{endpoint}"
+                logger.warning(
+                    f"Unknown infrastructure service type '{service_type}', "
+                    f"using generic http:// URL scheme"
+                )
+
+            # Map to all env vars for this service type
+            env_var_names = mapping.get(service_type, [])
+            for env_var in env_var_names:
+                infra_values[env_var] = url
+                logger.info(f"[Load] [Infrastructure] {env_var} = {url}")
+
+        return infra_values
+
+    async def _load_infrastructure_defaults(
+        self,
+        deploy_target: str,
+        env_vars: List[str]
+    ) -> Dict[str, str]:
+        """
+        Load infrastructure defaults from K8s cluster scans.
+
+        For K8s deployment targets, fetches infrastructure scan data from the cluster
+        and builds environment variable mappings for discovered services.
+
+        Args:
+            deploy_target: Deployment target ID (e.g., "anubis.k8s.purple")
+                          or environment name (e.g., "purple")
+            env_vars: List of env var names needed for the service
+
+        Returns:
+            Dict of env_var -> value mappings from infrastructure scans.
+            Empty dict for non-K8s targets or if no infrastructure found.
+
+        Examples:
+            For a K8s cluster with mongo discovered:
+            → returns {"MONGO_URL": "mongodb://mongodb.default.svc.cluster.local:27017"}
+        """
+        from src.utils.deployment_targets import parse_deployment_target_id
+
+        try:
+            # Parse target ID to determine if it's K8s
+            parsed = parse_deployment_target_id(deploy_target)
+            if parsed["type"] != "k8s":
+                # Infrastructure defaults only apply to K8s targets
+                return {}
+
+            # Get cluster and infrastructure data
+            from src.services.kubernetes_manager import get_kubernetes_manager
+            k8s_manager = get_kubernetes_manager()
+
+            cluster = k8s_manager.get_cluster(parsed["identifier"])
+            if not cluster or not cluster.infra_scans:
+                logger.debug(f"No infrastructure scans for cluster {parsed['identifier']}")
+                return {}
+
+            # Get infrastructure scan data (prefer non-target namespaces)
+            # Target namespace may contain deployed services, not infrastructure
+            infra_scans = {
+                ns: scan for ns, scan in cluster.infra_scans.items()
+                if ns != cluster.namespace
+            }
+
+            if not infra_scans:
+                # Fallback to target namespace if no other scans
+                infra_scans = cluster.infra_scans
+
+            if not infra_scans:
+                return {}
+
+            # Use first available scan
+            infra = next(iter(infra_scans.values()))
+
+            # Map infrastructure to env vars
+            mapping = self._get_infrastructure_mapping()
+            infrastructure_values = {}
+
+            for service_type, service_info in infra.items():
+                # Only process services that were found
+                if not isinstance(service_info, dict) or not service_info.get("found"):
+                    continue
+
+                endpoints = service_info.get("endpoints", [])
+                if not endpoints:
+                    continue
+
+                # Get the first endpoint
+                endpoint = endpoints[0]
+
+                # Build URL using infrastructure registry (data-driven)
+                registry = get_infrastructure_registry()
+                url = registry.build_url(service_type, endpoint)
+
+                if not url:
+                    # Unknown service type - fallback to generic http://
+                    url = f"http://{endpoint}"
+                    logger.warning(
+                        f"Unknown infrastructure service type '{service_type}', "
+                        f"using generic http:// URL scheme"
+                    )
+
+                # Map to all env vars for this service type that are needed
+                env_var_names = mapping.get(service_type, [])
+                for env_var in env_var_names:
+                    if env_var in env_vars:  # Only include if service needs it
+                        infrastructure_values[env_var] = url
+                        logger.info(f"[Load] [Infrastructure] {env_var} = {url}")
+
+            logger.info(
+                f"Infrastructure values for {deploy_target}: "
+                f"{list(infrastructure_values.keys())}"
+            )
+
+            return infrastructure_values
+
+        except Exception as e:
+            logger.warning(f"Failed to load infrastructure for {deploy_target}: {e}")
+            return {}
 
     async def _load_service_context(
         self, service_id: str
@@ -654,6 +864,7 @@ class Settings:
         env_vars: List[str],
         compose_defaults: Dict[str, str],
         capability_values: Dict[str, str],
+        infrastructure_values: Dict[str, str],
         template_overrides: Dict[str, str],
         infrastructure_overrides: Dict[str, str],
         instance_overrides: Dict[str, str],
@@ -722,8 +933,8 @@ class Settings:
                         continue
 
             # 5. Infrastructure (from deploy target)
-            if env_var in infrastructure_overrides:
-                value = infrastructure_overrides[env_var]
+            if env_var in infrastructure_overrides or env_var in infrastructure_values:
+                value = infrastructure_overrides.get(env_var) or infrastructure_values.get(env_var)
                 if value and str(value).strip():
                     results[env_var] = Resolution(
                         value=str(value),
