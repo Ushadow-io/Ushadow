@@ -24,6 +24,7 @@
         "NSSpeechRecognitionUsageDescription": "Ushadow uses speech recognition for voice input in chat.",
         "NSMicrophoneUsageDescription": "Ushadow needs microphone access for voice input.",
         "UIBackgroundModes": [
+          "audio",
           "bluetooth-central",
           "fetch",
           "processing"
@@ -35,7 +36,7 @@
         "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "6SJ7NH4HSZ",
-      "buildNumber": "4"
+      "buildNumber": "8"
     },
     "android": {
       "adaptiveIcon": {

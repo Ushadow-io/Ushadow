@@ -25,9 +25,11 @@ WebBrowser.maybeCompleteAuthSession();
 
 export interface KeycloakConfig {
   enabled: boolean;
-  public_url: string;  // e.g., "http://localhost:8080"
+  public_url: string;  // HTTPS URL for web browsers (e.g., "https://orange.spangled-kettle.ts.net/keycloak")
+  mobile_url?: string; // Optional direct IP for mobile (e.g., "http://100.105.225.45:8081")
   realm: string;       // e.g., "ushadow"
-  frontend_client_id: string;  // e.g., "ushadow-frontend"
+  frontend_client_id: string;  // Web client (e.g., "ushadow-frontend")
+  mobile_client_id: string;     // Mobile client (e.g., "ushadow-mobile")
   backend_client_id: string;
 }
 
@@ -65,12 +67,21 @@ export async function getKeycloakConfigFromUnode(
       console.log('[Keycloak] Fetching config from general endpoint');
     }
 
-    const response = await fetch(configUrl, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    console.log('[Keycloak] Requesting config from:', configUrl);
+
+    const response = await Promise.race([
+      fetch(configUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }),
+      new Promise<Response>((_, reject) =>
+        setTimeout(() => reject(new Error('Request timeout after 10s')), 10000)
+      )
+    ]);
+
+    console.log('[Keycloak] Response status:', response.status);
 
     if (!response.ok) {
       console.warn('[Keycloak] Config endpoint failed:', response.status);
@@ -78,6 +89,7 @@ export async function getKeycloakConfigFromUnode(
     }
 
     const data = await response.json();
+    console.log('[Keycloak] Response data:', JSON.stringify(data).substring(0, 200));
 
     // Extract Keycloak config from unode info response
     let config: KeycloakConfig;
@@ -88,6 +100,7 @@ export async function getKeycloakConfigFromUnode(
         public_url: data.keycloak_config.public_url,
         realm: data.keycloak_config.realm,
         frontend_client_id: data.keycloak_config.frontend_client_id,
+        mobile_client_id: data.keycloak_config.mobile_client_id || 'ushadow-mobile',
         backend_client_id: data.keycloak_config.backend_client_id || '',
       };
     } else {
@@ -95,9 +108,15 @@ export async function getKeycloakConfigFromUnode(
       config = data;
     }
 
+    // Mobile apps should prefer mobile_url (direct IP) over public_url (HTTPS)
+    // This avoids iOS cookie/redirect issues with ASWebAuthenticationSession
+    const keycloakUrl = config.mobile_url || config.public_url;
+
     console.log('[Keycloak] Config received:', {
       enabled: config.enabled,
       public_url: config.public_url,
+      mobile_url: config.mobile_url,
+      using: keycloakUrl,
       realm: config.realm,
       source: hostname ? `unode:${hostname}` : 'general',
     });
@@ -183,7 +202,9 @@ export async function authenticateWithKeycloak(
       return null;
     }
 
-    const { public_url, realm, frontend_client_id } = config;
+    const { realm, mobile_client_id } = config;
+    // Prefer mobile_url (direct IP) for mobile apps to avoid cookie issues
+    const keycloak_url = config.mobile_url || config.public_url;
 
     // 2. Generate PKCE challenge
     const { codeVerifier, codeChallenge } = await generatePKCE();
@@ -191,8 +212,8 @@ export async function authenticateWithKeycloak(
 
     // 3. Set up OAuth2 endpoints
     const discovery = {
-      authorizationEndpoint: `${public_url}/realms/${realm}/protocol/openid-connect/auth`,
-      tokenEndpoint: `${public_url}/realms/${realm}/protocol/openid-connect/token`,
+      authorizationEndpoint: `${keycloak_url}/realms/${realm}/protocol/openid-connect/auth`,
+      tokenEndpoint: `${keycloak_url}/realms/${realm}/protocol/openid-connect/token`,
     };
 
     // 4. Create redirect URI (expo AuthSession handles this)
@@ -203,12 +224,16 @@ export async function authenticateWithKeycloak(
       useProxy: false,  // Use native deep link, not Expo proxy
     });
 
+    console.log('[Keycloak] ========== OAuth Flow Debug ==========');
+    console.log('[Keycloak] Platform:', Platform.OS);
     console.log('[Keycloak] Redirect URI:', redirectUri);
+    console.log('[Keycloak] Using DEDICATED MOBILE CLIENT:', mobile_client_id);
+    console.log('[Keycloak] ⚠️  NOT using web client (frontend_client_id)');
 
     // 5. Build authorization request
     const authRequestParams: AuthSession.AuthRequestConfig = {
-      clientId: frontend_client_id,
-      scopes: ['openid', 'profile', 'email'],
+      clientId: mobile_client_id,  // Use dedicated mobile client (NOT frontend_client_id)
+      scopes: ['openid', 'profile', 'email', 'offline_access'],
       redirectUri,
       usePKCE: false,  // We'll handle PKCE manually for more control
       extraParams: {
@@ -221,14 +246,47 @@ export async function authenticateWithKeycloak(
 
     // 6. Open browser for user authentication
     console.log('[Keycloak] Opening browser for authentication...');
+    console.log('[Keycloak] Discovery endpoints:', discovery);
+    console.log('[Keycloak] Auth request config:', {
+      clientId: mobile_client_id,
+      redirectUri,
+      scopes: authRequestParams.scopes,
+      extraParams: authRequestParams.extraParams,
+    });
+
+    // Build the authorization URL explicitly to debug
+    try {
+      const authUrl = await authRequest.makeAuthUrlAsync(discovery);
+      console.log('[Keycloak] Built authorization URL:', authUrl);
+
+      // Parse URL to check redirect_uri parameter
+      if (authUrl) {
+        const url = new URL(authUrl);
+        console.log('[Keycloak] Authorization endpoint:', url.origin + url.pathname);
+        console.log('[Keycloak] Query parameters:');
+        url.searchParams.forEach((value, key) => {
+          if (key === 'redirect_uri') {
+            console.log(`  🎯 ${key}: ${value}`);
+          } else if (key === 'code_challenge') {
+            console.log(`  🔒 ${key}: ${value.substring(0, 20)}...`);
+          } else {
+            console.log(`  • ${key}: ${value}`);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('[Keycloak] Failed to build auth URL:', error);
+    }
 
     // Configure browser options for better redirect handling
     const browserOptions: AuthSession.AuthSessionOptions = {
-      preferEphemeralSession: true, // Use fresh session each time (prevents black screen on re-login)
+      preferEphemeralSession: false, // MUST be false for Keycloak cookies to persist
       showInRecents: false, // Don't show in recent apps
     };
 
     const authResult = await authRequest.promptAsync(discovery, browserOptions);
+
+    console.log('[Keycloak] Actual auth URL used:', authRequest.url);
 
     console.log('[Keycloak] Auth result type:', authResult.type);
 
@@ -265,6 +323,7 @@ export async function authenticateWithKeycloak(
         code,
         code_verifier: codeVerifier,
         redirect_uri: redirectUri,
+        client_id: mobile_client_id,
       }),
     });
 
@@ -345,7 +404,9 @@ export async function logoutFromKeycloak(
       return;
     }
 
-    const { public_url, realm, frontend_client_id } = config;
+    const { realm, mobile_client_id } = config;
+    // Prefer mobile_url (direct IP) for mobile apps
+    const keycloak_url = config.mobile_url || config.public_url;
 
     // Create redirect URI for post-logout
     const redirectUri = AuthSession.makeRedirectUri({
@@ -357,7 +418,7 @@ export async function logoutFromKeycloak(
     // Build Keycloak logout URL with required parameters
     // Note: client_id is required when using post_logout_redirect_uri
     const params = new URLSearchParams({
-      client_id: frontend_client_id,
+      client_id: mobile_client_id,  // Use dedicated mobile client
       post_logout_redirect_uri: redirectUri,
     });
 
@@ -368,7 +429,7 @@ export async function logoutFromKeycloak(
       console.warn('[Keycloak] No id_token provided - logout may fail with parameter error');
     }
 
-    const logoutUrl = `${public_url}/realms/${realm}/protocol/openid-connect/logout?${params.toString()}`;
+    const logoutUrl = `${keycloak_url}/realms/${realm}/protocol/openid-connect/logout?${params.toString()}`;
 
     console.log('[Keycloak] Logging out from Keycloak session...');
     console.log('[Keycloak] Logout URL params:', { hasIdTokenHint: !!idToken });

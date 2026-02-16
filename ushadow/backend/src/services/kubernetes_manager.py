@@ -1094,6 +1094,7 @@ class KubernetesManager:
                 "postgres": {"names": ["postgres", "postgresql"], "port": 5432},
                 "qdrant": {"names": ["qdrant"], "port": 6333},
                 "neo4j": {"names": ["neo4j"], "port": 7687},
+                "keycloak": {"names": ["keycloak"], "port": 8080},
             }
 
             # Common namespaces where infrastructure might be deployed

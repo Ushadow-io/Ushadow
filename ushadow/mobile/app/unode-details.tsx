@@ -339,6 +339,67 @@ export default function UNodeDetailsPage() {
     setShowScanner(true);
   };
 
+  // Reconnect to an existing unode (fetch fresh details with Keycloak auth)
+  const handleReconnect = async (unodeId: string) => {
+    try {
+      const node = unodes.find(n => n.id === unodeId);
+      if (!node) {
+        Alert.alert('Error', 'UNode not found');
+        return;
+      }
+
+      console.log('[UNodeDetails] Reconnecting to unode:', node.hostname);
+
+      // Fetch fresh unode details from API using Keycloak auth
+      const token = await getAuthToken();
+      if (!token) {
+        Alert.alert('Not Authenticated', 'Please login with Keycloak first');
+        router.replace('/');
+        return;
+      }
+
+      const baseApiUrl = node.apiUrl.replace(/\/api\/.*$/, '');
+      const infoUrl = `${baseApiUrl}/api/unodes/${node.hostname}/info`;
+
+      console.log('[UNodeDetails] Fetching fresh details from:', infoUrl);
+
+      const response = await fetch(infoUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch unode info: ${response.status}`);
+      }
+
+      const info = await response.json();
+      console.log('[UNodeDetails] Fresh unode info:', info);
+
+      // Update saved unode with fresh connection details
+      await saveUnode({
+        id: node.id,
+        name: node.name,
+        hostname: info.hostname || node.hostname,
+        apiUrl: baseApiUrl,
+        chronicleApiUrl: info.chronicle_api_url,
+        streamUrl: info.ws_pcm_url,
+        tailscaleIp: info.tailscale_ip || node.tailscaleIp,
+      });
+
+      console.log('[UNodeDetails] ✅ Reconnected successfully');
+      await getUnodes();
+
+      Alert.alert('Success', `Reconnected to ${node.name}`);
+    } catch (error) {
+      console.error('[UNodeDetails] Reconnect failed:', error);
+      Alert.alert(
+        'Reconnect Failed',
+        error instanceof Error ? error.message : 'Could not reconnect to unode'
+      );
+    }
+  };
+
   // Handle QR scan result for rescan
   const handleQRScan = async (data: UshadowConnectionData) => {
     console.log('[UNodeDetails] QR scan successful, data:', data);
@@ -537,14 +598,25 @@ export default function UNodeDetailsPage() {
             <Ionicons name="trash-outline" size={18} color="#fff" />
             <Text style={styles.removeButtonText}>Remove</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.rescanButton}
-            onPress={() => handleRescanNode(selectedNode)}
-            testID="rescan-qr-button"
-          >
-            <Ionicons name="qr-code-outline" size={18} color="#fff" />
-            <Text style={styles.rescanButtonText}>Rescan</Text>
-          </TouchableOpacity>
+          {authToken ? (
+            <TouchableOpacity
+              style={styles.reconnectButton}
+              onPress={() => handleReconnect(selectedNode.id)}
+              testID="reconnect-button"
+            >
+              <Ionicons name="sync-outline" size={18} color="#fff" />
+              <Text style={styles.reconnectButtonText}>Reconnect</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.rescanButton}
+              onPress={() => handleRescanNode(selectedNode)}
+              testID="rescan-qr-button"
+            >
+              <Ionicons name="qr-code-outline" size={18} color="#fff" />
+              <Text style={styles.rescanButtonText}>Rescan QR</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Expanded Content - Advanced details */}
@@ -1236,6 +1308,20 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   rescanButtonText: {
+    fontSize: fontSize.base,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  reconnectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.success[500],
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    gap: spacing.xs,
+  },
+  reconnectButtonText: {
     fontSize: fontSize.base,
     color: '#fff',
     fontWeight: '600',

@@ -1,6 +1,11 @@
 # OpenMemory (mem0) service definition
 # Graph-based memory with MCP support
 # Environment variables are passed directly via docker compose subprocess env
+#
+# Image Strategy:
+#   - Submodule checked out: Builds from local source (./openmemory/openmemory)
+#   - Submodule missing: Pulls pre-built images from ghcr.io/ushadow-io/u-mem0-*
+#   - Uses pull_policy: build to prefer local builds when context exists
 
 # =============================================================================
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
@@ -23,8 +28,11 @@ x-ushadow:
 services:
   mem0:
     image: ghcr.io/ushadow-io/u-mem0-api:v1.0.4
+    build:
+      context: ${PROJECT_ROOT:-..}/openmemory/openmemory/api
+      dockerfile: Dockerfile
+    pull_policy: build  # Build from source if openmemory submodule exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0
-    pull_policy: always
     # Requires qdrant from infra (started via infra_services in x-ushadow)
     ports:
       - "${OPENMEMORY_PORT:-8765}:8765"
@@ -65,13 +73,21 @@ services:
 
   mem0-ui:
     image: ghcr.io/ushadow-io/u-mem0-ui:v1.0.4
+    build:
+      context: ${PROJECT_ROOT:-..}/openmemory/openmemory/ui
+      dockerfile: Dockerfile
+      args:
+        # Use placeholder values so entrypoint can replace them at runtime
+        - NEXT_PUBLIC_USER_ID=NEXT_PUBLIC_USER_ID
+        - NEXT_PUBLIC_API_URL=NEXT_PUBLIC_API_URL
+    pull_policy: build  # Build from source if openmemory submodule exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mem0-ui
     ports:
       - "3002:3000"
     environment:
-      - VITE_API_URL=http://localhost:${OPENMEMORY_PORT:-8765}
-      - API_URL=http://mem0:8765
       - NEXT_PUBLIC_USER_ID=${ADMIN_EMAIL:-admin@example.com}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8765}
+      - API_URL=http://mem0:8765
     networks:
       - ushadow-network
     depends_on:
