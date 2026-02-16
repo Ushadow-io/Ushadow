@@ -515,6 +515,7 @@ export default function ServiceConfigsPage() {
       const envData = envResponse.data
 
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+        .sort((a, b) => a.name.localeCompare(b.name))
       setEnvVars(allEnvVars)
 
       // Load wiring connections for this service to get provider-supplied values
@@ -788,7 +789,7 @@ export default function ServiceConfigsPage() {
       const response = await svcConfigsApi.getTemplateEnvConfig(providerId)
       const data = response.data
 
-      setProviderCardEnvVars(data)
+      setProviderCardEnvVars(data.sort((a, b) => a.name.localeCompare(b.name)))
 
       // Initialize configs from backend response
       const initial: Record<string, EnvVarConfig> = {}
