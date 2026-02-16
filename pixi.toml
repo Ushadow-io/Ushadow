@@ -9,8 +9,14 @@ version = "0.1.0"
 # Install ushadow backend in editable mode
 install-ushadow = "cd ushadow/backend && uv pip install -e . --python $CONDA_PREFIX/bin/python"
 
+# Install robot test dependencies
+install-robot = "uv pip install -r robot_tests/requirements.txt --python $CONDA_PREFIX/bin/python"
+
 # Run ush CLI tool
 ush = { cmd = "python ush", depends-on = ["install-ushadow"] }
+
+# Run robot tests
+robot-test = { cmd = "robot", depends-on = ["install-robot"] }
 
 [dependencies]
 python = "3.12.*"
