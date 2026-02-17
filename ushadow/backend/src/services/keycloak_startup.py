@@ -11,7 +11,6 @@ import os
 from typing import List, Optional
 
 from .keycloak_admin import get_keycloak_admin
-from ..config.keycloak_settings import is_keycloak_enabled
 from .tailscale_manager import TailscaleManager
 
 logger = logging.getLogger(__name__)
@@ -176,11 +175,6 @@ async def register_current_environment():
     - Keycloak is not enabled in config
     - KEYCLOAK_AUTO_REGISTER=false environment variable is set
     """
-    # Check if Keycloak is enabled
-    if not is_keycloak_enabled():
-        logger.debug("[KC-STARTUP] Keycloak not enabled, skipping auto-registration")
-        return
-
     # Check if auto-registration is disabled
     if os.getenv("KEYCLOAK_AUTO_REGISTER", "true").lower() == "false":
         logger.info("[KC-STARTUP] Keycloak auto-registration disabled via KEYCLOAK_AUTO_REGISTER=false")

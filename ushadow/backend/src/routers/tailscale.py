@@ -725,25 +725,23 @@ async def get_mobile_connection_qr(
 
         # Auto-register mobile redirect URIs in Keycloak
         from src.services.keycloak_admin import get_keycloak_admin
-        from src.config.keycloak_settings import is_keycloak_enabled
 
-        if is_keycloak_enabled():
-            try:
-                keycloak_admin = get_keycloak_admin()
-                mobile_uris = [
-                    "ushadow://*",  # Production mobile app
-                    "exp://localhost:8081/--/oauth/callback",  # Expo Go development
-                    "exp://*",  # Expo Go wildcard
-                ]
-                await keycloak_admin.update_client_redirect_uris(
-                    client_id="ushadow-frontend",
-                    redirect_uris=mobile_uris,
-                    merge=True
-                )
-                logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Keycloak")
-            except Exception as e:
-                logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
-                # Non-fatal - continue with QR generation
+        try:
+            keycloak_admin = get_keycloak_admin()
+            mobile_uris = [
+                "ushadow://*",  # Production mobile app
+                "exp://localhost:8081/--/oauth/callback",  # Expo Go development
+                "exp://*",  # Expo Go wildcard
+            ]
+            await keycloak_admin.update_client_redirect_uris(
+                client_id="ushadow-frontend",
+                redirect_uris=mobile_uris,
+                merge=True
+            )
+            logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Keycloak")
+        except Exception as e:
+            logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
+            # Non-fatal - continue with QR generation
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match

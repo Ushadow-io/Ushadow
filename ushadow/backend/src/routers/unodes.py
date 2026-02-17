@@ -568,17 +568,14 @@ async def get_unode_info(hostname: str):
     api_url = f"http://{unode.tailscale_ip}:{port}"
 
     # Get Keycloak configuration
-    from src.config.keycloak_settings import get_keycloak_config, is_keycloak_enabled
+    from src.config.keycloak_settings import get_keycloak_config
 
-    keycloak_config = None
-    if is_keycloak_enabled():
-        kc_config = get_keycloak_config()
-        keycloak_config = {
-            "enabled": True,
-            "public_url": kc_config.get("public_url"),
-            "realm": kc_config.get("realm"),
-            "frontend_client_id": kc_config.get("frontend_client_id"),
-        }
+    kc_config = get_keycloak_config()
+    keycloak_config = {
+        "public_url": kc_config.get("public_url"),
+        "realm": kc_config.get("realm"),
+        "frontend_client_id": kc_config.get("frontend_client_id"),
+    }
 
     return UNodeInfoResponse(
         hostname=unode.hostname,

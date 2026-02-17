@@ -9,7 +9,7 @@ from pydantic import BaseModel
 import logging
 
 from src.services.keycloak_admin import get_keycloak_admin
-from src.config.keycloak_settings import get_keycloak_config, is_keycloak_enabled
+from src.config.keycloak_settings import get_keycloak_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 class KeycloakConfigResponse(BaseModel):
     """Public Keycloak configuration for clients"""
-    enabled: bool
     public_url: str
     realm: str
     frontend_client_id: str
@@ -39,7 +38,6 @@ async def get_keycloak_public_config():
 
     # No redundant defaults - get_keycloak_config() already provides them
     return KeycloakConfigResponse(
-        enabled=is_keycloak_enabled(),
         public_url=config["public_url"],  # Dynamic from Tailscale or config
         realm=config["realm"],
         frontend_client_id=config["frontend_client_id"],

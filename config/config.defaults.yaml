@@ -20,7 +20,6 @@ auth:
 # Keycloak OAuth Configuration
 # Uses KC_* environment variables (Keycloak's native format)
 keycloak:
-  enabled: ${oc.env:KC_ENABLED,true}
   url: ${oc.env:KC_URL,http://keycloak:8080}  # Internal URL (backend admin API calls)
   public_url: ${oc.env:KC_HOSTNAME_URL}  # Public URL (browser access, token issuer) - MUST be set via env var
   realm: ${oc.env:KC_REALM,ushadow}

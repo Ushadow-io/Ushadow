@@ -24,13 +24,13 @@ def get_keycloak_public_url() -> str:
 
     Returns the URL that browsers/frontends use to access Keycloak.
 
-    Resolution handled by OmegaConf in config.defaults.yaml:
+    Resolution is handled by OmegaConf in config.defaults.yaml:
     - keycloak.public_url: ${oc.env:KEYCLOAK_PUBLIC_URL,http://localhost:8081}
 
     This automatically checks KEYCLOAK_PUBLIC_URL env var and falls back to localhost:8081.
 
     Returns:
-        Public URL like "http://localhost:8081"
+        Public URL like "https://keycloak.chakra" or "http://localhost:8081"
     """
     settings = get_settings()
     return settings.get_sync("keycloak.public_url", "http://localhost:8081")
@@ -199,7 +199,6 @@ def get_keycloak_config() -> dict:
 
     # Build config dict
     config = {
-        "enabled": settings.get_sync("keycloak.enabled", False),
         "url": settings.get_sync("keycloak.url", "http://keycloak:8080"),
         "public_url": get_keycloak_public_url(),  # Dynamic public URL
         "realm": app_realm,  # Application realm (ushadow), not master
@@ -217,12 +216,3 @@ def get_keycloak_config() -> dict:
     return config
 
 
-def is_keycloak_enabled() -> bool:
-    """Check if Keycloak authentication is enabled.
-
-    This allows running both auth systems in parallel during migration:
-    - keycloak.enabled=false: Use existing fastapi-users auth
-    - keycloak.enabled=true: Use Keycloak (or hybrid mode)
-    """
-    settings = get_settings()
-    return settings.get_sync("keycloak.enabled", False)
