@@ -12,6 +12,7 @@ pub struct CreateTicketWorktreeRequest {
     pub ticket_id: String,
     pub ticket_title: String,
     pub project_root: String,
+    pub environment_name: String,    // Simple name for worktree directory (e.g., "staging")
     pub branch_name: Option<String>, // If None, will be generated from ticket_id
     pub base_branch: Option<String>, // Default to "main"
     pub epic_branch: Option<String>, // If part of epic with shared branch
@@ -50,21 +51,24 @@ pub async fn create_ticket_worktree(
         format!("ticket-{}", request.ticket_id)
     };
 
-    let base_branch = request.base_branch.unwrap_or_else(|| "main".to_string());
+    // Create a unique window name for this ticket (include ticket ID to ensure uniqueness)
+    // Sanitize branch_name by replacing slashes and other special chars with dashes (tmux doesn't allow slashes)
+    let sanitized_branch = branch_name.replace('/', "-").replace('\\', "-");
+    let ticket_id_short = &request.ticket_id[request.ticket_id.len().saturating_sub(6)..]; // Last 6 chars
+    let tmux_window_name = format!("ushadow-{}-{}", sanitized_branch, ticket_id_short);
+    let tmux_session_name = "workmux".to_string(); // Default session
 
     // Create worktree with tmux integration
-    // The worktree name will be the branch name
+    // Pass the custom window name so it creates the window with the ticket ID included
+    // Use environment_name for the worktree directory, branch_name for the git branch
     let worktree_info = create_worktree_with_workmux(
         request.project_root.clone(),
-        branch_name.clone(),
-        Some(base_branch),
-        Some(false), // Not background
+        request.environment_name.clone(), // name: worktree directory name (simple name like "staging")
+        Some(branch_name.clone()),        // branch_name: desired branch name (full name like "staging/feature-main")
+        request.base_branch.clone(),      // base_branch: branch to create from
+        Some(false),                      // background: not background
+        Some(tmux_window_name.clone()),   // custom_window_name: use ticket-specific name
     ).await?;
-
-    // Create a unique window name for this ticket (include ticket ID to ensure uniqueness)
-    let ticket_id_short = &request.ticket_id[request.ticket_id.len().saturating_sub(6)..]; // Last 6 chars
-    let tmux_window_name = format!("ushadow-{}-{}", branch_name, ticket_id_short);
-    let tmux_session_name = "workmux".to_string(); // Default session
 
     eprintln!("[create_ticket_worktree] ✓ Worktree created at: {}", worktree_info.path);
     eprintln!("[create_ticket_worktree] ✓ Tmux window: {}", tmux_window_name);
@@ -93,10 +97,42 @@ pub async fn attach_ticket_to_worktree(
         return Err(format!("Worktree path does not exist: {}", worktree_path));
     }
 
-    // Create a unique window name for this ticket (include ticket ID to ensure uniqueness)
-    let ticket_id_short = &ticket_id[ticket_id.len().saturating_sub(6)..]; // Last 6 chars
-    let tmux_window_name = format!("ushadow-{}-{}", branch_name, ticket_id_short);
     let tmux_session_name = "workmux".to_string();
+
+    // First, try to find an existing tmux window for this worktree path
+    // This is more reliable than using the branch name, which might be stale
+    let find_window_cmd = format!(
+        "tmux list-windows -t {} -F '#{{window_name}}:#{{pane_current_path}}' 2>/dev/null | grep ':{}' | head -1 | cut -d: -f1",
+        tmux_session_name,
+        worktree_path.replace("'", "'\\''") // Escape single quotes for shell safety
+    );
+
+    let find_result = shell_command(&find_window_cmd).output();
+
+    let existing_window = find_result
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                let window = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !window.is_empty() {
+                    Some(window)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+    let tmux_window_name = if let Some(ref existing) = existing_window {
+        eprintln!("[attach_ticket_to_worktree] ✓ Found existing tmux window for this worktree: {}", existing);
+        existing.clone()
+    } else {
+        // No existing window found, create a new unique window name
+        eprintln!("[attach_ticket_to_worktree] No existing window found, will create new one");
+        let ticket_id_short = &ticket_id[ticket_id.len().saturating_sub(6)..]; // Last 6 chars
+        format!("ushadow-{}-{}", branch_name, ticket_id_short)
+    };
 
     // Ensure tmux server is running
     shell_command("tmux start-server")
@@ -114,43 +150,65 @@ pub async fn attach_ticket_to_worktree(
             .map_err(|e| format!("Failed to create workmux session: {}", e))?;
     }
 
-    // Check if tmux window exists
-    let check_window = shell_command(&format!(
-        "tmux list-windows -t {} -F '#W'",
-        tmux_session_name
-    ))
-    .output()
-    .map_err(|e| format!("Failed to check tmux windows: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&check_window.stdout);
-    let window_exists = stdout.lines().any(|line| line == tmux_window_name);
-
-    if window_exists {
-        eprintln!("[attach_ticket_to_worktree] ✓ Found existing tmux window: {}", tmux_window_name);
-    } else {
-        eprintln!("[attach_ticket_to_worktree] Creating tmux window: {}", tmux_window_name);
-
-        // Create the tmux window
-        let create_result = shell_command(&format!(
-            "tmux new-window -t {} -n {} -c '{}'",
-            tmux_session_name, tmux_window_name, worktree_path
+    // Only need to create window if we didn't find an existing one
+    if existing_window.is_none() {
+        // Check if tmux window exists (by the new name we generated)
+        let check_window = shell_command(&format!(
+            "tmux list-windows -t {} -F '#W'",
+            tmux_session_name
         ))
         .output()
-        .map_err(|e| format!("Failed to create tmux window: {}", e))?;
+        .map_err(|e| format!("Failed to check tmux windows: {}", e))?;
 
-        if !create_result.status.success() {
-            let stderr = String::from_utf8_lossy(&create_result.stderr);
-            return Err(format!("Failed to create tmux window: {}", stderr));
+        let stdout = String::from_utf8_lossy(&check_window.stdout);
+        let window_exists = stdout.lines().any(|line| line == tmux_window_name);
+
+        if !window_exists {
+            eprintln!("[attach_ticket_to_worktree] Creating new tmux window: {}", tmux_window_name);
+
+            // Create the tmux window
+            let create_result = shell_command(&format!(
+                "tmux new-window -t {} -n {} -c '{}'",
+                tmux_session_name, tmux_window_name, worktree_path
+            ))
+            .output()
+            .map_err(|e| format!("Failed to create tmux window: {}", e))?;
+
+            if !create_result.status.success() {
+                let stderr = String::from_utf8_lossy(&create_result.stderr);
+                return Err(format!("Failed to create tmux window: {}", stderr));
+            }
+
+            eprintln!("[attach_ticket_to_worktree] ✓ Created tmux window: {}", tmux_window_name);
+        } else {
+            eprintln!("[attach_ticket_to_worktree] ✓ Window already exists: {}", tmux_window_name);
         }
-
-        eprintln!("[attach_ticket_to_worktree] ✓ Created tmux window: {}", tmux_window_name);
     }
 
+    // Get the actual current branch from the worktree (more reliable than env data)
+    let actual_branch = shell_command(&format!("cd '{}' && git branch --show-current", worktree_path))
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !branch.is_empty() {
+                    Some(branch)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or(branch_name); // Fallback to provided branch_name if detection fails
+
     eprintln!("[attach_ticket_to_worktree] ✓ Ticket attached to worktree with tmux window: {}", tmux_window_name);
+    eprintln!("[attach_ticket_to_worktree] ✓ Actual branch: {}", actual_branch);
 
     Ok(CreateTicketWorktreeResult {
         worktree_path,
-        branch_name,
+        branch_name: actual_branch,
         tmux_window_name,
         tmux_session_name,
     })
@@ -567,20 +625,25 @@ pub async fn update_ticket(
     if let Some(o) = order {
         ticket.order = o;
     }
+    // Handle worktree_path: empty string means clear, non-empty means set
     if let Some(wp) = worktree_path {
-        ticket.worktree_path = Some(wp);
+        ticket.worktree_path = if wp.is_empty() { None } else { Some(wp) };
     }
+    // Handle branch_name: empty string means clear, non-empty means set
     if let Some(bn) = branch_name {
-        ticket.branch_name = Some(bn);
+        ticket.branch_name = if bn.is_empty() { None } else { Some(bn) };
     }
+    // Handle tmux_window_name: empty string means clear, non-empty means set
     if let Some(twn) = tmux_window_name {
-        ticket.tmux_window_name = Some(twn);
+        ticket.tmux_window_name = if twn.is_empty() { None } else { Some(twn) };
     }
+    // Handle tmux_session_name: empty string means clear, non-empty means set
     if let Some(tsn) = tmux_session_name {
-        ticket.tmux_session_name = Some(tsn);
+        ticket.tmux_session_name = if tsn.is_empty() { None } else { Some(tsn) };
     }
+    // Handle environment_name: empty string means clear, non-empty means set
     if let Some(en) = environment_name {
-        ticket.environment_name = Some(en);
+        ticket.environment_name = if en.is_empty() { None } else { Some(en) };
     }
 
     ticket.updated_at = chrono::Utc::now().to_rfc3339();

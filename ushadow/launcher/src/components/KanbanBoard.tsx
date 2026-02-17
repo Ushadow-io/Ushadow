@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Plus, Tag, Folder } from 'lucide-react'
 import { TicketCard } from './TicketCard'
 import { CreateTicketDialog } from './CreateTicketDialog'
@@ -61,6 +61,9 @@ export function KanbanBoard({ projectId, backendUrl, projectRoot }: KanbanBoardP
   const [showCreateTicket, setShowCreateTicket] = useState(false)
   const [showCreateEpic, setShowCreateEpic] = useState(false)
   const [selectedEpic, setSelectedEpic] = useState<string | null>(null)
+  const [dragOverColumn, setDragOverColumn] = useState<TicketStatus | null>(null)
+  // Keep a ref to tickets so handleDrop always sees the latest values
+  const ticketsRef = useRef<Ticket[]>([])
 
   // Fetch tickets and epics (using Tauri commands)
   const fetchData = useCallback(async (isInitialLoad = false) => {
@@ -78,6 +81,7 @@ export function KanbanBoard({ projectId, backendUrl, projectRoot }: KanbanBoardP
       ])
 
       setTickets(ticketsData)
+      ticketsRef.current = ticketsData
       setEpics(epicsData)
     } catch (error) {
       console.error('Failed to fetch kanban data:', error)
@@ -108,6 +112,49 @@ export function KanbanBoard({ projectId, backendUrl, projectRoot }: KanbanBoardP
         return acc
       }, {} as Record<TicketStatus, Ticket[]>)
     : ticketsByStatus
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetStatus: TicketStatus) => {
+    e.preventDefault()
+    setDragOverColumn(null)
+
+    const ticketId = e.dataTransfer.getData('text/plain')
+    const ticket = ticketsRef.current.find(t => t.id === ticketId)
+    if (!ticket || ticket.status === targetStatus) return
+
+    try {
+      const { tauri } = await import('../hooks/useTauri')
+
+      // Stop agent when moving to todo: kill tmux window
+      if (targetStatus === 'todo' && ticket.tmux_window_name) {
+        try {
+          await tauri.killTmuxWindow(ticket.tmux_window_name)
+        } catch (err) {
+          console.error('[KanbanBoard] Failed to kill tmux window:', err)
+        }
+      }
+
+      // Unassign when moving to backlog or done
+      const shouldUnassign = targetStatus === 'backlog' || targetStatus === 'done'
+      // For todo: only clear tmux fields
+      const shouldClearTmux = targetStatus === 'todo'
+
+      await tauri.updateTicket(
+        ticketId,
+        undefined, undefined,
+        targetStatus,
+        undefined, undefined, undefined, undefined,
+        shouldUnassign ? '' : undefined, // worktreePath
+        shouldUnassign ? '' : undefined, // branchName
+        shouldUnassign || shouldClearTmux ? '' : undefined, // tmuxWindowName
+        shouldUnassign || shouldClearTmux ? '' : undefined, // tmuxSessionName
+        shouldUnassign ? '' : undefined, // environmentName
+      )
+
+      fetchData(false)
+    } catch (err) {
+      console.error('[KanbanBoard] Failed to move ticket:', err)
+    }
+  }, [fetchData])
 
   const handleTicketCreated = () => {
     fetchData(false) // Background refresh after creation
@@ -179,7 +226,18 @@ export function KanbanBoard({ projectId, backendUrl, projectRoot }: KanbanBoardP
         {COLUMNS.map((column) => (
           <div
             key={column.status}
-            className="flex-shrink-0 w-80 flex flex-col bg-gray-800 rounded-lg"
+            className={`flex-shrink-0 w-80 flex flex-col rounded-lg transition-colors ${
+              dragOverColumn === column.status ? 'bg-gray-700 ring-2 ring-blue-500/50' : 'bg-gray-800'
+            }`}
+            onDragOver={(e) => { e.preventDefault(); setDragOverColumn(column.status) }}
+            onDragEnter={(e) => { e.preventDefault(); setDragOverColumn(column.status) }}
+            onDragLeave={(e) => {
+              // Only clear if leaving the column entirely (not entering a child)
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDragOverColumn(null)
+              }
+            }}
+            onDrop={(e) => handleDrop(e, column.status)}
             data-testid={`kanban-column-${column.status}`}
           >
             {/* Column Header */}
@@ -193,7 +251,7 @@ export function KanbanBoard({ projectId, backendUrl, projectRoot }: KanbanBoardP
             </div>
 
             {/* Ticket List */}
-            <div className="flex-1 p-2 space-y-2 overflow-y-auto">
+            <div className="flex-1 p-2 space-y-2 overflow-y-auto" onDragOver={(e) => e.preventDefault()}>
               {filteredTickets[column.status]?.map((ticket) => (
                 <TicketCard
                   key={ticket.id}
