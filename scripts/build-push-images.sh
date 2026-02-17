@@ -155,9 +155,9 @@ case "$SERVICE" in
         info "============================================="
         ensure_builder
 
-        # Build backend
+        # Build backend (context is project root to include compose files)
         build_and_push \
-            "ushadow/backend" \
+            "." \
             "ushadow/backend/Dockerfile" \
             "ushadow-backend"
 

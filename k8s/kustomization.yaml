@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ushadow
+
+resources:
+  # - namespace.yaml  # Namespace managed separately - DO NOT let Skaffold delete it!
+  - secret.yaml
+  - backend-pvc.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - webui-deployment.yaml
+  - webui-service.yaml
+  - ingress.yaml
+  - certificate.yaml
+  # - infra/  # Infrastructure managed separately
+
+# Add common labels to all resources
+labels:
+  - pairs:
+      app: ushadow
+      env: purple
+
+# Add annotations
+commonAnnotations:
+  managed-by: kustomize
+  deployed-from: docker-compose
+
+# Note: Image replacement handled by Skaffold's --default-repo flag
+# No Kustomize image transformers needed when using Skaffold
