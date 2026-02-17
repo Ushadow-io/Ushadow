@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 # Patterns that indicate a key contains sensitive data
 # This is the single source of truth - other modules should import from here
-SENSITIVE_PATTERNS = ['key', 'secret', 'password', 'token', 'credential', 'auth', 'pass']
+# Note: 'auth' removed - too broad, catches AUTH_SOURCE, AUTH_METHOD, etc.
+# Use more specific patterns like 'auth_token', 'authorization' if needed
+SENSITIVE_PATTERNS = ['key', 'secret', 'password', 'token', 'credential', 'pass']
 
 
 def get_auth_secret_key() -> str:
@@ -78,9 +80,29 @@ def is_secret_key(name: str) -> bool:
 
     Returns:
         True if the key name matches sensitive patterns
+
+    Examples:
+        >>> is_secret_key("OPENAI_API_KEY")  # True - ends with KEY
+        >>> is_secret_key("ADMIN_PASSWORD")  # True - contains PASSWORD
+        >>> is_secret_key("KEYCLOAK_HOST")   # False - KEY is part of KEYCLOAK
+        >>> is_secret_key("REDIS_URL")       # False - no sensitive pattern
     """
     name_lower = name.lower()
-    return any(p in name_lower for p in SENSITIVE_PATTERNS)
+
+    # Check for patterns as word boundaries or suffixes to avoid false positives
+    # e.g., "keycloak" contains "key" but shouldn't be treated as secret
+    for pattern in SENSITIVE_PATTERNS:
+        # Match if:
+        # 1. Pattern is at the end: "api_key", "secret", etc.
+        # 2. Pattern is followed by underscore: "key_rotation", "secret_name"
+        # 3. Pattern is preceded by underscore: "openai_key", "admin_password"
+        if (name_lower.endswith(pattern) or
+            f'_{pattern}_' in name_lower or
+            f'_{pattern}' in name_lower or
+            f'{pattern}_' in name_lower):
+            return True
+
+    return False
 
 
 def should_store_in_secrets(path: str) -> bool:
@@ -109,6 +131,8 @@ def should_store_in_secrets(path: str) -> bool:
     if path_lower.startswith('security.') and any(p in path_lower for p in ['secret', 'key', 'password']):
         return True
     if path_lower.startswith('admin.') and 'password' in path_lower:
+        return True
+    if path_lower.startswith('infrastructure.secrets.'):
         return True
 
     # Fall back to pattern matching

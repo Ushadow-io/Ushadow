@@ -90,6 +90,12 @@ help:
 	@echo "  make reset        - Full reset (stop all, remove volumes, clean)"
 	@echo "  make reset-tailscale - Reset Tailscale (container, state, certs)"
 	@echo ""
+	@echo "Kubernetes DNS commands:"
+	@echo "  make k8s-add-service-dns SVC=<name> NS=<ns> NAMES=\"<aliases>\" - Add service to DNS"
+	@echo "  make k8s-add-service-dns-interactive - Add service (interactive)"
+	@echo "  make k8s-show-dns                    - Show current DNS mappings"
+	@echo "  make k8s-test-dns                    - Test DNS resolution"
+	@echo ""
 	@echo "Keycloak realm management:"
 	@echo "  make keycloak-delete-realm - Delete the ushadow realm"
 	@echo "  make keycloak-create-realm - Create realm from realm-export.json"
@@ -237,7 +243,7 @@ ushadow-push-local:
 		exit 1; \
 	fi
 	@echo "🏗️  Building for $(K8S_REGISTRY) (amd64)..."
-	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-backend:latest ushadow/backend/
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-backend:latest -f ushadow/backend/Dockerfile .
 	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-frontend:latest ushadow/frontend/
 	@echo "📤 Pushing to $(K8S_REGISTRY)..."
 	@docker push $(K8S_REGISTRY)/ushadow-backend:latest
@@ -477,6 +483,43 @@ network-create:
 
 network-remove:
 	docker network rm ushadow-network 2>/dev/null || true
+
+# =============================================================================
+# Kubernetes DNS Management
+# =============================================================================
+# Add services to Kubernetes CoreDNS for short-name access via Tailscale
+# Example: make k8s-add-service-dns SVC=mycelium NS=ushadow NAMES="mycelium fungi network"
+
+k8s-add-service-dns: ## Add DNS entry for a Kubernetes service (interactive)
+	@if [ -z "$(SVC)" ] || [ -z "$(NS)" ] || [ -z "$(NAMES)" ]; then \
+		echo "Usage: make k8s-add-service-dns SVC=<service> NS=<namespace> NAMES=\"<shortname1> [shortname2]...\""; \
+		echo ""; \
+		echo "Examples:"; \
+		echo "  make k8s-add-service-dns SVC=mycelium NS=ushadow NAMES=\"mycelium fungi\""; \
+		echo "  make k8s-add-service-dns SVC=neo4j NS=ushadow NAMES=\"neo4j graph\""; \
+		echo ""; \
+		echo "Or run interactively:"; \
+		echo "  make k8s-add-service-dns-interactive"; \
+		exit 1; \
+	fi
+	@./k8s/scripts/dns/add-service-dns.sh $(SVC) $(NS) $(NAMES)
+
+k8s-add-service-dns-interactive: ## Add DNS entry (prompts for input)
+	@echo "🌐 Add Kubernetes Service to DNS"
+	@echo ""
+	@read -p "Service name: " service; \
+	read -p "Namespace: " namespace; \
+	read -p "Short names (space-separated): " names; \
+	./k8s/scripts/dns/add-service-dns.sh $$service $$namespace $$names
+
+k8s-show-dns: ## Show current DNS mappings
+	@echo "📋 Current DNS Mappings:"
+	@echo ""
+	@kubectl get configmap chakra-dns-hosts -n kube-system -o jsonpath='{.data.chakra\.hosts}' 2>/dev/null || \
+		echo "❌ DNS ConfigMap not found. Run setup first."
+
+k8s-test-dns: ## Test DNS resolution for ushadow services
+	@./k8s/scripts/dns/test-ushadow-dns.sh
 
 # Show environment info
 env-info:

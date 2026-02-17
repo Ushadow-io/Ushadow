@@ -619,151 +619,94 @@ class KubernetesManager:
             else:
                 config_data[key] = str(value)
 
-        # Parse volumes - separate config files from persistent volumes
+        # Parse volumes - every Docker volume becomes a PVC.
+        # Bind-mount volumes are seeded from local paths on deploy.
         # Volumes can be:
+        #   - Named volumes: "volume_name:/container/path" (create service-scoped PVC)
         #   - Bind mounts: "/host/path:/container/path:ro" or "${VAR}/path:/container/path"
-        #   - Named volumes: "volume_name:/container/path" (creates PVC)
-        config_files = {}  # Files to include in ConfigMap
-        volume_mounts = []  # Volume mounts for container
-        k8s_volumes = []  # Volume definitions for pod
-        pvcs_to_create = []  # PVCs to create as manifests
+        #     - Well-known shared volumes (config, compose) use fixed PVC names
+        #     - Other bind mounts use service-scoped PVC names
+        volume_mounts = []    # Volume mounts for container
+        k8s_volumes = []      # Volume definitions for pod
+        pvcs_to_create = []   # {claim_name, volume_name, storage} PVCs to create
+        volumes_to_seed = []  # {source_path, pvc_claim_name} bind-mounts to seed on deploy
 
         for volume_def in volumes:
-            if isinstance(volume_def, str):
-                # Parse "source:dest" or "source:dest:options" format
-                parts = volume_def.split(":")
-                if len(parts) >= 2:
-                    source, dest = parts[0], parts[1]
-                    is_readonly = len(parts) > 2 and 'ro' in parts[2]
+            if not isinstance(volume_def, str):
+                continue
+            parts = volume_def.split(":")
+            if len(parts) < 2:
+                continue
 
-                    # Resolve environment variables in source path
-                    import os
-                    source = os.path.expandvars(source)
+            source, dest = parts[0], parts[1]
+            is_readonly = len(parts) > 2 and 'ro' in parts[2]
 
-                    # Detect volume type:
-                    # - Named volume: simple name without "/" or "." prefix (e.g., "ushadow-config")
-                    # - Path-based: starts with "/" or "." or contains "/" (e.g., "/config", "./data", "host/path")
-                    is_named_volume = not source.startswith(('/', '.')) and '/' not in source
+            # Resolve environment variables in source path
+            import os
+            source = os.path.expandvars(source)
 
-                    # Check if source is a file (for config files) or directory (for data volumes)
-                    from pathlib import Path
-                    source_path = Path(source)
+            # Named volume: simple name without "/" or "." (e.g., "chronicle_audio")
+            from pathlib import Path
+            source_path = Path(source)
+            is_named_volume = not source.startswith(('/', '.')) and '/' not in source
 
-                    if source_path.is_file():
-                        # Config file - add to ConfigMap
-                        try:
-                            with open(source_path, 'r') as f:
-                                file_content = f.read()
-                            file_name = source_path.name
-                            config_files[file_name] = file_content
-                            logger.info(f"Adding config file {file_name} to ConfigMap (source: {source})")
+            if is_named_volume:
+                # Named volume → service-scoped PVC
+                volume_name = source.replace("_", "-").replace(".", "-")
+                claim_name = f"{name}-{volume_name}"
+                storage = "10Gi"
+            else:
+                # Bind mount → PVC with seeding
+                # Well-known shared volumes use fixed claim names so all services share them.
+                # Other bind mounts get service-scoped names derived from destination path.
+                dest_lower = dest.lower()
+                if "config" in dest_lower:
+                    # All services share one config PVC (e.g., ../config:/app/config:ro)
+                    volume_name = "ushadow-config"
+                    claim_name = "ushadow-config"
+                    storage = "1Gi"
+                elif "compose" in dest_lower or dest.rstrip("/") == "/compose":
+                    # Compose files shared PVC
+                    volume_name = "ushadow-compose"
+                    claim_name = "ushadow-compose"
+                    storage = "1Gi"
+                else:
+                    # Service-specific bind mount: derive name from destination
+                    dest_name = dest.strip("/").replace("/", "-").replace("_", "-").replace(".", "-") or "data"
+                    volume_name = dest_name
+                    claim_name = f"{name}-{dest_name}"
+                    storage = "10Gi"
 
-                            # Add volume mount for this file
-                            volume_mounts.append({
-                                "name": "config-files",
-                                "mountPath": dest,
-                                "subPath": file_name,
-                                "readOnly": is_readonly
-                            })
-                        except Exception as e:
-                            logger.warning(f"Could not read config file {source}: {e}")
+                # Track for seeding if source exists locally
+                if source_path.exists():
+                    volumes_to_seed.append({
+                        "source_path": str(source_path.resolve()),
+                        "pvc_claim_name": claim_name,
+                    })
 
-                    elif is_named_volume:
-                        # Named volume - create PVC for persistent storage
-                        # Sanitize volume name: replace dots, underscores with hyphens (K8s requirement)
-                        volume_name = source.replace("_", "-").replace(".", "-")
+            # Add PVC manifest (skip if already added for shared volumes)
+            if not any(p["claim_name"] == claim_name for p in pvcs_to_create):
+                pvcs_to_create.append({
+                    "claim_name": claim_name,
+                    "volume_name": volume_name,
+                    "storage": storage,
+                })
 
-                        # Special case: compose volume should use ConfigMap (automatically generated)
-                        if source in ("ushadow-compose", "compose") or dest == "/compose":
-                            # Use the compose-files ConfigMap that was automatically generated
-                            if not any(v.get("name") == "compose-files" for v in k8s_volumes):
-                                k8s_volumes.append({
-                                    "name": "compose-files",
-                                    "configMap": {
-                                        "name": "compose-files"
-                                    }
-                                })
-                                logger.info(f"Using compose-files ConfigMap for {dest}")
+            # Add pod volume reference (skip if already added for shared volumes)
+            if not any(v.get("name") == volume_name for v in k8s_volumes):
+                k8s_volumes.append({
+                    "name": volume_name,
+                    "persistentVolumeClaim": {
+                        "claimName": claim_name,
+                    },
+                })
 
-                            # Add volume mount for compose files
-                            volume_mounts.append({
-                                "name": "compose-files",
-                                "mountPath": dest,
-                                "readOnly": True
-                            })
-                            continue  # Skip PVC creation for compose
-
-                        # Special case: config volume should use ConfigMap (automatically generated)
-                        if source in ("ushadow-config", "config") or dest == "/config":
-                            # Use the config-files ConfigMap that was automatically generated
-                            if not any(v.get("name") == "config-files" for v in k8s_volumes):
-                                k8s_volumes.append({
-                                    "name": "config-files",
-                                    "configMap": {
-                                        "name": "config-files"
-                                    }
-                                })
-                                logger.info(f"Using config-files ConfigMap for {dest}")
-
-                            # Add volume mount for config files
-                            volume_mounts.append({
-                                "name": "config-files",
-                                "mountPath": dest,
-                                "readOnly": True
-                            })
-                            continue  # Skip PVC creation for config
-
-                        # Only add PVC if not already added
-                        if not any(v.get("name") == volume_name for v in k8s_volumes):
-                            # Add PVC to list for manifest creation
-                            pvcs_to_create.append({
-                                "name": volume_name,
-                                "storage": "10Gi"  # Default size, could be configurable
-                            })
-
-                            # Add PVC reference to pod volumes
-                            k8s_volumes.append({
-                                "name": volume_name,
-                                "persistentVolumeClaim": {
-                                    "claimName": f"{name}-{volume_name}"
-                                }
-                            })
-
-                        volume_mounts.append({
-                            "name": volume_name,
-                            "mountPath": dest,
-                            "readOnly": is_readonly
-                        })
-                        logger.info(f"Adding PVC volume {volume_name} mounted at {dest}")
-
-                    elif source_path.is_dir() or not source_path.exists():
-                        # Directory or non-existent path - use emptyDir (non-persistent scratch)
-                        # Note: Named volumes are handled above and create PVCs
-                        # Sanitize volume name: replace dots, underscores with hyphens (K8s requirement)
-                        raw_name = source_path.name if source_path.name else "data"
-                        volume_name = raw_name.replace("_", "-").replace(".", "-")
-
-                        if not any(v.get("name") == volume_name for v in k8s_volumes):
-                            k8s_volumes.append({
-                                "name": volume_name,
-                                "emptyDir": {}
-                            })
-
-                        volume_mounts.append({
-                            "name": volume_name,
-                            "mountPath": dest,
-                            "readOnly": is_readonly
-                        })
-                        logger.info(f"Adding emptyDir volume {volume_name} mounted at {dest}")
-
-        # Add config-files volume if we have config files
-        if config_files:
-            k8s_volumes.append({
-                "name": "config-files",
-                "configMap": {
-                    "name": f"{name}-files"
-                }
+            volume_mounts.append({
+                "name": volume_name,
+                "mountPath": dest,
+                "readOnly": is_readonly,
             })
+            logger.info(f"Volume {source!r} → PVC {claim_name!r} mounted at {dest!r}")
 
         # Generate manifests matching friend-lite pattern
         labels = {
@@ -802,18 +745,32 @@ class KubernetesManager:
                 "data": secret_data
             }
 
-        # ConfigMap for config files (separate from env var ConfigMap)
-        if config_files:
-            manifests["config_files_map"] = {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {
-                    "name": f"{name}-files",
-                    "namespace": namespace,
-                    "labels": labels
-                },
-                "data": config_files
-            }
+        # TODO: Add deployment-config.yaml volume mount once ConfigMap generation is deployed
+        # Temporarily disabled - requires full implementation in get_or_create_envmap
+        # if config_data:
+        #     # Add volume for deployment config
+        #     if not any(v.get("name") == "deployment-config" for v in k8s_volumes):
+        #         k8s_volumes.append({
+        #             "name": "deployment-config",
+        #             "configMap": {
+        #                 "name": f"{name}-config",
+        #                 "items": [{
+        #                     "key": "deployment-config.yaml",
+        #                     "path": "deployment-config.yaml"
+        #                 }]
+        #             }
+        #         })
+        #         logger.info(f"Added deployment-config volume from {name}-config ConfigMap")
+        #
+        #     # Add volume mount for deployment config
+        #     if not any(m.get("name") == "deployment-config" for m in volume_mounts):
+        #         volume_mounts.append({
+        #             "name": "deployment-config",
+        #             "mountPath": "/app/config/deployment-config.yaml",
+        #             "subPath": "deployment-config.yaml",
+        #             "readOnly": True
+        #         })
+        #         logger.info("Added deployment-config.yaml volume mount at /app/config/deployment-config.yaml")
 
         # Debug: Log volumes before creating deployment
         logger.info(f"Final k8s_volumes list ({len(k8s_volumes)} volumes):")
@@ -823,27 +780,32 @@ class KubernetesManager:
         for idx, mount in enumerate(volume_mounts):
             logger.info(f"  [{idx}] name={mount['name']}, mountPath={mount['mountPath']}")
 
-        # PersistentVolumeClaims for named volumes
-        for i, pvc_info in enumerate(pvcs_to_create):
-            pvc_name = pvc_info["name"]
-            logger.info(f"Creating PVC manifest for: {pvc_name} (claim name: {name}-{pvc_name})")
-            manifests[f"pvc_{pvc_name}"] = {
+        # PersistentVolumeClaims for all volumes
+        for pvc_info in pvcs_to_create:
+            claim_name = pvc_info["claim_name"]
+            volume_name = pvc_info["volume_name"]
+            logger.info(f"Creating PVC manifest: {claim_name!r}")
+            manifests[f"pvc_{volume_name}"] = {
                 "apiVersion": "v1",
                 "kind": "PersistentVolumeClaim",
                 "metadata": {
-                    "name": f"{name}-{pvc_name}",
+                    "name": claim_name,
                     "namespace": namespace,
-                    "labels": labels
+                    "labels": labels,
                 },
                 "spec": {
                     "accessModes": ["ReadWriteOnce"],
                     "resources": {
                         "requests": {
-                            "storage": pvc_info["storage"]
+                            "storage": pvc_info["storage"],
                         }
-                    }
-                }
+                    },
+                },
             }
+
+        # Seed metadata: bind-mount volumes that need populating on deploy
+        if volumes_to_seed:
+            manifests["_volumes_to_seed"] = volumes_to_seed
 
         # Deployment
         manifests["deployment"] = {
@@ -1094,6 +1056,7 @@ class KubernetesManager:
                 "postgres": {"names": ["postgres", "postgresql"], "port": 5432},
                 "qdrant": {"names": ["qdrant"], "port": 6333},
                 "neo4j": {"names": ["neo4j"], "port": 7687},
+                "keycloak": {"names": ["keycloak"], "port": 8080}
             }
 
             # Common namespaces where infrastructure might be deployed
@@ -1327,6 +1290,70 @@ class KubernetesManager:
             logger.error(f"Error getting pod events: {e}")
             raise
 
+    def _generate_deployment_config_yaml(self, env_vars: Dict[str, str]) -> str:
+        """
+        Generate deployment-specific config.yaml from environment variables.
+
+        This creates an OmegaConf-compatible YAML config that maps env vars
+        to structured settings, allowing each deployment to have independent config.
+
+        Args:
+            env_vars: Environment variables from deployment
+
+        Returns:
+            YAML string with deployment configuration
+        """
+        import yaml
+
+        config = {
+            "# Deployment-specific configuration": None,
+            "# Auto-generated from environment variables": None,
+        }
+
+        # Map Keycloak env vars to config structure
+        keycloak_config = {}
+        if 'KEYCLOAK_ENABLED' in env_vars:
+            keycloak_config['enabled'] = env_vars['KEYCLOAK_ENABLED'].lower() in ('true', '1', 'yes')
+        if 'KEYCLOAK_PUBLIC_URL' in env_vars:
+            keycloak_config['public_url'] = env_vars['KEYCLOAK_PUBLIC_URL']
+        if 'KEYCLOAK_URL' in env_vars:
+            keycloak_config['url'] = env_vars['KEYCLOAK_URL']
+        if 'KEYCLOAK_REALM' in env_vars:
+            keycloak_config['realm'] = env_vars['KEYCLOAK_REALM']
+        if 'KEYCLOAK_FRONTEND_CLIENT_ID' in env_vars:
+            keycloak_config['frontend_client_id'] = env_vars['KEYCLOAK_FRONTEND_CLIENT_ID']
+        if 'KEYCLOAK_BACKEND_CLIENT_ID' in env_vars:
+            keycloak_config['backend_client_id'] = env_vars['KEYCLOAK_BACKEND_CLIENT_ID']
+        if 'KEYCLOAK_ADMIN_USER' in env_vars:
+            keycloak_config['admin_user'] = env_vars['KEYCLOAK_ADMIN_USER']
+
+        if keycloak_config:
+            config['keycloak'] = keycloak_config
+
+        # Map MongoDB env vars to config structure
+        mongodb_config = {}
+        if 'MONGODB_HOST' in env_vars:
+            mongodb_config['host'] = env_vars['MONGODB_HOST']
+        if 'MONGODB_PORT' in env_vars:
+            mongodb_config['port'] = int(env_vars['MONGODB_PORT'])
+        if 'MONGODB_DATABASE' in env_vars:
+            mongodb_config['database'] = env_vars['MONGODB_DATABASE']
+
+        if mongodb_config:
+            if 'infrastructure' not in config:
+                config['infrastructure'] = {}
+            config['infrastructure']['mongodb'] = mongodb_config
+
+        # Add other common configs as needed
+        if 'COMPOSE_PROJECT_NAME' in env_vars:
+            if 'environment' not in config:
+                config['environment'] = {}
+            config['environment']['name'] = env_vars['COMPOSE_PROJECT_NAME']
+
+        # Generate YAML with comments
+        yaml_str = yaml.dump(config, default_flow_style=False, sort_keys=False)
+        return yaml_str
+
     async def get_or_create_envmap(
         self,
         cluster_id: str,
@@ -1338,6 +1365,7 @@ class KubernetesManager:
         Get or create ConfigMap and Secret for service environment variables.
 
         Separates sensitive (keys, passwords) from non-sensitive values.
+        Also generates deployment-specific config.yaml for OmegaConf.
         Returns tuple of (configmap_name, secret_name).
         """
         try:
@@ -1358,6 +1386,11 @@ class KubernetesManager:
                     secret_data[key] = base64.b64encode(str(value).encode()).decode()
                 else:
                     config_data[key] = str(value)
+
+            # Generate deployment config YAML from env vars
+            deployment_config_yaml = self._generate_deployment_config_yaml(env_vars)
+            config_data['deployment-config.yaml'] = deployment_config_yaml
+            logger.info(f"Generated deployment config for {service_name}")
 
             configmap_name = f"{service_name}-config"
             secret_name = f"{service_name}-secrets"
@@ -1429,188 +1462,180 @@ class KubernetesManager:
             logger.error(f"Error creating envmap: {e}")
             raise
 
-    async def _ensure_config_configmap(
+    async def _seed_pvc_from_path(
         self,
         cluster_id: str,
-        namespace: str = "ushadow"
+        namespace: str,
+        pvc_claim_name: str,
+        source_path: str,
+        skip_if_not_empty: bool = True,
     ) -> bool:
         """
-        Ensure the config-files ConfigMap exists in the cluster.
+        Seed a PVC with files from a local path using a temporary Kubernetes pod.
 
-        This ConfigMap contains configuration files from the config/ directory,
-        including config.defaults.yaml with default_services configuration.
+        Creates a busybox pod that mounts the PVC, streams file content via the
+        Kubernetes exec API using base64 encoding, then deletes the pod. Requires
+        only the Kubernetes Python SDK — no kubectl needed.
 
-        Returns True if ConfigMap was created/updated successfully.
+        Args:
+            cluster_id: Kubernetes cluster ID
+            namespace: Target namespace
+            pvc_claim_name: Name of the PVC to seed
+            source_path: Local file or directory to copy into the PVC root
+            skip_if_not_empty: Skip seeding if the PVC already has files
+
+        Returns True if seeding succeeded (or was skipped because PVC has content).
         """
-        try:
-            logger.info(f"Ensuring config-files ConfigMap exists in namespace {namespace}")
+        import asyncio
+        import base64
 
-            # Find config directory (handles both container and development paths)
-            config_dir = Path("/config") if Path("/config").exists() else Path("config")
-            if not config_dir.exists():
-                logger.warning(f"Config directory not found at {config_dir}, skipping ConfigMap creation")
-                return False
-
-            # Collect all config files
-            config_data = {}
-
-            # Add YAML files (config.defaults.yaml, config.yaml, etc.)
-            for pattern in ["*.yaml", "*.yml"]:
-                for file_path in config_dir.glob(pattern):
-                    if file_path.is_file():
-                        try:
-                            content = file_path.read_text()
-                            config_data[file_path.name] = content
-                            logger.debug(f"Added {file_path.name} to ConfigMap ({len(content)} bytes)")
-                        except Exception as e:
-                            logger.warning(f"Failed to read {file_path}: {e}")
-
-            if not config_data:
-                logger.warning("No config files found to add to ConfigMap")
-                return False
-
-            logger.info(f"Collected {len(config_data)} config files for ConfigMap (total size: {sum(len(v) for v in config_data.values())} bytes)")
-
-            # Create ConfigMap manifest
-            configmap = {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {
-                    "name": "config-files",
-                    "namespace": namespace,
-                    "labels": {
-                        "app": "ushadow",
-                        "component": "backend"
-                    }
-                },
-                "data": config_data
-            }
-
-            # Get API client
-            core_api, _ = self._get_kube_client(cluster_id)
-
-            # Try to create or update the ConfigMap
-            try:
-                core_api.create_namespaced_config_map(
-                    namespace=namespace,
-                    body=configmap
-                )
-                logger.info(f"✅ Created config-files ConfigMap in namespace {namespace}")
-                return True
-            except ApiException as e:
-                if e.status == 409:  # Already exists, update it
-                    core_api.patch_namespaced_config_map(
-                        name="config-files",
-                        namespace=namespace,
-                        body=configmap
-                    )
-                    logger.info(f"✅ Updated config-files ConfigMap in namespace {namespace}")
-                    return True
-                else:
-                    raise
-
-        except Exception as e:
-            logger.error(f"Failed to ensure config-files ConfigMap: {e}")
-            # Don't fail the deployment, just log the error
+        source = Path(source_path)
+        if not source.exists():
+            logger.warning(f"Seed source {source_path!r} does not exist, skipping PVC {pvc_claim_name!r}")
             return False
 
-    async def _ensure_compose_configmap(
-        self,
-        cluster_id: str,
-        namespace: str = "ushadow"
-    ) -> bool:
-        """
-        Ensure the compose-files ConfigMap exists in the cluster.
+        # Collect files relative to source root
+        files_to_copy: Dict[str, bytes] = {}
+        if source.is_file():
+            files_to_copy[source.name] = source.read_bytes()
+        else:
+            for f in source.rglob("*"):
+                if f.is_file():
+                    rel = str(f.relative_to(source))
+                    try:
+                        files_to_copy[rel] = f.read_bytes()
+                    except Exception as exc:
+                        logger.warning(f"Could not read {f}: {exc}")
 
-        This ConfigMap contains all compose files from the compose/ directory,
-        which are needed by ushadow-backend for service management.
+        if not files_to_copy:
+            logger.info(f"No files in {source_path!r}, nothing to seed into PVC {pvc_claim_name!r}")
+            return True
 
-        Returns True if ConfigMap was created/updated successfully.
-        """
-        try:
-            logger.info(f"Ensuring compose-files ConfigMap exists in namespace {namespace}")
+        logger.info(f"Seeding PVC {pvc_claim_name!r} with {len(files_to_copy)} files from {source_path!r}")
 
-            # Find compose directory (handles both container and development paths)
-            compose_dir = Path("/compose") if Path("/compose").exists() else Path("compose")
-            if not compose_dir.exists():
-                logger.warning(f"Compose directory not found at {compose_dir}, skipping ConfigMap creation")
-                return False
+        pod_name = f"seed-{pvc_claim_name[:18]}-{secrets.token_hex(4)}"
+        core_api, _ = self._get_kube_client(cluster_id)
 
-            # Collect all compose files
-            compose_data = {}
-
-            # Add YAML files
-            for pattern in ["*.yaml", "*.yml", "*.md"]:
-                for file_path in compose_dir.glob(pattern):
-                    if file_path.is_file():
-                        try:
-                            content = file_path.read_text()
-                            compose_data[file_path.name] = content
-                            logger.debug(f"Added {file_path.name} to ConfigMap ({len(content)} bytes)")
-                        except Exception as e:
-                            logger.warning(f"Failed to read {file_path}: {e}")
-
-            # Add scripts directory if exists
-            scripts_dir = compose_dir / "scripts"
-            if scripts_dir.exists():
-                for script_path in scripts_dir.iterdir():
-                    if script_path.is_file():
-                        try:
-                            content = script_path.read_text()
-                            # Prefix with "script-" to avoid conflicts
-                            compose_data[f"script-{script_path.name}"] = content
-                            logger.debug(f"Added script {script_path.name} to ConfigMap")
-                        except Exception as e:
-                            logger.warning(f"Failed to read script {script_path}: {e}")
-
-            if not compose_data:
-                logger.warning("No compose files found to add to ConfigMap")
-                return False
-
-            logger.info(f"Collected {len(compose_data)} files for ConfigMap (total size: {sum(len(v) for v in compose_data.values())} bytes)")
-
-            # Create ConfigMap manifest
-            configmap = {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {
-                    "name": "compose-files",
-                    "namespace": namespace,
-                    "labels": {
-                        "app": "ushadow",
-                        "component": "backend"
-                    }
+        seed_pod = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                "namespace": namespace,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "ushadow",
+                    "ushadow/role": "pvc-seeder",
                 },
-                "data": compose_data
-            }
+            },
+            "spec": {
+                "restartPolicy": "Never",
+                "containers": [{
+                    "name": "seeder",
+                    "image": "busybox:1.36",
+                    "command": ["sh", "-c", "sleep 600"],
+                    "volumeMounts": [{"name": "pvc", "mountPath": "/seed-data"}],
+                }],
+                "volumes": [{
+                    "name": "pvc",
+                    "persistentVolumeClaim": {"claimName": pvc_claim_name},
+                }],
+            },
+        }
 
-            # Get API client
-            core_api, _ = self._get_kube_client(cluster_id)
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: core_api.create_namespaced_pod(namespace=namespace, body=seed_pod),
+            )
+            logger.info(f"Created seeder pod {pod_name!r} for PVC {pvc_claim_name!r}")
 
-            # Try to create or update the ConfigMap
-            try:
-                core_api.create_namespaced_config_map(
-                    namespace=namespace,
-                    body=configmap
+            # Wait up to 120s for the pod to be Running
+            for _ in range(120):
+                pod = await loop.run_in_executor(
+                    None,
+                    lambda: core_api.read_namespaced_pod(name=pod_name, namespace=namespace),
                 )
-                logger.info(f"✅ Created compose-files ConfigMap in namespace {namespace}")
-                return True
-            except ApiException as e:
-                if e.status == 409:  # Already exists, update it
-                    core_api.patch_namespaced_config_map(
-                        name="compose-files",
-                        namespace=namespace,
-                        body=configmap
-                    )
-                    logger.info(f"✅ Updated compose-files ConfigMap in namespace {namespace}")
-                    return True
-                else:
-                    raise
+                phase = pod.status.phase
+                if phase == "Running":
+                    break
+                if phase in ("Failed", "Unknown"):
+                    raise RuntimeError(f"Seeder pod {pod_name!r} entered phase {phase!r}")
+                await asyncio.sleep(1)
+            else:
+                raise RuntimeError(f"Seeder pod {pod_name!r} did not become Running within 120s")
 
-        except Exception as e:
-            logger.error(f"Failed to ensure compose-files ConfigMap: {e}")
-            # Don't fail the deployment, just log the error
+            from kubernetes.stream import stream as k8s_stream
+
+            # Optionally check if PVC already has content
+            if skip_if_not_empty:
+                check = await loop.run_in_executor(
+                    None,
+                    lambda: k8s_stream(
+                        core_api.connect_get_namespaced_pod_exec,
+                        pod_name, namespace,
+                        command=["sh", "-c", "ls /seed-data | wc -l"],
+                        stderr=True, stdin=False, stdout=True, tty=False,
+                    ),
+                )
+                if check and check.strip() != "0":
+                    logger.info(f"PVC {pvc_claim_name!r} already has content, skipping seed")
+                    return True
+
+            # Copy files via base64 encoding to avoid shell escaping issues
+            for rel_path, content in files_to_copy.items():
+                dest_path = f"/seed-data/{rel_path}"
+                dest_dir = str(Path(dest_path).parent)
+
+                await loop.run_in_executor(
+                    None,
+                    lambda d=dest_dir: k8s_stream(
+                        core_api.connect_get_namespaced_pod_exec,
+                        pod_name, namespace,
+                        command=["mkdir", "-p", d],
+                        stderr=True, stdin=False, stdout=True, tty=False,
+                    ),
+                )
+
+                # base64 only uses [A-Za-z0-9+/=] — safe inside single-quoted shell strings
+                encoded = base64.b64encode(content).decode()
+                # Split into 32KB chunks to stay within exec argument limits
+                chunks = [encoded[i:i + 32768] for i in range(0, len(encoded), 32768)]
+                # First chunk: create file; subsequent chunks: append
+                cmd = f"printf '%s' '{chunks[0]}' | base64 -d > {dest_path}"
+                for chunk in chunks[1:]:
+                    cmd += f" && printf '%s' '{chunk}' | base64 -d >> {dest_path}"
+
+                await loop.run_in_executor(
+                    None,
+                    lambda c=cmd: k8s_stream(
+                        core_api.connect_get_namespaced_pod_exec,
+                        pod_name, namespace,
+                        command=["sh", "-c", c],
+                        stderr=True, stdin=False, stdout=True, tty=False,
+                    ),
+                )
+                logger.debug(f"Seeded {rel_path!r} ({len(content)} bytes) into PVC {pvc_claim_name!r}")
+
+            logger.info(f"Seeded {len(files_to_copy)} files into PVC {pvc_claim_name!r}")
+            return True
+
+        except Exception as exc:
+            logger.error(f"Failed to seed PVC {pvc_claim_name!r}: {exc}")
             return False
+        finally:
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: core_api.delete_namespaced_pod(
+                        name=pod_name,
+                        namespace=namespace,
+                        body=client.V1DeleteOptions(grace_period_seconds=0),
+                    ),
+                )
+                logger.info(f"Deleted seeder pod {pod_name!r}")
+            except Exception as cleanup_exc:
+                logger.warning(f"Failed to delete seeder pod {pod_name!r}: {cleanup_exc}")
 
     async def deploy_to_kubernetes(
         self,
@@ -1644,12 +1669,6 @@ class KubernetesManager:
                     f"The cluster may be unreachable. Check network connectivity and kubeconfig."
                 )
 
-            # For ushadow-backend, ensure compose-files and config-files ConfigMaps exist
-            if "ushadow-backend" in service_name.lower() or "backend" in service_def.get("service_id", ""):
-                logger.info("Detected ushadow-backend deployment, ensuring ConfigMaps...")
-                await self._ensure_compose_configmap(cluster_id, namespace)
-                await self._ensure_config_configmap(cluster_id, namespace)
-
             # Compile manifests
             logger.info(f"Compiling K8s manifests for {service_name}...")
             manifests = await self.compile_service_to_k8s(service_def, namespace, k8s_spec)
@@ -1664,6 +1683,8 @@ class KubernetesManager:
             manifest_dir = Path("/tmp/k8s-manifests") / cluster_id / namespace
             manifest_dir.mkdir(parents=True, exist_ok=True)
             for manifest_type, manifest in manifests.items():
+                if manifest_type.startswith("_"):
+                    continue  # Skip internal metadata keys
                 manifest_file = manifest_dir / f"{service_name}-{manifest_type}.yaml"
                 with open(manifest_file, 'w') as f:
                     yaml.dump(manifest, f, default_flow_style=False)
@@ -1709,26 +1730,6 @@ class KubernetesManager:
                     else:
                         raise
 
-            # Apply ConfigMap for config files
-            if "config_files_map" in manifests:
-                try:
-                    core_api.create_namespaced_config_map(
-                        namespace=namespace,
-                        body=manifests["config_files_map"]
-                    )
-                    logger.info(f"Created ConfigMap for config files")
-                except ApiException as e:
-                    if e.status == 409:  # Already exists, update it
-                        name = manifests["config_files_map"]["metadata"]["name"]
-                        core_api.patch_namespaced_config_map(
-                            name=name,
-                            namespace=namespace,
-                            body=manifests["config_files_map"]
-                        )
-                        logger.info(f"Updated ConfigMap for config files")
-                    else:
-                        raise
-
             # Apply PersistentVolumeClaims (must exist before Deployment references them)
             for manifest_key, manifest in manifests.items():
                 if manifest_key.startswith("pvc_"):
@@ -1744,6 +1745,16 @@ class KubernetesManager:
                             logger.info(f"PVC {pvc_name} already exists in {namespace}")
                         else:
                             raise
+
+            # Seed bind-mount volumes with local files (skip if PVC already has content)
+            for seed_info in manifests.get("_volumes_to_seed", []):
+                await self._seed_pvc_from_path(
+                    cluster_id=cluster_id,
+                    namespace=namespace,
+                    pvc_claim_name=seed_info["pvc_claim_name"],
+                    source_path=seed_info["source_path"],
+                    skip_if_not_empty=True,
+                )
 
             # Apply Deployment
             deployment_name = manifests["deployment"]["metadata"]["name"]
@@ -1819,8 +1830,6 @@ class KubernetesManager:
                 deployed_resources.append(f"ConfigMap/{manifests['config_map']['metadata']['name']}")
             if "secret" in manifests:
                 deployed_resources.append(f"Secret/{manifests['secret']['metadata']['name']}")
-            if "config_files_map" in manifests:
-                deployed_resources.append(f"ConfigMap/{manifests['config_files_map']['metadata']['name']}")
             deployed_resources.append(f"Deployment/{deployment_name}")
             deployed_resources.append(f"Service/{service_name}")
             if "ingress" in manifests:

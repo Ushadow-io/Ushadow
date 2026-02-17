@@ -29,7 +29,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
-COPY pyproject.toml uv.lock ./
+# When build context is project root, copy from ushadow/backend/
+COPY ushadow/backend/pyproject.toml ushadow/backend/uv.lock ./
 
 # Install dependencies with uv (frozen from lockfile)
 # This creates a .venv directory with all dependencies
@@ -66,10 +67,19 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy dependency files (needed for uv run)
-COPY pyproject.toml uv.lock ./
+# When build context is project root, copy from ushadow/backend/
+COPY ushadow/backend/pyproject.toml ushadow/backend/uv.lock ./
 
-# Copy application code
-COPY . .
+# Copy application code from ushadow/backend/
+COPY ushadow/backend/ .
+
+# Copy compose files from project root (service definitions for discovery)
+# These contain x-ushadow metadata needed regardless of deployment method
+COPY compose/ /compose/
+
+# Copy config files from project root (default configuration, wiring, capabilities)
+# These are needed for service configuration and capability resolution
+COPY config/ /config/
 
 # Expose port (default 8000, override with PORT env var)
 EXPOSE 8000

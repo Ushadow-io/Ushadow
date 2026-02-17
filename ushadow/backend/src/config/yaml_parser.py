@@ -405,16 +405,30 @@ class ComposeParser(BaseYAMLParser):
             match = self.ENV_VAR_PATTERN.search(value)
             if match:
                 var_name, default = match.groups()
-                # ${VAR} (no :-) → required (default is None)
-                # ${VAR:-} → required (empty default isn't useful)
-                # ${VAR:-value} → optional with explicit default
-                has_default = default is not None and default != ""
-                return ComposeEnvVar(
-                    name=key,
-                    has_default=has_default,
-                    default_value=default if has_default else None,
-                    is_required=not has_default,
-                )
+
+                # If the ENTIRE value is just ${VAR:-default}, extract the default
+                # Otherwise (template string like "jdbc://host/${VAR:-default}"), keep full value
+                if match.group(0) == value:
+                    # Simple variable reference: ${VAR} or ${VAR:-default}
+                    # ${VAR} (no :-) → required (default is None)
+                    # ${VAR:-} → required (empty default isn't useful)
+                    # ${VAR:-value} → optional with explicit default
+                    has_default = default is not None and default != ""
+                    return ComposeEnvVar(
+                        name=key,
+                        has_default=has_default,
+                        default_value=default if has_default else None,
+                        is_required=not has_default,
+                    )
+                else:
+                    # Template string containing variable references
+                    # Keep the full template as the default value
+                    return ComposeEnvVar(
+                        name=key,
+                        has_default=True,
+                        default_value=value,
+                        is_required=False,
+                    )
 
             # Plain value - has a hardcoded default
             return ComposeEnvVar(
