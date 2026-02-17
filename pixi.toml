@@ -1,16 +1,37 @@
 [workspace]
 authors = ["Stu Alexander <thestumonkey@gmail.com>"]
 channels = ["conda-forge"]
-name = "purple"
+name = "ushadow"
 platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
-# Install ushadow backend in editable mode
-install-ushadow = "cd ushadow/backend && uv pip install -e . --python $CONDA_PREFIX/bin/python"
+# Install ushadow backend in editable mode (includes dev dependencies like pytest)
+install-ushadow = "cd ushadow/backend && uv pip install -e '.[dev]' --python $CONDA_PREFIX/bin/python"
+
+# Install robot test dependencies
+install-robot = "uv pip install -r robot_tests/requirements.txt --python $CONDA_PREFIX/bin/python"
+
+# Install all dependencies
+install = { depends-on = ["install-ushadow", "install-robot"] }
 
 # Run ush CLI tool
 ush = { cmd = "python ush", depends-on = ["install-ushadow"] }
+
+# Run pytest (all backend tests)
+test = { cmd = "cd ushadow/backend && pytest", depends-on = ["install-ushadow"] }
+
+# Run integration tests only
+test-integration = { cmd = "cd ushadow/backend && pytest tests/integration/ -v", depends-on = ["install-ushadow"] }
+
+# Run tests without secrets (fast, for CI)
+test-no-secrets = { cmd = "cd ushadow/backend && pytest -m 'integration and no_secrets' -v", depends-on = ["install-ushadow"] }
+
+# Run Robot Framework tests
+test-robot = { cmd = "cd robot_tests && robot api/", depends-on = ["install-robot"] }
+
+# Run Robot Framework service config tests
+test-robot-services = { cmd = "cd robot_tests && robot api/service_configs_deployment.robot", depends-on = ["install-robot"] }
 
 [dependencies]
 python = "3.12.*"

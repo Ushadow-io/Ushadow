@@ -123,11 +123,25 @@ case "$SERVICE" in
         build_and_push \
             "mycelia" \
             "mycelia/backend/Dockerfile" \
-            "mycelia-backend"
+            "mycelia/backend"
+
+        # Build frontend (context is mycelia root, use prod Dockerfile)
+        build_and_push \
+            "mycelia" \
+            "mycelia/frontend/Dockerfile.prod" \
+            "mycelia/frontend"
+
+        # Build python worker (context is mycelia root, Dockerfile is in python/)
+        build_and_push \
+            "mycelia" \
+            "mycelia/python/Dockerfile" \
+            "mycelia/python-worker"
 
         info "============================================="
         info "Mycelia images pushed successfully!"
-        info "  ${REGISTRY}/mycelia-backend:${TAG}"
+        info "  ${REGISTRY}/mycelia/backend:${TAG}"
+        info "  ${REGISTRY}/mycelia/frontend:${TAG}"
+        info "  ${REGISTRY}/mycelia/python-worker:${TAG}"
         info "============================================="
         ;;
 
@@ -180,7 +194,7 @@ case "$SERVICE" in
         echo "Available services:"
         echo "  ushadow     - Build ushadow backend + frontend"
         echo "  chronicle   - Build Chronicle backend + workers + webui"
-        echo "  mycelia     - Build Mycelia backend"
+        echo "  mycelia     - Build Mycelia backend + frontend + python-worker"
         echo "  openmemory  - Build OpenMemory server"
         echo ""
         echo "Examples:"

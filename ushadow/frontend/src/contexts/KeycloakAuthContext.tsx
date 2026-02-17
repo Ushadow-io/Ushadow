@@ -93,12 +93,13 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
 
       const { expiresAt, expiresIn } = expiry
 
-      // If token is already expired or expires in less than 0 seconds, don't set up refresh
+      // If token is already expired or expires in less than 0 seconds, clear it
       if (expiresIn <= 0) {
-        console.warn('[KC-AUTH] Token already expired, skipping refresh setup')
+        console.warn('[KC-AUTH] Token already expired, clearing tokens...')
         setIsAuthenticated(false)
         setUserInfo(null)
         setUser(null)
+        TokenManager.clearTokens() // CRITICAL: Clear expired tokens!
         return
       }
 
@@ -170,6 +171,9 @@ export function KeycloakAuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    // Clean up any stale "null" or "undefined" string values in sessionStorage
+    TokenManager.cleanupStaleTokens()
+
     // Check auth state with launcher support (async)
     const checkAuth = async () => {
       console.log('[KC-AUTH] Checking authentication (launcher-aware)...')

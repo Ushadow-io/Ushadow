@@ -359,16 +359,26 @@ class DockerManager:
 
         Combines hardcoded CORE_SERVICES with services discovered from
         compose/*-compose.yaml files via ComposeServiceRegistry.
+
+        Cached after first access to avoid repeated compose registry lookups.
         """
+        # Return cached value if available
+        if hasattr(self, '_manageable_services_cache'):
+            return self._manageable_services_cache
+
         # Start with core services
         services = dict(self.CORE_SERVICES)
 
         # Load services from ComposeServiceRegistry (compose-first approach)
         try:
             compose_registry = get_compose_registry()
-            for service in compose_registry.get_services():
+            all_compose_services = list(compose_registry.get_services())
+            logger.info(f"[MANAGEABLE_SERVICES] Found {len(all_compose_services)} services from compose registry")
+            logger.info(f"[MANAGEABLE_SERVICES] Service names: {[s.service_name for s in all_compose_services]}")
+            for service in all_compose_services:
                 # Skip if already in core services
                 if service.service_name in services:
+                    logger.debug(f"[MANAGEABLE_SERVICES] Skipping {service.service_name} (already in core)")
                     continue
 
                 # Use service_name as the key
@@ -397,10 +407,18 @@ class DockerManager:
             logger.warning(f"Failed to load services from compose registry: {e}")
 
         logger.debug(f"Loaded {len(services)} manageable services")
+
+        # Cache the result to avoid repeated lookups
+        self._manageable_services_cache = services
         return services
 
     def reload_services(self) -> None:
-        """Force reload services from ComposeServiceRegistry."""
+        """Force reload services from ComposeServiceRegistry and clear cache."""
+        # Clear cache
+        if hasattr(self, '_manageable_services_cache'):
+            delattr(self, '_manageable_services_cache')
+
+        # Reload compose registry
         registry = get_compose_registry()
         registry.reload()
         logger.info("ComposeServiceRegistry reloaded")
@@ -1669,20 +1687,20 @@ class DockerManager:
 
             import subprocess
             try:
-                # Run docker compose build using container paths
-                # Unset PROJECT_ROOT so compose file uses relative path (../mycelia)
-                # which resolves correctly from the mounted /mycelia directory
+                # Run docker compose build - use container path for compose file
+                # Docker compose reads from mounted /compose directory
+                # PROJECT_ROOT env var ensures build contexts resolve to host paths
                 cmd = ["docker", "compose", "-f", compose_file, "build", service_name]
-                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ with PROJECT_ROOT unset")
+                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ with PROJECT_ROOT={project_root}")
 
-                # Create environment without PROJECT_ROOT
+                # Use environment with PROJECT_ROOT set to host path
                 env = os.environ.copy()
-                env.pop('PROJECT_ROOT', None)
+                env['PROJECT_ROOT'] = project_root
 
                 result = subprocess.run(
                     cmd,
                     cwd="/",  # Use root of container filesystem
-                    env=env,  # Use environment without PROJECT_ROOT
+                    env=env,  # Use environment with PROJECT_ROOT set to host path
                     capture_output=True,
                     text=True,
                     timeout=600  # 10 minute timeout for builds
