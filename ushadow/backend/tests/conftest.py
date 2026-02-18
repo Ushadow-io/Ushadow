@@ -24,9 +24,9 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
 
-# Add src to path for imports
+# Add backend root to path for src.* imports
 backend_root = Path(__file__).parent.parent
-sys.path.insert(0, str(backend_root / "src"))
+sys.path.insert(0, str(backend_root))
 
 # Find project root (contains config/ directory)
 project_root = backend_root.parent.parent
@@ -74,8 +74,12 @@ api_keys:
 """)
 
     # Reset settings store singleton to pick up new CONFIG_DIR
-    import src.config.omegaconf_settings as settings_module
-    settings_module._settings_store = None
+    try:
+        import src.config.omegaconf_settings as settings_module
+        settings_module._settings_store = None
+    except ModuleNotFoundError:
+        # Settings module not needed for all tests
+        pass
 
     yield test_config_dir
 

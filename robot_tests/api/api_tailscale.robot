@@ -11,8 +11,9 @@ Documentation    Comprehensive Tailscale API Integration Tests
 ...
 ...              NOTE: Tests are organized by functional area for maintainability
 
+Variables        ../resources/setup/test_env.py
 Library          RequestsLibrary
-Library          REST    localhost:8080    ssl_verify=false
+Library          REST    ${BACKEND_URL}    ssl_verify=false
 Library          Collections
 Library          String
 Library          Process
@@ -28,9 +29,19 @@ Suite Teardown   Standard Suite Teardown
 Test Setup       Start Tailscale Container
 
 *** Variables ***
-${TAILSCALE_API}    /api/tailscale
-${SESSION}          tailscale_session
-${PROJECT_ROOT}     ${CURDIR}/../..
+${TAILSCALE_API}              /api/tailscale
+${SESSION}                    tailscale_session
+${PROJECT_ROOT}               ${CURDIR}/../..
+# App environment — read from OS env (exported from .env.test by Makefile) or use defaults
+${COMPOSE_PROJECT_NAME}       %{COMPOSE_PROJECT_NAME=ushadow-green}
+${TAILSCALE_HOSTNAME}         %{TAILSCALE_HOSTNAME=green.spangled-kettle.ts.net}
+# Derived container/service names
+${TAILSCALE_CONTAINER}        ${COMPOSE_PROJECT_NAME}-tailscale
+${WEBUI_SERVICE}              ${COMPOSE_PROJECT_NAME}-webui
+${BACKEND_SERVICE}            ${COMPOSE_PROJECT_NAME}-backend
+# Internal Docker service ports (defined in docker-compose.yml)
+${WEBUI_DEV_PORT}             5173
+${BACKEND_INTERNAL_PORT}      8000
 
 # ============================================================================
 # Container Management & Status Tests
@@ -380,7 +391,7 @@ Configure Tailscale Serve Routes
     ${deployment_mode}=    Create Dictionary    mode=single    environment=dev
     ${payload}=    Create Dictionary
     ...    deployment_mode=${deployment_mode}
-    ...    hostname=green.spangled-kettle.ts.net
+    ...    hostname=${TAILSCALE_HOSTNAME}
     ...    backend_port=${8000}
     ...    use_caddy_proxy=${False}
 
@@ -405,7 +416,7 @@ Configure Tailscale Serve Routes
     Sleep    2s
 
     # Verify routes were created
-    ${result}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     Should Be Equal As Integers    ${result.rc}    0
     ${output}=    Set Variable    ${result.stdout}
 
@@ -419,7 +430,7 @@ Tailscale Serve Routes Are Configured
     [Tags]    tailscale    integration    routing
 
     # Get serve status from container
-    ${result}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     Should Be Equal As Integers    ${result.rc}    0
     ...    msg=Failed to get tailscale serve status
 
@@ -434,7 +445,7 @@ Frontend Route Uses Correct Port
     [Tags]    tailscale    integration    routing    critical
 
     # Get serve status
-    ${result}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     ${output}=    Set Variable    ${result.stdout}
 
     Log    Checking routes in:\n${output}
@@ -449,7 +460,7 @@ Frontend Route Uses Correct Port
 
     IF    ${is_dev}
         # Dev mode: Should route to port 5173
-        Should Contain    ${output}    ushadow-green-webui:5173
+        Should Contain    ${output}    ${WEBUI_SERVICE}:${WEBUI_DEV_PORT}
         ...    msg=Frontend route should use port 5173 in dev mode
 
         # Should NOT contain port 3000
@@ -457,7 +468,7 @@ Frontend Route Uses Correct Port
         ...    msg=Frontend route should NOT use deprecated port 3000
     ELSE
         # Prod mode: Should route to port 80
-        Should Contain    ${output}    ushadow-green-webui:80
+        Should Contain    ${output}    ${WEBUI_SERVICE}:80
         ...    msg=Frontend route should use port 80 in prod mode
     END
 
@@ -465,28 +476,28 @@ Backend API Routes Are Configured
     [Documentation]    TDD GREEN: Verify /api and /auth routes exist
     [Tags]    tailscale    integration    routing
 
-    ${result}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     ${output}=    Set Variable    ${result.stdout}
 
     # Should have /api route
     Should Contain    ${output}    /api
     ...    msg=Missing /api route
 
-    Should Contain    ${output}    ushadow-green-backend:8000/api
+    Should Contain    ${output}    ${BACKEND_SERVICE}:${BACKEND_INTERNAL_PORT}/api
     ...    msg=/api should route to backend:8000/api
 
     # Should have /auth route
     Should Contain    ${output}    /auth
     ...    msg=Missing /auth route
 
-    Should Contain    ${output}    ushadow-green-backend:8000/auth
+    Should Contain    ${output}    ${BACKEND_SERVICE}:${BACKEND_INTERNAL_PORT}/auth
     ...    msg=/auth should route to backend:8000/auth
 
 WebSocket Routes Are Configured
     [Documentation]    TDD GREEN: Verify WebSocket routes go to chronicle
     [Tags]    tailscale    integration    routing
 
-    ${result}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     ${output}=    Set Variable    ${result.stdout}
 
     # Should have WebSocket routes
@@ -505,14 +516,14 @@ Routes Can Be Reconfigured
     [Tags]    tailscale    integration    routing
 
     # Get current routes
-    ${result_before}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result_before}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     Log    Routes before reconfiguration:\n${result_before.stdout}
 
     # Build request payload
     ${deployment_mode}=    Create Dictionary    mode=single    environment=dev
     ${payload}=    Create Dictionary
     ...    deployment_mode=${deployment_mode}
-    ...    hostname=green.spangled-kettle.ts.net
+    ...    hostname=${TAILSCALE_HOSTNAME}
     ...    backend_port=${8000}
     ...    use_caddy_proxy=${False}
 
@@ -529,10 +540,10 @@ Routes Can Be Reconfigured
     Sleep    2s
 
     # Verify routes still correct after reconfiguration
-    ${result_after}=    Run Process    docker    exec    ushadow-green-tailscale    tailscale    serve    status
+    ${result_after}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     Log    Routes after reconfiguration:\n${result_after.stdout}
 
-    Should Contain    ${result_after.stdout}    ushadow-green-webui:5173
+    Should Contain    ${result_after.stdout}    ${WEBUI_SERVICE}:${WEBUI_DEV_PORT}
     ...    msg=Routes should still be correct after reconfiguration
 
 # ============================================================================
@@ -636,12 +647,12 @@ Control Plane Connection Stability During Long Operations
     [Tags]    tailscale    integration    stability    network
 
     # Get initial log position
-    ${result}=    Run Process    docker    logs    --tail\=0    ushadow-green-tailscale
+    ${result}=    Run Process    docker    logs    --tail\=0    ${TAILSCALE_CONTAINER}
     ...           stdout=${TEMPDIR}/tailscale_initial.log
     Log    Starting from current log position
 
     # Capture baseline - check for recent connection errors
-    ${baseline_result}=    Run Process    docker    logs    --tail\=50    ushadow-green-tailscale
+    ${baseline_result}=    Run Process    docker    logs    --tail\=50    ${TAILSCALE_CONTAINER}
     ${baseline_logs}=    Set Variable    ${baseline_result.stdout}
 
     ${has_baseline_errors}=    Run Keyword And Return Status
@@ -657,7 +668,7 @@ Control Plane Connection Stability During Long Operations
     # Attempt certificate provisioning (long-running operation ~60-90s)
     ${start_time}=    Get Time    epoch
 
-    REST.POST    /api/tailscale/container/provision-cert?hostname=green.spangled-kettle.ts.net
+    REST.POST    /api/tailscale/container/provision-cert?hostname=${TAILSCALE_HOSTNAME}
 
     ${end_time}=    Get Time    epoch
     ${duration}=    Evaluate    ${end_time} - ${start_time}
@@ -665,7 +676,7 @@ Control Plane Connection Stability During Long Operations
     Log    Certificate provisioning took ${duration} seconds
 
     # Capture logs during the operation
-    ${log_result}=    Run Process    docker    logs    --since\=${start_time}s    ushadow-green-tailscale
+    ${log_result}=    Run Process    docker    logs    --since\=${start_time}s    ${TAILSCALE_CONTAINER}
     ${operation_logs}=    Set Variable    ${log_result.stdout}
 
     Log    Operation logs:\n${operation_logs}

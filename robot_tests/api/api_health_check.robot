@@ -12,10 +12,13 @@ Documentation    Health Check API Tests
 
 Library          RequestsLibrary
 Library          Collections
-Library          ../resources/EnvConfig.py
 
-Suite Setup      Setup Health Tests
-Suite Teardown   Teardown Health Tests
+# Import test environment configuration and setup resources
+Resource         ../resources/setup/suite_setup.robot
+Variables        ../resources/setup/test_env.py
+
+Suite Setup      Health Check Suite Setup
+Suite Teardown   Health Check Suite Teardown
 
 *** Variables ***
 ${HEALTH_ENDPOINT}    /health
@@ -213,19 +216,33 @@ Health Check With Invalid Method Returns 405
     Status Should Be    405    ${response}
 
 *** Keywords ***
-Setup Health Tests
-    [Documentation]    Setup API session for health tests (no auth required)
+Health Check Suite Setup
+    [Documentation]    Setup test environment and API session for health tests
 
-    # Get API URL from .env file (uses BACKEND_PORT)
-    ${api_url}=    Get Api Url
+    # First, run standard suite setup (starts containers including backend-test)
+    Suite Setup
 
-    # Create session - health endpoint is public, no auth needed
-    Create Session    ${SESSION}    ${api_url}    verify=True
+    # Then setup health-specific session using test backend (port 8200, no auth required)
+    Log To Console    \nConnecting to test backend: ${BACKEND_URL}
 
-Teardown Health Tests
+    # Create session with 10-second timeout - health endpoint is public, no auth needed
+    Create Session    ${SESSION}    ${BACKEND_URL}    verify=True    timeout=10
+
+Health Check Suite Teardown
     [Documentation]    Cleanup after tests
 
     Delete All Sessions
+
+    # Run standard suite teardown (keeps/stops containers based on TEST_MODE)
+    Suite Teardown
+
+Setup Health Tests
+    [Documentation]    DEPRECATED: Use Health Check Suite Setup instead
+    Health Check Suite Setup
+
+Teardown Health Tests
+    [Documentation]    DEPRECATED: Use Health Check Suite Teardown instead
+    Health Check Suite Teardown
 
 Status Should Be
     [Documentation]    Helper keyword to verify HTTP status code

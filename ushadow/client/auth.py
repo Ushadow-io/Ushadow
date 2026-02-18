@@ -148,25 +148,33 @@ class UshadowClient:
             )
 
             if config_response.status_code != 200:
+                if self.verbose:
+                    print(f"⚠️  Keycloak config endpoint failed: {config_response.status_code}")
                 return None
 
             kc_config = config_response.json()
 
             # Check if Keycloak is enabled
             if not kc_config.get("enabled"):
+                if self.verbose:
+                    print("⚠️  Keycloak is disabled in backend configuration")
                 return None
 
             # Build token endpoint URL
-            keycloak_url = kc_config.get("public_url", "http://localhost:8080")
+            keycloak_url = kc_config.get("public_url", "http://localhost:8081")
             realm = kc_config.get("realm", "ushadow")
             token_url = f"{keycloak_url}/realms/{realm}/protocol/openid-connect/token"
+
+            if self.verbose:
+                print(f"🔐 Attempting Keycloak authentication: {token_url}")
+                print(f"   User: {self.email}, Realm: {realm}")
 
             # Use direct grant flow (Resource Owner Password Credentials)
             token_response = httpx.post(
                 token_url,
                 data={
                     "grant_type": "password",
-                    "client_id": "ushadow-frontend",  # Public client for direct grant
+                    "client_id": "ushadow-cli",  # Dedicated CLI client with direct grant enabled
                     "username": self.email,
                     "password": self.password,
                 },
@@ -175,7 +183,12 @@ class UshadowClient:
 
             if token_response.status_code != 200:
                 if self.verbose:
-                    print(f"⚠️  Keycloak auth failed: {token_response.status_code}")
+                    try:
+                        error_detail = token_response.json()
+                        error_msg = error_detail.get("error_description") or error_detail.get("error")
+                        print(f"⚠️  Keycloak auth failed ({token_response.status_code}): {error_msg}")
+                    except Exception:
+                        print(f"⚠️  Keycloak auth failed: {token_response.status_code} - {token_response.text[:200]}")
                 return None
 
             tokens = token_response.json()
@@ -183,7 +196,7 @@ class UshadowClient:
 
         except Exception as e:
             if self.verbose:
-                print(f"⚠️  Keycloak not available: {e}")
+                print(f"⚠️  Keycloak not available: {e.__class__.__name__}: {e}")
             return None
 
     def _request(

@@ -12,6 +12,9 @@ install-ushadow = "cd ushadow/backend && uv pip install -e '.[dev]' --python $CO
 # Install robot test dependencies
 install-robot = "uv pip install -r robot_tests/requirements.txt --python $CONDA_PREFIX/bin/python"
 
+# Install RF Browser Playwright browsers (run once after install-robot)
+install-rfbrowser = { cmd = "rfbrowser init", depends-on = ["install-robot"] }
+
 # Install all dependencies
 install = { depends-on = ["install-ushadow", "install-robot"] }
 
@@ -32,6 +35,21 @@ test-robot = { cmd = "cd robot_tests && robot api/", depends-on = ["install-robo
 
 # Run Robot Framework service config tests
 test-robot-services = { cmd = "cd robot_tests && robot api/service_configs_deployment.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework conversation tests
+test-robot-conversations = { cmd = "cd robot_tests && robot api/conversations.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework memory tests
+test-robot-memories = { cmd = "cd robot_tests && robot api/memories.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework Keycloak auth tests
+test-robot-keycloak = { cmd = "cd robot_tests && robot api/keycloak_auth.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework browser-based OAuth tests (requires rfbrowser init first)
+test-robot-browser = { cmd = "cd robot_tests && robot browser/", depends-on = ["install-robot"] }
+
+# Dev mode: browser stays open on failure, Playwright Inspector pauses for DOM inspection
+test-robot-browser-dev = { cmd = "cd robot_tests && robot -v DEV_MODE:true browser/", depends-on = ["install-robot"] }
 
 [dependencies]
 python = "3.12.*"

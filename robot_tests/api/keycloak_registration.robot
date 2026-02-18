@@ -23,12 +23,6 @@ Suite Setup      Keycloak Test Suite Setup
 Suite Teardown   Keycloak Test Suite Teardown
 
 *** Variables ***
-# Test environment uses different ports to avoid conflicts
-${BACKEND_PORT}     8290
-${BACKEND_URL}      http://localhost:${BACKEND_PORT}
-# Use TEST_KEYCLOAK_PORT env var, default to 8181 (test) or 8081 (dev)
-${KEYCLOAK_PORT}    %{TEST_KEYCLOAK_PORT=8181}
-${KEYCLOAK_URL}     http://localhost:${KEYCLOAK_PORT}
 ${FORM_HEADERS}     ${EMPTY}
 
 *** Test Cases ***
@@ -152,9 +146,9 @@ Test Direct Keycloak Admin Registration
 
     # Update redirect URIs
     ${new_redirect_uris}=    Create List
-    ...    http://localhost:3290/oauth/callback
-    ...    http://127.0.0.1:3290/oauth/callback
-    ...    https://green.spangled-kettle.ts.net/oauth/callback
+    ...    ${FRONTEND_URL}/oauth/callback
+    Run Keyword If    '${TAILSCALE_URL}' != '${EMPTY}'
+    ...    Append To List    ${new_redirect_uris}    ${TAILSCALE_URL}/oauth/callback
 
     ${update_payload}=    Create Dictionary
     ...    id=${client_uuid}
