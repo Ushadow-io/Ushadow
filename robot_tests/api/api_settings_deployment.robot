@@ -8,7 +8,8 @@ Documentation    Settings API and UI-to-Deployment Consistency Tests
 ...
 ...              CRITICAL: Users must trust that UI values = deployment values
 
-Library          REST    localhost:8080    ssl_verify=false
+Variables        ../resources/setup/test_env.py
+Library          REST    ${BACKEND_URL}    ssl_verify=false
 Library          Collections
 Library          OperatingSystem
 Library          ../resources/EnvConfig.py
@@ -16,7 +17,7 @@ Resource         ../resources/setup/suite_setup.robot
 
 Suite Setup      Standard Suite Setup
 Suite Teardown   Standard Suite Teardown
-Test Setup       Start Tailscale Container
+
 
 *** Variables ***
 ${SERVICE_ID}    chronicle

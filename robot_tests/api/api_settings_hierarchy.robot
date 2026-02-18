@@ -14,7 +14,8 @@ Documentation    Settings Configuration Hierarchy API Tests
 ...
 ...              Spec: specs/features/SETTINGS_CONFIG_HIERARCHY_SPEC.md
 
-Library          REST    localhost:8080    ssl_verify=false
+Variables        ../resources/setup/test_env.py
+Library          REST    ${BACKEND_URL}    ssl_verify=false
 Library          Collections
 Library          ../resources/EnvConfig.py
 Resource         ../resources/setup/suite_setup.robot

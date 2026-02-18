@@ -25,6 +25,7 @@ keycloak:
   realm: ${oc.env:KEYCLOAK_REALM,ushadow}
   backend_client_id: ${oc.env:KEYCLOAK_BACKEND_CLIENT_ID,ushadow-backend}
   frontend_client_id: ${oc.env:KEYCLOAK_FRONTEND_CLIENT_ID,ushadow-frontend}
+  cli_client_id: ${oc.env:KEYCLOAK_CLI_CLIENT_ID,ushadow-cli}  # CLI tools (ush) with direct grant
   admin_user: ${oc.env:KEYCLOAK_ADMIN_USER,admin}
 
 # Speech Detection Settings
