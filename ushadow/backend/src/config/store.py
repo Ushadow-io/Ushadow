@@ -306,9 +306,29 @@ class SettingsStore:
         OmegaConf.save(current, file_path)
         logger.info(f"Saved to {file_path}: {list(updates.keys())}")
 
+    @staticmethod
+    def _make_secret_refs(data: dict) -> dict:
+        """
+        Recursively replace leaf values with '@secret' placeholder.
+
+        Used to write a structural index of secret keys into config.overrides.yaml
+        so the override is visible without exposing the value.
+        """
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, dict):
+                result[key] = SettingsStore._make_secret_refs(value)
+            else:
+                result[key] = "@secret"
+        return result
+
     async def save_to_secrets(self, updates: dict) -> None:
         """
-        Save sensitive values to secrets.yaml.
+        Save sensitive values to secrets.yaml only.
+
+        Do NOT mirror @secret placeholders into config.overrides.yaml — overrides
+        is merged after secrets in the load order, so a placeholder would overwrite
+        the real value and store.get() would return "@secret" instead of the value.
 
         Use for: api_keys, passwords, tokens, credentials.
         """
@@ -332,18 +352,33 @@ class SettingsStore:
                      - Dot notation: {"api_keys.openai": "sk-..."}
                      - Nested: {"api_keys": {"openai": "sk-..."}}
         """
+        updates = self._filter_masked_values(updates)
         secrets_updates = {}
         overrides_updates = {}
 
         for key, value in updates.items():
             if isinstance(value, dict):
-                # Nested dict - check the section name
+                # Fast path: known secret sections go entirely to secrets
                 if key in ('api_keys', 'admin', 'security') or should_store_in_secrets(key):
                     secrets_updates[key] = value
                 else:
-                    overrides_updates[key] = value
+                    # Mixed dict: check each leaf key by its full path so that
+                    # e.g. {"infrastructure.overrides.X": {"KC_DB_PASSWORD": "..."}}
+                    # correctly routes the password to secrets.yaml
+                    secret_leaves = {}
+                    config_leaves = {}
+                    for leaf_key, leaf_value in value.items():
+                        full_path = f"{key}.{leaf_key}"
+                        if should_store_in_secrets(full_path):
+                            secret_leaves[leaf_key] = leaf_value
+                        else:
+                            config_leaves[leaf_key] = leaf_value
+                    if secret_leaves:
+                        secrets_updates[key] = secret_leaves
+                    if config_leaves:
+                        overrides_updates[key] = config_leaves
             else:
-                # Dot notation or simple key
+                # Dot notation or simple key — full path is already the key
                 if should_store_in_secrets(key):
                     secrets_updates[key] = value
                 else:
@@ -369,7 +404,7 @@ class SettingsStore:
                 filtered_nested = self._filter_masked_values(value)
                 if filtered_nested:  # Only include if not empty
                     filtered[key] = filtered_nested
-            elif value is None or not str(value).startswith("***"):
+            elif value is None or not (str(value).startswith("***") or str(value).startswith("•••")):
                 filtered[key] = value
             else:
                 logger.debug(f"Filtering masked value for key: {key}")

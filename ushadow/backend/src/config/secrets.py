@@ -120,7 +120,6 @@ def should_store_in_secrets(path: str) -> bool:
     Rules:
         - Anything under api_keys.* → secrets.yaml
         - security.* containing secret/key/password → secrets.yaml
-        - admin.* containing password → secrets.yaml
         - Otherwise, check if key name matches sensitive patterns
     """
     path_lower = path.lower()
@@ -129,8 +128,6 @@ def should_store_in_secrets(path: str) -> bool:
     if path_lower.startswith('api_keys.'):
         return True
     if path_lower.startswith('security.') and any(p in path_lower for p in ['secret', 'key', 'password']):
-        return True
-    if path_lower.startswith('admin.') and 'password' in path_lower:
         return True
     if path_lower.startswith('infrastructure.secrets.'):
         return True

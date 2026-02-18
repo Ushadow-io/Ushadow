@@ -47,7 +47,7 @@ class Source(str, Enum):
     COMPOSE_DEFAULT = "compose_default"
     ENV_FILE = "env_file"
     CAPABILITY = "capability"
-    INFRASTRUCTURE = "infrastructure"  # Scanned infrastructure from DeployTarget (K8s only)
+    INFRASTRUCTURE = "infrastructure"  # From deploy target infrastructure scan (K8s only)
     TEMPLATE_OVERRIDE = "template_override"  # services.{service_id} in config.overrides.yaml
     INSTANCE_OVERRIDE = "instance_override"  # instances.{deployment_id} in instance-overrides.yaml
     NOT_FOUND = "not_found"
@@ -92,6 +92,31 @@ class SettingSuggestion:
             "capability": self.capability,
             "provider_name": self.provider_name,
         }
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def _service_keywords(service_type: str) -> List[str]:
+    """
+    Return uppercase keyword patterns that identify env vars for a given service type.
+
+    Used to pattern-match env vars like MONGODB_HOST, REDIS_URL, QDRANT_PORT
+    against the service that provides them.
+
+    Examples:
+        "mongo"    → ["MONGO", "MONGODB"]
+        "redis"    → ["REDIS"]
+        "postgres" → ["POSTGRES", "POSTGRESQL", "DATABASE"]
+        "qdrant"   → ["QDRANT"]
+    """
+    base = service_type.upper()
+    extras: Dict[str, List[str]] = {
+        "MONGO":    ["MONGO", "MONGODB"],
+        "POSTGRES": ["POSTGRES", "POSTGRESQL", "DATABASE"],
+    }
+    return extras.get(base, [base])
 
 
 # =============================================================================
@@ -174,14 +199,18 @@ class Settings:
         env_vars, compose_defaults, capability_values, template_overrides = \
             await self._load_service_context(service_id)
 
-        # Load infrastructure overrides from deploy target
+        # Load infrastructure values if deploy_target is a K8s target
+        infrastructure_values = await self._load_infrastructure_defaults(
+            deploy_target,
+            env_vars
+        )
         infrastructure_overrides = await self._load_infrastructure_overrides(deploy_target)
 
         return await self._resolve_all(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
-            infrastructure_values={},
+            infrastructure_values=infrastructure_values,
             template_overrides=template_overrides,
             infrastructure_overrides=infrastructure_overrides,
             instance_overrides={},
@@ -207,32 +236,20 @@ class Settings:
         env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, deployment_target = \
             await self._load_deployment_context(deployment_id)
 
-        # Load infrastructure overrides from settings if deployment_target is specified
+        infrastructure_values = {}
         infrastructure_overrides = {}
-        if deployment_target and deployment_target.startswith("k8s://"):
-            # Parse cluster_id from deployment_target (format: k8s://{cluster_id}/{namespace})
-            try:
-                parts = deployment_target[6:].split('/', 1)
-                cluster_id = parts[0] if parts else None
-
-                if cluster_id:
-                    logger.info(f"[Settings] Loading infrastructure overrides for cluster: {cluster_id}")
-
-                    overrides_from_config = await self._store.get(f"infrastructure.overrides.{cluster_id}") or {}
-                    secrets_from_config = await self._store.get(f"infrastructure.secrets.{cluster_id}") or {}
-
-                    infrastructure_overrides.update(overrides_from_config)
-                    infrastructure_overrides.update(secrets_from_config)
-
-                    logger.info(f"[Settings] Loaded {len(infrastructure_overrides)} infrastructure overrides for {cluster_id}")
-            except Exception as e:
-                logger.warning(f"Failed to parse deployment_target or load infrastructure overrides: {e}")
+        if deployment_target:
+            infrastructure_values = await self._load_infrastructure_defaults(
+                deployment_target,
+                env_vars
+            )
+            infrastructure_overrides = await self._load_infrastructure_overrides(deployment_target)
 
         results = await self._resolve_all(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
-            infrastructure_values={},
+            infrastructure_values=infrastructure_values,
             template_overrides=template_overrides,
             infrastructure_overrides=infrastructure_overrides,
             instance_overrides=instance_overrides,
@@ -463,9 +480,8 @@ class Settings:
                     f"using generic http:// URL scheme"
                 )
 
-            # Map to all env vars for this service type
-            env_var_names = mapping.get(service_type, [])
-            for env_var in env_var_names:
+            # Map to all URL vars for this service type
+            for env_var in mapping.get(service_type, []):
                 infra_values[env_var] = url
                 logger.info(f"[Load] [Infrastructure] {env_var} = {url}")
 
@@ -517,33 +533,69 @@ class Settings:
             mapping = self._get_infrastructure_mapping()
             infrastructure_values = {}
 
-            for service_type, service_info in infrastructure_scan.items():
-                # Only process services that were found
-                if not isinstance(service_info, dict) or not service_info.get("found"):
-                    continue
+            # infra_scans is {namespace: {service_type: {...}}} — iterate both levels
+            for namespace_or_type, namespace_or_info in infrastructure_scan.items():
+                # Detect whether this is a namespace-keyed scan (dict of service_types)
+                # or a flat scan (direct service_type → info). Use presence of "found" key.
+                if isinstance(namespace_or_info, dict) and "found" not in namespace_or_info:
+                    # Namespace-keyed: {namespace: {service_type: service_info}}
+                    services_iter = namespace_or_info.items()
+                else:
+                    # Flat (legacy): {service_type: service_info}
+                    services_iter = [(namespace_or_type, namespace_or_info)]
 
-                endpoints = service_info.get("endpoints", [])
-                if not endpoints:
-                    continue
+                for service_type, service_info in services_iter:
+                    # Only process services that were found
+                    if not isinstance(service_info, dict) or not service_info.get("found"):
+                        continue
 
-                # Build URL using registry (data-driven from compose)
-                endpoint = endpoints[0]
-                url = registry.build_url(service_type, endpoint)
+                    endpoints = service_info.get("endpoints", [])
+                    if not endpoints:
+                        continue
 
-                if not url:
-                    # Unknown service type - fallback to generic http://
-                    url = f"http://{endpoint}"
-                    logger.warning(
-                        f"Unknown infrastructure service type '{service_type}', "
-                        f"using generic http:// URL scheme"
-                    )
+                    # Build URL using registry (data-driven from compose)
+                    endpoint = endpoints[0]
+                    url = registry.build_url(service_type, endpoint)
 
-                # Map to env vars that this service needs
-                env_var_names = mapping.get(service_type, [])
-                for env_var in env_var_names:
-                    if env_var in env_vars:
-                        infrastructure_values[env_var] = url
-                        logger.info(f"[Infrastructure] {env_var} = {url}")
+                    if not url:
+                        # Unknown service type - fallback to generic http://
+                        url = f"http://{endpoint}"
+                        logger.warning(
+                            f"Unknown infrastructure service type '{service_type}', "
+                            f"using generic http:// URL scheme"
+                        )
+
+                    # Parse host and port from endpoint (e.g., "mongo.root.svc.cluster.local:27017")
+                    host, port = endpoint.rsplit(':', 1) if ':' in endpoint else (endpoint, '')
+
+                    # 1. Assign full URL to known URL-mapped vars (e.g., MONGO_URL, MONGODB_URL)
+                    for env_var in mapping.get(service_type, []):
+                        if env_var in env_vars:
+                            infrastructure_values[env_var] = url
+                            logger.info(f"[Infrastructure] {env_var} = {url}")
+
+                    # 2. Pattern-match remaining env vars by service keyword and assign
+                    # component values (HOST → hostname, PORT → port number, URI/URL → full url)
+                    keywords = _service_keywords(service_type)
+                    for env_var in env_vars:
+                        if env_var in infrastructure_values:
+                            continue  # Already assigned
+                        var_upper = env_var.upper()
+                        if not any(kw in var_upper for kw in keywords):
+                            continue
+                        # HOST var → just the hostname
+                        if 'HOST' in var_upper and 'HOSTNAME' not in var_upper:
+                            infrastructure_values[env_var] = host
+                            logger.info(f"[Infrastructure] {env_var} = {host}")
+                        # PORT var → just the port number
+                        elif 'PORT' in var_upper and port:
+                            infrastructure_values[env_var] = port
+                            logger.info(f"[Infrastructure] {env_var} = {port}")
+                        # URI/URL var → full connection URL
+                        elif 'URI' in var_upper or 'URL' in var_upper:
+                            infrastructure_values[env_var] = url
+                            logger.info(f"[Infrastructure] {env_var} = {url}")
+                        # DATABASE, AUTH_SOURCE, etc. are app-specific — do not auto-assign
 
             logger.info(
                 f"Loaded infrastructure for {deploy_target_id}: "
@@ -599,133 +651,41 @@ class Settings:
 
     async def _load_infrastructure_overrides(self, deploy_target: str) -> Dict[str, str]:
         """
-        Load infrastructure overrides from deploy target.
+        Load user-saved infrastructure overrides for a deploy target.
 
-        Uses ComposeRegistry to read docker-compose.infra.yml and get env var
-        definitions, then overrides defaults with scanned endpoint data.
+        Returns raw (unmasked) values suitable for actual deployment.
+        Only covers the manual override layer — scan-derived defaults are
+        handled separately by _load_infrastructure_defaults.
 
         Args:
-            deploy_target: Target identifier (cluster ID, unode hostname, etc.)
+            deploy_target: Deployment target ID (e.g. "anubis.k8s.purple")
 
         Returns:
-            Dict mapping env var names to infrastructure values
+            Dict mapping env var names to their raw values from the settings store.
         """
         from src.models.deploy_target import DeployTarget
-        from src.services.compose_registry import get_compose_registry
+        from src.config import get_settings_store
 
         try:
-            # Get the deploy target with infrastructure data
             target = await DeployTarget.from_id(deploy_target)
+            if target.type != "k8s":
+                return {}
 
-            if not target.infrastructure:
-                logger.warning(f"No infrastructure data for deploy target: {deploy_target}")
-                # Continue to load manual overrides even if no auto-scanned data
-            else:
-                logger.debug(f"Infrastructure data available: {list(target.infrastructure.keys())}")
+            cluster_id = target.raw_metadata.get("cluster_id")
+            if not cluster_id:
+                return {}
 
-            # Load default values from docker-compose.infra.yml
-            # This gives us env vars like KC_REALM that have defaults in the compose file
-            compose_registry = get_compose_registry()
-            infrastructure_overrides = {}
+            store = get_settings_store()
+            config_overrides: Dict[str, str] = await store.get(f"infrastructure.overrides.{cluster_id}") or {}
+            secret_overrides: Dict[str, str] = await store.get(f"infrastructure.secrets.{cluster_id}") or {}
 
-            # Get all infrastructure services from compose registry
-            all_services = compose_registry.get_services()
-            for service in all_services:
-                # Only process infrastructure services (from docker-compose.infra.yml)
-                if not service.service_id.startswith('docker-compose.infra:'):
-                    continue
-
-                # Extract default env var values from the service definition
-                for env_var in service.required_env_vars + service.optional_env_vars:
-                    if env_var.has_default and env_var.default_value:
-                        infrastructure_overrides[env_var.name] = env_var.default_value
-                        logger.debug(f"[Infrastructure Default] {env_var.name} = {env_var.default_value}")
-
-            # Apply manual infrastructure overrides from settings
-            # For K8s clusters, use cluster_id to load overrides
-            # Overrides are stored at:
-            # - infrastructure.overrides.{cluster_id}
-            # - infrastructure.secrets.{cluster_id}
-            cluster_id = None
-            if target.type == "k8s":
-                # Extract cluster_id from raw_metadata
-                cluster_id = target.raw_metadata.get('cluster_id')
-                logger.debug(f"K8s cluster_id: {cluster_id}")
-
-            if cluster_id:
-                # Load infrastructure scan results (auto-detected values)
-                scan_values = await self._store.get(f"infrastructure.scans.{cluster_id}") or {}
-                if scan_values:
-                    infrastructure_overrides.update(scan_values)
-                    logger.info(f"Loaded {len(scan_values)} scanned infrastructure values for cluster {cluster_id}")
-
-                # Load manual overrides (user-configured overrides)
-                config_overrides = await self._store.get(f"infrastructure.overrides.{cluster_id}") or {}
-                secret_overrides = await self._store.get(f"infrastructure.secrets.{cluster_id}") or {}
-
-                # Apply manual overrides (these take priority over scanned values)
-                manual_overrides = {**config_overrides, **secret_overrides}
-                if manual_overrides:
-                    infrastructure_overrides.update(manual_overrides)
-                    logger.info(
-                        f"Applied {len(manual_overrides)} manual infrastructure overrides "
-                        f"({len(config_overrides)} config + {len(secret_overrides)} secrets) "
-                        f"for cluster {cluster_id}"
-                    )
-                    for env_var, value in manual_overrides.items():
-                        logger.debug(f"[Infrastructure Override] {env_var} = {value}")
-
-            if infrastructure_overrides:
-                logger.info(
-                    f"Loaded {len(infrastructure_overrides)} total infrastructure values from {deploy_target}"
-                )
-
-            return infrastructure_overrides
-
+            result = {name: value for name, value in {**config_overrides, **secret_overrides}.items() if value}
+            if result:
+                logger.info(f"Loaded {len(result)} infrastructure overrides from {deploy_target}")
+            return result
         except Exception as e:
-            logger.warning(f"Could not load infrastructure for {deploy_target}: {e}")
+            logger.warning(f"Could not load infrastructure overrides for {deploy_target}: {e}")
             return {}
-
-    def _parse_endpoint(self, endpoint: str) -> tuple[str, str]:
-        """Parse endpoint into host and port."""
-        if ':' in endpoint:
-            host, port = endpoint.rsplit(':', 1)
-            return host, port
-        return endpoint, ""
-
-    def _override_with_endpoint(
-        self,
-        env_var: str,
-        default_value: str,
-        host: str,
-        port: str,
-        endpoint: str
-    ) -> str:
-        """Override default value with scanned endpoint data."""
-        import re
-
-        var_upper = env_var.upper()
-
-        # HOST variables get the hostname
-        if 'HOST' in var_upper and 'HOSTNAME' not in var_upper:
-            return host
-
-        # PORT variables get the port
-        if 'PORT' in var_upper:
-            return port
-
-        # URL/URI variables get the default with hostname:port replaced
-        if 'URL' in var_upper or 'URI' in var_upper:
-            # Replace hostname:port in URL
-            pattern = r'(^[a-z]+://)[^:/]+(:[0-9]+)?(/.*)?$'
-            match = re.match(pattern, default_value)
-            if match:
-                protocol = match.group(1)
-                path = match.group(3) or ''
-                return f"{protocol}{host}:{port}{path}"
-
-        # Other variables use the default
-        return default_value
 
     async def _load_deployment_context(
         self, deployment_id: str
@@ -912,9 +872,20 @@ class Settings:
                         )
                         continue
 
-            # 5. Infrastructure (from deploy target)
-            if env_var in infrastructure_overrides or env_var in infrastructure_values:
-                value = infrastructure_overrides.get(env_var) or infrastructure_values.get(env_var)
+            # 5b. Infrastructure overrides (user-set values from infra screen)
+            if env_var in infrastructure_overrides:
+                value = infrastructure_overrides[env_var]
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.INFRASTRUCTURE,
+                        path=f"infrastructure.{env_var}"
+                    )
+                    continue
+
+            # 5. Infrastructure (scanned from K8s cluster)
+            if env_var in infrastructure_values:
+                value = infrastructure_values[env_var]
                 if value and str(value).strip():
                     results[env_var] = Resolution(
                         value=str(value),
