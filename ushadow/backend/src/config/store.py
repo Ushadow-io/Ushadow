@@ -138,10 +138,11 @@ class SettingsStore:
 
         Merge order (later overrides earlier):
         1. config.defaults.yaml - All default values
-        2. tailscale.yaml - Tailscale configuration (hostname, etc.)
-        3. secrets.yaml - API keys, passwords (gitignored)
-        4. config.overrides.yaml - Template-level overrides (gitignored)
-        5. instance-overrides.yaml - Instance-level overrides (gitignored)
+        2. deployment-config.yaml - Deployment-specific config (generated at deploy time)
+        3. tailscale.yaml - Tailscale configuration (hostname, etc.)
+        4. secrets.yaml - API keys, passwords (gitignored)
+        5. config.overrides.yaml - Template-level overrides (gitignored)
+        6. instance-overrides.yaml - Instance-level overrides (gitignored)
 
         Returns:
             OmegaConf DictConfig with all values merged
@@ -159,6 +160,12 @@ class SettingsStore:
         if cfg := self._load_yaml_if_exists(self.defaults_path):
             configs.append(cfg)
             logger.debug(f"Loaded defaults from {self.defaults_path}")
+
+        # Load deployment-specific config (generated at deployment time)
+        deployment_config_path = Path("/app/config/deployment-config.yaml")
+        if cfg := self._load_yaml_if_exists(deployment_config_path):
+            configs.append(cfg)
+            logger.info(f"Loaded deployment config from {deployment_config_path}")
 
         if cfg := self._load_yaml_if_exists(self.tailscale_path):
             configs.append(cfg)
@@ -331,7 +338,7 @@ class SettingsStore:
         for key, value in updates.items():
             if isinstance(value, dict):
                 # Nested dict - check the section name
-                if key in ('api_keys', 'admin', 'security'):
+                if key in ('api_keys', 'admin', 'security') or should_store_in_secrets(key):
                     secrets_updates[key] = value
                 else:
                     overrides_updates[key] = value

@@ -171,7 +171,7 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
         let network_exists = check_output.is_ok() && check_output.unwrap().status.success();
 
         if network_exists {
-            log_messages.push(format!("✓ Network '{}' already exists", network));
+            log_messages.push(format!("[OK] Network '{}' already exists", network));
         } else {
             log_messages.push(format!("Creating network: {}", network));
 
@@ -188,12 +188,12 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
                 let stderr = String::from_utf8_lossy(&create_output.stderr);
                 // Ignore if network already exists (race condition)
                 if stderr.contains("already exists") {
-                    log_messages.push(format!("✓ Network '{}' already exists (race condition)", network));
+                    log_messages.push(format!("[OK] Network '{}' already exists (race condition)", network));
                 } else {
-                    log_messages.push(format!("⚠ Failed to create network {}: {}", network, stderr));
+                    log_messages.push(format!("[WARN] Failed to create network {}: {}", network, stderr));
                 }
             } else {
-                log_messages.push(format!("✓ Network '{}' created successfully", network));
+                log_messages.push(format!("[OK] Network '{}' created successfully", network));
             }
         }
     }
@@ -250,7 +250,7 @@ pub async fn start_infrastructure(state: State<'_, AppState>) -> Result<String, 
         return Err(format!("{}\n\nInfrastructure failed to start", error_log));
     }
 
-    log_messages.push("✓ Infrastructure started successfully".to_string());
+    log_messages.push("[OK] Infrastructure started successfully".to_string());
     Ok(log_messages.join("\n"))
 }
 
@@ -472,7 +472,7 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
                 debug_log.push(format!("Warning: Failed to copy setup directory: {}", e));
                 // Continue anyway - might be a partial copy that still works
             } else {
-                debug_log.push(format!("✓ Bundled setup copied successfully"));
+                debug_log.push(format!("[OK] Bundled setup copied successfully"));
             }
         }
 
@@ -541,7 +541,7 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         }
 
         // On success, only show status log
-        status_log.push(format!("✓ Environment '{}' initialized and started", env_name));
+        status_log.push(format!("[OK] Environment '{}' initialized and started", env_name));
         return Ok(status_log.join("\n"));
     }
 

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../contexts/ThemeContext'
 import { chatApi, BACKEND_URL } from '../services/api'
 import type { ChatMessage, ChatStatus } from '../services/api'
+import { getStorageKey } from '../utils/storage'
 
 interface Message extends ChatMessage {
   id: string
@@ -97,12 +98,23 @@ export default function ChatPage() {
         content: m.content,
       }))
 
+      // Get token from storage (Keycloak in sessionStorage, or legacy in localStorage)
+      const kcToken = sessionStorage.getItem('kc_access_token')
+      const legacyToken = localStorage.getItem(getStorageKey('token'))
+      const token = kcToken || legacyToken
+
+      // Build headers - only include Authorization if we have a valid token
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      }
+
+      if (token && token !== 'null' && token !== 'undefined') {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+
       const response = await fetch(`${BACKEND_URL}/api/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('ushadow_token')}`,
-        },
+        headers,
         body: JSON.stringify({
           messages: allMessages,
           use_memory: useMemory,

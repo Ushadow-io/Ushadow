@@ -17,7 +17,15 @@ spec:
       containers:
         - image: mongo:8.0
           name: mongo
+          command: ["mongod", "--noauth"]
           ports:
             - containerPort: 27017
               protocol: TCP
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+      volumes:
+        - name: mongo-data
+          persistentVolumeClaim:
+            claimName: mongo-data
       restartPolicy: Always

@@ -28,7 +28,7 @@ const LEADER_PORT = 8000;
 // Timeout for probes (ms)
 const PROBE_TIMEOUT = 3000;
 // Timeout for fetching leader info (ms)
-const LEADER_INFO_TIMEOUT = 5000;
+const LEADER_INFO_TIMEOUT = 15000;  // Increased from 5s to 15s for Tailscale latency
 
 /**
  * QR code data structure from web dashboard (v2 - minimal)
@@ -92,10 +92,13 @@ const probeLeader = async (
   ip: string,
   port: number = LEADER_PORT
 ): Promise<{ reachable: boolean; hostname?: string }> => {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.log(`[Discovery] Probe timeout for ${ip}:${port}, aborting...`);
+    controller.abort();
+  }, PROBE_TIMEOUT);
 
+  try {
     // Use HTTPS for Tailscale hostnames (.ts.net), HTTP for IP addresses
     const protocol = ip.includes('.ts.net') ? 'https' : 'http';
     const portSuffix = protocol === 'https' ? '' : `:${port}`;
@@ -107,8 +110,6 @@ const probeLeader = async (
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
     if (response.ok) {
       try {
         const data = await response.json();
@@ -119,8 +120,15 @@ const probeLeader = async (
     }
     return { reachable: false };
   } catch (e) {
-    console.log(`[Discovery] Probe failed for ${ip}:${port}:`, e);
+    if (e instanceof Error && e.name === 'AbortError') {
+      console.log(`[Discovery] Probe aborted (timeout after ${PROBE_TIMEOUT}ms) for ${ip}:${port}`);
+    } else {
+      console.log(`[Discovery] Probe failed for ${ip}:${port}:`, e);
+    }
     return { reachable: false };
+  } finally {
+    // Ensure timeout is always cleared
+    clearTimeout(timeoutId);
   }
 };
 
@@ -144,10 +152,13 @@ const fetchLeaderInfoFromApi = async (
     url = `${protocol}://${urlOrIp}${portSuffix}/api/unodes/leader/info`;
   }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), LEADER_INFO_TIMEOUT);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.log('[Discovery] Request timeout, aborting...');
+    controller.abort();
+  }, LEADER_INFO_TIMEOUT);
 
+  try {
     console.log('[Discovery] Fetching leader info from:', url);
     const response = await fetch(url, {
       method: 'GET',
@@ -164,8 +175,15 @@ const fetchLeaderInfoFromApi = async (
     console.log(`[Discovery] Failed to fetch leader info: ${response.status}`);
     return null;
   } catch (e) {
-    console.log(`[Discovery] Error fetching leader info from ${url}:`, e);
+    if (e instanceof Error && e.name === 'AbortError') {
+      console.log(`[Discovery] Request aborted (timeout after ${LEADER_INFO_TIMEOUT}ms)`);
+    } else {
+      console.log(`[Discovery] Error fetching leader info from ${url}:`, e);
+    }
     return null;
+  } finally {
+    // Ensure timeout is always cleared
+    clearTimeout(timeoutId);
   }
 };
 

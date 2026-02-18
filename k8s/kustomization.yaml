@@ -4,20 +4,27 @@ kind: Kustomization
 namespace: ushadow
 
 resources:
-  - namespace.yaml
-  - configmap.yaml
+  # - namespace.yaml  # Namespace managed separately - DO NOT let Skaffold delete it!
   - secret.yaml
-  - compose-configmap.yaml
-  - infra/
-  - base/
-  # - tweaks/ingress-example.yaml  # Uncomment when ready
+  - backend-pvc.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - webui-deployment.yaml
+  - webui-service.yaml
+  - ingress.yaml
+  - certificate.yaml
+  # - infra/  # Infrastructure managed separately
 
 # Add common labels to all resources
-commonLabels:
-  app: ushadow
-  env: purple
+labels:
+  - pairs:
+      app: ushadow
+      env: purple
 
 # Add annotations
 commonAnnotations:
   managed-by: kustomize
   deployed-from: docker-compose
+
+# Note: Image replacement handled by Skaffold's --default-repo flag
+# No Kustomize image transformers needed when using Skaffold

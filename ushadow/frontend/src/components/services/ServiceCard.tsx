@@ -194,25 +194,36 @@ export function ServiceCard({
 
             {/* Enable/Disable Toggle */}
             {!isEditing && (
-              <button
-                id={`toggle-enabled-${service.service_id}`}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onToggleEnabled()
-                }}
-                disabled={isTogglingEnabled}
-                aria-label={service.enabled ? `Disable ${service.name}` : `Enable ${service.name}`}
-                className="flex items-center gap-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
-                title={service.enabled ? 'Click to disable' : 'Click to enable'}
-              >
-                {isTogglingEnabled ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : service.enabled ? (
-                  <ToggleRight className="h-5 w-5 text-success-600 dark:text-success-400" />
-                ) : (
-                  <ToggleLeft className="h-5 w-5 text-neutral-400" />
+              <div className="flex items-center gap-1.5">
+                <button
+                  id={`toggle-enabled-${service.service_id}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleEnabled()
+                  }}
+                  disabled={isTogglingEnabled}
+                  aria-label={service.enabled ? `Disable ${service.name}` : `Enable ${service.name}`}
+                  className="flex items-center gap-1 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+                  title={isTogglingEnabled ? 'Updating...' : service.enabled ? 'Click to disable' : 'Click to enable'}
+                >
+                  {service.enabled ? (
+                    <ToggleRight className={`h-5 w-5 transition-all ${
+                      isTogglingEnabled
+                        ? 'text-neutral-400 dark:text-neutral-500 opacity-60'
+                        : 'text-success-600 dark:text-success-400'
+                    }`} />
+                  ) : (
+                    <ToggleLeft className={`h-5 w-5 transition-all ${
+                      isTogglingEnabled
+                        ? 'text-neutral-500 dark:text-neutral-400 opacity-60'
+                        : 'text-neutral-400 dark:text-neutral-600'
+                    }`} />
+                  )}
+                </button>
+                {isTogglingEnabled && (
+                  <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
                 )}
-              </button>
+              </div>
             )}
 
             {/* Expand indicator */}

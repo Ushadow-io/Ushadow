@@ -201,6 +201,23 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
 
       console.log('[PhoneAudioRecorder] Starting audio recording...');
 
+      // Configure iOS audio session for background recording
+      // This keeps the audio pipeline active when screen locks
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true, // ⭐ Critical for background audio
+          interruptionModeIOS: 2, // DoNotMix
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
+        });
+        console.log('[PhoneAudioRecorder] ✅ Audio session configured for background recording');
+      } catch (audioModeError) {
+        console.warn('[PhoneAudioRecorder] ⚠️ Failed to set audio mode:', audioModeError);
+        // Continue anyway - audio recording might still work
+      }
+
       // Clear partial chunk buffer from previous session
       partialChunkBuffer.current = new Uint8Array(0);
 
@@ -255,6 +272,18 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
       // Stop recording
       await AudioRecord.stop();
       console.log('[PhoneAudioRecorder] Recording stopped');
+
+      // Deactivate audio session to allow iOS to suspend app if needed
+      // (unless other audio is active)
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+        });
+        console.log('[PhoneAudioRecorder] Audio session deactivated');
+      } catch (audioModeError) {
+        console.warn('[PhoneAudioRecorder] Failed to deactivate audio session:', audioModeError);
+      }
     } catch (err) {
       console.error('[PhoneAudioRecorder] Stop recording error:', err);
       setStateSafe(setError, 'Failed to stop recording');

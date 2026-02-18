@@ -156,7 +156,11 @@
       ]
     }
   ],
-  "defaultDefaultClientScopes": ["openid", "profile", "email"],
+  "defaultDefaultClientScopes": [
+    "openid",
+    "profile",
+    "email"
+  ],
   "clients": [
     {
       "clientId": "ushadow-frontend",
@@ -174,16 +178,58 @@
       "redirectUris": [
         "http://localhost:3000/oauth/callback",
         "http://localhost:*/oauth/callback",
-        "tauri://oauth-callback"
+        "tauri://oauth-callback",
+        "ushadow://oauth/callback"
       ],
       "webOrigins": [
         "http://localhost:3000",
         "http://localhost:*",
-        "tauri://localhost"
+        "tauri://localhost",
+        "ushadow://localhost"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:3000/"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "ushadow-mobile",
+      "name": "Ushadow Mobile",
+      "description": "Ushadow mobile application (React Native)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "authorizationServicesEnabled": false,
+      "fullScopeAllowed": true,
+      "redirectUris": [
+        "ushadow://oauth/callback",
+        "exp://*/--/oauth/callback",
+        "exp://localhost:*/--/oauth/callback"
+      ],
+      "webOrigins": [
+        "ushadow://localhost",
+        "exp://*"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "ushadow://##exp://*"
       },
       "protocolMappers": [
         {

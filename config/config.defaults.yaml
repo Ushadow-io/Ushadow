@@ -18,15 +18,16 @@ auth:
   admin_name: admin
 
 # Keycloak OAuth Configuration
+# Uses KC_* environment variables (Keycloak's native format)
 keycloak:
-  enabled: ${oc.env:KEYCLOAK_ENABLED,true}
-  url: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}  # Internal Docker/K8s URL
-  public_url: ${oc.env:KEYCLOAK_PUBLIC_URL,http://localhost:8081}  # External browser URL
-  realm: ${oc.env:KEYCLOAK_REALM,ushadow}
-  backend_client_id: ${oc.env:KEYCLOAK_BACKEND_CLIENT_ID,ushadow-backend}
-  frontend_client_id: ${oc.env:KEYCLOAK_FRONTEND_CLIENT_ID,ushadow-frontend}
+  url: ${oc.env:KC_URL,http://keycloak:8080}  # Internal URL (backend admin API calls)
+  public_url: ${oc.env:KC_HOSTNAME_URL}  # Public URL (browser access, token issuer) - MUST be set via env var
+  realm: ${oc.env:KC_REALM,ushadow}
+  backend_client_id: ${oc.env:KC_BACKEND_CLIENT_ID,ushadow-backend}
+  frontend_client_id: ${oc.env:KC_FRONTEND_CLIENT_ID,ushadow-frontend}
+  admin_user: ${oc.env:KC_BOOTSTRAP_ADMIN_USERNAME,admin}
+  admin_password: ${oc.env:KC_BOOTSTRAP_ADMIN_PASSWORD,admin}
   cli_client_id: ${oc.env:KEYCLOAK_CLI_CLIENT_ID,ushadow-cli}  # CLI tools (ush) with direct grant
-  admin_user: ${oc.env:KEYCLOAK_ADMIN_USER,admin}
 
 # Speech Detection Settings
 speech_detection:
@@ -78,6 +79,14 @@ service_preferences:
   openmemory:
     enable_graph: false
     neo4j_password: null
+
+# Server Runtime
+server:
+  config_dir: ${oc.env:CONFIG_DIR,/config}
+
+# Tailscale
+tailscale:
+  container_name: ${oc.env:TAILSCALE_CONTAINER,tailscale}
 
 # Network Configuration
 network:

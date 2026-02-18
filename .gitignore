@@ -131,6 +131,8 @@ ushadow/launcher/src-tauri/target/
 # ==============================================================================
 # Environment files
 .env
+# Kubernetes secrets (real values - check in secret.yaml.example instead)
+k8s/secret.yaml
 .env.local
 .env.*.local
 .env.chronicle
@@ -189,5 +191,7 @@ robot_results/
 output.xml
 log.html
 report.html
+config/kubeconfigs
+config/wiring.yaml
 config/service_configs.yaml
 config/wiring.yaml

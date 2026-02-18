@@ -128,6 +128,7 @@ export default function Layout() {
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
     { path: '/timeline', label: 'Timeline', icon: Calendar, featureFlag: 'timeline' },
+    { path: '/feed', label: 'Feed', icon: Radio, featureFlag: 'social_feed' },
     { path: '/cluster', label: 'Cluster', icon: Network, badgeVariant: 'beta' },
     { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },
     { path: '/settings', label: 'Settings', icon: Settings },

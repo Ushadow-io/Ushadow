@@ -499,26 +499,202 @@ button[type="submit"]:active {
 }
 
 /* ============================================
-   RESPONSIVE
+   RESPONSIVE - MOBILE & KEYBOARD AWARE
    ============================================ */
 
+/* Mobile portrait - general adjustments */
 @media (max-width: 768px) {
+  /* Use dynamic viewport height for better keyboard handling */
+  html,
+  body {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+  }
+
   .login-pf-page {
-    padding-top: 2rem !important;
+    min-height: 100dvh !important;
+    padding: 1.5rem 1rem !important;
+    justify-content: flex-start !important;
   }
 
+  /* Smaller logo on mobile */
   #kc-header-wrapper::before {
-    width: 100px !important;
-    height: 100px !important;
+    width: 80px !important;
+    height: 80px !important;
+    margin-bottom: 0.5rem !important;
   }
 
-  #kc-header {
-    font-size: 1.875rem !important;
+  /* Smaller title */
+  #kc-header,
+  #kc-header-wrapper h1 {
+    font-size: 1.75rem !important;
+  }
+
+  /* Smaller subtitle */
+  #kc-header::after {
+    font-size: 0.8rem !important;
+  }
+
+  /* Compact card with less padding */
+  .card-pf {
+    padding: 1.5rem !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Reduce spacing between form elements */
+  .form-group,
+  .pf-c-form__group {
+    margin-bottom: 1rem !important;
+  }
+
+  /* Slightly smaller inputs */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input.pf-c-form-control {
+    padding: 0.65rem 0.875rem !important;
+    font-size: 16px !important; /* Prevents iOS zoom on focus */
+  }
+
+  /* Compact button */
+  .btn-primary,
+  button[type="submit"],
+  input[type="submit"],
+  .pf-c-button.pf-m-primary {
+    padding: 0.65rem 1.25rem !important;
+    font-size: 0.9375rem !important;
+  }
+
+  /* Smaller page title */
+  #kc-page-title,
+  .instruction {
+    font-size: 0.875rem !important;
+    margin-bottom: 1.25rem !important;
+  }
+
+  /* Compact form options */
+  #kc-form-options {
+    margin: 0.75rem 0 1rem 0 !important;
+  }
+
+  /* Reduce glow effects on mobile (performance) */
+  body::before,
+  body::after {
+    display: none !important;
+  }
+}
+
+/* Small mobile devices - ultra compact */
+@media (max-width: 480px) {
+  .login-pf-page {
+    padding: 1rem 0.75rem !important;
+  }
+
+  /* Extra small logo */
+  #kc-header-wrapper::before {
+    width: 64px !important;
+    height: 64px !important;
+  }
+
+  #kc-header,
+  #kc-header-wrapper h1 {
+    font-size: 1.5rem !important;
   }
 
   .card-pf {
-    padding: 1.75rem !important;
-    margin: 1rem !important;
+    padding: 1.25rem !important;
+    border-radius: 12px !important;
+  }
+}
+
+/* Landscape mobile - keyboard takes up most of screen */
+@media (max-width: 768px) and (max-height: 500px) {
+  /* Critical: Minimal padding when in landscape with keyboard */
+  .login-pf-page {
+    padding: 0.5rem !important;
+    min-height: auto !important;
+  }
+
+  /* Hide logo in landscape to save space */
+  #kc-header-wrapper::before {
+    display: none !important;
+  }
+
+  /* Minimal header */
+  #kc-header,
+  #kc-header-wrapper h1 {
+    font-size: 1.25rem !important;
+    margin-bottom: 0 !important;
+  }
+
+  /* Hide subtitle in landscape */
+  #kc-header::after {
+    display: none !important;
+  }
+
+  /* Minimal card padding */
+  .card-pf {
+    padding: 1rem !important;
+  }
+
+  /* Compact form elements */
+  .form-group,
+  .pf-c-form__group {
+    margin-bottom: 0.75rem !important;
+  }
+
+  label,
+  .pf-c-form__label {
+    margin-bottom: 0.25rem !important;
+  }
+
+  /* Minimal input padding */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input.pf-c-form-control {
+    padding: 0.5rem 0.75rem !important;
+  }
+
+  /* Compact button */
+  .btn-primary,
+  button[type="submit"],
+  input[type="submit"],
+  .pf-c-button.pf-m-primary {
+    padding: 0.5rem 1rem !important;
+  }
+
+  /* Hide registration link in landscape to save space */
+  #kc-registration {
+    display: none !important;
+  }
+
+  /* Minimal form options */
+  #kc-form-options {
+    margin: 0.5rem 0 0.75rem 0 !important;
+  }
+}
+
+/* Touch-specific improvements */
+@media (hover: none) and (pointer: coarse) {
+  /* Larger touch targets */
+  input[type="checkbox"] {
+    width: 1.125rem !important;
+    height: 1.125rem !important;
+  }
+
+  /* Easier to tap links */
+  a {
+    padding: 0.25rem 0 !important;
+    display: inline-block !important;
+  }
+
+  /* Better button touch target */
+  .btn-primary,
+  button[type="submit"],
+  input[type="submit"] {
+    min-height: 44px !important; /* Apple's recommended touch target */
   }
 }
 

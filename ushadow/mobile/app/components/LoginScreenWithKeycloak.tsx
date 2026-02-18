@@ -19,7 +19,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
-import { saveAuthToken, saveIdToken, saveApiUrl, getDefaultServerUrl, setDefaultServerUrl } from '../_utils/authStorage';
+import { saveAuthToken, saveRefreshToken, saveIdToken, saveApiUrl, getDefaultServerUrl, setDefaultServerUrl } from '../_utils/authStorage';
 import {
   isKeycloakAvailable,
   authenticateWithKeycloak,
@@ -133,6 +133,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       // Save tokens and API URL
       await saveAuthToken(tokens.access_token);
+      if (tokens.refresh_token) {
+        await saveRefreshToken(tokens.refresh_token);
+        console.log('[Login] Refresh token saved for automatic token refresh');
+      } else {
+        console.warn('[Login] No refresh token received - token refresh will not work');
+      }
       if (tokens.id_token) {
         await saveIdToken(tokens.id_token);
         console.log('[Login] ID token saved for logout');

@@ -21,7 +21,7 @@ spec:
             - name: VITE_BACKEND_URL
               value: http://localhost:8000
             - name: VITE_ENV_NAME
-          image: webui
+          image: registry.temp.skaffold/ushadow-frontend
           name: ushadow-webui
           ports:
             - containerPort: 80
