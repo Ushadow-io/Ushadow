@@ -290,7 +290,7 @@ ushadow/
 ├── scripts/                 # Utility scripts
 ├── tests/                   # Test suites
 ├── docker-compose.yml       # Main application compose
-├── quickstart.sh            # Quick start script
+├── go.sh                    # Quick start script (./dev.sh for development)
 └── README.md
 ```
 
@@ -404,20 +404,35 @@ make test
 ### Start All Services
 
 ```bash
-./quickstart.sh
+./go.sh
 ```
 
 Or manually:
 
 ```bash
 # Start infrastructure
-docker compose -f deployment/docker-compose.infra.yml up -d
+docker compose -f compose/docker-compose.infra.yml up -d
 
 # Start Chronicle
-docker compose -f deployment/docker-compose.chronicle.yml up -d
+docker compose -f compose/chronicle-compose.yaml up -d
 
 # Start ushadow
 docker compose up -d
+```
+
+### Start infrastructure only: `make infra-up`
+
+Starts MongoDB, Redis, and Qdrant (and memory services). Use it when:
+
+- You want to run the ushadow app separately (e.g. `make up` or `./dev.sh` after infra is up)
+- Infrastructure was stopped (`make infra-down`) and you need it again
+- You're running frontend/backend manually and only need the databases
+
+**Summary:** Use `./go.sh` or `./dev.sh` for a full start (they bring up infra too). Use `make infra-up` when you only want infra or when you start the app in a separate step.
+
+```bash
+make infra-up    # Start infrastructure
+make infra-down  # Stop infrastructure
 ```
 
 ### Stop Services
@@ -428,8 +443,8 @@ docker compose down
 
 # Stop everything
 docker compose down
-docker compose -f deployment/docker-compose.chronicle.yml down
-docker compose -f deployment/docker-compose.infra.yml down
+docker compose -f compose/chronicle-compose.yaml down
+docker compose -f compose/docker-compose.infra.yml down
 ```
 
 ### View Logs

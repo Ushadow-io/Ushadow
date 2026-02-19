@@ -82,7 +82,7 @@ $ python3 setup/setuputils.py get-redis-marker 2
 ### Integration
 
 Used by:
-- `quick-start.sh` - Interactive environment setup
+- `go.sh` / `dev.sh` - Environment setup and startup
 - Multi-worktree configurations - Port and database isolation
 - CI/CD pipelines - Environment validation
 
