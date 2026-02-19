@@ -395,6 +395,7 @@ export interface EnvVarInfo {
   suggestions: EnvVarSuggestion[]
   locked?: boolean
   provider_name?: string
+  is_secret?: boolean  // When true, backend already masked the value — skip frontend masking
 }
 
 /** Missing key that needs to be configured for a provider */
@@ -744,6 +745,30 @@ export const kubernetesApi = {
   listCertificates: (clusterId: string, namespace?: string) =>
     api.get<{ certificates: CertificateStatus[]; total: number }>(
       `/api/kubernetes/${clusterId}/dns/certificates${namespace ? `?namespace=${namespace}` : ''}`
+    ),
+}
+
+/** A single infrastructure env var with source attribution */
+export interface InfraEnvVar {
+  name: string
+  value: string
+  source: 'default' | 'infrastructure' | 'override'
+  locked: boolean
+  is_secret: boolean
+}
+
+/** Unified deploy-target infrastructure env var API */
+export const deploymentTargetsApi = {
+  /** Get composited infrastructure env vars for a deploy target */
+  getInfrastructureEnvVars: (targetId: string) =>
+    api.get<{ env_vars: InfraEnvVar[]; target_name: string }>(
+      `/api/deployments/targets/${encodeURIComponent(targetId)}/infrastructure-env-vars`
+    ),
+  /** Save manual overrides for a deploy target */
+  saveInfrastructureOverrides: (targetId: string, overrides: Record<string, string>) =>
+    api.put<{ success: boolean; saved: number }>(
+      `/api/deployments/targets/${encodeURIComponent(targetId)}/infrastructure-env-vars`,
+      overrides
     ),
 }
 
@@ -1660,21 +1685,23 @@ export const tailscaleApi = {
     api.get<{ exists: boolean; running: boolean; status?: string; id?: string }>('/api/tailscale/caddy/status'),
   startCaddy: () => api.post<{ status: string; message: string }>('/api/tailscale/container/start-caddy'),
 
-  // Mobile app connection - minimal data, app fetches details from /api/unodes/leader/info
-  getMobileConnectionQR: () =>
+  // Mobile app connection - supports both unode (Tailscale) and k8s (ingress) targets
+  getMobileConnectionQR: (targetId?: string) =>
     api.get<{
       qr_code_data: string
       connection_data: {
         type: string
         v: number
         hostname: string
-        ip: string
+        ip: string | null
         port: number
+        platform?: string
+        cluster_id?: string
       }
       hostname: string
-      tailscale_ip: string
+      tailscale_ip: string | null
       api_port: number
-    }>('/api/tailscale/mobile/connect-qr'),
+    }>('/api/tailscale/mobile/connect-qr', { params: targetId ? { target_id: targetId } : {} }),
 
   // Configuration
   getConfig: () => api.get<TailscaleConfig | null>('/api/tailscale/config'),

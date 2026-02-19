@@ -35,11 +35,12 @@ class UshadowClient:
     returns raw dicts for flexibility.
     """
 
-    def __init__(self, base_url: str, email: str = "", password: str = "", verbose: bool = False):
+    def __init__(self, base_url: str, email: str = "", password: str = "", verbose: bool = False, verify_ssl: bool = True):
         self.base_url = base_url.rstrip("/")
         self.email = email
         self.password = password
         self.verbose = verbose
+        self.verify_ssl = verify_ssl
         self._token: Optional[str] = None
 
     @classmethod
@@ -120,6 +121,7 @@ class UshadowClient:
                 content=login_data.encode(),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=10.0,
+                verify=self.verify_ssl,
             )
             response.raise_for_status()
             result = response.json()
@@ -145,6 +147,7 @@ class UshadowClient:
             config_response = httpx.get(
                 f"{self.base_url}/api/keycloak/config",
                 timeout=5.0,
+                verify=self.verify_ssl,
             )
 
             if config_response.status_code != 200:
@@ -154,32 +157,33 @@ class UshadowClient:
 
             kc_config = config_response.json()
 
-            # Check if Keycloak is enabled
-            if not kc_config.get("enabled"):
-                if self.verbose:
-                    print("⚠️  Keycloak is disabled in backend configuration")
+            # Use Keycloak if a URL is present, regardless of the enabled flag
+            # (k8s deployments may return enabled=null but still use Keycloak)
+            keycloak_url = kc_config.get("public_url")
+            if not keycloak_url:
                 return None
 
-            # Build token endpoint URL
-            keycloak_url = kc_config.get("public_url", "http://localhost:8081")
             realm = kc_config.get("realm", "ushadow")
             token_url = f"{keycloak_url}/realms/{realm}/protocol/openid-connect/token"
 
-            if self.verbose:
-                print(f"🔐 Attempting Keycloak authentication: {token_url}")
-                print(f"   User: {self.email}, Realm: {realm}")
-
-            # Use direct grant flow (Resource Owner Password Credentials)
-            token_response = httpx.post(
-                token_url,
-                data={
-                    "grant_type": "password",
-                    "client_id": "ushadow-cli",  # Dedicated CLI client with direct grant enabled
-                    "username": self.email,
-                    "password": self.password,
-                },
-                timeout=10.0,
-            )
+            # Try ushadow-cli client first (intended for direct grant / CLI use),
+            # fall back to ushadow-frontend if it doesn't exist
+            for client_id in ("ushadow-cli", "ushadow-frontend"):
+                token_response = httpx.post(
+                    token_url,
+                    data={
+                        "grant_type": "password",
+                        "client_id": client_id,
+                        "username": self.email,
+                        "password": self.password,
+                    },
+                    timeout=10.0,
+                    verify=self.verify_ssl,
+                )
+                if token_response.status_code == 200:
+                    break
+                if self.verbose:
+                    print(f"⚠️  Keycloak client '{client_id}' failed: {token_response.status_code}")
 
             if token_response.status_code != 200:
                 if self.verbose:
@@ -221,6 +225,7 @@ class UshadowClient:
             json=data,
             headers=headers,
             timeout=timeout,
+            verify=self.verify_ssl,
         )
         response.raise_for_status()
 

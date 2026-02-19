@@ -98,8 +98,10 @@ def validate_keycloak_token(token: str) -> Optional[dict]:
             token,
             signing_key.key,
             algorithms=["RS256"],
-            options={"verify_iss": False},  # Allow any issuer (multi-domain support)
-            audience=backend_client_id,
+            options={
+                "verify_iss": False,  # Allow any issuer (multi-domain support)
+                "verify_aud": False,  # Skip audience check (token aud varies by client/domain)
+            },
         )
 
         logger.debug(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")

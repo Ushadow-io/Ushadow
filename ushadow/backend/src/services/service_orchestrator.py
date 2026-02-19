@@ -516,18 +516,9 @@ class ServiceOrchestrator:
         settings_v2 = get_settings()
 
         # Get resolutions using new entity-based API
-        # Use for_deploy_config if deploy_target is provided (includes deploy_env layer)
+        # Use for_deploy_config if deploy_target is provided (includes deploy_env + infrastructure layers)
         if deploy_target:
-            # Extract environment from deployment_target_id (e.g., "ushadow-purple.unode.purple" -> "purple")
-            from src.utils.deployment_targets import parse_deployment_target_id
-            try:
-                parsed = parse_deployment_target_id(deploy_target)
-                environment = parsed["environment"]
-            except ValueError:
-                # Fallback for backward compatibility if not in new format
-                environment = deploy_target
-
-            resolutions = await settings_v2.for_deploy_config(environment, service.service_id)
+            resolutions = await settings_v2.for_deploy_config(deploy_target, service.service_id)
         else:
             resolutions = await settings_v2.for_service(service.service_id)
 

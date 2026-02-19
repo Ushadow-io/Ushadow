@@ -21,7 +21,13 @@ function getBackendUrl(): string {
     return origin
   }
 
-  // Otherwise use the configured backend URL (local development)
+  // If not on localhost/127.0.0.1, use the same origin (K8s/production)
+  // Nginx proxies /api/* to the backend service in this case
+  if (!origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+    return origin
+  }
+
+  // Local development: use configured backend URL (different port)
   return import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 }
 

@@ -25,7 +25,7 @@ router = APIRouter()
 
 # Request/Response models
 class ScanInfraRequest(BaseModel):
-    namespace: str = "default"
+    namespace: str = "root"
 
 
 class DeployServiceRequest(BaseModel):
@@ -364,10 +364,12 @@ async def deploy_service_to_cluster(
         raise HTTPException(status_code=404, detail="Cluster not found")
 
     # Resolve service with all variables substituted (including ServiceConfig overrides if provided)
+    # Use cluster.deployment_target_id ("name.k8s.env") not raw cluster_id UUID,
+    # so DeployTarget.from_id() can resolve infrastructure env vars correctly.
     try:
         resolved_service = await deployment_manager.resolve_service_for_deployment(
             request.service_id,
-            deploy_target=cluster_id,
+            deploy_target=cluster.deployment_target_id,
             config_id=request.config_id
         )
     except ValueError as e:

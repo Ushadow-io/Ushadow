@@ -4,6 +4,11 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // Force a single React instance even when packages bundle their own copy (e.g., vibe-kanban-web-companion).
+    // Without this, two React instances coexist and hooks throw "Cannot read properties of null (reading 'useState')".
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     port: 5173,
     host: '0.0.0.0',
