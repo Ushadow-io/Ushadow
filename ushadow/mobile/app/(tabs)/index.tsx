@@ -250,7 +250,11 @@ export default function HomeScreen() {
       <View style={styles.streamingContainer}>
         <UnifiedStreamingPage
           authToken={authToken}
-          onAuthRequired={() => setShowLoginScreen(true)}
+          onAuthRequired={(opts) => {
+            if (opts?.apiUrl) setCurrentApiUrl(opts.apiUrl);
+            if (opts?.hostname) setCurrentHostname(opts.hostname);
+            setShowLoginScreen(true);
+          }}
           onWebSocketLog={(status, message, details) => logEvent('websocket', status, message, details)}
           onBluetoothLog={(status, message, details) => logEvent('bluetooth', status, message, details)}
           onSessionStart={startSession}
