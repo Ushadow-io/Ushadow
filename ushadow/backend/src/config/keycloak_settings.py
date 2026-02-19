@@ -22,15 +22,15 @@ _keycloak_openid: Optional[KeycloakOpenID] = None
 def get_keycloak_public_url() -> str:
     """Get the Keycloak public URL.
 
-    Returns the URL that browsers/frontends use to access Keycloak.
+    Returns the URL that browsers/web frontends use to access Keycloak.
 
     Resolution is handled by OmegaConf in config.defaults.yaml:
-    - keycloak.public_url: ${oc.env:KEYCLOAK_PUBLIC_URL,http://localhost:8081}
+    - keycloak.public_url: ${oc.env:KC_HOSTNAME_URL,http://localhost:8081}
 
-    This automatically checks KEYCLOAK_PUBLIC_URL env var and falls back to localhost:8081.
+    Set KC_HOSTNAME_URL in .env to your public-facing URL (e.g., Tailscale hostname).
 
     Returns:
-        Public URL like "https://keycloak.chakra" or "http://localhost:8081"
+        Public URL like "https://orange.spangled-kettle.ts.net" or "http://localhost:8081"
     """
     settings = get_settings()
     return settings.get_sync("keycloak.public_url", "http://localhost:8081")
@@ -43,7 +43,7 @@ def get_keycloak_connection() -> KeycloakOpenIDConnection:
     This connection stores all config in one place and can be shared
     across KeycloakAdmin and KeycloakOpenID instances.
 
-    IMPORTANT: Uses internal URL (KEYCLOAK_URL) for backend-to-Keycloak communication,
+    IMPORTANT: Uses internal URL (KC_URL) for backend-to-Keycloak communication,
     not the public URL (which is for browser-to-Keycloak).
 
     Follows python-keycloak best practices for configuration management.
@@ -58,7 +58,7 @@ def get_keycloak_connection() -> KeycloakOpenIDConnection:
         settings = get_settings()
 
         # Backend uses internal URL for direct connection to Keycloak
-        # Resolved by OmegaConf: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}
+        # Resolved by OmegaConf: ${oc.env:KC_URL,http://keycloak:8080}
         internal_url = settings.get_sync("keycloak.url", "http://keycloak:8080")
 
         # Admin user authenticates against master realm, not application realm
@@ -106,7 +106,7 @@ def get_keycloak_admin() -> KeycloakAdmin:
         app_realm = settings.get_sync("keycloak.realm", "master")
 
         # Internal URL for backend-to-Keycloak communication
-        # Resolved by OmegaConf: ${oc.env:KEYCLOAK_URL,http://keycloak:8080}
+        # Resolved by OmegaConf: ${oc.env:KC_URL,http://keycloak:8080}
         internal_url = settings.get_sync("keycloak.url", "http://keycloak:8080")
 
         # Admin credentials from master realm
@@ -193,6 +193,20 @@ def get_keycloak_openid(client_id: Optional[str] = None) -> KeycloakOpenID:
     return _keycloak_openid
 
 
+def get_keycloak_mobile_url() -> Optional[str]:
+    """Get the explicit Keycloak URL override for mobile clients.
+
+    Returns KC_MOBILE_URL if set, otherwise None. When None, callers should
+    auto-derive the mobile URL from the unode's Tailscale IP and KC_PORT.
+
+    Returns:
+        KC_MOBILE_URL value (e.g., "https://orange.spangled-kettle.ts.net"), or None
+    """
+    settings = get_settings()
+    url = settings.get_sync("keycloak.mobile_url", None)
+    return url if url else None
+
+
 def get_keycloak_config() -> dict:
     """Get Keycloak configuration from OmegaConf settings.
 
@@ -205,6 +219,7 @@ def get_keycloak_config() -> dict:
             - enabled: bool
             - url: str (internal Docker URL)
             - public_url: str (external browser URL - dynamically determined)
+            - mobile_url: str | None (Tailscale URL for mobile apps)
             - realm: str
             - backend_client_id: str
             - backend_client_secret: str (from secrets.yaml)
@@ -220,7 +235,8 @@ def get_keycloak_config() -> dict:
     # Build config dict
     config = {
         "url": settings.get_sync("keycloak.url", "http://keycloak:8080"),
-        "public_url": get_keycloak_public_url(),  # Dynamic public URL
+        "public_url": get_keycloak_public_url(),  # Dynamic public URL (localhost for web)
+        "mobile_url": get_keycloak_mobile_url(),  # Tailscale URL for mobile apps
         "realm": app_realm,  # Application realm (ushadow), not master
         "backend_client_id": settings.get_sync("keycloak.backend_client_id", "ushadow-backend"),
         "frontend_client_id": settings.get_sync("keycloak.frontend_client_id", "ushadow-frontend"),

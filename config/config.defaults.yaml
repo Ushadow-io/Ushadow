@@ -20,8 +20,9 @@ auth:
 # Keycloak OAuth Configuration
 # Uses KC_* environment variables (Keycloak's native format)
 keycloak:
-  url: ${oc.env:KC_URL,http://keycloak:8080}  # Internal URL (backend admin API calls)
-  public_url: ${oc.env:KC_HOSTNAME_URL}  # Public URL (browser access, token issuer) - MUST be set via env var
+  url: ${oc.env:KC_URL,http://keycloak:8080}                    # Internal URL (backend→Keycloak admin API)
+  public_url: ${oc.env:KC_HOSTNAME_URL,http://localhost:8081}   # Browser/web URL (OAuth redirects, token issuer)
+  mobile_url: ${oc.env:KC_MOBILE_URL,''}                         # Mobile URL override; auto-derived from Tailscale IP if empty
   realm: ${oc.env:KC_REALM,ushadow}
   backend_client_id: ${oc.env:KC_BACKEND_CLIENT_ID,ushadow-backend}
   frontend_client_id: ${oc.env:KC_FRONTEND_CLIENT_ID,ushadow-frontend}

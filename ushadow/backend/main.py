@@ -39,11 +39,15 @@ from src.utils.telemetry import TelemetryClient
 from src.utils.version import VERSION as BACKEND_VERSION
 from src.utils.mongodb import get_mongodb_uri
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure logging — use plain StreamHandler to avoid Rich's narrow column format.
+# Uvicorn auto-detects Rich if installed and wraps output to Docker's 80-col terminal.
+# Explicitly setting a handler here prevents that auto-detection.
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler], force=True)
 logger = logging.getLogger(__name__)
 
 # Telemetry configuration

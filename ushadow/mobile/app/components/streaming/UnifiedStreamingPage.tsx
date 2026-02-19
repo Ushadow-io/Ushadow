@@ -624,10 +624,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   }, [selectedSource]);
 
   // Handle UNode found
-  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string) => {
+  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
     const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
     const savedUnode = await saveUnode({
       name,
+      hostname,
       apiUrl,
       chronicleApiUrl,
       streamUrl,

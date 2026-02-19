@@ -29,15 +29,10 @@ services:
       # Host project root for docker compose volume mounts (required for service management)
       - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
 
-      # ── Keycloak URLs (both change per environment) ──────────────────────
-      # Internal URL: backend→Keycloak admin API (Docker service name / K8s FQDN)
-      - KC_URL=${KEYCLOAK_URL:-http://keycloak:8080}
-      # Public URL: browser OAuth redirects and token issuer (must be user-accessible)
-      - KC_HOSTNAME_URL=${KEYCLOAK_EXTERNAL_URL:-http://localhost:8081}
-
-      # ── Credentials ───────────────────────────────────────────────────────
-      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-}
+      # ── Keycloak (KC_ vars loaded via env_file above, no translation needed) ──
+      # KC_URL, KC_HOSTNAME_URL, KC_MOBILE_URL, KC_REALM, KC_FRONTEND_CLIENT_ID,
+      # KC_BACKEND_CLIENT_ID, KC_CLIENT_SECRET, KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD
+      # See config/config.defaults.yaml → keycloak.* for how they map to OmegaConf keys
       - POSTGRES_USER=${POSTGRES_USER:-ushadow}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
       - POSTGRES_DB=${POSTGRES_DB:-ushadow}

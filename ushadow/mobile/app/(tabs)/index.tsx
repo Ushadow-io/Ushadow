@@ -136,6 +136,9 @@ export default function HomeScreen() {
 
             if (lastConnected > fiveSecondsAgo) {
               console.log('[Home] Recently scanned QR code - showing login screen');
+              // Populate connection info from the freshly scanned unode
+              setCurrentApiUrl(activeUnode.apiUrl);
+              setCurrentHostname(activeUnode.hostname || activeUnode.name);
               setShowLoginScreen(true);
             }
           }

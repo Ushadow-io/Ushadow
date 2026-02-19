@@ -109,7 +109,7 @@ services:
       # Database name (Mycelia uses DATABASE_NAME)
       - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
       # Constructed URI - set MONGO_URL directly or it will be built from components
-      - MONGO_URL=${MONGO_URL}
+      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia}
 
       # Redis Configuration - uses shared redis from infra
       - REDIS_HOST=redis

@@ -19,6 +19,9 @@
     },
     "production": {
       "distribution": "store",
+      "env": {
+        "APP_VARIANT": "production"
+      },
       "ios": {
         "simulator": false,
         "autoIncrement": true

@@ -44,80 +44,72 @@ export interface KeycloakTokens {
 /**
  * Fetch Keycloak configuration from a unode.
  *
- * For environments with multiple unodes, this fetches the Keycloak
- * configuration from the specific unode that the mobile app is connecting to.
- *
- * @param backendUrl - The unode's backend URL (e.g., "http://100.64.1.5:8360")
- * @param hostname - The unode's hostname (e.g., "orange", "public-unode-1")
+ * @param backendUrl - The unode's backend URL (e.g., "https://orange.spangled-kettle.ts.net")
+ * @param hostname - The unode's hostname (e.g., "Orion") — preferred for accurate config
  */
 export async function getKeycloakConfigFromUnode(
   backendUrl: string,
   hostname?: string
 ): Promise<KeycloakConfig | null> {
   try {
-    let configUrl: string;
-
-    if (hostname) {
-      // Fetch from unode-specific endpoint (preferred for multi-unode environments)
-      configUrl = `${backendUrl}/api/unodes/${hostname}/info`;
-      console.log('[Keycloak] Fetching config from unode:', hostname);
-    } else {
-      // Fallback to general config endpoint (single unode environments)
-      configUrl = `${backendUrl}/api/keycloak/config`;
-      console.log('[Keycloak] Fetching config from general endpoint');
-    }
-
-    console.log('[Keycloak] Requesting config from:', configUrl);
+    // /{hostname}/info returns keycloak_config with a correct mobile_url (Tailscale IP).
+    // Fall back to /api/keycloak/config for environments without a known hostname.
+    const configUrl = hostname
+      ? `${backendUrl}/api/unodes/${hostname}/info`
+      : `${backendUrl}/api/keycloak/config`;
 
     const response = await Promise.race([
-      fetch(configUrl, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }),
+      fetch(configUrl, { headers: { 'Content-Type': 'application/json' } }),
       new Promise<Response>((_, reject) =>
         setTimeout(() => reject(new Error('Request timeout after 10s')), 10000)
-      )
+      ),
     ]);
 
-    console.log('[Keycloak] Response status:', response.status);
-
     if (!response.ok) {
+      if (hostname && response.status === 404) {
+        console.warn(`[Keycloak] UNode "${hostname}" not found, falling back to general config`);
+        return getKeycloakConfigFromUnode(backendUrl);
+      }
       console.warn('[Keycloak] Config endpoint failed:', response.status);
       return null;
     }
 
     const data = await response.json();
-    console.log('[Keycloak] Response data:', JSON.stringify(data).substring(0, 200));
 
-    // Extract Keycloak config from unode info response
-    let config: KeycloakConfig;
-    if (hostname && data.keycloak_config) {
-      // UNode info endpoint response
-      config = {
-        enabled: data.keycloak_config.enabled ?? false,
-        public_url: data.keycloak_config.public_url,
-        realm: data.keycloak_config.realm,
-        frontend_client_id: data.keycloak_config.frontend_client_id,
-        mobile_client_id: data.keycloak_config.mobile_client_id || 'ushadow-mobile',
-        backend_client_id: data.keycloak_config.backend_client_id || '',
-      };
-    } else {
-      // General config endpoint response
-      config = data;
+    // /{hostname}/info nests config under keycloak_config; general endpoint returns it flat.
+    const raw = hostname ? data.keycloak_config : data;
+
+    if (!raw?.realm) {
+      console.warn('[Keycloak] No realm in config response');
+      return null;
     }
 
-    // Mobile apps should prefer mobile_url (direct IP) over public_url (HTTPS)
-    // This avoids iOS cookie/redirect issues with ASWebAuthenticationSession
-    const keycloakUrl = config.mobile_url || config.public_url;
+    // The general /api/keycloak/config endpoint may return localhost URLs (container-local).
+    // Replace with the backend's host so the mobile device can actually reach Keycloak.
+    // This is not needed for /{hostname}/info which always provides a Tailscale IP mobile_url.
+    const resolveUrl = (url: string): string => {
+      if (!url || hostname) return url;
+      if (url.includes('localhost') || url.includes('127.0.0.1')) {
+        const kcPort = new URL(url).port || '8081';
+        return `http://${new URL(backendUrl).hostname}:${kcPort}`;
+      }
+      return url;
+    };
 
-    console.log('[Keycloak] Config received:', {
-      enabled: config.enabled,
-      public_url: config.public_url,
-      mobile_url: config.mobile_url,
-      using: keycloakUrl,
+    const config: KeycloakConfig = {
+      enabled: true,
+      public_url: resolveUrl(raw.public_url ?? ''),
+      mobile_url: raw.mobile_url ? resolveUrl(raw.mobile_url) : undefined,
+      realm: raw.realm,
+      frontend_client_id: raw.frontend_client_id || 'ushadow-frontend',
+      mobile_client_id: raw.mobile_client_id || 'ushadow-mobile',
+      backend_client_id: raw.backend_client_id || '',
+    };
+
+    console.log('[Keycloak] Config:', {
       realm: config.realm,
+      mobile_url: config.mobile_url,
+      public_url: config.public_url,
       source: hostname ? `unode:${hostname}` : 'general',
     });
 
@@ -197,8 +189,8 @@ export async function authenticateWithKeycloak(
     // 1. Get Keycloak configuration from unode (or fallback to general endpoint)
     const config = await getKeycloakConfigFromUnode(backendUrl, hostname);
 
-    if (!config || !config.enabled) {
-      console.log('[Keycloak] Keycloak not enabled on this backend');
+    if (!config) {
+      console.log('[Keycloak] Keycloak not available on this backend');
       return null;
     }
 
@@ -399,7 +391,7 @@ export async function logoutFromKeycloak(
   try {
     const config = await getKeycloakConfigFromUnode(backendUrl, hostname);
 
-    if (!config || !config.enabled) {
+    if (!config) {
       console.log('[Keycloak] No active Keycloak config, skipping logout');
       return;
     }
@@ -458,5 +450,6 @@ export async function isKeycloakAvailable(
   hostname?: string
 ): Promise<boolean> {
   const config = await getKeycloakConfigFromUnode(backendUrl, hostname);
-  return config?.enabled ?? false;
+  // Available if we got a config with a realm — don't require explicit enabled flag
+  return !!(config?.realm);
 }

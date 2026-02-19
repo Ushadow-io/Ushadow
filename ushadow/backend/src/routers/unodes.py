@@ -577,8 +577,15 @@ async def get_unode_info(hostname: str):
     from src.config.keycloak_settings import get_keycloak_config
 
     kc_config = get_keycloak_config()
+
+    # Mobile URL: explicit override > auto-derived from Tailscale IP + KC port
+    kc_port = os.getenv("KC_PORT", "8081")
+    mobile_url = kc_config.get("mobile_url") or f"http://{unode.tailscale_ip}:{kc_port}"
+
     keycloak_config = {
+        "enabled": True,  # If this endpoint is reached, Keycloak is configured
         "public_url": kc_config.get("public_url"),
+        "mobile_url": mobile_url,
         "realm": kc_config.get("realm"),
         "frontend_client_id": kc_config.get("frontend_client_id"),
         "mobile_client_id": "ushadow-mobile",  # Dedicated mobile client

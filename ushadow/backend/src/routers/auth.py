@@ -32,6 +32,7 @@ class SetupStatusResponse(BaseModel):
     """Setup status response."""
     requires_setup: bool
     user_count: int
+    keycloak_user_count: int = 0  # Number of users registered in Keycloak
 
 
 class SetupRequest(BaseModel):
@@ -213,16 +214,29 @@ async def login(
 @router.get("/setup/status", response_model=SetupStatusResponse)
 async def get_setup_status(user_manager=Depends(get_user_manager)):
     """Check if initial setup is required.
-    
-    Returns true if no users exist in the system.
+
+    Returns user counts from both MongoDB and Keycloak.
+    keycloak_user_count is used by the frontend to disable Login when no users exist yet
+    (forcing new installs to register first).
     """
     try:
-        # Count users in the database
         user_count = await User.count()
-        
+
+        # Count Keycloak users — someone may have registered but not yet logged in
+        # (login creates the MongoDB record), so KC is the authoritative source.
+        # KeycloakAdminClient is our wrapper; users_count() is on the underlying .admin object.
+        keycloak_user_count = 0
+        try:
+            from src.services.keycloak_admin import get_keycloak_admin
+            kc_admin = get_keycloak_admin()
+            keycloak_user_count = kc_admin.admin.users_count()
+        except Exception as kc_err:
+            logger.warning(f"Could not get Keycloak user count: {kc_err}")
+
         return SetupStatusResponse(
-            requires_setup=user_count == 0,
-            user_count=user_count
+            requires_setup=user_count == 0 and keycloak_user_count == 0,
+            user_count=user_count,
+            keycloak_user_count=keycloak_user_count,
         )
     except Exception as e:
         logger.error(f"Error checking setup status: {e}")
@@ -486,7 +500,11 @@ class TokenRefreshRequest(BaseModel):
 async def refresh_access_token(request: TokenRefreshRequest):
     """Refresh access token using refresh token.
 
-    Standard OAuth 2.0 refresh token flow using python-keycloak.
+    Standard OAuth 2.0 refresh token flow with issuer URL translation.
+
+    Handles Docker network URL translation: tokens issued by external URLs
+    (localhost:8081, Tailscale) must be refreshed using the same URL, not
+    the internal Docker network URL (keycloak:8080).
 
     IMPORTANT: Extracts the issuer from the refresh token to ensure
     we use the same Keycloak URL that issued the token (handles multi-domain

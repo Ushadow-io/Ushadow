@@ -36,9 +36,8 @@ def get_jwks_client() -> PyJWKClient:
         app_realm = settings.get_sync("keycloak.realm", "ushadow")
 
         # IMPORTANT: Backend must use internal URL for JWKS, never external/proxy URLs
-        # Priority: KEYCLOAK_URL env var > config setting > Docker default
+        # Priority: KC_URL env var (via OmegaConf keycloak.url) > Docker default
         internal_url = (
-            os.environ.get("KEYCLOAK_URL") or
             settings.get_sync("keycloak.url") or
             "http://keycloak:8080"
         )
@@ -86,15 +85,21 @@ def validate_keycloak_token(token: str) -> Optional[dict]:
         signing_key = jwks_client.get_signing_key_from_jwt(token)
 
         # Decode and validate JWT
-        # - Verify signature using Keycloak's public key
+        # - Verify signature using Keycloak's public key (RS256 via JWKS)
         # - Check expiration
-        # - Skip issuer validation (options={"verify_iss": False})
+        # - Skip issuer check: tokens may be issued by localhost:8081 or Tailscale URLs
+        # - Verify audience: token must be intended for "ushadow-backend"
+        #   (configured via audience mapper on ushadow-frontend / ushadow-mobile clients)
+        from src.config import get_settings_store
+        settings = get_settings_store()
+        backend_client_id = settings.get_sync("keycloak.backend_client_id", "ushadow-backend")
+
         payload = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             options={"verify_iss": False},  # Allow any issuer (multi-domain support)
-            audience=None  # Skip audience check (optional, can be added if needed)
+            audience=backend_client_id,
         )
 
         logger.info(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")
@@ -105,9 +110,7 @@ def validate_keycloak_token(token: str) -> Optional[dict]:
         return None
 
     except PyJWKClientError as e:
-        # Signing key not found - token is invalid or from old realm
-        # PyJWKClient handles key rotation automatically, no need to clear cache
-        logger.warning(f"[KC-AUTH] Signing key not found - invalid or expired token")
+        logger.warning(f"[KC-AUTH] Signing key not found (kid mismatch or realm reset): {e}")
         return None
 
     except jwt.InvalidTokenError as e:

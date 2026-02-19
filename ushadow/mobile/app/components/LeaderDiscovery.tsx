@@ -71,7 +71,7 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
       }
 
       // Pass auth token from QR code if available (v3+)
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 

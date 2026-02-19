@@ -417,17 +417,17 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
         data['keycloak'] = {}
 
     # Set Keycloak admin credentials (separate from Ushadow admin)
-    # These match KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD in .env
+    # These match KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD in .env
     if not data['keycloak'].get('admin_user'):
-        data['keycloak']['admin_user'] = os.getenv('KEYCLOAK_ADMIN', 'admin')
+        data['keycloak']['admin_user'] = os.getenv('KC_BOOTSTRAP_ADMIN_USERNAME', 'admin')
         created_new = True
 
     if not data['keycloak'].get('admin_password'):
-        data['keycloak']['admin_password'] = os.getenv('KEYCLOAK_ADMIN_PASSWORD', 'admin')
+        data['keycloak']['admin_password'] = os.getenv('KC_BOOTSTRAP_ADMIN_PASSWORD', 'admin')
         created_new = True
 
     # Only store backend_client_secret if provided (optional for public clients)
-    keycloak_client_secret = os.getenv('KEYCLOAK_CLIENT_SECRET', '')
+    keycloak_client_secret = os.getenv('KC_CLIENT_SECRET', '')
     if keycloak_client_secret:
         data['keycloak']['backend_client_secret'] = keycloak_client_secret
         created_new = True

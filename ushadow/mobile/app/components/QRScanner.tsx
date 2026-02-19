@@ -86,9 +86,9 @@ export const QRScanner: React.FC<QRScannerProps> = ({
       }
 
       // Validate required fields
-      if (!data.ip || !data.port) {
-        console.log('[QRScanner] Missing fields - ip:', data.ip, 'port:', data.port);
-        setError('Invalid QR code data. Missing connection details.');
+      if (!data.api_url) {
+        console.log('[QRScanner] Missing api_url');
+        setError('Invalid QR code data. Missing connection URL.');
         setScanned(false); // Allow retry
         return;
       }

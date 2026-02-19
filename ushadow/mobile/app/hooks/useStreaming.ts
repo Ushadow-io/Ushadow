@@ -7,6 +7,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { useAudioStreamer } from './useAudioStreamer';
 import { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
+import { useAppLifecycle } from './useAppLifecycle';
+import { useLockScreenControls } from './useLockScreenControls';
 
 export interface UseStreaming {
   // Combined state
@@ -29,6 +31,9 @@ export interface UseStreaming {
 export const useStreaming = (): UseStreaming => {
   const [combinedError, setCombinedError] = useState<string | null>(null);
   const streamUrlRef = useRef<string>('');
+  const shouldBeStreamingRef = useRef<boolean>(false);
+  const streamModeRef = useRef<'batch' | 'streaming'>('streaming');
+  const streamCodecRef = useRef<'pcm' | 'opus'>('pcm');
 
   // Audio streamer (WebSocket)
   const {
@@ -42,7 +47,11 @@ export const useStreaming = (): UseStreaming => {
     stopStreaming: wsStop,
     cancelRetry,
     sendAudio,
+    getWebSocketReadyState,
   } = useAudioStreamer();
+
+  // Lock screen controls (iOS now-playing presence during standby)
+  const lockScreen = useLockScreenControls();
 
   // Phone audio recorder
   const {
@@ -68,6 +77,9 @@ export const useStreaming = (): UseStreaming => {
   ) => {
     setCombinedError(null);
     streamUrlRef.current = streamUrl;
+    shouldBeStreamingRef.current = true;
+    streamModeRef.current = mode;
+    streamCodecRef.current = codec;
 
     try {
       console.log(`[Streaming] Starting WebSocket connection (mode: ${mode}, codec: ${codec})...`);
@@ -80,6 +92,10 @@ export const useStreaming = (): UseStreaming => {
       });
 
       console.log('[Streaming] Streaming started successfully');
+      await lockScreen.showStreamingControls({
+        title: 'Ushadow Recording',
+        artist: 'Phone Microphone',
+      });
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[Streaming] Error starting streaming:', errorMessage);
@@ -91,10 +107,26 @@ export const useStreaming = (): UseStreaming => {
 
       throw err;
     }
-  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop]);
+  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, lockScreen]);
+
+  // Reconnect WebSocket when app returns to foreground (mic keeps recording during standby)
+  useAppLifecycle({
+    onForeground: useCallback(() => {
+      if (
+        shouldBeStreamingRef.current &&
+        streamUrlRef.current &&
+        getWebSocketReadyState() !== WebSocket.OPEN
+      ) {
+        console.log('[Streaming] App foregrounded: reconnecting WebSocket (mic still recording)');
+        wsStart(streamUrlRef.current, streamModeRef.current, streamCodecRef.current)
+          .catch(err => console.warn('[Streaming] Foreground reconnect failed:', err));
+      }
+    }, [wsStart, getWebSocketReadyState]),
+  });
 
   // Stop streaming: stop recording, then disconnect WebSocket
   const stopStreamingCombined = useCallback(async () => {
+    shouldBeStreamingRef.current = false;
     console.log('[Streaming] Stopping streaming...');
 
     try {
@@ -104,9 +136,10 @@ export const useStreaming = (): UseStreaming => {
     }
 
     wsStop();
+    await lockScreen.hideControls();
 
     console.log('[Streaming] Streaming stopped');
-  }, [stopRecording, wsStop]);
+  }, [stopRecording, wsStop, lockScreen]);
 
   return {
     isStreaming,
