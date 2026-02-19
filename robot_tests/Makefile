@@ -9,7 +9,7 @@
 # Full Test Run:
 #   make test           # Start containers + run tests (recommended)
 
-.PHONY: start stop restart rebuild status logs test test-quick test-keycloak clean help
+.PHONY: start stop restart rebuild status logs test test-quick test-keycloak lint clean help
 
 # Default target
 help:
@@ -29,19 +29,25 @@ help:
 	@echo "  make test-quick     Run tests (assumes containers running)"
 	@echo "  make test-keycloak  Run only Keycloak tests"
 	@echo ""
+	@echo "Code Quality:"
+	@echo "  make lint           Verify tests follow standard setup pattern"
+	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean          Stop containers and remove volumes"
 	@echo ""
 	@echo "Test Environment Ports:"
+	@echo "  Backend:  http://localhost:8200"
 	@echo "  Keycloak: http://localhost:8181 (admin/admin)"
 	@echo "  MongoDB:  localhost:27118"
 	@echo "  Redis:    localhost:6480"
 
 # Container Management
 start:
-	@echo "Starting test containers..."
+	@echo "Starting all test containers (including any newly added services)..."
 	@docker compose -f docker-compose-test.yml up -d
-	@echo "✓ Containers started"
+	@echo ""
+	@echo "✓ Test containers started:"
+	@docker compose -f docker-compose-test.yml ps --format "  - {{.Service}}: {{.State}}"
 
 stop:
 	@echo "Stopping test containers..."
@@ -84,6 +90,11 @@ test-quick:
 test-keycloak:
 	@echo "Running Keycloak tests..."
 	@robot --outputdir results api/keycloak_registration.robot
+
+# Linting
+lint:
+	@echo "Linting Robot Framework tests..."
+	@./lint_robot_tests.sh
 
 # Cleanup
 clean:

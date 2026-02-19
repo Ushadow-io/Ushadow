@@ -21,6 +21,7 @@ Library          OperatingSystem
 Library          String
 Library          Process
 Variables        test_env.py
+Variables        suppress_warnings.py    # Suppress urllib3 warnings during startup
 
 *** Keywords ***
 
@@ -53,13 +54,13 @@ Dev Mode Setup
     Log To Console    \n=== Dev Mode Setup (Default) ===
 
     Log To Console    Checking if test containers are ready...
-    ${is_up}=    Run Keyword And Return Status    Check Keycloak Ready    ${KEYCLOAK_URL}
+    ${all_ready}=    Check All Services Ready
 
-    IF    ${is_up}
+    IF    ${all_ready}
         Log To Console    ✓ Reusing existing containers (fast mode)
         Clear Test Data
     ELSE
-        Log To Console    ⚠ Containers not running, starting them...
+        Log To Console    ⚠ Not all containers running, starting them...
         Start Test Containers
         Clear Test Data
     END
@@ -92,28 +93,39 @@ Start Test Containers
     [Documentation]    Start test containers using docker-compose
     [Arguments]    ${build}=${False}
 
-    ${is_up}=    Run Keyword And Return Status    Check Keycloak Ready    ${KEYCLOAK_URL}
+    ${all_ready}=    Check All Services Ready
 
-    IF    ${is_up}
-        Log    Test containers already running, skipping start
+    IF    ${all_ready}
+        Log To Console    ✓ All test containers already running and healthy
         RETURN
     END
 
-    # Clean up any stopped/stuck containers first
-    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    down    -v    shell=True
-
-    # Start containers
+    # Start/update containers (docker compose up -d handles existing containers gracefully)
+    # This will start any missing services without recreating existing healthy ones
     IF    ${build}
-        Log To Console    Building and starting containers...
-        Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d    --build    shell=True
+        Log To Console    Building and starting all containers...
+        ${result}=    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d    --build
+        ...    shell=False    stdout=${TEMPDIR}/docker-up.log    stderr=STDOUT
+        # Only show output on error
+        IF    ${result.rc} != 0
+            Log To Console    Docker compose failed:\n${result.stdout}
+        END
     ELSE
-        Log To Console    Starting containers...
-        Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d    shell=True
+        Log To Console    Starting all containers (this may take ~30s)...
+        ${result}=    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d
+        ...    shell=False    stdout=${TEMPDIR}/docker-up.log    stderr=STDOUT
+        # Only show output on error
+        IF    ${result.rc} != 0
+            Log To Console    Docker compose failed:\n${result.stdout}
+        END
     END
 
-    Log To Console    Waiting for Keycloak to be ready...
+    Log To Console    Waiting for all services to be ready...
+    Log To Console    → Checking Keycloak...
     Wait Until Keyword Succeeds    90s    5s    Check Keycloak Ready    ${KEYCLOAK_URL}
-    Log To Console    ✓ Test containers ready!
+    Log To Console    → Checking Backend...
+    Wait Until Keyword Succeeds    90s    5s    Check Backend Ready    ${BACKEND_URL}
+    Log To Console    ✓ All test containers ready!
 
 Stop Test Containers
     [Documentation]    Stop test containers using docker-compose
@@ -129,20 +141,63 @@ Stop Test Containers
 
 Rebuild Test Containers
     [Documentation]    Rebuild and restart test containers
-    Log To Console    Rebuilding containers with latest code...
-    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d    --build    shell=True
+    Log To Console    Rebuilding containers with latest code (this may take ~60s)...
+    ${result}=    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d    --build
+    ...    shell=True    stdout=${TEMPDIR}/docker-rebuild.log    stderr=STDOUT
+    # Only show output on error
+    IF    ${result.rc} != 0
+        Log To Console    Docker compose failed:\n${result.stdout}
+    END
 
     Log To Console    Waiting for services to be ready...
+    Log To Console    → Checking Keycloak...
     Wait Until Keyword Succeeds    90s    5s    Check Keycloak Ready    ${KEYCLOAK_URL}
-    Log To Console    ✓ Containers rebuilt and ready!
+    Log To Console    → Checking Backend...
+    Wait Until Keyword Succeeds    60s    5s    Check Backend Ready    ${BACKEND_URL}
+    Log To Console    ✓ All containers rebuilt and ready!
+
+Check All Services Ready
+    [Documentation]    Check if all required test services are ready
+    ...                Returns success only if Keycloak AND Backend are both healthy
+
+    # Check Keycloak
+    Log To Console    → Checking Keycloak (${KEYCLOAK_URL})...
+    ${keycloak_ok}=    Run Keyword And Return Status    Check Keycloak Ready    ${KEYCLOAK_URL}
+    IF    not ${keycloak_ok}
+        Log To Console    ✗ Keycloak not ready
+        RETURN    ${False}
+    END
+    Log To Console    ✓ Keycloak ready
+
+    # Check Backend
+    Log To Console    → Checking Backend (${BACKEND_URL})...
+    ${backend_ok}=    Run Keyword And Return Status    Check Backend Ready    ${BACKEND_URL}
+    IF    not ${backend_ok}
+        Log To Console    ✗ Backend not ready
+        RETURN    ${False}
+    END
+    Log To Console    ✓ Backend ready
+
+    # All services ready
+    RETURN    ${True}
 
 Check Keycloak Ready
     [Documentation]    Check if Keycloak is ready
     [Arguments]    ${keycloak_url}=${KEYCLOAK_URL}
 
-    Create Session    keycloak_check    ${keycloak_url}    verify=False
-    ${response}=    GET On Session    keycloak_check    /realms/master    expected_status=200
+    Create Session    keycloak_check    ${keycloak_url}    verify=False    timeout=5
+    ${response}=    GET On Session    keycloak_check    /realms/master    expected_status=any
     Delete All Sessions
+    Should Be Equal As Integers    ${response.status_code}    200
+
+Check Backend Ready
+    [Documentation]    Check if backend is ready via health endpoint
+    [Arguments]    ${backend_url}=${BACKEND_URL}
+
+    Create Session    backend_check    ${backend_url}    verify=False    timeout=10
+    ${response}=    GET On Session    backend_check    /health    expected_status=any
+    Delete All Sessions
+    Should Be Equal As Integers    ${response.status_code}    200
 
 Clear Test Data
     [Documentation]    Clear test databases and data (MongoDB, Redis, etc.)

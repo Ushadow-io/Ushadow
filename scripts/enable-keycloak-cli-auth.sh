@@ -2,6 +2,9 @@
 # Enable CLI authentication for Keycloak
 # This enables Direct Access Grants (Resource Owner Password Credentials)
 # which allows the ush CLI tool to authenticate with username/password.
+#
+# NOTE: For a complete setup that also creates the admin user in Keycloak, use:
+#   python scripts/fix-ush-auth.py
 
 set -e
 
@@ -44,9 +47,9 @@ fi
 echo "✅ Keycloak enabled"
 echo ""
 
-# Enable direct access grants for frontend client
-echo "Enabling Direct Access Grants for ushadow-frontend client..."
-RESULT=$(curl -s -X POST "${BACKEND_URL}/api/keycloak/clients/ushadow-frontend/enable-direct-grant")
+# Enable direct access grants for CLI client
+echo "Enabling Direct Access Grants for ushadow-cli client..."
+RESULT=$(curl -s -X POST "${BACKEND_URL}/api/keycloak/clients/ushadow-cli/enable-direct-grant")
 SUCCESS=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('success', False))" 2>/dev/null || echo "false")
 
 if [ "$SUCCESS" = "True" ]; then

@@ -28,6 +28,7 @@ keycloak:
   frontend_client_id: ${oc.env:KC_FRONTEND_CLIENT_ID,ushadow-frontend}
   admin_user: ${oc.env:KC_BOOTSTRAP_ADMIN_USERNAME,admin}
   admin_password: ${oc.env:KC_BOOTSTRAP_ADMIN_PASSWORD,admin}
+  cli_client_id: ${oc.env:KEYCLOAK_CLI_CLIENT_ID,ushadow-cli}  # CLI tools (ush) with direct grant
 
 # Speech Detection Settings
 speech_detection:

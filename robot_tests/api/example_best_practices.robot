@@ -19,9 +19,6 @@ Resource         ../resources/auth_keywords.robot
 Resource         ../resources/service_config_keywords.robot
 Resource         ../resources/config_file_keywords.robot
 Resource         ../resources/file_keywords.robot
-Library          REST    localhost:8080    ssl_verify=false
-Library          Collections
-Library          String
 Library          ../resources/EnvConfig.py
 Resource         ../resources/setup/suite_setup.robot
 
