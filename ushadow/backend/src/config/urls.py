@@ -8,7 +8,6 @@ Functions for constructing service URLs in different network contexts:
 """
 
 import logging
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +40,17 @@ def get_docker_proxy_url(service_name: str) -> str:
     """
     Get proxy URL using Docker DNS (for container-to-container communication).
 
-    Uses COMPOSE_PROJECT_NAME to build the backend service hostname.
-    This URL goes through the ushadow backend proxy, providing:
-    - Stable hostname (no hash-suffixed container names)
-    - Unified routing logic
-    - Works across environment changes
+    Delegates to src.utils.service_urls.get_proxy_url() which is platform-aware.
+    Kept for backward compatibility — prefer get_proxy_url() for new code.
 
     Args:
         service_name: Service name (e.g., "mem0", "chronicle-backend")
 
     Returns:
-        Docker proxy URL (e.g., "http://ushadow-orange-backend:8000/api/services/mem0/proxy")
+        Proxy URL through the ushadow backend (e.g., "http://ushadow-orange-backend:8000/api/services/mem0/proxy")
     """
-    # Backend always listens on port 8000 internally (container port)
-    # BACKEND_PORT is the external/host port which varies by environment
-    backend_internal_port = "8000"
-    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-    return f"http://{project_name}-backend:{backend_internal_port}/api/services/{service_name}/proxy"
+    from src.utils.service_urls import get_proxy_url
+    return get_proxy_url(service_name)
 
 
 def get_relative_proxy_url(service_name: str) -> str:

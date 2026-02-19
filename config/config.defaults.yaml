@@ -29,6 +29,11 @@ keycloak:
   admin_user: ${oc.env:KC_BOOTSTRAP_ADMIN_USERNAME,admin}
   admin_password: ${oc.env:KC_BOOTSTRAP_ADMIN_PASSWORD,admin}
   cli_client_id: ${oc.env:KEYCLOAK_CLI_CLIENT_ID,ushadow-cli}  # CLI tools (ush) with direct grant
+  # Keycloak server behaviour defaults
+  hostname_strict: ${oc.env:KC_HOSTNAME_STRICT,false}      # Allow backend to use internal URL
+  http_enabled: ${oc.env:KC_HTTP_ENABLED,true}             # Required for non-HTTPS KC_HOSTNAME_URL
+  health_enabled: ${oc.env:KC_HEALTH_ENABLED,true}
+  proxy_headers: ${oc.env:KC_PROXY_HEADERS,xforwarded}     # Trust X-Forwarded-* headers
 
 # Speech Detection Settings
 speech_detection:
@@ -98,7 +103,7 @@ network:
 # Security Configuration
 security:
   # Merges CORS_ORIGINS env var with defaults (deduplicates)
-  cors_origins: ${merge_csv:${oc.env:CORS_ORIGINS},http://localhost:5173,http://localhost:3000,http://localhost:1421,http://127.0.0.1:5173,http://127.0.0.1:3000}
+  cors_origins: ${merge_csv:${oc.env:CORS_ORIGINS,},http://localhost:5173,http://localhost:3000,http://localhost:1421,http://127.0.0.1:5173,http://127.0.0.1:3000}
 
 # Infrastructure Services
 infrastructure:

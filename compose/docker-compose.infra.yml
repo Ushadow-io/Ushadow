@@ -33,6 +33,8 @@ services:
       - MONGODB_PORT=${MONGODB_PORT:-27017}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
       - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
+      - MONGODB_USERNAME=${MONGODB_USERNAME:-root}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-password}
     volumes:
       - mongo_data:/data/db
     command: ["--replSet", "rs0", "--bind_ip_all"]

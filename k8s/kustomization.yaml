@@ -5,8 +5,11 @@ namespace: ushadow
 
 resources:
   # - namespace.yaml  # Namespace managed separately - DO NOT let Skaffold delete it!
-  - secret.yaml
-  - backend-pvc.yaml
+  # secret.yaml is gitignored (contains plaintext creds) - apply once manually:
+  #   kubectl apply -f k8s/secret.yaml   (copy from secret.yaml.example and fill in values)
+  #
+  # PVCs are NOT listed here — managed by seed-pvcs.sh so Skaffold never deletes them.
+  # Skaffold runs `skaffold delete` on `dev` teardown which would wipe PVC-stored overrides.
   - backend-deployment.yaml
   - backend-service.yaml
   - webui-deployment.yaml

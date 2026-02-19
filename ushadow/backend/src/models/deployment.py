@@ -219,6 +219,7 @@ class Deployment(BaseModel):
         use_enum_values = True
 
 
+
 class DeployRequest(BaseModel):
     """Request to deploy a service to a node."""
     service_id: str

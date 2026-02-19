@@ -383,8 +383,8 @@ class LeaderInfoResponse(BaseModel):
     hostname: str
     envname: Optional[str] = None
     display_name: Optional[str] = None
-    tailscale_ip: str
-    tailscale_hostname: Optional[str] = None  # Full Tailscale DNS name
+    tailscale_ip: Optional[str] = None  # None for K8s deployments
+    tailscale_hostname: Optional[str] = None  # Full Tailscale DNS name or ingress hostname
     capabilities: UNodeCapabilities
     api_port: int = 8000
 
@@ -409,14 +409,20 @@ async def get_leader_info():
 
     This is an unauthenticated endpoint that returns leader details
     for mobile apps that have just connected via QR code.
-    The mobile app uses this to display cluster status and capabilities.
+    Works on both Docker (unode) and Kubernetes deployments.
     """
-    from src.services.docker_manager import get_docker_manager
+    from src.utils.environment import is_kubernetes
+
+    if is_kubernetes():
+        return await _get_leader_info_k8s()
+    return await _get_leader_info_docker()
+
+
+async def _get_leader_info_docker() -> LeaderInfoResponse:
+    """LeaderInfoResponse for Docker/unode deployments."""
+    from src.services.compose_registry import get_compose_registry
 
     unode_manager = await get_unode_manager()
-    docker_mgr = get_docker_manager()
-
-    # Get the leader unode
     leader = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
     if not leader:
         raise HTTPException(
@@ -424,49 +430,31 @@ async def get_leader_info():
             detail="Leader node not found. Cluster may not be initialized."
         )
 
-    # Get all unodes for cluster topology info
     unodes = await unode_manager.list_unodes()
-
-    # Get Tailscale status (single source of truth)
     ts_status = get_tailscale_status()
-    tailscale_hostname = ts_status.hostname  # e.g., "blue.spangled-kettle.ts.net"
+    tailscale_hostname = ts_status.hostname
     api_port = 8000
 
-    # Build main API URLs
     if tailscale_hostname:
         ushadow_api_url = f"https://{tailscale_hostname}"
     else:
         ushadow_api_url = f"http://{leader.tailscale_ip}:{api_port}"
 
-    # Build service deployments with URLs from compose registry
-    from src.services.compose_registry import get_compose_registry
-
     env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
     compose_registry = get_compose_registry()
 
-    # Get Chronicle service route_path for WebSocket URLs
-    chronicle_service = compose_registry.get_service_by_name("chronicle-backend")
-    chronicle_route = chronicle_service.route_path if chronicle_service else None
-
-    # Build Chronicle API URL using generic proxy pattern (per docs/IMPLEMENTATION-SUMMARY.md)
     chronicle_api_url = None
-    if tailscale_hostname:
-        chronicle_api_url = f"https://{tailscale_hostname}/api/services/chronicle-backend/proxy"
-
-    # Build WebSocket URLs - these use direct Tailscale routes (no service prefix)
-    # The /ws_pcm and /ws_omi routes are configured directly in Tailscale Serve
     ws_pcm_url = None
     ws_omi_url = None
     if tailscale_hostname:
+        chronicle_api_url = f"https://{tailscale_hostname}/api/services/chronicle-backend/proxy"
         ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
         ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
 
     services: List[ServiceDeployment] = []
     for unode in unodes:
         for service_name in unode.services:
-            # Look up service in compose registry for route_path and ports
             discovered_service = compose_registry.get_service_by_name(service_name)
-
             route_path = None
             internal_port = None
             external_url = None
@@ -476,8 +464,6 @@ async def get_leader_info():
             if discovered_service:
                 route_path = discovered_service.route_path
                 display_name = discovered_service.display_name or display_name
-
-                # Get internal port from compose ports
                 if discovered_service.ports:
                     container_port = discovered_service.ports[0].get("container")
                     if container_port:
@@ -485,20 +471,11 @@ async def get_leader_info():
                             internal_port = int(container_port)
                         except (ValueError, TypeError):
                             pass
-
-                # Build container name
-                container_name = f"{env_name}-{service_name}"
-
-                # Build internal URL (container-to-container)
                 if internal_port:
-                    internal_url = f"http://{container_name}:{internal_port}"
-
-                # Build external URL (through Tailscale Serve)
+                    internal_url = f"http://{env_name}-{service_name}:{internal_port}"
                 if route_path and tailscale_hostname:
                     external_url = f"https://{tailscale_hostname}{route_path}"
 
-            # Add WebSocket URLs for chronicle service (legacy support)
-            # These use direct Tailscale routes (no service prefix)
             service_ws_pcm_url = None
             service_ws_omi_url = None
             if service_name == "chronicle-backend" and tailscale_hostname:
@@ -508,7 +485,7 @@ async def get_leader_info():
             services.append(ServiceDeployment(
                 name=service_name,
                 display_name=display_name,
-                status="running",  # TODO: Get actual status from docker
+                status="running",
                 unode_hostname=unode.hostname,
                 route_path=route_path,
                 internal_port=internal_port,
@@ -517,10 +494,6 @@ async def get_leader_info():
                 ws_pcm_url=service_ws_pcm_url,
                 ws_omi_url=service_ws_omi_url,
             ))
-
-    # Build Keycloak URL for mobile devices (exposed on port 8081)
-    # Use HOST's Tailscale IP (leader's IP, not container's IP)
-    keycloak_url = f"http://{leader.tailscale_ip}:8081"
 
     return LeaderInfoResponse(
         hostname=leader.hostname,
@@ -532,11 +505,66 @@ async def get_leader_info():
         api_port=api_port,
         ushadow_api_url=ushadow_api_url,
         chronicle_api_url=chronicle_api_url,
-        keycloak_url=keycloak_url,
+        keycloak_url=f"http://{leader.tailscale_ip}:8081",
         ws_pcm_url=ws_pcm_url,
         ws_omi_url=ws_omi_url,
         unodes=unodes,
         services=services,
+    )
+
+
+async def _get_leader_info_k8s() -> LeaderInfoResponse:
+    """LeaderInfoResponse for Kubernetes deployments."""
+    from src.utils.node_discovery import get_current_node
+    from src.utils.environment import get_env_name
+
+    unode = await get_current_node()
+    public_url = os.getenv("USHADOW_PUBLIC_URL", "").rstrip("/")
+
+    if not unode and not public_url:
+        raise HTTPException(
+            status_code=404,
+            detail="Leader node not found. Set USHADOW_CLUSTER_NAME or USHADOW_PUBLIC_URL."
+        )
+
+    # Derive public hostname from UNode.public_url → ingress_domain → K8s API server
+    if unode and unode.public_url:
+        base_url = unode.public_url.rstrip("/")
+    elif public_url:
+        base_url = public_url
+    elif unode:
+        ingress_domain = unode.metadata.get("ingress_domain")
+        if ingress_domain:
+            base_url = f"https://ushadow.{ingress_domain}"
+        else:
+            server = unode.metadata.get("server", "")
+            host = server.removeprefix("https://").removeprefix("http://").split(":")[0]
+            base_url = f"https://{host}"
+    else:
+        base_url = public_url
+
+    ingress_host = base_url.removeprefix("https://").removeprefix("http://")
+    keycloak_url = os.getenv("KC_HOSTNAME_URL") or f"{base_url.rstrip('/')}"
+
+    return LeaderInfoResponse(
+        hostname=unode.hostname if unode else ingress_host,
+        envname=unode.envname if unode else get_env_name(),
+        display_name=unode.hostname if unode else ingress_host,
+        tailscale_ip=None,
+        tailscale_hostname=ingress_host,
+        capabilities=UNodeCapabilities(
+            can_run_kubernetes=True,
+            can_run_docker=False,
+            can_become_leader=True,
+        ),
+        api_port=443,
+        ushadow_api_url=base_url,
+        chronicle_api_url=f"{base_url}/api/services/chronicle-backend/proxy",
+        keycloak_url=keycloak_url,
+        ws_pcm_url=f"wss://{ingress_host}/ws_pcm",
+        ws_omi_url=f"wss://{ingress_host}/ws_omi",
+        unodes=[unode] if unode else [],
+        services=[],  # TODO: list K8s deployed services
     )
 
 

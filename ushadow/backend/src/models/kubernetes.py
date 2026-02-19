@@ -25,7 +25,7 @@ class KubernetesCluster(BaseModel):
     # Metadata
     version: Optional[str] = Field(None, description="Kubernetes version")
     node_count: Optional[int] = Field(None, description="Number of nodes in cluster")
-    namespace: str = Field("default", description="Default namespace for deployments")
+    namespace: str = Field("ushadow", description="Default namespace for deployments")
     infra_namespace: Optional[str] = Field(None, description="Namespace where infrastructure services (mongo, redis, etc.) are located")
 
     # Infrastructure scan results (cached per namespace)
@@ -54,6 +54,11 @@ class KubernetesCluster(BaseModel):
         False,
         description="Whether Tailscale MagicDNS is configured"
     )
+
+    def to_unode(self, env_name: str, public_url: Optional[str] = None) -> Any:
+        """Return a UNode view of this cluster for unified node handling."""
+        from src.models.unode import UNode
+        return UNode.from_k8s_cluster(self, env_name, public_url)
 
     @computed_field
     @property
@@ -145,7 +150,7 @@ class KubernetesClusterCreate(BaseModel):
     name: str = Field(..., description="Human-readable cluster name")
     kubeconfig: str = Field(..., description="Base64-encoded kubeconfig file")
     context: Optional[str] = Field(None, description="Context to use (if not specified, uses current-context)")
-    namespace: str = Field("default", description="Default namespace")
+    namespace: str = Field("ushadow", description="Default namespace")
     labels: Dict[str, str] = Field(default_factory=dict)
 
 

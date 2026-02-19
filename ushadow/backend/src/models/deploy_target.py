@@ -67,7 +67,7 @@ class DeployTarget(BaseModel):
 
         # Fetch metadata based on type
         if target_type == "k8s":
-            k8s_manager = get_kubernetes_manager()
+            k8s_manager = await get_kubernetes_manager()
             clusters = await k8s_manager.list_clusters()
             cluster = next((c for c in clusters if c.name == identifier), None)
 
@@ -77,19 +77,35 @@ class DeployTarget(BaseModel):
             return cls(
                 id=target_id,
                 type="k8s",
-                metadata=cluster.model_dump()
+                name=cluster.name,
+                identifier=cluster.cluster_id,
+                environment=target_info["environment"],
+                status=cluster.status.value if cluster.status else "unknown",
+                namespace=cluster.namespace,
+                infrastructure=cluster.infra_scans,
+                raw_metadata=cluster.model_dump()
             )
         else:  # docker/unode
-            unode_manager = get_unode_manager()
+            unode_manager = await get_unode_manager()
             unode = await unode_manager.get_unode(identifier)
 
             if not unode:
                 raise ValueError(f"UNode not found: {identifier}")
 
+            from src.models.unode import UNodeRole
+            is_leader = unode.role == UNodeRole.LEADER
             return cls(
                 id=target_id,
                 type="docker",
-                metadata=unode.model_dump()
+                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+                identifier=unode.hostname,
+                environment=target_info["environment"],
+                status=unode.status.value if unode.status else "unknown",
+                provider="local" if is_leader else "remote",
+                is_leader=is_leader,
+                namespace=None,
+                infrastructure=None,
+                raw_metadata=unode.model_dump()
             )
 
     def get_identifier(self) -> str:

@@ -88,6 +88,13 @@ seed_pvc() {
 log "Seeding PVCs in namespace: $NAMESPACE"
 log "Repository root: $REPO_ROOT"
 
+# Apply PVC manifests first (idempotent - kubectl apply is a no-op if they exist).
+# PVCs are NOT in kustomization.yaml to prevent Skaffold from deleting them on teardown
+# (skaffold dev runs `skaffold delete` on Ctrl+C, which would wipe stored overrides/secrets).
+log "Ensuring PVCs exist..."
+$KUBECTL apply -f "$REPO_ROOT/k8s/backend-pvc.yaml"
+$KUBECTL apply -f "$REPO_ROOT/k8s/backend-data-pvc.yaml"
+
 # Seed the shared config PVC from the local config/ directory
 seed_pvc "ushadow-config" "$REPO_ROOT/config"
 

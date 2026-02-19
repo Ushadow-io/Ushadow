@@ -29,6 +29,9 @@ spec:
             # Public: browser OAuth redirects and token issuer
             - name: KC_HOSTNAME_URL
               value: https://keycloak.chakra
+            # Public frontend URL for CORS (browser→backend and Keycloak webOrigins)
+            - name: CORS_ORIGINS
+              value: https://ushadow.chakra
             # ── Credentials ─────────────────────────────────────────────────
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD
               valueFrom:
@@ -36,6 +39,19 @@ spec:
                   name: ushadow-secret
                   key: KEYCLOAK_ADMIN_PASSWORD
                   optional: true
+            # ── Cluster identity ─────────────────────────────────────────────
+            # USHADOW_CLUSTER_NAME: must match the cluster name (or cluster_id)
+            # registered in the ushadow UI. Used by the mobile QR endpoint to
+            # auto-detect the current deploy target.
+            - name: USHADOW_CLUSTER_NAME
+              value: chakra
+            # USHADOW_PUBLIC_URL: the public-facing base URL for this ushadow
+            # installation (what the mobile app uses to reach the API).
+            # Must be reachable from mobile devices - typically the ingress host.
+            - name: USHADOW_PUBLIC_URL
+              value: https://ushadow.chakra
+            - name: CONFIG_DIR
+              value: /config
           image: registry.temp.skaffold/ushadow-backend
           name: ushadow-backend
           ports:
@@ -44,8 +60,13 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+            - name: data
+              mountPath: /app/data
       volumes:
         - name: config
           persistentVolumeClaim:
             claimName: ushadow-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: ushadow-data
       restartPolicy: Always

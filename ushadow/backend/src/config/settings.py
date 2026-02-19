@@ -671,17 +671,16 @@ class Settings:
             if target.type != "k8s":
                 return {}
 
-            cluster_id = target.raw_metadata.get("cluster_id")
-            if not cluster_id:
+            # Use cluster name (stable) rather than cluster_id (changes on re-add)
+            cluster_name = target.name
+            if not cluster_name:
                 return {}
 
             store = get_settings_store()
-            config_overrides: Dict[str, str] = await store.get(f"infrastructure.overrides.{cluster_id}") or {}
-            secret_overrides: Dict[str, str] = await store.get(f"infrastructure.secrets.{cluster_id}") or {}
-
-            result = {name: value for name, value in {**config_overrides, **secret_overrides}.items() if value}
+            overrides: Dict[str, str] = await store.get(f"infrastructure.overrides.{cluster_name}") or {}
+            result = {name: value for name, value in overrides.items() if value}
             if result:
-                logger.info(f"Loaded {len(result)} infrastructure overrides from {deploy_target}")
+                logger.info(f"Loaded {len(result)} infrastructure overrides for {cluster_name}")
             return result
         except Exception as e:
             logger.warning(f"Could not load infrastructure overrides for {deploy_target}: {e}")

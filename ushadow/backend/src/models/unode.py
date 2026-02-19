@@ -56,6 +56,11 @@ class UNodeBase(BaseModel):
     role: UNodeRole = UNodeRole.WORKER
     platform: UNodePlatform = UNodePlatform.UNKNOWN
     tailscale_ip: Optional[str] = None
+    # Public-facing base URL for mobile/external access (e.g. https://ushadow.chakra).
+    # Set explicitly for K8s nodes; derived from Tailscale for Docker nodes.
+    public_url: Optional[str] = None
+    # Cluster UUID — only set for type=KUBERNETES nodes.
+    cluster_id: Optional[str] = None
     capabilities: UNodeCapabilities = Field(default_factory=UNodeCapabilities)
     labels: Dict[str, str] = Field(default_factory=dict)
 
@@ -88,11 +93,50 @@ class UNode(UNodeBase):
         """
         Get unified deployment target ID.
 
-        Format: {hostname}.unode.{environment}
-        Example: "ushadow-purple.unode.purple"
+        Docker: {hostname}.unode.{environment}
+        K8s:    {hostname}.k8s.{environment}
         """
         from src.utils.deployment_targets import make_deployment_target_id
-        return make_deployment_target_id(self.hostname, "unode")
+        target_type = "k8s" if self.type == UNodeType.KUBERNETES else "unode"
+        return make_deployment_target_id(self.hostname, target_type)
+
+    @classmethod
+    def from_k8s_cluster(
+        cls,
+        cluster: Any,  # KubernetesCluster — avoid circular import
+        env_name: str,
+        public_url: Optional[str] = None,
+    ) -> "UNode":
+        """Create a UNode view of a KubernetesCluster.
+
+        Stores K8s-specific data (context, server, namespace, ingress) in
+        metadata so callers can retrieve it without needing the full
+        KubernetesCluster model.
+        """
+        from datetime import datetime
+        return cls(
+            id=cluster.cluster_id,
+            hostname=cluster.name,
+            envname=env_name,
+            type=UNodeType.KUBERNETES,
+            cluster_id=cluster.cluster_id,
+            public_url=public_url,
+            status=UNodeStatus.ONLINE if getattr(cluster.status, "value", cluster.status) == "connected" else UNodeStatus.OFFLINE,
+            registered_at=datetime.utcnow(),
+            labels=cluster.labels,
+            capabilities=UNodeCapabilities(
+                can_run_docker=False,
+                can_run_kubernetes=True,
+                can_become_leader=True,
+            ),
+            metadata={
+                "context": cluster.context,
+                "server": cluster.server,
+                "namespace": cluster.namespace,
+                "ingress_domain": cluster.ingress_domain,
+                "ingress_class": cluster.ingress_class,
+            },
+        )
 
     class Config:
         from_attributes = True

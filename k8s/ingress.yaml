@@ -20,6 +20,27 @@ spec:
             name: ushadow-backend
             port:
               number: 8000
+      - path: /openapi.json
+        pathType: Exact
+        backend:
+          service:
+            name: ushadow-backend
+            port:
+              number: 8000
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: ushadow-backend
+            port:
+              number: 8000
+      - path: /docs
+        pathType: Exact
+        backend:
+          service:
+            name: ushadow-backend
+            port:
+              number: 8000
       - path: /
         pathType: Prefix
         backend:

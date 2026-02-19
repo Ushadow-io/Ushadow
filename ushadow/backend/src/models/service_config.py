@@ -141,6 +141,12 @@ class ServiceConfig(BaseModel):
         description="Required unode labels for deployment (e.g., {'zone': 'public', 'region': 'us-west'})"
     )
 
+    # Deployment target (e.g. "k8s.k8s.ushadow") — used for infrastructure env var resolution
+    deployment_target: Optional[str] = Field(
+        None,
+        description="Deployment target ID (e.g. 'anubis.k8s.purple') for infrastructure resolution"
+    )
+
     # Funnel route configuration (for public unodes)
     route: Optional[str] = Field(
         None,
@@ -197,6 +203,10 @@ class ServiceConfigCreate(BaseModel):
         default_factory=dict,
         description="Required unode labels for deployment"
     )
+    deployment_target: Optional[str] = Field(
+        None,
+        description="Deployment target ID for infrastructure resolution (e.g. 'anubis.k8s.purple')"
+    )
 
 
 class ServiceConfigUpdate(BaseModel):
@@ -207,6 +217,10 @@ class ServiceConfigUpdate(BaseModel):
     deployment_labels: Optional[Dict[str, str]] = Field(
         None,
         description="Required unode labels for deployment"
+    )
+    deployment_target: Optional[str] = Field(
+        None,
+        description="Deployment target ID for infrastructure resolution (e.g. 'anubis.k8s.purple')"
     )
     route: Optional[str] = Field(
         None,
