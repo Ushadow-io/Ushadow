@@ -1008,27 +1008,11 @@ pub async fn create_worktree_with_workmux(
         }
     }
 
-    // Register with workmux for dashboard visibility (hybrid approach)
-    // By default, workmux open doesn't run hooks or file operations, so it's safe
-    eprintln!("[create_worktree_with_workmux] Registering worktree with workmux for dashboard visibility");
-    let register_cmd = format!(
-        "cd '{}' && workmux open {}",
-        worktree.path, name
-    );
-    match shell_command(&register_cmd).output() {
-        Ok(output) if output.status.success() => {
-            eprintln!("[create_worktree_with_workmux] ✓ Worktree registered with workmux dashboard");
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[create_worktree_with_workmux] Warning: Failed to register with workmux: {}", stderr);
-            // Don't fail the whole operation if workmux registration fails
-        }
-        Err(e) => {
-            eprintln!("[create_worktree_with_workmux] Warning: Failed to register with workmux: {}", e);
-            // Don't fail the whole operation if workmux registration fails
-        }
-    }
+    // Note: We intentionally do NOT call `workmux open` here.
+    // `workmux open <name>` creates a window named `ushadow-{name}` (e.g. `ushadow-beige`),
+    // which would duplicate the ticket-specific window already created above (e.g.
+    // `ushadow-beige-act-dashboard-dev-ush-6`). The ticket window is the source of truth;
+    // workmux registration happens lazily when the user opens the terminal.
 
     Ok(worktree)
 }
@@ -1440,56 +1424,69 @@ pub async fn open_tmux_in_terminal(
         .to_str()
         .ok_or("Path contains invalid UTF-8")?;
 
-    eprintln!("[open_tmux_in_terminal] Using workmux to ensure window exists for worktree: {}", worktree_name);
-    let workmux_cmd = format!(
-        "cd '{}' && workmux open {}",
-        worktree_path,
-        worktree_name
-    );
+    // Ensure the specific named window exists in the workmux session.
+    // We use direct tmux commands rather than `workmux open` to avoid creating a
+    // second window with the workmux naming convention (ushadow-{worktree_name})
+    // alongside the ticket-specific window (ushadow-{branch}-{ticket_id}).
+    // Note: `tmux has-window` does not exist; use list-windows + grep instead.
+    let window_exists = shell_command(&format!(
+        "tmux list-windows -t workmux -F '#{{window_name}}' 2>/dev/null | grep -Fx '{}'",
+        window_name
+    ))
+    .output()
+    .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+    .unwrap_or(false);
 
-    let open_result = shell_command(&workmux_cmd).output();
+    if !window_exists {
+        eprintln!("[open_tmux_in_terminal] Window '{}' not found, creating it", window_name);
+        match shell_command(&format!(
+            "tmux new-window -t workmux -n {} -c '{}'",
+            window_name, worktree_path
+        ))
+        .output()
+        {
+            Ok(output) if output.status.success() => {
+                eprintln!("[open_tmux_in_terminal] ✓ Created tmux window '{}'", window_name);
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("[open_tmux_in_terminal] Warning: Failed to create window: {}", stderr);
+            }
+            Err(e) => {
+                eprintln!("[open_tmux_in_terminal] Warning: Failed to create window: {}", e);
+            }
+        }
+    } else {
+        eprintln!("[open_tmux_in_terminal] ✓ Window '{}' already exists", window_name);
+    }
 
-    match open_result {
-        Ok(output) if output.status.success() => {
-            eprintln!("[open_tmux_in_terminal] ✓ Workmux window ready");
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[open_tmux_in_terminal] Workmux open warning: {}", stderr);
-            // Don't fail - window might still exist from before
-        }
-        Err(e) => {
-            eprintln!("[open_tmux_in_terminal] Workmux open error: {}", e);
-            // Don't fail - window might still exist from before
-        }
+    // The window name passed in is the authoritative name (ticket-specific or env-specific).
+    // We ensured it exists above, so use it directly.
+    let actual_window_name = window_name.clone();
+
+    // Pre-select the window in the tmux session. This makes `tmux attach-session -t workmux`
+    // (without a window spec) land on the right window. It also handles the case where
+    // multiple windows share a name — select-window picks the first match, and the attach
+    // script doesn't need to resolve the ambiguity.
+    let _ = shell_command(&format!(
+        "tmux select-window -t workmux:{}",
+        actual_window_name
+    ))
+    .output();
+    eprintln!("[open_tmux_in_terminal] Selected window '{}'", actual_window_name);
+
+    // Spawn agent start/resume in the background so it doesn't delay iTerm opening.
+    // check_and_resume_agent sleeps for several seconds waiting for Claude to load,
+    // so running it inline would make the button feel slow.
+    {
+        let window = actual_window_name.clone();
+        let wpath = worktree_path.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = check_and_resume_agent("workmux", &window, &wpath).await;
+        });
     }
 
     eprintln!("[open_tmux_in_terminal] Checking if window is already being viewed");
-
-    // After workmux open, find the actual window being used for this worktree
-    // Workmux might create a window with a different name than what we expect
-    let find_window = shell_command(&format!(
-        "tmux list-windows -t workmux -F '#{{window_name}}:#{{pane_current_path}}' 2>/dev/null | grep '{}$' | cut -d: -f1 | head -1",
-        worktree_path
-    ))
-    .output();
-
-    let actual_window_name = match find_window {
-        Ok(output) if output.status.success() => {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() {
-                eprintln!("[open_tmux_in_terminal] Found window '{}' for path {}", name, worktree_path);
-                name
-            } else {
-                eprintln!("[open_tmux_in_terminal] No window found for path, using provided name");
-                window_name.clone()
-            }
-        }
-        _ => {
-            eprintln!("[open_tmux_in_terminal] Failed to query windows, using provided name");
-            window_name.clone()
-        }
-    };
 
     // Check if any client is currently viewing this specific window
     // Use the format '#{client_session}:#{window_name}' to get accurate window info per client
@@ -1616,10 +1613,9 @@ end tell"#,
             let temp_script = format!("/tmp/ushadow_iterm_{}.sh", window_name.replace("/", "_"));
 
             let script_content = format!(
-                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Attach to the workmux session and select the specific window\nexec tmux attach-session -t workmux:{}\n",
+                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Attach to workmux session - window was pre-selected by the launcher\nexec tmux attach-session -t workmux\n",
                 display_name,
                 r, g, b,
-                actual_window_name
             );
             fs::write(&temp_script, script_content)
                 .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -1651,18 +1647,6 @@ end tell"#,
 
             if output.status.success() {
                 eprintln!("[open_tmux_in_terminal] iTerm2 success");
-
-                // STEP 5: Check and resume agent if not running
-                let resumed = check_and_resume_agent(
-                    "workmux",
-                    &actual_window_name,
-                    &worktree_path
-                ).await.unwrap_or(false);
-
-                if resumed {
-                    return Ok(format!("Opened window '{}' in iTerm2 and resumed agent", actual_window_name));
-                }
-
                 return Ok(format!("Opened tmux window '{}' in iTerm2", actual_window_name));
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1682,9 +1666,8 @@ end tell"#,
         use std::fs;
         let temp_script = format!("/tmp/ushadow_terminal_{}.sh", actual_window_name.replace("/", "_"));
         let script_content = format!(
-            "#!/bin/bash\nprintf '\\033]0;{}\\007'\n# Attach to the workmux session and select the specific window\nexec tmux attach-session -t workmux:{}\n",
-            display_name,
-            actual_window_name
+            "#!/bin/bash\nprintf '\\033]0;{}\\007'\n# Attach to workmux session - window was pre-selected by the launcher\nexec tmux attach-session -t workmux\n",
+            display_name
         );
         fs::write(&temp_script, script_content)
             .map_err(|e| format!("Failed to write temp script: {}", e))?;
@@ -1713,19 +1696,7 @@ end tell"#,
         }
 
         eprintln!("[open_tmux_in_terminal] Terminal.app success");
-
-        // Check and resume agent if not running
-        let resumed = check_and_resume_agent(
-            "workmux",
-            &actual_window_name,
-            &worktree_path
-        ).await.unwrap_or(false);
-
-        if resumed {
-            Ok(format!("Opened window '{}' in Terminal.app and resumed agent", actual_window_name))
-        } else {
-            Ok(format!("Opened tmux window '{}' in Terminal.app", actual_window_name))
-        }
+        Ok(format!("Opened tmux window '{}' in Terminal.app", actual_window_name))
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1763,71 +1734,144 @@ end tell"#,
     }
 }
 
-/// Check if Claude agent is running in a tmux window, and resume if needed
+/// Check if Claude agent is running in a tmux window; start or resume it if not.
+///
+/// Always tries `claude --resume` first so the user gets their last conversation back.
+/// If Claude starts fresh (no prior session), and there's a ticket for this worktree,
+/// sends the ticket title + description as initial context.
 pub async fn check_and_resume_agent(
     tmux_session_name: &str,
     tmux_window_name: &str,
     worktree_path: &str,
 ) -> Result<bool, String> {
+    use super::kanban::get_ticket_by_worktree_path;
+
     eprintln!("[check_and_resume_agent] Checking agent status for window {}", tmux_window_name);
 
-    // 1. Capture pane content to check if agent running
-    let capture = shell_command(&format!(
-        "tmux capture-pane -t {}:{} -p",
+    // 1. Check the current foreground process in the pane — this is reliable because
+    //    Claude's startup banner stays in the scrollback after it exits, so scanning
+    //    pane text gives false positives.
+    let current_command = shell_command(&format!(
+        "tmux display-message -t {}:{} -p '#{{pane_current_command}}'",
         tmux_session_name, tmux_window_name
-    )).output();
+    ))
+    .output()
+    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    .unwrap_or_default();
 
-    let pane_content = match capture {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
-        Err(e) => {
-            eprintln!("[check_and_resume_agent] Failed to capture pane: {}", e);
-            return Ok(false);
-        }
-    };
+    eprintln!("[check_and_resume_agent] Current pane command: '{}'", current_command);
 
-    // 2. Check if Claude agent is active
-    // Look for patterns indicating agent is running:
-    // - "claude>" prompt
-    // - "Claude Code" in output
-    // - "Assistant:" in conversation
-    let agent_running = pane_content.contains("claude>")
-        || pane_content.contains("Claude Code")
-        || pane_content.contains("Assistant:");
-
-    if agent_running {
-        eprintln!("[check_and_resume_agent] Agent already running");
-        return Ok(false);  // No action needed
-    }
-
-    // 3. Check for Claude Code session that can be resumed
-    // Look for session file in worktree
-    let session_file = format!("{}/.claude/session.json", worktree_path);
-    let has_session = std::path::Path::new(&session_file).exists();
-
-    if !has_session {
-        eprintln!("[check_and_resume_agent] No session to resume");
-        return Ok(false);  // Can't resume, no session
-    }
-
-    // 4. Resume agent with claude --resume
-    eprintln!("[check_and_resume_agent] Resuming agent...");
-    let resume_cmd = "claude --resume --dangerously-skip-permissions";
-
-    let send_result = shell_command(&format!(
-        "tmux send-keys -t {}:{} '{}' Enter",
-        tmux_session_name, tmux_window_name, resume_cmd
-    )).output();
-
-    if let Err(e) = send_result {
-        eprintln!("[check_and_resume_agent] Failed to send resume command: {}", e);
+    // Shells indicate Claude is not running; anything else (claude, node, python…) is.
+    let is_shell = matches!(current_command.as_str(), "zsh" | "bash" | "sh" | "fish" | "");
+    if !is_shell {
+        eprintln!("[check_and_resume_agent] Agent already running ({}), no action needed", current_command);
         return Ok(false);
     }
 
-    // 5. Wait for agent to start
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // 2. Check if Claude has any session files for this worktree.
+    //    Claude stores sessions in ~/.claude/projects/<path-with-slashes-as-dashes>/*.jsonl
+    //    Only use --resume if sessions exist; otherwise start fresh so we avoid the
+    //    interactive session-picker TUI (which appears when --resume finds multiple sessions).
+    let home_dir = std::env::var("HOME").unwrap_or_default();
+    let encoded_path = worktree_path.replace('/', "-");
+    let sessions_dir = format!("{}/.claude/projects/{}", home_dir, encoded_path);
+    let has_sessions = std::fs::read_dir(&sessions_dir)
+        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| {
+            e.path().extension().map(|x| x == "jsonl").unwrap_or(false)
+        }))
+        .unwrap_or(false);
 
-    eprintln!("[check_and_resume_agent] Agent resume command sent");
-    Ok(true)  // Agent was resumed
+    let claude_cmd = if has_sessions {
+        eprintln!("[check_and_resume_agent] Session files found in {}, using --resume", sessions_dir);
+        "claude --resume --dangerously-skip-permissions".to_string()
+    } else {
+        eprintln!("[check_and_resume_agent] No session files found, starting fresh");
+        "claude --dangerously-skip-permissions".to_string()
+    };
+
+    eprintln!("[check_and_resume_agent] Starting agent: {}", claude_cmd);
+    let send_result = shell_command(&format!(
+        "tmux send-keys -t {}:{} '{}' Enter",
+        tmux_session_name, tmux_window_name, claude_cmd
+    ))
+    .output();
+
+    if let Err(e) = send_result {
+        eprintln!("[check_and_resume_agent] Failed to send command: {}", e);
+        return Ok(false);
+    }
+
+    // 3. Wait for Claude to start, then detect fresh vs resumed by scanning scrollback
+    //    for prior conversation markers (Human:/Assistant:). We use scrollback here
+    //    intentionally — the current command will be "claude" either way.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let pane_after = shell_command(&format!(
+        "tmux capture-pane -t {}:{} -p -S -100",
+        tmux_session_name, tmux_window_name
+    ))
+    .output()
+    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    .unwrap_or_default();
+
+    let is_resumed = pane_after.contains("Human:") || pane_after.contains("Assistant:");
+
+    if is_resumed {
+        eprintln!("[check_and_resume_agent] Session resumed successfully");
+        return Ok(true);
+    }
+
+    // If Claude is showing the interactive session picker ("Resume Session" TUI),
+    // the user must manually select a session. We must NOT send the ticket text,
+    // as it would be typed into the picker's search field.
+    let is_in_picker = pane_after.contains("Type to search") || pane_after.contains("Resume Session");
+    if is_in_picker {
+        eprintln!("[check_and_resume_agent] Claude is showing session picker — user must select a session manually");
+        return Ok(false);
+    }
+
+    // 4. Fresh start — look up the ticket for this worktree and send its context
+    eprintln!("[check_and_resume_agent] Fresh Claude session, looking up ticket context");
+    let ticket = get_ticket_by_worktree_path(worktree_path);
+
+    if let Some(ticket) = ticket {
+        eprintln!("[check_and_resume_agent] Sending context for ticket: {}", ticket.title);
+
+        let prompt = format!(
+            "You are working on the following ticket:\n\nTitle: {}\n\nDescription: {}\n\nPlease help implement this feature.",
+            ticket.title,
+            ticket.description.as_ref().unwrap_or(&"No description".to_string())
+        );
+
+        let escaped = prompt
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`");
+
+        // Wait a moment for Claude's initial UI to settle before sending the prompt
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let _ = shell_command(&format!(
+            "tmux send-keys -t {}:{} \"{}\"",
+            tmux_session_name, tmux_window_name, escaped
+        ))
+        .output();
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let _ = shell_command(&format!(
+            "tmux send-keys -t {}:{} Enter",
+            tmux_session_name, tmux_window_name
+        ))
+        .output();
+
+        eprintln!("[check_and_resume_agent] Ticket context sent");
+    } else {
+        eprintln!("[check_and_resume_agent] No ticket found for this worktree, Claude started fresh");
+    }
+
+    Ok(true)
 }
 
 /// Capture the visible content of a tmux pane

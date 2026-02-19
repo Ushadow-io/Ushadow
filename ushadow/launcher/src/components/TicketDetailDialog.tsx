@@ -10,6 +10,7 @@ import {
   AlertCircle,
   CheckCircle,
   Code2,
+  Loader2,
 } from 'lucide-react'
 import type { Ticket, Epic, UshadowEnvironment } from '../hooks/useTauri'
 import { EnvironmentBadge } from './EnvironmentBadge'
@@ -70,6 +71,7 @@ export function TicketDetailDialog({
   const [showWorkstreamMenu, setShowWorkstreamMenu] = useState(false)
   const [showRecreateDialog, setShowRecreateDialog] = useState(false)
   const [recreatingTmux, setRecreatingTmux] = useState(false)
+  const [openingTerminal, setOpeningTerminal] = useState(false)
 
   // Load environments on mount
   useEffect(() => {
@@ -725,6 +727,8 @@ export function TicketDetailDialog({
                   {/* Terminal Button */}
                   <button
                     onClick={async () => {
+                      if (openingTerminal) return
+                      setOpeningTerminal(true)
                       try {
                         const { tauri } = await import('../hooks/useTauri')
                         await tauri.openTmuxInTerminal(
@@ -739,13 +743,19 @@ export function TicketDetailDialog({
                         } else {
                           setError(message)
                         }
+                      } finally {
+                        setOpeningTerminal(false)
                       }
                     }}
-                    className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-teal-600/10 border border-teal-500/20 text-teal-400 hover:bg-teal-600/20 hover:border-teal-500/30"
+                    disabled={openingTerminal}
+                    className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-teal-600/10 border border-teal-500/20 text-teal-400 hover:bg-teal-600/20 hover:border-teal-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                     data-testid="ticket-detail-open-terminal"
                   >
-                    <Terminal className="w-4.5 h-4.5" />
-                    <span>Open Terminal</span>
+                    {openingTerminal
+                      ? <Loader2 className="w-4.5 h-4.5 animate-spin" />
+                      : <Terminal className="w-4.5 h-4.5" />
+                    }
+                    <span>{openingTerminal ? 'Opening…' : 'Open Terminal'}</span>
                   </button>
 
                   {/* VSCode Button */}
