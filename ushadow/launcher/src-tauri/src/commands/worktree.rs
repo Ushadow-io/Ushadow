@@ -463,25 +463,14 @@ pub async fn create_worktree(
         let base = if let Some(ref provided_base) = base_branch {
             // Use provided base branch - could be origin/main, origin/dev, or another branch like rouge/feature-dev
             if provided_base.contains('/') {
-                // Already has a prefix (e.g., "origin/dev" or "rouge/feature-dev")
+                // Already has a remote prefix (e.g., "origin/dev" or "rouge/feature-dev")
                 provided_base.clone()
             } else {
-                // Check if branch exists locally first
-                let local_check = silent_command("git")
-                    .args(["rev-parse", "--verify", provided_base])
-                    .current_dir(&main_repo)
-                    .output()
-                    .ok()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
-
-                if local_check {
-                    eprintln!("[create_worktree] Using local branch '{}'", provided_base);
-                    provided_base.clone()  // Use local branch as-is
-                } else {
-                    eprintln!("[create_worktree] Local branch '{}' not found, trying origin/{}", provided_base, provided_base);
-                    format!("origin/{}", provided_base)  // Try remote
-                }
+                // Always branch from the remote tip so we get the latest, not a
+                // potentially stale local tracking branch.
+                let remote_ref = format!("origin/{}", provided_base);
+                eprintln!("[create_worktree] Using remote ref '{}' as base", remote_ref);
+                remote_ref
             }
         } else if new_branch_name.ends_with("-dev") {
             "origin/dev".to_string()
