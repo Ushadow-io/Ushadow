@@ -39,6 +39,11 @@ class PostSource(Document):
     api_key: Optional[str] = Field(
         default=None, description="API key (required for youtube)"
     )
+    # Mastodon OAuth2 — when set, fetches from the user's authenticated home timeline
+    # instead of public hashtag timelines.
+    access_token: Optional[str] = Field(
+        default=None, description="Mastodon OAuth2 access token"
+    )
     enabled: bool = Field(default=True)
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -50,6 +55,22 @@ class PostSource(Document):
             "source_id",
             [("user_id", 1), ("source_id", 1)],
         ]
+
+
+class MastodonAppCredential(Document):
+    """Cached OAuth2 app credentials per Mastodon instance.
+
+    Mastodon requires registering an application before starting OAuth.
+    We register once per instance URL and cache the client_id / client_secret.
+    """
+
+    instance_url: str = Field(..., description="Normalised instance base URL")
+    client_id: str
+    client_secret: str
+
+    class Settings:
+        name = "mastodon_app_credentials"
+        indexes = ["instance_url"]
 
 
 class Post(Document):

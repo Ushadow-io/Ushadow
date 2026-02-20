@@ -423,7 +423,7 @@ export default function UNodeDetailsPage() {
     // Ensure apiUrl is always the base URL (remove any /api/... path)
     const baseApiUrl = result.leader.apiUrl.replace(/\/api\/.*$/, '');
 
-    await saveUnode({
+    const savedUnode = await saveUnode({
       id: rescanNodeId!, // Keep same ID
       name: existingNode?.name || result.leader.hostname.split('.')[0] || 'UNode',
       hostname: result.leader.hostname, // Save actual hostname (e.g., "Orion")
@@ -435,8 +435,9 @@ export default function UNodeDetailsPage() {
       authToken: undefined,
     });
 
-    // Reload unodes
-    await getUnodes();
+    // Set as active unode so home screen reads the correct server on next focus
+    await setActiveUnode(savedUnode.id);
+
     setRescanNodeId(null);
 
     // Clear any existing auth token to force Keycloak login

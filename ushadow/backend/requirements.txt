@@ -10,6 +10,9 @@ email-validator==2.2.0
 
 # HTTP Client for Chronicle/MCP/Agent Zero
 httpx==0.27.2
+
+# Mastodon / ActivityPub client (OAuth2 + REST API)
+Mastodon.py>=1.8.0
 aiohttp==3.11.7
 
 # LLM Integration - Unified API for multiple providers

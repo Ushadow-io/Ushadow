@@ -5,7 +5,7 @@
  * The component auto-detects if Keycloak is available on the backend.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -32,6 +32,7 @@ interface LoginScreenProps {
   onLoginSuccess: (token: string, apiUrl: string) => void;
   initialApiUrl?: string;
   hostname?: string;  // UNode hostname for fetching Keycloak config
+  autoStartKeycloak?: boolean;  // Auto-trigger OAuth when Keycloak is detected (e.g. QR scan)
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({
@@ -40,6 +41,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onLoginSuccess,
   initialApiUrl = '',
   hostname,
+  autoStartKeycloak = false,
 }) => {
   const [apiUrl, setApiUrl] = useState(initialApiUrl || '');
   const [loading, setLoading] = useState(false);
@@ -49,6 +51,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   // Keycloak availability detection
   const [checkingKeycloak, setCheckingKeycloak] = useState(false);
   const [keycloakEnabled, setKeycloakEnabled] = useState<boolean | null>(null);
+
+  // Guard: only auto-start once per modal open
+  const autoStartedRef = useRef(false);
 
   // Debug logging
   console.log('[LoginScreen] Props:', { visible, initialApiUrl, hostname });
@@ -75,6 +80,27 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       checkKeycloakAvailability();
     }
   }, [apiUrl, hostname]);
+
+  // Reset auto-start guard when modal closes
+  useEffect(() => {
+    if (!visible) {
+      autoStartedRef.current = false;
+    }
+  }, [visible]);
+
+  // Auto-start Keycloak OAuth when triggered by QR scan
+  useEffect(() => {
+    if (
+      autoStartKeycloak &&
+      keycloakEnabled === true &&
+      !checkingKeycloak &&
+      !loading &&
+      !autoStartedRef.current
+    ) {
+      autoStartedRef.current = true;
+      handleKeycloakLogin();
+    }
+  }, [autoStartKeycloak, keycloakEnabled, checkingKeycloak, loading]);
 
   const checkKeycloakAvailability = async () => {
     const url = extractBaseUrl(apiUrl);
@@ -195,37 +221,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
           {/* Form */}
           <View style={styles.form}>
-            <Text style={styles.formTitle}>Sign in to Ushadow</Text>
+            <Text style={styles.formTitle}>
+              {hostname ? `Sign in to ${hostname}` : 'Sign in to Ushadow'}
+            </Text>
             <Text style={styles.formSubtitle}>
-              Enter your server URL to connect to your leader node
+              {hostname
+                ? extractBaseUrl(initialApiUrl || apiUrl) || 'Checking server…'
+                : 'Enter your server URL to connect to your leader node'}
             </Text>
 
-            {/* API URL */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Server URL</Text>
-              <TextInput
-                style={styles.input}
-                value={apiUrl}
-                onChangeText={setApiUrl}
-                placeholder="https://your-server.ts.net"
-                placeholderTextColor={theme.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                testID="login-api-url"
-              />
-              {/* Save as default checkbox */}
-              <TouchableOpacity
-                style={styles.checkboxRow}
-                onPress={() => setSaveAsDefault(!saveAsDefault)}
-                testID="login-save-default"
-              >
-                <View style={[styles.checkbox, saveAsDefault && styles.checkboxChecked]}>
-                  {saveAsDefault && <Text style={styles.checkmark}>✓</Text>}
-                </View>
-                <Text style={styles.checkboxLabel}>Save as default server</Text>
-              </TouchableOpacity>
-            </View>
+            {/* API URL — only show editable field when not QR-triggered */}
+            {!hostname && (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Server URL</Text>
+                <TextInput
+                  style={styles.input}
+                  value={apiUrl}
+                  onChangeText={setApiUrl}
+                  placeholder="https://your-server.ts.net"
+                  placeholderTextColor={theme.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  testID="login-api-url"
+                />
+                {/* Save as default checkbox */}
+                <TouchableOpacity
+                  style={styles.checkboxRow}
+                  onPress={() => setSaveAsDefault(!saveAsDefault)}
+                  testID="login-save-default"
+                >
+                  <View style={[styles.checkbox, saveAsDefault && styles.checkboxChecked]}>
+                    {saveAsDefault && <Text style={styles.checkmark}>✓</Text>}
+                  </View>
+                  <Text style={styles.checkboxLabel}>Save as default server</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* Loading indicator while checking Keycloak */}
             {checkingKeycloak && (

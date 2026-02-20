@@ -11,6 +11,14 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.database import get_database
 from src.models.feed import SourceCreate
+from pydantic import BaseModel
+
+
+class MastodonConnectRequest(BaseModel):
+    instance_url: str
+    code: str
+    redirect_uri: str
+    name: str = "Mastodon"
 from src.services.auth import get_current_user
 from src.services.feed_service import FeedService
 from src.utils.auth_helpers import get_user_email
@@ -40,6 +48,56 @@ async def list_sources(
     user_id = get_user_email(current_user)
     sources = await service.list_sources(user_id)
     return {"sources": sources}
+
+
+@router.get("/sources/mastodon/auth-url")
+async def mastodon_auth_url(
+    instance_url: str = Query(..., description="Mastodon instance URL, e.g. mastodon.social"),
+    redirect_uri: str = Query(..., description="App redirect URI for OAuth callback"),
+    service: FeedService = Depends(get_feed_service),
+    current_user=Depends(get_current_user),
+):
+    """Return a Mastodon OAuth2 authorization URL.
+
+    The client should open this URL in a browser. After the user authorises,
+    Mastodon redirects to redirect_uri?code=<code>. Pass that code to
+    POST /api/feed/sources/mastodon/connect.
+    """
+    try:
+        url = await service.get_mastodon_auth_url(instance_url, redirect_uri)
+        return {"authorization_url": url}
+    except Exception as e:
+        logger.error(f"Mastodon auth URL error: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/sources/mastodon/connect", status_code=201)
+async def mastodon_connect(
+    data: MastodonConnectRequest,
+    service: FeedService = Depends(get_feed_service),
+    current_user=Depends(get_current_user),
+):
+    """Exchange a Mastodon OAuth2 code for an access token and save the source.
+
+    Creates a new PostSource (or updates an existing one for the same instance)
+    with the access token. Future refreshes will pull from the authenticated
+    home timeline instead of public hashtag timelines.
+    """
+    user_id = get_user_email(current_user)
+    try:
+        source = await service.connect_mastodon(
+            user_id=user_id,
+            instance_url=data.instance_url,
+            code=data.code,
+            redirect_uri=data.redirect_uri,
+            name=data.name,
+        )
+        return source
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Mastodon connect error: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.post("/sources", status_code=201)
