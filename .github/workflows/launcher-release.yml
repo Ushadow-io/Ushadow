@@ -142,6 +142,21 @@ jobs:
             exit 1
           fi
 
+      - name: Pre-build kanban-cli universal binary
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: |
+          # Tauri v1 only lipo's the main binary; kanban-cli must be lipo'd manually
+          # so the bundler can find it at universal-apple-darwin/release/kanban-cli
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --target aarch64-apple-darwin --bin kanban-cli
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --target x86_64-apple-darwin --bin kanban-cli
+          mkdir -p src-tauri/target/universal-apple-darwin/release
+          lipo -create \
+            src-tauri/target/aarch64-apple-darwin/release/kanban-cli \
+            src-tauri/target/x86_64-apple-darwin/release/kanban-cli \
+            -output src-tauri/target/universal-apple-darwin/release/kanban-cli
+
       - name: Build Tauri app (Universal)
         working-directory: ${{ env.LAUNCHER_DIR }}
         run: npm run tauri:build:macos
