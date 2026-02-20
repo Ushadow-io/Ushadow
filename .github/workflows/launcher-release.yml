@@ -167,6 +167,11 @@ jobs:
           security find-identity -v -p codesigning
           echo "=== Signing identity prefix ==="
           echo "$APPLE_SIGNING_IDENTITY" | cut -c1-10
+          echo "=== Test codesign on /usr/bin/true ==="
+          cp /usr/bin/true /tmp/test_sign_binary
+          codesign --force -s "$APPLE_SIGNING_IDENTITY" --timestamp /tmp/test_sign_binary \
+            && echo "✓ test sign succeeded" \
+            || { echo "✗ test sign failed (exit $?)"; codesign --force -v -s "$APPLE_SIGNING_IDENTITY" /tmp/test_sign_binary; }
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
