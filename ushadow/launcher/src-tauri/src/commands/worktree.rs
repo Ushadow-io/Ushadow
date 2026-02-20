@@ -1768,10 +1768,10 @@ pub async fn check_and_resume_agent(
         return Ok(false);
     }
 
-    // 2. Check if Claude has any session files for this worktree.
-    //    Claude stores sessions in ~/.claude/projects/<path-with-slashes-as-dashes>/*.jsonl
-    //    Only use --resume if sessions exist; otherwise start fresh so we avoid the
-    //    interactive session-picker TUI (which appears when --resume finds multiple sessions).
+    // 2. Check if Claude has prior session files for this worktree.
+    //    If yes, resume — the user gets their conversation back.
+    //    If no, start fresh and pass the ticket context as a CLI argument
+    //    so there's no timing dependency or risk of text landing on the wrong prompt.
     let home_dir = std::env::var("HOME").unwrap_or_default();
     let encoded_path = worktree_path.replace('/', "-");
     let sessions_dir = format!("{}/.claude/projects/{}", home_dir, encoded_path);
@@ -1782,93 +1782,38 @@ pub async fn check_and_resume_agent(
         .unwrap_or(false);
 
     let claude_cmd = if has_sessions {
-        eprintln!("[check_and_resume_agent] Session files found in {}, using --resume", sessions_dir);
+        eprintln!("[check_and_resume_agent] Session files found — resuming");
         "claude --resume --dangerously-skip-permissions".to_string()
     } else {
-        eprintln!("[check_and_resume_agent] No session files found, starting fresh");
-        "claude --dangerously-skip-permissions".to_string()
+        // Fresh start: look up the ticket and embed context directly in the command.
+        // claude "initial message" starts an interactive session pre-loaded with that message.
+        let ticket = get_ticket_by_worktree_path(worktree_path);
+        if let Some(ticket) = ticket {
+            eprintln!("[check_and_resume_agent] No sessions — starting fresh with ticket context: {}", ticket.title);
+            let prompt = format!(
+                "You are working on the following ticket:\n\nTitle: {}\n\nDescription: {}\n\nPlease help implement this feature.",
+                ticket.title,
+                ticket.description.as_ref().unwrap_or(&"No description".to_string())
+            );
+            // Single-quote escape for the outer shell command
+            let escaped = prompt.replace('\'', "'\\''");
+            format!("claude --dangerously-skip-permissions '{}'", escaped)
+        } else {
+            eprintln!("[check_and_resume_agent] No sessions, no ticket — starting plain Claude");
+            "claude --dangerously-skip-permissions".to_string()
+        }
     };
 
-    eprintln!("[check_and_resume_agent] Starting agent: {}", claude_cmd);
-    let send_result = shell_command(&format!(
+    eprintln!("[check_and_resume_agent] Running: {}", claude_cmd);
+    let result = shell_command(&format!(
         "tmux send-keys -t {}:{} '{}' Enter",
         tmux_session_name, tmux_window_name, claude_cmd
     ))
     .output();
 
-    if let Err(e) = send_result {
-        eprintln!("[check_and_resume_agent] Failed to send command: {}", e);
+    if let Err(e) = result {
+        eprintln!("[check_and_resume_agent] Failed to start Claude: {}", e);
         return Ok(false);
-    }
-
-    // 3. Wait for Claude to start, then detect fresh vs resumed by scanning scrollback
-    //    for prior conversation markers (Human:/Assistant:). We use scrollback here
-    //    intentionally — the current command will be "claude" either way.
-    std::thread::sleep(std::time::Duration::from_secs(3));
-
-    let pane_after = shell_command(&format!(
-        "tmux capture-pane -t {}:{} -p -S -100",
-        tmux_session_name, tmux_window_name
-    ))
-    .output()
-    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-    .unwrap_or_default();
-
-    let is_resumed = pane_after.contains("Human:") || pane_after.contains("Assistant:");
-
-    if is_resumed {
-        eprintln!("[check_and_resume_agent] Session resumed successfully");
-        return Ok(true);
-    }
-
-    // If Claude is showing the interactive session picker ("Resume Session" TUI),
-    // the user must manually select a session. We must NOT send the ticket text,
-    // as it would be typed into the picker's search field.
-    let is_in_picker = pane_after.contains("Type to search") || pane_after.contains("Resume Session");
-    if is_in_picker {
-        eprintln!("[check_and_resume_agent] Claude is showing session picker — user must select a session manually");
-        return Ok(false);
-    }
-
-    // 4. Fresh start — look up the ticket for this worktree and send its context
-    eprintln!("[check_and_resume_agent] Fresh Claude session, looking up ticket context");
-    let ticket = get_ticket_by_worktree_path(worktree_path);
-
-    if let Some(ticket) = ticket {
-        eprintln!("[check_and_resume_agent] Sending context for ticket: {}", ticket.title);
-
-        let prompt = format!(
-            "You are working on the following ticket:\n\nTitle: {}\n\nDescription: {}\n\nPlease help implement this feature.",
-            ticket.title,
-            ticket.description.as_ref().unwrap_or(&"No description".to_string())
-        );
-
-        let escaped = prompt
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('$', "\\$")
-            .replace('`', "\\`");
-
-        // Wait a moment for Claude's initial UI to settle before sending the prompt
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        let _ = shell_command(&format!(
-            "tmux send-keys -t {}:{} \"{}\"",
-            tmux_session_name, tmux_window_name, escaped
-        ))
-        .output();
-
-        std::thread::sleep(std::time::Duration::from_millis(300));
-
-        let _ = shell_command(&format!(
-            "tmux send-keys -t {}:{} Enter",
-            tmux_session_name, tmux_window_name
-        ))
-        .output();
-
-        eprintln!("[check_and_resume_agent] Ticket context sent");
-    } else {
-        eprintln!("[check_and_resume_agent] No ticket found for this worktree, Claude started fresh");
     }
 
     Ok(true)

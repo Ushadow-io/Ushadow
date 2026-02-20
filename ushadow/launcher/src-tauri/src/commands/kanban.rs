@@ -20,6 +20,7 @@ fn setup_claude_hooks(worktree_path: &str) {
         return;
     }
     let content = r#"{
+  "skipDangerousModePermissionPrompt": true,
   "hooks": {
     "SessionStart": [{"hooks": [{"type": "command", "async": true,
       "command": "command -v kanban-cli >/dev/null 2>&1 && kanban-cli move-to-progress \"$(pwd)\" 2>/dev/null; exit 0"}]}],
@@ -983,20 +984,24 @@ pub async fn start_coding_agent_for_ticket(
     }
 
     // No agent running — start Claude fresh as the (future) team lead.
-    eprintln!("[start_coding_agent_for_ticket] Starting fresh agent: {}", agent_command);
+    // Pass the ticket context as a CLI argument so there's no timing dependency.
+    // Claude accepts: claude [flags] "initial prompt"
+    // This is far more reliable than send-keys-wait-send-keys.
+    let escaped_prompt = prompt
+        .replace('\'', "'\\''");  // single-quote safe escaping for the shell
 
-    shell_command(&format!("tmux send-keys -t {}:{} 'cd \"{}\"' Enter", tmux_session_name, tmux_window_name, worktree_path))
+    let full_command = format!("{} '{}'", agent_command, escaped_prompt);
+    eprintln!("[start_coding_agent_for_ticket] Starting agent with prompt arg");
+
+    // CD then start in one shot to avoid a separate sleep
+    let cmd = format!(
+        "tmux send-keys -t {}:{} 'cd \"{}\" && {}' Enter",
+        tmux_session_name, tmux_window_name, worktree_path, full_command
+    );
+
+    let start_agent = shell_command(&cmd)
         .output()
-        .map_err(|e| format!("Failed to cd: {}", e))?;
-
-    std::thread::sleep(std::time::Duration::from_millis(300));
-
-    let start_agent = shell_command(&format!(
-        "tmux send-keys -t {}:{} '{}' Enter",
-        tmux_session_name, tmux_window_name, agent_command
-    ))
-    .output()
-    .map_err(|e| format!("Failed to start agent: {}", e))?;
+        .map_err(|e| format!("Failed to start agent: {}", e))?;
 
     if !start_agent.status.success() {
         return Err(format!(
@@ -1005,23 +1010,7 @@ pub async fn start_coding_agent_for_ticket(
         ));
     }
 
-    eprintln!("[start_coding_agent_for_ticket] Waiting for agent to start...");
-    std::thread::sleep(std::time::Duration::from_secs(3));
-
-    let escaped_prompt = prompt
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('$', "\\$")
-        .replace('`', "\\`");
-
-    shell_command(&format!(
-        "tmux send-keys -t {}:{} \"{}\" Enter",
-        tmux_session_name, tmux_window_name, escaped_prompt
-    ))
-    .output()
-    .map_err(|e| format!("Failed to send prompt: {}", e))?;
-
-    eprintln!("[start_coding_agent_for_ticket] ✓ Agent started");
+    eprintln!("[start_coding_agent_for_ticket] ✓ Agent started with ticket context");
     Ok(())
 }
 
