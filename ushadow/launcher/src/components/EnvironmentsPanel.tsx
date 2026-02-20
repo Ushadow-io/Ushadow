@@ -423,8 +423,8 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
 
   const handleOpenTerminal = async () => {
     if (environment.path) {
-      const windowName = `ushadow-${environment.name}`
-      await tauri.openTmuxInTerminal(windowName, environment.path)
+      // Pass empty window name — backend will attach to the session's current window
+      await tauri.openTmuxInTerminal('', environment.path, environment.name)
     }
   }
 
@@ -622,8 +622,8 @@ function DetailView({ environment, onStart, onStop, onOpenInBrowser, onMerge, on
 
   const handleOpenTerminal = async () => {
     if (environment.path) {
-      const windowName = `ushadow-${environment.name}`
-      await tauri.openTmuxInTerminal(windowName, environment.path)
+      // Pass empty window name — backend attaches to the session's current window
+      await tauri.openTmuxInTerminal('', environment.path, environment.name)
     }
   }
 

@@ -869,21 +869,20 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
         }
     }
 
-    // Step 2: Close tmux window if it exists
-    // Sanitize env_name by replacing slashes (tmux doesn't allow slashes in window names)
+    // Step 2: Kill the per-environment tmux session (ush-{env}) if it exists
     let sanitized_env_name = env_name.replace('/', "-").replace('\\', "-");
-    let window_name = format!("ushadow-{}", sanitized_env_name);
-    eprintln!("[delete_environment] Closing tmux window '{}'...", window_name);
-    let close_result = shell_command(&format!("tmux kill-window -t {}", window_name))
+    let session_name = format!("ush-{}", sanitized_env_name);
+    eprintln!("[delete_environment] Killing tmux session '{}'...", session_name);
+    let close_result = shell_command(&format!("tmux kill-session -t {}", session_name))
         .output();
 
     match close_result {
         Ok(output) if output.status.success() => {
-            messages.push(format!("[OK] Closed tmux window '{}'", window_name));
+            messages.push(format!("[OK] Killed tmux session '{}'", session_name));
         }
         Ok(_) | Err(_) => {
-            // Tmux window might not exist, that's fine
-            eprintln!("[delete_environment] No tmux window found for '{}'", window_name);
+            // Session might not exist, that's fine
+            eprintln!("[delete_environment] No tmux session found for '{}'", session_name);
         }
     }
 
@@ -949,59 +948,88 @@ pub async fn create_worktree_with_workmux(
 
     eprintln!("[create_worktree_with_workmux] Worktrees directory: {}", worktrees_dir);
 
+    // Clone branch_name before moving it into create_worktree so we can use it below
+    let branch_name_for_window = branch_name.clone();
+
     // Create the worktree directly
     let worktree = create_worktree(main_repo.clone(), worktrees_dir, name.clone(), branch_name, base_branch).await?;
 
     eprintln!("[create_worktree_with_workmux] Worktree created at: {}", worktree.path);
 
-    // Now attach tmux to the worktree
-    // Ensure tmux is running
-    let tmux_check = shell_command("tmux list-sessions")
+    // New model: one tmux session per environment, named ush-{env}.
+    // Window name = sanitized branch name (slashes → dashes).
+    // custom_window_name is kept in the signature for backwards-compat but is ignored.
+    let _ = custom_window_name;
+
+    let session_name = format!("ush-{}", name);
+
+    // Window name is the branch (sanitized for tmux — no slashes allowed)
+    let branch_for_window = branch_name_for_window.as_deref().unwrap_or(&name);
+    let window_name = branch_for_window.replace('/', "-").replace('\\', "-");
+
+    eprintln!("[create_worktree_with_workmux] Target session '{}', window '{}'", session_name, window_name);
+
+    // Check whether the session already exists
+    let session_exists = shell_command(&format!("tmux has-session -t {}", session_name))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !session_exists {
+        // S5: brand-new env — create session with the first window
+        eprintln!("[create_worktree_with_workmux] Session '{}' not found, creating it", session_name);
+        let create_result = shell_command(&format!(
+            "tmux new-session -d -s {} -c '{}' -n '{}'",
+            session_name, worktree.path, window_name
+        ))
         .output();
 
-    let tmux_available = matches!(tmux_check, Ok(output) if output.status.success());
-
-    if !tmux_available {
-        eprintln!("[create_worktree_with_workmux] tmux not running, attempting to start a new session");
-        let _start_tmux = shell_command("tmux new-session -d -s workmux")
-            .output();
-    }
-
-    // Create tmux window for the worktree
-    // Use custom window name if provided, otherwise generate from name
-    let window_name = if let Some(custom_name) = custom_window_name {
-        custom_name
+        match create_result {
+            Ok(output) if output.status.success() => {
+                eprintln!("[create_worktree_with_workmux] ✓ Created session '{}' with window '{}'", session_name, window_name);
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("[create_worktree_with_workmux] Warning: Failed to create session: {}", stderr);
+            }
+            Err(e) => {
+                eprintln!("[create_worktree_with_workmux] Warning: Failed to create session: {}", e);
+            }
+        }
     } else {
-        // Sanitize name by replacing slashes and other special chars with dashes (tmux doesn't allow slashes in window names)
-        let sanitized_name = name.replace('/', "-").replace('\\', "-");
-        format!("ushadow-{}", sanitized_name)
-    };
-    let create_window = shell_command(&format!(
-        "tmux new-window -t workmux -n {} -c '{}'",
-        window_name, worktree.path
-    ))
-        .output();
+        // Session already exists — add a window for this branch if not already present
+        let window_exists = shell_command(&format!(
+            "tmux list-windows -t {} -F '#{{window_name}}' 2>/dev/null | grep -Fx '{}'",
+            session_name, window_name
+        ))
+        .output()
+        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
 
-    match create_window {
-        Ok(output) if output.status.success() => {
-            eprintln!("[create_worktree_with_workmux] Created tmux window '{}'", window_name);
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[create_worktree_with_workmux] Warning: Failed to create tmux window: {}", stderr);
-            // Don't fail the whole operation if tmux fails
-        }
-        Err(e) => {
-            eprintln!("[create_worktree_with_workmux] Warning: Failed to create tmux window: {}", e);
-            // Don't fail the whole operation if tmux fails
+        if !window_exists {
+            eprintln!("[create_worktree_with_workmux] Session exists, adding window '{}'", window_name);
+            let create_result = shell_command(&format!(
+                "tmux new-window -t {} -n '{}' -c '{}'",
+                session_name, window_name, worktree.path
+            ))
+            .output();
+
+            match create_result {
+                Ok(output) if output.status.success() => {
+                    eprintln!("[create_worktree_with_workmux] ✓ Added window '{}' to session '{}'", window_name, session_name);
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("[create_worktree_with_workmux] Warning: Failed to add window: {}", stderr);
+                }
+                Err(e) => {
+                    eprintln!("[create_worktree_with_workmux] Warning: Failed to add window: {}", e);
+                }
+            }
+        } else {
+            eprintln!("[create_worktree_with_workmux] ✓ Window '{}' already exists in session '{}'", window_name, session_name);
         }
     }
-
-    // Note: We intentionally do NOT call `workmux open` here.
-    // `workmux open <name>` creates a window named `ushadow-{name}` (e.g. `ushadow-beige`),
-    // which would duplicate the ticket-specific window already created above (e.g.
-    // `ushadow-beige-act-dashboard-dev-ush-6`). The ticket window is the source of truth;
-    // workmux registration happens lazily when the user opens the terminal.
 
     Ok(worktree)
 }
@@ -1393,238 +1421,203 @@ pub async fn kill_tmux_server() -> Result<String, String> {
     Ok("Killed tmux server".to_string())
 }
 
-/// Open a tmux window in iTerm2 (falls back to Terminal.app if not available)
+/// Open a tmux session in iTerm2 (falls back to Terminal.app if not available).
+///
+/// Implements three scenarios from the agent window spec:
+/// - S1: No `ush-{env}` session → create session + window, open new iTerm window
+/// - S2: Session + iTerm window (title contains env_name) → focus existing iTerm window
+/// - S3: Session exists, no matching iTerm window → open new iTerm window attaching to session
 #[tauri::command]
 pub async fn open_tmux_in_terminal(
     window_name: String,
     worktree_path: String,
     environment_name: Option<String>,
 ) -> Result<String, String> {
-    eprintln!("[open_tmux_in_terminal] Opening tmux window: {} at path: {}", window_name, worktree_path);
-    if let Some(ref env) = environment_name {
-        eprintln!("[open_tmux_in_terminal] Environment name: {}", env);
-    }
+    use std::fs;
 
-    // STEP 1: Use workmux to ensure window exists (idempotent)
-    // Extract worktree name from path (e.g., "gold" from "/Users/stu/repos/worktrees/ushadow/gold")
-    let worktree_name = std::path::Path::new(&worktree_path)
-        .file_name()
-        .ok_or("Invalid worktree path")?
-        .to_str()
-        .ok_or("Path contains invalid UTF-8")?;
+    // Derive the environment name from the parameter, or fall back to the last
+    // component of the worktree path (e.g. "beige" from ".../worktrees/ushadow/beige").
+    let env_name: String = environment_name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            std::path::Path::new(&worktree_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("ushadow")
+                .to_string()
+        });
 
-    // Ensure the specific named window exists in the workmux session.
-    // We use direct tmux commands rather than `workmux open` to avoid creating a
-    // second window with the workmux naming convention (ushadow-{worktree_name})
-    // alongside the ticket-specific window (ushadow-{branch}-{ticket_id}).
-    // Note: `tmux has-window` does not exist; use list-windows + grep instead.
-    let window_exists = shell_command(&format!(
-        "tmux list-windows -t workmux -F '#{{window_name}}' 2>/dev/null | grep -Fx '{}'",
-        window_name
-    ))
-    .output()
-    .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-    .unwrap_or(false);
+    // Sanitize window_name for tmux (slashes not allowed in window names)
+    let sanitized_window = window_name.replace('/', "-").replace('\\', "-");
 
-    if !window_exists {
-        eprintln!("[open_tmux_in_terminal] Window '{}' not found, creating it", window_name);
+    let session_name = format!("ush-{}", env_name);
+
+    eprintln!(
+        "[open_tmux_in_terminal] env='{}' session='{}' window='{}' path='{}'",
+        env_name, session_name, sanitized_window, worktree_path
+    );
+
+    // ── Ensure the tmux session exists; manage windows only if a branch is given ──
+    let session_exists = shell_command(&format!("tmux has-session -t {}", session_name))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !session_exists {
+        // S1: create the session.  If we have a target window name use it; otherwise
+        // create a default window named after the env.
+        let first_window = if sanitized_window.is_empty() { env_name.clone() } else { sanitized_window.clone() };
+        eprintln!("[open_tmux_in_terminal] Session '{}' not found, creating with window '{}' (S1)", session_name, first_window);
         match shell_command(&format!(
-            "tmux new-window -t workmux -n {} -c '{}'",
-            window_name, worktree_path
+            "tmux new-session -d -s {} -c '{}' -n '{}'",
+            session_name, worktree_path, first_window
         ))
         .output()
         {
             Ok(output) if output.status.success() => {
-                eprintln!("[open_tmux_in_terminal] ✓ Created tmux window '{}'", window_name);
+                eprintln!("[open_tmux_in_terminal] ✓ Created session '{}'", session_name);
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("[open_tmux_in_terminal] Warning: Failed to create window: {}", stderr);
+                eprintln!("[open_tmux_in_terminal] Warning: Failed to create session: {}", stderr);
             }
             Err(e) => {
-                eprintln!("[open_tmux_in_terminal] Warning: Failed to create window: {}", e);
+                eprintln!("[open_tmux_in_terminal] Warning: Failed to create session: {}", e);
             }
         }
+    } else if !sanitized_window.is_empty() {
+        // Session exists and a specific window was requested — ensure it exists and select it
+        let window_exists = shell_command(&format!(
+            "tmux list-windows -t {} -F '#{{window_name}}' 2>/dev/null | grep -Fx '{}'",
+            session_name, sanitized_window
+        ))
+        .output()
+        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
+
+        if !window_exists {
+            eprintln!(
+                "[open_tmux_in_terminal] Window '{}' missing from session '{}', creating it",
+                sanitized_window, session_name
+            );
+            let _ = shell_command(&format!(
+                "tmux new-window -t {} -n '{}' -c '{}'",
+                session_name, sanitized_window, worktree_path
+            ))
+            .output();
+        }
+
+        // Pre-select the window so attach lands on it
+        let _ = shell_command(&format!(
+            "tmux select-window -t {}:'{}'",
+            session_name, sanitized_window
+        ))
+        .output();
+        eprintln!("[open_tmux_in_terminal] Selected window '{}' in session '{}'", sanitized_window, session_name);
     } else {
-        eprintln!("[open_tmux_in_terminal] ✓ Window '{}' already exists", window_name);
+        eprintln!("[open_tmux_in_terminal] Session exists, no specific window requested — will attach to current window (S2/S3)");
     }
 
-    // The window name passed in is the authoritative name (ticket-specific or env-specific).
-    // We ensured it exists above, so use it directly.
-    let actual_window_name = window_name.clone();
-
-    // Pre-select the window in the tmux session. This makes `tmux attach-session -t workmux`
-    // (without a window spec) land on the right window. It also handles the case where
-    // multiple windows share a name — select-window picks the first match, and the attach
-    // script doesn't need to resolve the ambiguity.
-    let _ = shell_command(&format!(
-        "tmux select-window -t workmux:{}",
-        actual_window_name
-    ))
-    .output();
-    eprintln!("[open_tmux_in_terminal] Selected window '{}'", actual_window_name);
-
-    // Spawn agent start/resume in the background so it doesn't delay iTerm opening.
-    // check_and_resume_agent sleeps for several seconds waiting for Claude to load,
-    // so running it inline would make the button feel slow.
-    {
-        let window = actual_window_name.clone();
+    // ── Spawn agent start/resume in background (only when a specific window is known) ──
+    if !sanitized_window.is_empty() {
+        let sess = session_name.clone();
+        let win = sanitized_window.clone();
         let wpath = worktree_path.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = check_and_resume_agent("workmux", &window, &wpath).await;
+            let _ = check_and_resume_agent(&sess, &win, &wpath).await;
         });
     }
 
-    eprintln!("[open_tmux_in_terminal] Checking if window is already being viewed");
-
-    // Check if any client is currently viewing this specific window
-    // Use the format '#{client_session}:#{window_name}' to get accurate window info per client
-    let check_clients = shell_command(&format!(
-        "tmux list-clients -F '#{{client_session}}:#{{window_name}}' 2>/dev/null | grep -x 'workmux:{}'",
-        actual_window_name
-    ))
-    .output();
-
-    let has_clients = match &check_clients {
-        Ok(output) if output.status.success() => {
-            let clients = String::from_utf8_lossy(&output.stdout);
-            eprintln!("[open_tmux_in_terminal] Clients viewing window: {}", clients.trim());
-            true
-        }
-        _ => {
-            eprintln!("[open_tmux_in_terminal] No clients viewing window");
-            false
-        }
-    };
-
-    if has_clients {
-        eprintln!("[open_tmux_in_terminal] Window is already being viewed, checking if iTerm has visible windows");
-        // Someone is already viewing this window, but check if iTerm actually has windows
-        #[cfg(target_os = "macos")]
-        {
-            // Check if iTerm has any windows
-            let count_windows = Command::new("osascript")
-                .arg("-e")
-                .arg(r#"tell application "iTerm" to count windows"#)
-                .output();
-
-            let has_iterm_windows = count_windows
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .and_then(|s| s.trim().parse::<i32>().ok())
-                .map(|count| count > 0)
-                .unwrap_or(false);
-
-            if !has_iterm_windows {
-                eprintln!("[open_tmux_in_terminal] Tmux clients exist but no iTerm windows - creating new window");
-                // Fall through to create a new window
-            } else {
-                eprintln!("[open_tmux_in_terminal] iTerm has windows, attempting to focus");
-                // First, activate iTerm
-                let focus_script = r#"tell application "iTerm" to activate"#;
-                let _ = Command::new("osascript")
-                    .arg("-e")
-                    .arg(focus_script)
-                    .output();
-
-                // Give iTerm time to activate
-                std::thread::sleep(std::time::Duration::from_millis(200));
-
-                // Try to select the window that's attached to this tmux session
-                let select_script = format!(
-                    r#"tell application "iTerm"
-    repeat with aWindow in windows
-        try
-            tell current session of aWindow
-                if name contains "{}" then
-                    select aWindow
-                    return
-                end if
-            end tell
-        end try
-    end repeat
-end tell"#,
-                    actual_window_name
-                );
-                let _ = Command::new("osascript")
-                    .arg("-e")
-                    .arg(&select_script)
-                    .output();
-
-                return Ok(format!("Focused iTerm window for '{}'", actual_window_name));
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            return Ok(format!("Tmux window '{}' is already open", actual_window_name));
-        }
-    }
-
-    eprintln!("[open_tmux_in_terminal] No clients viewing this window, will open new terminal");
-
+    // ── macOS: S2 = focus existing iTerm window; S3/S1 = open new one ──────
     #[cfg(target_os = "macos")]
     {
-        // Check if iTerm2 is installed and available
-        let iterm_check = Command::new("osascript")
+        // Map env names to RGB colors (0-255)
+        let (r, g, b) = match env_name.as_str() {
+            "gold" | "yellow" => (255, 215, 0),
+            "green"           => (0, 200, 80),
+            "red"             => (255, 60, 60),
+            "purple" | "pink" => (200, 0, 255),
+            "orange"          => (255, 165, 0),
+            "blue"            => (50, 120, 255),
+            "cyan"            => (0, 220, 220),
+            "brown"           => (165, 42, 42),
+            "beige"           => (220, 200, 160),
+            _                 => (128, 128, 128),
+        };
+
+        // S2: Check for an existing iTerm window whose title contains the env name.
+        // The attach script sets the window title to the env_name via \033]0;{env_name}\007.
+        let find_script = format!(
+            r#"tell application "iTerm"
+    set matched to false
+    repeat with w in windows
+        if name of w contains "{}" then
+            select w
+            set matched to true
+            exit repeat
+        end if
+    end repeat
+    if matched then
+        return "found"
+    else
+        return "not_found"
+    end if
+end tell"#,
+            env_name
+        );
+
+        let iterm_running = Command::new("osascript")
             .arg("-e")
             .arg("application \"iTerm\" is running")
-            .output();
-
-        let iterm_available = iterm_check
+            .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-        if iterm_available {
-            eprintln!("[open_tmux_in_terminal] Using iTerm2");
+        if iterm_running {
+            let find_result = Command::new("osascript")
+                .arg("-e")
+                .arg(&find_script)
+                .output();
 
-            // Use provided environment name for display and coloring
-            // Fall back to extracting from window name if not provided
-            let env_name = environment_name
-                .as_deref()
-                .unwrap_or_else(|| window_name.strip_prefix("ushadow-").unwrap_or(&window_name));
-            let display_name = format!("Ushadow: {}", env_name);
+            let found_window = find_result
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim() == "found")
+                .unwrap_or(false);
 
-            // Map env names to RGB colors (0-255)
-            let (r, g, b) = match env_name {
-                "gold" | "yellow" => (255, 215, 0),      // Gold/Yellow
-                "green" => (0, 255, 0),                  // Green
-                "red" => (255, 0, 0),                    // Red
-                "purple" | "pink" => (255, 0, 255),      // Purple/Magenta
-                "orange" => (255, 165, 0),               // Orange
-                "blue" => (0, 0, 255),                   // Blue
-                "cyan" => (0, 255, 255),                 // Cyan
-                "brown" => (165, 42, 42),                // Brown
-                _ => (128, 128, 128),                    // Gray for unknown
-            };
+            if found_window {
+                eprintln!("[open_tmux_in_terminal] S2: Found existing iTerm window for '{}', focused it", env_name);
+                // Activate iTerm to bring it to front
+                let _ = Command::new("osascript")
+                    .arg("-e")
+                    .arg(r#"tell application "iTerm" to activate"#)
+                    .output();
+                return Ok(format!("Focused existing iTerm window for '{}'", env_name));
+            }
 
-            // Create temp script file with color sequences to avoid quote escaping hell
-            use std::fs;
-            let temp_script = format!("/tmp/ushadow_iterm_{}.sh", window_name.replace("/", "_"));
+            eprintln!("[open_tmux_in_terminal] S1/S3: No iTerm window for '{}', opening new one", env_name);
 
+            // Write a temp attach script that sets the iTerm title and attaches to the session
+            let temp_script = format!("/tmp/ushadow_iterm_{}.sh", env_name.replace("/", "_"));
             let script_content = format!(
-                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\n# Attach to workmux session - window was pre-selected by the launcher\nexec tmux attach-session -t workmux\n",
-                display_name,
-                r, g, b,
+                "#!/bin/bash\nprintf '\\033]0;{}\\007\\033]6;1;bg;red;brightness;{}\\007\\033]6;1;bg;green;brightness;{}\\007\\033]6;1;bg;blue;brightness;{}\\007'\nexec tmux attach-session -t {}\n",
+                env_name, r, g, b, session_name
             );
-            fs::write(&temp_script, script_content)
-                .map_err(|e| format!("Failed to write temp script: {}", e))?;
-
+            fs::write(&temp_script, &script_content)
+                .map_err(|e| format!("Failed to write attach script: {}", e))?;
             shell_command(&format!("chmod +x {}", temp_script))
                 .output()
-                .map_err(|e| format!("Failed to chmod: {}", e))?;
+                .map_err(|e| format!("Failed to chmod attach script: {}", e))?;
 
-            // iTerm2 AppleScript - simplified to just create a new window
-            // The check above already ensures we don't create duplicates
             let applescript = format!(
                 r#"tell application "iTerm"
     activate
     set newWindow to (create window with default profile)
     tell current session of newWindow
-        set name to "{}"
         write text "{} && exit"
     end tell
 end tell"#,
-                display_name,
                 temp_script
             );
 
@@ -1635,35 +1628,27 @@ end tell"#,
                 .map_err(|e| format!("Failed to run iTerm2 AppleScript: {}", e))?;
 
             if output.status.success() {
-                eprintln!("[open_tmux_in_terminal] iTerm2 success");
-                return Ok(format!("Opened tmux window '{}' in iTerm2", actual_window_name));
+                eprintln!("[open_tmux_in_terminal] ✓ Opened new iTerm window for session '{}'", session_name);
+                return Ok(format!("Opened iTerm window for '{}'", env_name));
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!("[open_tmux_in_terminal] iTerm2 failed: {}, falling back to Terminal.app", stderr);
             }
         } else {
-            eprintln!("[open_tmux_in_terminal] iTerm2 not available, using Terminal.app");
+            eprintln!("[open_tmux_in_terminal] iTerm not running, trying Terminal.app");
         }
 
-        // Fallback to Terminal.app (macOS default terminal)
-        let env_name = environment_name
-            .as_deref()
-            .unwrap_or_else(|| actual_window_name.strip_prefix("ushadow-").unwrap_or(&actual_window_name));
-        let display_name = format!("Ushadow: {}", env_name);
-
-        // Create temp script for Terminal.app (simpler than iTerm2, no tab colors)
-        use std::fs;
-        let temp_script = format!("/tmp/ushadow_terminal_{}.sh", actual_window_name.replace("/", "_"));
+        // Fallback: Terminal.app
+        let temp_script = format!("/tmp/ushadow_terminal_{}.sh", env_name.replace("/", "_"));
         let script_content = format!(
-            "#!/bin/bash\nprintf '\\033]0;{}\\007'\n# Attach to workmux session - window was pre-selected by the launcher\nexec tmux attach-session -t workmux\n",
-            display_name
+            "#!/bin/bash\nprintf '\\033]0;{}\\007'\nexec tmux attach-session -t {}\n",
+            env_name, session_name
         );
-        fs::write(&temp_script, script_content)
-            .map_err(|e| format!("Failed to write temp script: {}", e))?;
-
+        fs::write(&temp_script, &script_content)
+            .map_err(|e| format!("Failed to write Terminal attach script: {}", e))?;
         shell_command(&format!("chmod +x {}", temp_script))
             .output()
-            .map_err(|e| format!("Failed to chmod: {}", e))?;
+            .map_err(|e| format!("Failed to chmod Terminal attach script: {}", e))?;
 
         let applescript = format!(
             r#"tell application "Terminal"
@@ -1681,41 +1666,28 @@ end tell"#,
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Failed to open Terminal: {}", stderr));
+            return Err(format!("Failed to open Terminal.app: {}", stderr));
         }
 
-        eprintln!("[open_tmux_in_terminal] Terminal.app success");
-        Ok(format!("Opened tmux window '{}' in Terminal.app", actual_window_name))
+        eprintln!("[open_tmux_in_terminal] ✓ Terminal.app success");
+        Ok(format!("Opened Terminal.app for session '{}'", session_name))
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        // For Linux/Windows - create dedicated tmux session per environment
-        // Try common terminal emulators in order of preference
-        let _env_name = window_name.strip_prefix("ushadow-").unwrap_or(&window_name);
-
-        // Create the tmux session if it doesn't exist
-        let _ = shell_command(&format!(
-            "tmux has-session -t {} 2>/dev/null || tmux new-session -d -s {} -c '{}'",
-            window_name, window_name, worktree_path
-        )).output();
-
-        // Create tmux commands before the array to extend their lifetime
-        let xfce_cmd = format!("tmux attach-session -t {}", window_name);
-        let xterm_cmd = format!("tmux attach-session -t {}", window_name);
-
-        // Try different terminal emulators
-        let terminals = vec![
-            ("gnome-terminal", vec!["--", "tmux", "attach-session", "-t", &window_name]),
-            ("konsole", vec!["-e", "tmux", "attach-session", "-t", &window_name]),
-            ("xfce4-terminal", vec!["-e", xfce_cmd.as_str()]),
-            ("xterm", vec!["-e", xterm_cmd.as_str()]),
+        // Linux: try common terminal emulators
+        let attach_cmd = format!("tmux attach-session -t {}", session_name);
+        let terminals: Vec<(&str, Vec<&str>)> = vec![
+            ("gnome-terminal", vec!["--", "tmux", "attach-session", "-t", &session_name]),
+            ("konsole", vec!["-e", "tmux", "attach-session", "-t", &session_name]),
+            ("xfce4-terminal", vec!["-e", attach_cmd.as_str()]),
+            ("xterm", vec!["-e", attach_cmd.as_str()]),
         ];
 
         for (terminal, args) in terminals {
-            if let Ok(_) = Command::new(terminal).args(&args).spawn() {
-                eprintln!("[open_tmux_in_terminal] Opened {} for session {}", terminal, window_name);
-                return Ok(format!("Opened tmux session '{}' in {}", window_name, terminal));
+            if Command::new(terminal).args(&args).spawn().is_ok() {
+                eprintln!("[open_tmux_in_terminal] Opened {} for session {}", terminal, session_name);
+                return Ok(format!("Opened {} for session '{}'", terminal, session_name));
             }
         }
 
@@ -1757,25 +1729,51 @@ pub async fn check_and_resume_agent(
         return Ok(false);
     }
 
-    // 2. Check if Claude has prior session files for this worktree.
-    //    If yes, resume — the user gets their conversation back.
-    //    If no, start fresh and pass the ticket context as a CLI argument
-    //    so there's no timing dependency or risk of text landing on the wrong prompt.
+    // 2. Find the most-recently-modified Claude session file for this worktree.
+    //    Pass its UUID directly to --resume so Claude skips the picker entirely.
+    //    Bare `claude --resume` without a session ID shows an interactive chooser
+    //    whenever multiple sessions exist — not what we want.
     let home_dir = std::env::var("HOME").unwrap_or_default();
     let encoded_path = worktree_path.replace('/', "-");
     let sessions_dir = format!("{}/.claude/projects/{}", home_dir, encoded_path);
-    let has_sessions = std::fs::read_dir(&sessions_dir)
-        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| {
-            e.path().extension().map(|x| x == "jsonl").unwrap_or(false)
-        }))
-        .unwrap_or(false);
 
-    let claude_cmd = if has_sessions {
-        eprintln!("[check_and_resume_agent] Session files found — resuming");
-        "claude --resume --dangerously-skip-permissions".to_string()
+    // Walk the directory, collect (modified_time, session_id) for every .jsonl file,
+    // then pick the most recently modified one.
+    let latest_session_id: Option<String> = std::fs::read_dir(&sessions_dir)
+        .ok()
+        .map(|entries| {
+            let mut candidates: Vec<(std::time::SystemTime, String)> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "jsonl").unwrap_or(false))
+                .filter_map(|e| {
+                    let session_id = e.path()
+                        .file_stem()?
+                        .to_str()?
+                        .to_string();
+                    let modified = e.metadata().ok()?.modified().ok()?;
+                    Some((modified, session_id))
+                })
+                .collect();
+            candidates.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+            candidates.into_iter().next().map(|(_, id)| id)
+        })
+        .flatten();
+
+    // Build the claude invocation, writing it to a temp script to avoid multi-layer
+    // quoting issues.  tmux send-keys passes each argument as separate keystroke runs,
+    // so any unbalanced inner quotes turn "You are working" into "Youareworking".
+    // A temp script path has no special characters, so the outer quoting is trivially safe.
+    // Inside the script we use bash $'...' (ANSI-C quoting) which handles \' and \n cleanly.
+    let script_key = format!("{}-{}", tmux_session_name, tmux_window_name).replace('/', "_");
+    let temp_script = format!("/tmp/ushadow_claude_{}.sh", script_key);
+
+    let script_content = if let Some(session_id) = latest_session_id {
+        eprintln!("[check_and_resume_agent] Resuming session {} (no picker)", session_id);
+        format!(
+            "#!/bin/bash\nexec claude --resume {} --dangerously-skip-permissions\n",
+            session_id
+        )
     } else {
-        // Fresh start: look up the ticket and embed context directly in the command.
-        // claude "initial message" starts an interactive session pre-loaded with that message.
         let ticket = get_ticket_by_worktree_path(worktree_path);
         if let Some(ticket) = ticket {
             eprintln!("[check_and_resume_agent] No sessions — starting fresh with ticket context: {}", ticket.title);
@@ -1784,19 +1782,32 @@ pub async fn check_and_resume_agent(
                 ticket.title,
                 ticket.description.as_ref().unwrap_or(&"No description".to_string())
             );
-            // Single-quote escape for the outer shell command
-            let escaped = prompt.replace('\'', "'\\''");
-            format!("claude --dangerously-skip-permissions '{}'", escaped)
+            // Escape for bash $'...' ANSI-C quoting: backslash → \\, single-quote → \', newline → \n
+            let ansi_escaped = prompt
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('\n', "\\n");
+            format!(
+                "#!/bin/bash\nexec claude --dangerously-skip-permissions $'{}'\n",
+                ansi_escaped
+            )
         } else {
             eprintln!("[check_and_resume_agent] No sessions, no ticket — starting plain Claude");
-            "claude --dangerously-skip-permissions".to_string()
+            "#!/bin/bash\nexec claude --dangerously-skip-permissions\n".to_string()
         }
     };
 
-    eprintln!("[check_and_resume_agent] Running: {}", claude_cmd);
+    if let Err(e) = std::fs::write(&temp_script, &script_content) {
+        eprintln!("[check_and_resume_agent] Warning: could not write temp script: {}", e);
+    } else {
+        let _ = shell_command(&format!("chmod +x {}", temp_script)).output();
+    }
+
+    // tmux send-keys just types the script path — no special characters, no quoting issues
+    eprintln!("[check_and_resume_agent] Running via script: {}", temp_script);
     let result = shell_command(&format!(
-        "tmux send-keys -t {}:{} '{}' Enter",
-        tmux_session_name, tmux_window_name, claude_cmd
+        "tmux send-keys -t {}:{} 'bash {}' Enter",
+        tmux_session_name, tmux_window_name, temp_script
     ))
     .output();
 
