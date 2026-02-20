@@ -177,6 +177,8 @@ jobs:
 
       - name: Pre-build kanban-cli universal binary
         working-directory: ${{ env.LAUNCHER_DIR }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           # tauri_build::build() (build.rs) requires bundled/**/* to match at
           # least one file or it aborts compilation.  The real content is
@@ -198,6 +200,16 @@ jobs:
             src-tauri/target/aarch64-apple-darwin/release/kanban-cli \
             src-tauri/target/x86_64-apple-darwin/release/kanban-cli \
             -output src-tauri/target/universal-apple-darwin/release/kanban-cli
+
+          # codesign --deep (used by Tauri v1) requires every nested binary to
+          # already be signed before it can sign the parent .app bundle.
+          # Pre-sign kanban-cli here so codesign doesn't fail with
+          # "code object is not signed at all in subcomponent".
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            codesign --force -s "$APPLE_SIGNING_IDENTITY" --timestamp \
+              src-tauri/target/universal-apple-darwin/release/kanban-cli
+            echo "✓ kanban-cli pre-signed"
+          fi
 
       - name: Build Tauri app (Universal)
         working-directory: ${{ env.LAUNCHER_DIR }}
