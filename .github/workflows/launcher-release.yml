@@ -142,8 +142,60 @@ jobs:
             exit 1
           fi
 
+      - name: Import Apple signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Decode the base64 certificate and import it into a temporary keychain
+          # so codesign can find it during the build without persisting credentials.
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "$(security list-keychains -d user | xargs)"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          rm "$RUNNER_TEMP/cert.p12"
+
+      - name: Pre-build kanban-cli universal binary
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        run: |
+          # tauri_build::build() (build.rs) requires bundled/**/* to match at
+          # least one file or it aborts compilation.  The real content is
+          # populated by `npm run prebundle` inside the next step's
+          # `npm run tauri:build:macos`; here we only need a placeholder so
+          # cargo doesn't bail before it even starts compiling kanban-cli.
+          mkdir -p src-tauri/bundled
+          touch src-tauri/bundled/.buildplaceholder
+
+          # Tauri v1 only lipo's the main binary; kanban-cli must be lipo'd
+          # manually so the bundler can find it at
+          # universal-apple-darwin/release/kanban-cli.
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --target aarch64-apple-darwin --bin kanban-cli
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --target x86_64-apple-darwin --bin kanban-cli
+          mkdir -p src-tauri/target/universal-apple-darwin/release
+          lipo -create \
+            src-tauri/target/aarch64-apple-darwin/release/kanban-cli \
+            src-tauri/target/x86_64-apple-darwin/release/kanban-cli \
+            -output src-tauri/target/universal-apple-darwin/release/kanban-cli
+
       - name: Build Tauri app (Universal)
         working-directory: ${{ env.LAUNCHER_DIR }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build:macos
 
       - name: Find and upload artifacts

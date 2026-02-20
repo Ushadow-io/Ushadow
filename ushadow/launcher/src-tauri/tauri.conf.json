@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Ushadow",
-    "version": "0.8.0"
+    "version": "0.8.5"
   },
   "tauri": {
     "allowlist": {
@@ -94,7 +94,7 @@
         "minimumSystemVersion": "10.15",
         "exceptionDomain": "localhost",
         "signingIdentity": null,
-        "entitlements": null
+        "entitlements": "entitlements.plist"
       },
       "windows": {
         "webviewInstallMode": {
@@ -132,7 +132,8 @@
         "minWidth": 800,
         "minHeight": 600,
         "center": true,
-        "visible": false
+        "visible": false,
+        "fileDropEnabled": false
       }
     ]
   }

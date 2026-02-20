@@ -9,9 +9,13 @@ import {
   Plus,
   AlertCircle,
   CheckCircle,
+  Code2,
+  Loader2,
 } from 'lucide-react'
 import type { Ticket, Epic, UshadowEnvironment } from '../hooks/useTauri'
 import { EnvironmentBadge } from './EnvironmentBadge'
+import { NewEnvironmentDialog } from './NewEnvironmentDialog'
+import { getColors } from '../utils/colors'
 
 interface TicketDetailDialogProps {
   ticket: Ticket
@@ -24,10 +28,10 @@ interface TicketDetailDialogProps {
 }
 
 const PRIORITY_OPTIONS = [
-  { value: 'low', label: 'Low', color: 'bg-gray-600' },
-  { value: 'medium', label: 'Medium', color: 'bg-blue-600' },
-  { value: 'high', label: 'High', color: 'bg-orange-600' },
-  { value: 'urgent', label: 'Urgent', color: 'bg-red-600' },
+  { value: 'low', label: 'Low', color: 'bg-surface-500', textColor: 'text-text-secondary', icon: '▼' },
+  { value: 'medium', label: 'Medium', color: 'bg-info-500', textColor: 'text-white', icon: '■' },
+  { value: 'high', label: 'High', color: 'bg-warning-500', textColor: 'text-surface-900', icon: '▲' },
+  { value: 'urgent', label: 'Urgent', color: 'bg-error-500', textColor: 'text-white', icon: '⚠' },
 ]
 
 const STATUS_OPTIONS = [
@@ -62,6 +66,12 @@ export function TicketDetailDialog({
   const [creatingWorktree, setCreatingWorktree] = useState(false)
   const [assigningEnv, setAssigningEnv] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
+  const [showPriorityMenu, setShowPriorityMenu] = useState(false)
+  const [showWorkstreamMenu, setShowWorkstreamMenu] = useState(false)
+  const [showRecreateDialog, setShowRecreateDialog] = useState(false)
+  const [recreatingTmux, setRecreatingTmux] = useState(false)
+  const [openingTerminal, setOpeningTerminal] = useState(false)
 
   // Load environments on mount
   useEffect(() => {
@@ -69,6 +79,33 @@ export function TicketDetailDialog({
       loadEnvironments()
     }
   }, [isOpen])
+
+  // Close modal on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    if (isOpen) {
+      document.addEventListener('keydown', handleKeyDown)
+      return () => document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen, onClose])
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (!target.closest('[data-dropdown]')) {
+        setShowPriorityMenu(false)
+        setShowWorkstreamMenu(false)
+      }
+    }
+
+    if (showPriorityMenu || showWorkstreamMenu) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showPriorityMenu, showWorkstreamMenu])
 
   const loadEnvironments = async () => {
     setLoadingEnvs(true)
@@ -90,15 +127,37 @@ export function TicketDetailDialog({
     try {
       const { tauri } = await import('../hooks/useTauri')
 
+      const statusChanged = status !== ticket.status
+
+      // Stop agent when moving to todo: kill the tmux window
+      if (statusChanged && status === 'todo' && ticket.tmux_window_name) {
+        try {
+          await tauri.killTmuxWindow(ticket.tmux_window_name)
+        } catch (err) {
+          console.error('[TicketDetail] Failed to kill tmux window:', err)
+          // Non-fatal: continue with status update
+        }
+      }
+
+      // Unassign when moving to backlog or done: clear all assignment fields
+      const shouldUnassign = statusChanged && (status === 'backlog' || status === 'done')
+      // For todo: only clear tmux fields (keep worktree/branch/env for reference)
+      const shouldClearTmux = statusChanged && status === 'todo'
+
       await tauri.updateTicket(
         ticket.id,
         title !== ticket.title ? title : undefined,
         description !== ticket.description ? description : undefined,
-        status !== ticket.status ? status : undefined,
+        statusChanged ? status : undefined,
         priority !== ticket.priority ? priority : undefined,
         epicId !== ticket.epic_id ? epicId || undefined : undefined,
         JSON.stringify(tags) !== JSON.stringify(ticket.tags) ? tags : undefined,
-        undefined // order
+        undefined, // order
+        shouldUnassign ? '' : undefined, // worktreePath
+        shouldUnassign ? '' : undefined, // branchName
+        shouldUnassign || shouldClearTmux ? '' : undefined, // tmuxWindowName
+        shouldUnassign || shouldClearTmux ? '' : undefined, // tmuxSessionName
+        shouldUnassign ? '' : undefined, // environmentName
       )
 
       setSuccessMessage('Ticket updated successfully')
@@ -122,26 +181,31 @@ export function TicketDetailDialog({
     setTags(tags.filter((t) => t !== tagToRemove))
   }
 
-  const handleCreateWorktree = async () => {
+  const handleCreateWorktree = async (envName: string, branchName: string, baseBranch?: string) => {
     setError(null)
     setCreatingWorktree(true)
+    setShowNewEnvDialog(false)
 
     try {
       const { tauri } = await import('../hooks/useTauri')
 
-      // Get epic for base branch if ticket has one
-      const epic = epicId ? epics.find((e) => e.id === epicId) : null
-
+      // Note: When user provides a branch via dialog, we don't use epic's shared branch
+      // The branchName from dialog is in format "envname/feature-basebranch" (for main/dev)
+      // or "envname/feature" (when branching from another worktree)
       const request = {
-        ticketId: ticket.id,
-        ticketTitle: ticket.title,
-        projectRoot,
-        branchName: undefined, // Will be auto-generated
-        baseBranch: epic?.base_branch || 'main',
-        epicBranch: epic?.branch_name || undefined,
+        ticket_id: ticket.id,
+        ticket_title: ticket.title,
+        project_root: projectRoot,
+        environment_name: envName, // Simple name for worktree directory (e.g., "staging")
+        branch_name: branchName,   // Full branch name (e.g., "staging/feature-main")
+        base_branch: baseBranch,   // Use the base branch from dialog (main/dev/worktree branch)
+        epic_branch: undefined,    // Not using epic branch when user provides custom branch
       }
 
       const result = await tauri.createTicketWorktree(request)
+
+      // Extract environment name from branch name (format: "envname/feature")
+      const extractedEnvName = result.branch_name.split('/')[0]
 
       // Update ticket with worktree info
       await tauri.updateTicket(
@@ -156,7 +220,8 @@ export function TicketDetailDialog({
         result.worktree_path, // worktreePath
         result.branch_name, // branchName
         result.tmux_window_name, // tmuxWindowName
-        result.tmux_session_name // tmuxSessionName
+        result.tmux_session_name, // tmuxSessionName
+        extractedEnvName // environmentName - extract from branch name
       )
 
       // Start coding agent in the tmux window
@@ -201,6 +266,9 @@ export function TicketDetailDialog({
 
       const result = await tauri.attachTicketToWorktree(ticket.id, env.path, env.branch)
 
+      // Extract environment name from branch name (format: "envname/feature")
+      const extractedEnvName = result.branch_name.split('/')[0]
+
       // Update ticket with environment info
       await tauri.updateTicket(
         ticket.id,
@@ -215,7 +283,7 @@ export function TicketDetailDialog({
         result.branch_name, // branchName
         result.tmux_window_name, // tmuxWindowName
         result.tmux_session_name, // tmuxSessionName
-        env.name // environmentName - save the environment name!
+        extractedEnvName // environmentName - extract from branch name
       )
 
       // Start coding agent in the tmux window
@@ -242,57 +310,107 @@ export function TicketDetailDialog({
     }
   }
 
+  const handleRecreateTmuxWindow = async () => {
+    if (!ticket.worktree_path || !ticket.environment_name) {
+      setError('Missing worktree path or environment name')
+      return
+    }
+
+    setError(null)
+    setRecreatingTmux(true)
+    setShowRecreateDialog(false)
+
+    try {
+      const { tauri } = await import('../hooks/useTauri')
+
+      // Recreate the tmux window using attach command
+      await tauri.attachTmuxToWorktree(
+        ticket.worktree_path,
+        ticket.environment_name,
+        ticket.tmux_window_name || undefined
+      )
+
+      setSuccessMessage('Tmux window recreated successfully')
+      setTimeout(() => setSuccessMessage(null), 3000)
+
+      // Open terminal — derive canonical window name from branch_name
+      const windowName = ticket.branch_name
+        ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+        : ticket.tmux_window_name || ''
+      if (windowName) {
+        await tauri.openTmuxInTerminal(
+          windowName,
+          ticket.worktree_path,
+          ticket.environment_name
+        )
+      }
+    } catch (err) {
+      console.error('[TicketDetail] Error recreating tmux window:', err)
+      setError(err instanceof Error ? err.message : 'Failed to recreate tmux window')
+    } finally {
+      setRecreatingTmux(false)
+    }
+  }
+
+  const handleClearAssignment = async () => {
+    setShowRecreateDialog(false)
+
+    try {
+      const { tauri } = await import('../hooks/useTauri')
+      await tauri.updateTicket(
+        ticket.id,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        '', '', '', '', ''
+      )
+      setSuccessMessage('Environment assignment cleared')
+      setTimeout(() => setSuccessMessage(null), 3000)
+      onUpdated()
+    } catch (clearErr) {
+      setError(clearErr instanceof Error ? clearErr.message : 'Failed to clear assignment')
+    }
+  }
+
   if (!isOpen) return null
 
   const selectedEpic = epicId ? epics.find((e) => e.id === epicId) : null
   const hasAssignment = ticket.worktree_path || ticket.branch_name
 
+  const selectedPriority = PRIORITY_OPTIONS.find(opt => opt.value === priority)
+
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center z-50 p-4"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+      className="fixed inset-0 flex items-center justify-center z-50 p-4 bg-black/70 backdrop-blur-sm font-sans"
       onClick={onClose}
       data-testid="ticket-detail-dialog"
     >
       <div
-        className="rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto"
-        style={{ backgroundColor: '#1a1a21', border: '1px solid #3d3d4a' }}
+        className="rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden bg-[#0f0f13] border border-white/10 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div
-          className="flex items-center justify-between p-6"
-          style={{ borderBottom: '1px solid #3d3d4a' }}
-        >
-          <h2 className="text-xl font-semibold" style={{ color: '#f4f4f5' }}>
+        <div className="flex items-center justify-between px-8 py-6 border-b border-white/5 bg-gradient-to-b from-white/[0.03] to-transparent">
+          <h2 className="text-xl font-semibold text-white/90">
             Ticket Details
           </h2>
           <button
             onClick={onClose}
-            className="transition-colors"
-            style={{ color: '#a1a1aa' }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#f4f4f5')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#a1a1aa')}
+            className="transition-all rounded-lg p-2 hover:bg-white/5 text-white/40 hover:text-white/80"
             data-testid="ticket-detail-close"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-8 space-y-8">
           {/* Success Message */}
           {successMessage && (
             <div
-              className="rounded-lg p-4 flex items-start gap-3"
-              style={{
-                backgroundColor: 'rgba(74, 222, 128, 0.1)',
-                border: '1px solid rgba(74, 222, 128, 0.2)',
-              }}
+              className="rounded-xl p-4 flex items-start gap-3 bg-emerald-500/10 border border-emerald-500/20"
               data-testid="ticket-detail-success"
             >
-              <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" style={{ color: '#4ade80' }} />
+              <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0 text-emerald-400" />
               <div className="flex-1">
-                <p className="text-sm" style={{ color: '#a1a1aa' }}>
+                <p className="text-sm text-white/70">
                   {successMessage}
                 </p>
               </div>
@@ -302,16 +420,12 @@ export function TicketDetailDialog({
           {/* Error Message */}
           {error && (
             <div
-              className="rounded-lg p-4 flex items-start gap-3"
-              style={{
-                backgroundColor: 'rgba(248, 113, 113, 0.1)',
-                border: '1px solid rgba(248, 113, 113, 0.2)',
-              }}
+              className="rounded-xl p-4 flex items-start gap-3 bg-red-500/10 border border-red-500/20"
               data-testid="ticket-detail-error"
             >
-              <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" style={{ color: '#f87171' }} />
+              <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0 text-red-400" />
               <div className="flex-1">
-                <p className="text-sm" style={{ color: '#a1a1aa' }}>
+                <p className="text-sm text-white/70">
                   {error}
                 </p>
               </div>
@@ -319,96 +433,70 @@ export function TicketDetailDialog({
           )}
 
           {/* Two Column Layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Column - Basic Info */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold" style={{ color: '#f4f4f5' }}>
-                Basic Information
-              </h3>
-
+          <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-10">
+            {/* Left Column - Content */}
+            <div className="space-y-6">
               {/* Title */}
               <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  Title *
+                <label className="block text-xs font-medium mb-3 tracking-wider uppercase text-white/40">
+                  Title
                 </label>
                 <input
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #52525b',
-                    color: '#f4f4f5',
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.border = '1px solid #4ade80')}
-                  onBlur={(e) => (e.currentTarget.style.border = '1px solid #52525b')}
+                  className="w-full px-0 py-2 text-2xl font-semibold transition-all focus:outline-none bg-transparent border-0 border-b-2 border-white/5 text-white/90 placeholder-white/20 focus:border-primary-400/50"
+                  placeholder="Enter ticket title..."
                   data-testid="ticket-detail-title"
                 />
               </div>
 
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  Description
-                </label>
-                <textarea
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-lg h-32 transition-all focus:outline-none"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #52525b',
-                    color: '#f4f4f5',
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.border = '1px solid #4ade80')}
-                  onBlur={(e) => (e.currentTarget.style.border = '1px solid #52525b')}
-                  data-testid="ticket-detail-description"
-                />
-              </div>
+              {/* Compact Metadata Row */}
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Priority - Compact */}
+                <div className="relative" data-dropdown>
+                  <button
+                    type="button"
+                    onClick={() => setShowPriorityMenu(!showPriorityMenu)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20 transition-all"
+                    data-testid="ticket-detail-priority"
+                  >
+                    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${selectedPriority?.color} ${selectedPriority?.textColor}`}>
+                      <span className="text-sm">{selectedPriority?.icon}</span>
+                      {selectedPriority?.label}
+                    </span>
+                    <svg className="w-3 h-3 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
 
-              {/* Priority */}
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  Priority
-                </label>
-                <select
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value as typeof priority)}
-                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #52525b',
-                    color: '#f4f4f5',
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.border = '1px solid #4ade80')}
-                  onBlur={(e) => (e.currentTarget.style.border = '1px solid #52525b')}
-                  data-testid="ticket-detail-priority"
-                >
-                  {PRIORITY_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  {showPriorityMenu && (
+                    <div className="absolute z-10 mt-1 left-0 bg-[#1a1a21] border border-white/10 rounded-lg shadow-2xl overflow-hidden min-w-[140px]">
+                      {PRIORITY_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => {
+                            setPriority(opt.value as typeof priority)
+                            setShowPriorityMenu(false)
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.05] transition-colors border-b border-white/5 last:border-0"
+                        >
+                          <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${opt.color} ${opt.textColor}`}>
+                            <span className="text-sm">{opt.icon}</span>
+                            {opt.label}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-              {/* Status */}
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  Status
-                </label>
+                {/* Status - Compact */}
                 <select
                   value={status}
                   onChange={(e) => setStatus(e.target.value as typeof status)}
-                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #52525b',
-                    color: '#f4f4f5',
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.border = '1px solid #4ade80')}
-                  onBlur={(e) => (e.currentTarget.style.border = '1px solid #52525b')}
+                  className="px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/10 text-white/70 text-xs hover:bg-white/[0.05] hover:border-white/20 focus:border-primary-400/50 focus:outline-none font-medium transition-all"
                   data-testid="ticket-detail-status"
                 >
                   {STATUS_OPTIONS.map((opt) => (
@@ -417,24 +505,12 @@ export function TicketDetailDialog({
                     </option>
                   ))}
                 </select>
-              </div>
 
-              {/* Epic */}
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  Epic
-                </label>
+                {/* Epic - Compact */}
                 <select
                   value={epicId}
                   onChange={(e) => setEpicId(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-lg transition-all focus:outline-none"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #52525b',
-                    color: '#f4f4f5',
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.border = '1px solid #4ade80')}
-                  onBlur={(e) => (e.currentTarget.style.border = '1px solid #52525b')}
+                  className="px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/10 text-white/70 text-xs hover:bg-white/[0.05] hover:border-white/20 focus:border-primary-400/50 focus:outline-none font-medium transition-all"
                   data-testid="ticket-detail-epic"
                 >
                   <option value="">No Epic</option>
@@ -444,320 +520,318 @@ export function TicketDetailDialog({
                     </option>
                   ))}
                 </select>
+
                 {selectedEpic && (
                   <div
-                    className="mt-2 flex items-center gap-2 text-sm px-2 py-1 rounded"
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-medium"
                     style={{ backgroundColor: `${selectedEpic.color}20`, color: selectedEpic.color }}
                   >
-                    <Folder className="w-4 h-4" />
-                    <span>Base: {selectedEpic.base_branch}</span>
+                    <Folder className="w-3 h-3" />
+                    <span>{selectedEpic.base_branch}</span>
                   </div>
                 )}
               </div>
 
+              {/* Description - Now Much Larger */}
+              <div>
+                <label className="block text-xs font-medium mb-3 tracking-wider uppercase text-white/40">
+                  Description
+                </label>
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="w-full px-4 py-4 rounded-xl h-[32rem] transition-all focus:outline-none font-normal leading-relaxed bg-white/[0.03] border border-white/5 text-white/80 placeholder-white/20 focus:border-primary-400/30 focus:bg-white/[0.05] resize-none"
+                  data-testid="ticket-detail-description"
+                  placeholder="Describe the task, requirements, or issue in detail..."
+                />
+              </div>
+
               {/* Tags */}
               <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
+                <label className="block text-xs font-medium mb-3 tracking-wider uppercase text-white/40">
                   Tags
                 </label>
-                <div className="flex gap-2 mb-2">
+                <div className="flex gap-2 mb-3">
                   <input
                     type="text"
                     value={tagInput}
                     onChange={(e) => setTagInput(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && handleAddTag()}
-                    className="flex-1 px-4 py-2.5 rounded-lg transition-all focus:outline-none"
-                    placeholder="Add tag"
-                    style={{
-                      backgroundColor: '#252530',
-                      border: '1px solid #52525b',
-                      color: '#f4f4f5',
-                    }}
-                    onFocus={(e) => (e.currentTarget.style.border = '1px solid #4ade80')}
-                    onBlur={(e) => (e.currentTarget.style.border = '1px solid #52525b')}
+                    className="flex-1 px-4 py-2.5 rounded-lg bg-white/[0.03] border border-white/10 text-white/80 placeholder-white/30 hover:bg-white/[0.05] hover:border-white/20 focus:border-primary-400/50 focus:outline-none transition-all"
+                    placeholder="Add tag (press Enter)"
                     data-testid="ticket-detail-tag-input"
                   />
                   <button
                     onClick={handleAddTag}
-                    className="px-3 py-2.5 rounded-lg font-medium transition-all"
-                    style={{
-                      backgroundColor: 'transparent',
-                      border: '1px solid #52525b',
-                      color: '#f4f4f5',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = '#2d2d3a'
-                      e.currentTarget.style.borderColor = '#a1a1aa'
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent'
-                      e.currentTarget.style.borderColor = '#52525b'
-                    }}
+                    className="px-3 py-2.5 rounded-lg font-medium transition-all hover:bg-white/[0.05] border border-white/10 text-white/60 hover:text-white/80 hover:border-white/20"
                     data-testid="ticket-detail-add-tag"
                   >
                     <Plus className="w-5 h-5" />
                   </button>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {tags.map((tag, idx) => (
-                    <span
-                      key={idx}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
-                      style={{
-                        backgroundColor: 'rgba(74, 222, 128, 0.15)',
-                        color: '#86efac',
-                      }}
-                      data-testid={`ticket-detail-tag-${tag}`}
-                    >
-                      <Tag className="w-3 h-3" />
-                      {tag}
-                      <button
-                        onClick={() => handleRemoveTag(tag)}
-                        className="ml-0.5 transition-colors"
-                        style={{ color: '#71717a' }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = '#f4f4f5')}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = '#71717a')}
+                {tags.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {tags.map((tag, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-primary-400/15 text-primary-300 border border-primary-400/20"
+                        data-testid={`ticket-detail-tag-${tag}`}
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
+                        <Tag className="w-3.5 h-3.5" />
+                        {tag}
+                        <button
+                          onClick={() => handleRemoveTag(tag)}
+                          className="ml-1 transition-colors hover:bg-white/10 rounded p-0.5 text-white/40 hover:text-white/70"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Right Column - Environment Assignment */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold" style={{ color: '#f4f4f5' }}>
-                Environment Assignment
-              </h3>
+            {/* Right Column - Workstream */}
+            <div className="space-y-6">
+              {/* Workstream Section Header */}
+              <div>
+                <h3 className="text-xs font-medium tracking-wider uppercase text-white/40 mb-6">
+                  Workstream
+                </h3>
 
-              {/* Current Assignment */}
-              {hasAssignment ? (
-                <div
-                  className="p-4 rounded-lg"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #3d3d4a',
-                  }}
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    {ticket.environment_name && (
+                {/* Current Assignment Display */}
+                {hasAssignment && ticket.environment_name && (
+                  <div
+                    className="p-5 rounded-xl mb-6 border"
+                    style={{
+                      backgroundColor: `${getColors(ticket.environment_name).primary}10`,
+                      borderColor: `${getColors(ticket.environment_name).primary}30`,
+                    }}
+                  >
+                    <div className="flex items-center justify-between mb-4">
                       <EnvironmentBadge
                         name={ticket.environment_name}
                         variant="label"
                         showIcon={true}
                         testId="ticket-detail-assigned-env"
                       />
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400">
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>Active</span>
+                      </div>
+                    </div>
+                    {ticket.branch_name && (
+                      <div className="flex items-center gap-2 text-sm mb-2 font-medium text-white/60">
+                        <GitBranch className="w-4 h-4" />
+                        <span className="truncate">{ticket.branch_name}</span>
+                      </div>
                     )}
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded text-xs" style={{ backgroundColor: 'rgba(74, 222, 128, 0.2)', color: '#4ade80' }}>
-                      <CheckCircle className="w-3 h-3" />
-                      <span>Assigned</span>
-                    </div>
+                    {ticket.tmux_window_name && (
+                      <div className="flex items-center gap-2 text-xs font-medium text-white/40">
+                        <Terminal className="w-3.5 h-3.5" />
+                        <span>{ticket.tmux_window_name}</span>
+                      </div>
+                    )}
                   </div>
-                  {ticket.branch_name && (
-                    <div className="flex items-center gap-2 text-sm mb-2" style={{ color: '#71717a' }}>
-                      <GitBranch className="w-3 h-3" />
-                      <span>{ticket.branch_name}</span>
-                    </div>
-                  )}
-                  {ticket.tmux_window_name && (
-                    <div className="flex items-center gap-2 text-xs" style={{ color: '#71717a' }}>
-                      <Terminal className="w-3 h-3" />
-                      <span>{ticket.tmux_window_name}</span>
-                    </div>
-                  )}
-                  {ticket.worktree_path && (
-                    <div className="text-xs truncate mt-2" style={{ color: '#52525b' }} title={ticket.worktree_path}>
-                      {ticket.worktree_path}
-                    </div>
-                  )}
+                )}
 
-                  {/* Action Buttons */}
-                  {ticket.tmux_window_name && ticket.worktree_path && (
-                    <div className="flex gap-2 mt-4 pt-3" style={{ borderTop: '1px solid #3d3d4a' }}>
+                {/* Assignment Selector */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium mb-3 text-white/60">
+                    {hasAssignment ? 'Switch Workstream' : 'Assign to Workstream'}
+                  </label>
+                  {loadingEnvs ? (
+                    <div className="text-sm px-4 py-3 rounded-lg bg-white/[0.02] text-white/40">
+                      Loading workstreams...
+                    </div>
+                  ) : (
+                    <div className="relative" data-dropdown>
                       <button
-                        onClick={async () => {
-                          const { tauri } = await import('../hooks/useTauri')
-                          await tauri.openTmuxInTerminal(ticket.tmux_window_name!, ticket.worktree_path!)
-                        }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg font-medium transition-all"
-                        style={{
-                          backgroundColor: '#252530',
-                          border: '1px solid #52525b',
-                          color: '#f4f4f5',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#2d2d3a'
-                          e.currentTarget.style.borderColor = '#a1a1aa'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = '#252530'
-                          e.currentTarget.style.borderColor = '#52525b'
-                        }}
-                        data-testid="ticket-detail-open-terminal"
+                        type="button"
+                        onClick={() => setShowWorkstreamMenu(!showWorkstreamMenu)}
+                        disabled={assigningEnv}
+                        className="w-full flex items-center justify-between px-4 py-3 rounded-lg bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20 transition-all text-left disabled:opacity-50"
+                        data-testid="ticket-detail-assign-selector"
                       >
-                        <Terminal className="w-4 h-4" />
-                        Open Terminal
-                      </button>
-                      <button
-                        onClick={async () => {
-                          const { tauri } = await import('../hooks/useTauri')
-                          await tauri.openInVscode(ticket.worktree_path!)
-                        }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg font-medium transition-all"
-                        style={{
-                          backgroundColor: '#252530',
-                          border: '1px solid #52525b',
-                          color: '#f4f4f5',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#2d2d3a'
-                          e.currentTarget.style.borderColor = '#a1a1aa'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = '#252530'
-                          e.currentTarget.style.borderColor = '#52525b'
-                        }}
-                        data-testid="ticket-detail-open-vscode"
-                      >
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M23.15 2.587L18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z"/>
+                        <span className="text-white/40 text-sm">
+                          {environments.filter(env => env.is_worktree && env.path && env.branch).length === 0
+                            ? 'No workstreams available'
+                            : 'Select a workstream...'}
+                        </span>
+                        <svg className="w-4 h-4 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
-                        Open VSCode
                       </button>
+
+                      {showWorkstreamMenu && environments.filter(env => env.is_worktree && env.path && env.branch).length > 0 && (
+                        <div className="absolute z-10 mt-2 w-full bg-[#1a1a21] border border-white/10 rounded-xl shadow-2xl max-h-80 overflow-y-auto">
+                          {environments
+                            .filter((env) => env.is_worktree && env.path && env.branch)
+                            .map((env) => {
+                              const envColors = getColors(env.name)
+                              return (
+                                <button
+                                  key={env.name}
+                                  type="button"
+                                  onClick={() => {
+                                    handleAssignToEnvironment(env)
+                                    setShowWorkstreamMenu(false)
+                                  }}
+                                  className="w-full flex items-center justify-between p-4 hover:bg-white/[0.05] transition-all border-b border-white/5 last:border-b-0"
+                                  data-testid={`ticket-detail-assign-${env.name}`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div
+                                      className="w-2 h-2 rounded-full flex-shrink-0"
+                                      style={{ backgroundColor: env.running ? '#10b981' : '#52525b' }}
+                                    />
+                                    <EnvironmentBadge
+                                      name={env.name}
+                                      variant="text"
+                                      showIcon={false}
+                                      className="text-base font-medium"
+                                    />
+                                  </div>
+                                </button>
+                              )
+                            })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              ) : (
-                <div
-                  className="p-4 rounded-lg text-sm"
-                  style={{
-                    backgroundColor: '#252530',
-                    border: '1px solid #3d3d4a',
-                    color: '#71717a',
-                  }}
-                >
-                  Not assigned to any environment
-                </div>
-              )}
 
-              {/* Create New Worktree */}
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  {hasAssignment ? 'Or create new worktree:' : 'Create new worktree:'}
-                </label>
+                {/* Create New Worktree */}
                 <button
-                  onClick={handleCreateWorktree}
+                  onClick={() => setShowNewEnvDialog(true)}
                   disabled={creatingWorktree}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 font-medium rounded-lg transition-all"
-                  style={{
-                    backgroundColor: creatingWorktree ? 'rgba(168, 85, 247, 0.4)' : '#a855f7',
-                    color: creatingWorktree ? 'rgba(255, 255, 255, 0.5)' : '#ffffff',
-                    cursor: creatingWorktree ? 'not-allowed' : 'pointer',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!creatingWorktree) e.currentTarget.style.backgroundColor = '#c084fc'
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!creatingWorktree) e.currentTarget.style.backgroundColor = '#a855f7'
-                  }}
+                  className="w-full flex items-center justify-center gap-2.5 px-4 py-3 font-semibold rounded-lg transition-all bg-gradient-to-r from-primary-500 to-primary-400 hover:from-primary-400 hover:to-primary-300 text-white shadow-lg shadow-primary-500/20 hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-100"
                   data-testid="ticket-detail-create-worktree"
                 >
                   <GitBranch className="w-5 h-5" />
-                  {creatingWorktree ? 'Creating Worktree...' : 'Create New Worktree'}
+                  {creatingWorktree ? 'Creating...' : 'Create New Workstream'}
                 </button>
-                <p className="text-xs mt-2" style={{ color: '#71717a' }}>
-                  Creates a new git worktree and tmux window for this ticket.
-                  {selectedEpic && selectedEpic.branch_name && ' Will use epic\'s shared branch.'}
-                </p>
+                {selectedEpic && selectedEpic.branch_name && (
+                  <p className="text-xs mt-3 font-medium text-white/40">
+                    Will use epic's shared branch
+                  </p>
+                )}
               </div>
 
-              {/* Assign to Existing Environment */}
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#a1a1aa' }}>
-                  {hasAssignment ? 'Reassign to different environment:' : 'Or assign to existing environment:'}
-                </label>
-                  {loadingEnvs ? (
-                    <div className="text-sm" style={{ color: '#71717a' }}>
-                      Loading environments...
-                    </div>
-                  ) : environments.length === 0 ? (
-                    <div className="text-sm" style={{ color: '#71717a' }}>
-                      No environments available
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {environments
-                        .filter((env) => env.is_worktree && env.path && env.branch)
-                        .map((env) => (
-                          <button
-                            key={env.name}
-                            onClick={() => handleAssignToEnvironment(env)}
-                            disabled={assigningEnv}
-                            className="w-full flex items-center justify-between p-3 rounded-lg text-left transition-all"
-                            style={{
-                              backgroundColor: '#252530',
-                              border: '1px solid #3d3d4a',
-                              opacity: assigningEnv ? 0.5 : 1,
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!assigningEnv) e.currentTarget.style.backgroundColor = '#2d2d3a'
-                            }}
-                            onMouseLeave={(e) => {
-                              if (!assigningEnv) e.currentTarget.style.backgroundColor = '#252530'
-                            }}
-                            data-testid={`ticket-detail-assign-${env.name}`}
-                          >
-                            <div className="flex-1">
-                              <EnvironmentBadge
-                                name={env.name}
-                                variant="text"
-                                showIcon={false}
-                                className="text-base"
-                              />
-                              <div className="text-xs flex items-center gap-2 mt-1" style={{ color: '#a1a1aa' }}>
-                                <GitBranch className="w-3 h-3" />
-                                <span>{env.branch}</span>
-                              </div>
-                            </div>
-                            <div
-                              className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: env.running ? '#4ade80' : '#52525b' }}
-                            />
-                          </button>
-                        ))}
-                    </div>
-                  )}
-              </div>
+              {/* Action Buttons */}
+              {ticket.tmux_window_name && ticket.worktree_path && (
+                <div className="pt-6 space-y-4 border-t border-white/5">
+                  <h3 className="text-xs font-medium tracking-wider uppercase text-white/40">
+                    Actions
+                  </h3>
+
+                  {/* Terminal Button */}
+                  <button
+                    onClick={async () => {
+                      if (openingTerminal) return
+                      setOpeningTerminal(true)
+                      try {
+                        const { tauri } = await import('../hooks/useTauri')
+                        // Derive canonical window name from branch_name (ushadow- prefix matches .workmux.yaml).
+                        // Falls back to stored tmux_window_name for environments without a branch.
+                        const windowName = ticket.branch_name
+                          ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+                          : ticket.tmux_window_name || ''
+                        await tauri.openTmuxInTerminal(
+                          windowName,
+                          ticket.worktree_path!,
+                          ticket.environment_name || undefined
+                        )
+                      } catch (err) {
+                        const message = err instanceof Error ? err.message : String(err)
+                        if (message.includes('no longer exists')) {
+                          setShowRecreateDialog(true)
+                        } else {
+                          setError(message)
+                        }
+                      } finally {
+                        setOpeningTerminal(false)
+                      }
+                    }}
+                    disabled={openingTerminal}
+                    className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-teal-600/10 border border-teal-500/20 text-teal-400 hover:bg-teal-600/20 hover:border-teal-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="ticket-detail-open-terminal"
+                  >
+                    {openingTerminal
+                      ? <Loader2 className="w-4.5 h-4.5 animate-spin" />
+                      : <Terminal className="w-4.5 h-4.5" />
+                    }
+                    <span>{openingTerminal ? 'Opening…' : 'Open Terminal'}</span>
+                  </button>
+
+                  {/* VSCode Button */}
+                  <button
+                    onClick={async () => {
+                      const { tauri } = await import('../hooks/useTauri')
+                      await tauri.openInVscode(ticket.worktree_path!)
+                    }}
+                    className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-blue-600/10 border border-blue-500/20 text-blue-400 hover:bg-blue-600/20 hover:border-blue-500/30"
+                    data-testid="ticket-detail-open-vscode"
+                  >
+                    <Code2 className="w-4.5 h-4.5" />
+                    <span>Open VSCode</span>
+                  </button>
+
+                  {/* Clear Assignment */}
+                  <button
+                    onClick={async () => {
+                      const shouldClear = confirm(
+                        'Clear this workstream assignment?\n\nThis will remove the worktree path, branch, and tmux window reference.'
+                      )
+                      if (shouldClear) {
+                        try {
+                          const { tauri } = await import('../hooks/useTauri')
+                          await tauri.updateTicket(
+                            ticket.id,
+                            undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                            '', '', '', '', ''
+                          )
+                          setSuccessMessage('Environment assignment cleared')
+                          setTimeout(() => setSuccessMessage(null), 3000)
+                          onUpdated()
+                        } catch (clearErr) {
+                          setError(clearErr instanceof Error ? clearErr.message : 'Failed to clear assignment')
+                        }
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all hover:bg-red-500/10 border border-white/10 text-red-400 hover:border-red-500/30"
+                    data-testid="ticket-detail-clear-assignment"
+                  >
+                    <X className="w-4 h-4" />
+                    Clear Assignment
+                  </button>
+                </div>
+              )}
 
               {/* Metadata */}
-              <div className="pt-4 text-xs space-y-1" style={{ borderTop: '1px solid #3d3d4a', color: '#71717a' }}>
-                <div>ID: {ticket.id}</div>
-                <div>Created: {new Date(ticket.created_at).toLocaleString()}</div>
-                <div>Updated: {new Date(ticket.updated_at).toLocaleString()}</div>
+              <div className="pt-6 text-xs space-y-2 font-mono border-t border-white/5 text-white/30">
+                <div className="flex justify-between">
+                  <span className="text-white/20">ID</span>
+                  <span>{ticket.id}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/20">Created</span>
+                  <span>{new Date(ticket.created_at).toLocaleDateString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/20">Updated</span>
+                  <span>{new Date(ticket.updated_at).toLocaleDateString()}</span>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4" style={{ borderTop: '1px solid #3d3d4a' }}>
+          {/* Footer Actions */}
+          <div className="flex items-center justify-end gap-3 px-8 py-6 border-t border-white/5 bg-gradient-to-t from-white/[0.02] to-transparent">
             <button
               onClick={onClose}
-              className="px-6 py-2.5 font-medium rounded-lg transition-all"
-              style={{
-                backgroundColor: 'transparent',
-                border: '1px solid #52525b',
-                color: '#f4f4f5',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#2d2d3a'
-                e.currentTarget.style.borderColor = '#a1a1aa'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent'
-                e.currentTarget.style.borderColor = '#52525b'
-              }}
+              className="px-5 py-2.5 font-medium rounded-lg transition-all hover:bg-white/5 text-white/60 hover:text-white/80"
               data-testid="ticket-detail-cancel"
             >
               Cancel
@@ -765,18 +839,7 @@ export function TicketDetailDialog({
             <button
               onClick={handleSave}
               disabled={saving || !title.trim()}
-              className="flex items-center gap-2 px-6 py-2.5 font-medium rounded-lg transition-all"
-              style={{
-                backgroundColor: saving || !title.trim() ? 'rgba(74, 222, 128, 0.4)' : '#4ade80',
-                color: saving || !title.trim() ? 'rgba(15, 15, 19, 0.5)' : '#0f0f13',
-                cursor: saving || !title.trim() ? 'not-allowed' : 'pointer',
-              }}
-              onMouseEnter={(e) => {
-                if (!saving && title.trim()) e.currentTarget.style.backgroundColor = '#86efac'
-              }}
-              onMouseLeave={(e) => {
-                if (!saving && title.trim()) e.currentTarget.style.backgroundColor = '#4ade80'
-              }}
+              className="flex items-center gap-2 px-5 py-2.5 font-medium rounded-lg transition-all bg-gradient-to-r from-primary-500 to-primary-400 hover:from-primary-400 hover:to-primary-300 text-white shadow-lg shadow-primary-500/20 hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-100"
               data-testid="ticket-detail-save"
             >
               <Save className="w-4 h-4" />
@@ -785,6 +848,88 @@ export function TicketDetailDialog({
           </div>
         </div>
       </div>
+
+      {/* Recreate Tmux Window Dialog */}
+      {showRecreateDialog && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-[60] p-4 bg-black/70 backdrop-blur-sm"
+          onClick={() => setShowRecreateDialog(false)}
+          data-testid="recreate-tmux-dialog"
+        >
+          <div
+            className="rounded-2xl w-full max-w-md bg-[#0f0f13] border border-white/10 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-5 border-b border-white/5">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/10">
+                  <AlertCircle className="w-5 h-5 text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-white/90">
+                    Tmux Window Missing
+                  </h3>
+                  <p className="text-sm text-white/50 mt-1">
+                    The tmux window no longer exists (likely due to system reboot)
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-white/60 leading-relaxed">
+                The worktree still exists at <span className="font-mono text-white/80">{ticket.worktree_path}</span>, but the tmux window <span className="font-mono text-white/80">{ticket.tmux_window_name}</span> is gone.
+              </p>
+              <p className="text-sm text-white/60 leading-relaxed">
+                What would you like to do?
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div className="px-6 py-5 space-y-3 border-t border-white/5">
+              <button
+                onClick={handleRecreateTmuxWindow}
+                disabled={recreatingTmux}
+                className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-gradient-to-r from-primary-500 to-primary-400 hover:from-primary-400 hover:to-primary-300 text-white shadow-lg shadow-primary-500/20 hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="recreate-tmux-confirm"
+              >
+                <Terminal className="w-4.5 h-4.5" />
+                {recreatingTmux ? 'Recreating...' : 'Recreate Tmux Window'}
+              </button>
+
+              <button
+                onClick={handleClearAssignment}
+                disabled={recreatingTmux}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/30 disabled:opacity-50"
+                data-testid="recreate-tmux-clear"
+              >
+                <X className="w-4 h-4" />
+                Clear Assignment
+              </button>
+
+              <button
+                onClick={() => setShowRecreateDialog(false)}
+                disabled={recreatingTmux}
+                className="w-full px-4 py-2.5 rounded-lg font-medium transition-all hover:bg-white/5 text-white/60 hover:text-white/80 disabled:opacity-50"
+                data-testid="recreate-tmux-cancel"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Environment Dialog */}
+      <NewEnvironmentDialog
+        isOpen={showNewEnvDialog}
+        projectRoot={projectRoot}
+        onClose={() => setShowNewEnvDialog(false)}
+        onLink={() => {}} // Not used in this context
+        onWorktree={handleCreateWorktree}
+      />
     </div>
   )
 }

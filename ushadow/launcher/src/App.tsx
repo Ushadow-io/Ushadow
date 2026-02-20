@@ -71,7 +71,7 @@ function App() {
   const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
   const [isResizing, setIsResizing] = useState(false)
   const [environmentConflict, setEnvironmentConflict] = useState<EnvironmentConflict | null>(null)
-  const [pendingEnvCreation, setPendingEnvCreation] = useState<{ name: string; branch: string } | null>(null)
+  const [pendingEnvCreation, setPendingEnvCreation] = useState<{ name: string; branch: string; baseBranch?: string } | null>(null)
   const [selectedEnvironment, setSelectedEnvironment] = useState<UshadowEnvironment | null>(null)
 
   // Auto-select environment matching current directory's ENV_NAME, or first running
@@ -947,9 +947,10 @@ function App() {
     log(`Creating worktree "${name}" from branch "${branch}"...`, 'step')
     log(`Project root: ${effectiveProjectRoot}`, 'info')
     log(`Worktrees dir: ${effectiveWorktreesDir}`, 'info')
+    log(`Base branch: ${baseBranch || 'auto-detect from suffix'}`, 'info')
 
     try {
-      const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch, true)
+      const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch, baseBranch, true, undefined)
       log(`✓ Worktree created successfully`, 'success')
       log(`Path: ${worktree.path}`, 'info')
       log(`Branch: ${worktree.branch}`, 'info')
@@ -980,12 +981,13 @@ function App() {
     }
   }
 
-  const handleNewEnvWorktree = async (name: string, branch: string) => {
+  const handleNewEnvWorktree = async (name: string, branch: string, baseBranch?: string) => {
     setShowNewEnvDialog(false)
 
     // Force lowercase to avoid Docker Compose naming issues
     name = name.toLowerCase()
     branch = branch.toLowerCase()
+    baseBranch = baseBranch?.toLowerCase()
 
     if (!effectiveWorktreesDir) {
       log('Worktrees directory not configured', 'error')
@@ -1002,7 +1004,7 @@ function App() {
 
         // Show conflict dialog
         setEnvironmentConflict(conflict)
-        setPendingEnvCreation({ name, branch })
+        setPendingEnvCreation({ name, branch, baseBranch })
         return
       }
     } catch (err) {
@@ -1025,7 +1027,7 @@ function App() {
       } else {
         // Step 1: Create the git worktree with workmux (includes tmux integration)
         log(`Creating git worktree at ${envPath}...`, 'info')
-        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, true)
+        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, baseBranch, true, undefined)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
 
         // Step 1.5: Write default admin credentials if configured
@@ -1098,7 +1100,7 @@ function App() {
   const handleConflictSwitchBranch = async () => {
     if (!environmentConflict || !pendingEnvCreation) return
 
-    const { name, branch } = pendingEnvCreation
+    const { name, branch, baseBranch } = pendingEnvCreation
     setEnvironmentConflict(null)
     setPendingEnvCreation(null)
 
@@ -1126,7 +1128,7 @@ function App() {
   const handleConflictDeleteAndRecreate = async () => {
     if (!environmentConflict || !pendingEnvCreation) return
 
-    const { name, branch } = pendingEnvCreation
+    const { name, branch, baseBranch } = pendingEnvCreation
     setEnvironmentConflict(null)
     setPendingEnvCreation(null)
 
@@ -1152,7 +1154,7 @@ function App() {
         log(`[DRY RUN] Worktree environment "${name}" created`, 'success')
       } else {
         log(`Creating git worktree at ${envPath}...`, 'info')
-        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, true)
+        const worktree = await tauri.createWorktreeWithWorkmux(effectiveProjectRoot, name, branch || undefined, baseBranch, true, undefined)
         log(`✓ Worktree created at ${worktree.path}`, 'success')
 
         // Write credentials if configured

@@ -190,10 +190,10 @@ export const tauri = {
   listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),
   checkWorktreeExists: (mainRepo: string, branch: string) => invoke<WorktreeInfo | null>('check_worktree_exists', { mainRepo, branch }),
   checkEnvironmentConflict: (mainRepo: string, envName: string) => invoke<EnvironmentConflict | null>('check_environment_conflict', { mainRepo, envName }),
-  createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
-    invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
-  createWorktreeWithWorkmux: (mainRepo: string, name: string, baseBranch?: string, background?: boolean) =>
-    invoke<WorktreeInfo>('create_worktree_with_workmux', { mainRepo, name, baseBranch, background }),
+  createWorktree: (mainRepo: string, worktreesDir: string, name: string, branchName?: string, baseBranch?: string) =>
+    invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, branchName, baseBranch }),
+  createWorktreeWithWorkmux: (mainRepo: string, name: string, branchName?: string, baseBranch?: string, background?: boolean, customWindowName?: string) =>
+    invoke<WorktreeInfo>('create_worktree_with_workmux', { mainRepo, name, branchName, baseBranch, background, customWindowName }),
   mergeWorktreeWithRebase: (mainRepo: string, name: string, useRebase: boolean, keepWorktree: boolean) =>
     invoke<string>('merge_worktree_with_rebase', { mainRepo, name, useRebase, keepWorktree }),
   listTmuxSessions: () => invoke<string[]>('list_tmux_sessions'),
@@ -201,7 +201,7 @@ export const tauri = {
   getEnvironmentTmuxStatus: (envName: string) => invoke<TmuxStatus>('get_environment_tmux_status', { envName }),
   getTmuxInfo: () => invoke<string>('get_tmux_info'),
   ensureTmuxRunning: () => invoke<string>('ensure_tmux_running'),
-  attachTmuxToWorktree: (worktreePath: string, envName: string) => invoke<string>('attach_tmux_to_worktree', { worktreePath, envName }),
+  attachTmuxToWorktree: (worktreePath: string, envName: string, windowNameOverride?: string) => invoke<string>('attach_tmux_to_worktree', { worktreePath, envName, windowNameOverride }),
   openInVscode: (path: string, envName?: string) => invoke<void>('open_in_vscode', { path, envName }),
   openInVscodeWithTmux: (path: string, envName: string) => invoke<void>('open_in_vscode_with_tmux', { path, envName }),
   removeWorktree: (mainRepo: string, name: string) => invoke<void>('remove_worktree', { mainRepo, name }),
@@ -211,7 +211,7 @@ export const tauri = {
   getTmuxSessions: () => invoke<TmuxSessionInfo[]>('get_tmux_sessions'),
   killTmuxWindow: (windowName: string) => invoke<string>('kill_tmux_window', { windowName }),
   killTmuxServer: () => invoke<string>('kill_tmux_server'),
-  openTmuxInTerminal: (windowName: string, worktreePath: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath }),
+  openTmuxInTerminal: (windowName: string, worktreePath: string, environmentName?: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath, environmentName }),
   captureTmuxPane: (windowName: string) => invoke<string>('capture_tmux_pane', { windowName }),
   getClaudeStatus: (windowName: string) => invoke<ClaudeStatus>('get_claude_status', { windowName }),
 
@@ -281,12 +281,13 @@ export const tauri = {
 
   // Kanban ticket-worktree integration
   createTicketWorktree: (request: {
-    ticketId: string
-    ticketTitle: string
-    projectRoot: string
-    branchName?: string
-    baseBranch?: string
-    epicBranch?: string
+    ticket_id: string
+    ticket_title: string
+    project_root: string
+    environment_name: string
+    branch_name?: string
+    base_branch?: string
+    epic_branch?: string
   }) => invoke<{
     worktree_path: string
     branch_name: string
