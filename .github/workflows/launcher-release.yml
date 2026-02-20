@@ -142,15 +142,26 @@ jobs:
             exit 1
           fi
 
+      - name: Check Apple certificate secret
+        id: check_cert
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "has_cert=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_cert=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+
       - name: Import Apple signing certificate
-        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        if: steps.check_cert.outputs.has_cert == 'true'
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify signing identity
-        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        if: steps.check_cert.outputs.has_cert == 'true'
         run: |
           echo "=== Available codesigning identities ==="
           security find-identity -v -p codesigning
