@@ -759,7 +759,7 @@ export function FlatServiceCard({
                   {/* Deploy target menu */}
                   {showDeployMenu && (
                     <div
-                      className="absolute right-0 mt-1 w-40 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg z-50"
+                      className="absolute right-0 bottom-full mb-1 w-40 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg z-dropdown"
                       data-testid={`flat-service-deploy-menu-${template.id}`}
                     >
                       <button
@@ -975,7 +975,7 @@ export function FlatServiceCard({
                   {/* Deploy target menu - same as main Deploy button */}
                   {showWorkersDeployMenu && (
                     <div
-                      className="absolute right-0 mt-1 w-40 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg z-50"
+                      className="absolute right-0 bottom-full mb-1 w-40 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg z-dropdown"
                       data-testid="deploy-workers-menu"
                     >
                       <button
