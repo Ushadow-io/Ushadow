@@ -381,7 +381,6 @@ class ServiceConfigManager:
             description=data.description,
             config=ConfigValues(values=data.config),
             deployment_labels=data.deployment_labels,
-            deployment_target=data.deployment_target,
             created_at=now,
             updated_at=now,
         )
@@ -421,9 +420,6 @@ class ServiceConfigManager:
             config.deployment_labels = data.deployment_labels
         if data.route is not None:
             config.route = data.route
-        if data.deployment_target is not None:
-            config.deployment_target = data.deployment_target
-
         config.updated_at = datetime.now(timezone.utc)
 
         self._save_service_configs()

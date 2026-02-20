@@ -2,7 +2,7 @@
  * ProviderCard - Individual provider card with expand/collapse and env var editing
  */
 
-import { CheckCircle, ChevronUp, Cloud, HardDrive, Loader2, Pencil, Save } from 'lucide-react'
+import { AlertCircle, CheckCircle, ChevronUp, Cloud, HardDrive, Loader2, Pencil, Save } from 'lucide-react'
 import EnvVarEditor from '../EnvVarEditor'
 import { EnvVarInfo, EnvVarConfig } from '../../services/api'
 
@@ -31,12 +31,16 @@ export default function ProviderCard({
   isLoading,
   isSaving,
 }: ProviderCardProps) {
+  const isConfigured = provider.configured !== false
+
   return (
     <div
       className={`rounded-lg border bg-white dark:bg-neutral-900 transition-all ${
         isExpanded
           ? 'border-primary-400 dark:border-primary-600'
-          : 'border-neutral-200 dark:border-neutral-700 hover:border-primary-300 dark:hover:border-primary-600'
+          : isConfigured
+          ? 'border-neutral-200 dark:border-neutral-700 hover:border-primary-300 dark:hover:border-primary-600'
+          : 'border-amber-300 dark:border-amber-700 hover:border-amber-400 dark:hover:border-amber-600'
       }`}
       data-testid={`provider-card-${provider.id}`}
     >
@@ -62,13 +66,20 @@ export default function ProviderCard({
           <div className="font-medium text-sm text-neutral-900 dark:text-neutral-100 truncate">
             {provider.name}
           </div>
-          {provider.description && !isExpanded && (
+          {!isConfigured && !isExpanded && (
+            <div className="text-xs text-amber-600 dark:text-amber-400">Needs setup</div>
+          )}
+          {isConfigured && provider.description && !isExpanded && (
             <div className="text-xs text-neutral-500 dark:text-neutral-400 truncate">
               {provider.description}
             </div>
           )}
         </div>
-        <CheckCircle className="h-4 w-4 text-success-500 flex-shrink-0" />
+        {isConfigured ? (
+          <CheckCircle className="h-4 w-4 text-success-500 flex-shrink-0" data-testid={`provider-status-ok-${provider.id}`} />
+        ) : (
+          <AlertCircle className="h-4 w-4 text-amber-500 flex-shrink-0" data-testid={`provider-status-warning-${provider.id}`} />
+        )}
         <button
           className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 flex-shrink-0"
           onClick={(e) => {
@@ -116,6 +127,7 @@ export default function ProviderCard({
                 <button
                   onClick={onCancel}
                   className="px-3 py-1.5 text-sm text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded"
+                  data-testid={`provider-cancel-${provider.id}`}
                 >
                   Cancel
                 </button>

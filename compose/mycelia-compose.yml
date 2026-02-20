@@ -56,15 +56,11 @@ services:
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./frontend/Dockerfile.${MYCELIA_FRONTEND_MODE:-dev}
-    pull_policy: build  # Build from source if mycelia submodule exists, otherwise pull from GHCR
+    pull_policy: missing
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-frontend
     ports:
       - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
-    volumes:
-      - ${PROJECT_ROOT:-..}/mycelia/frontend:/app
-      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/app/myceliasdk
     environment:
-      - MYCELIA_FRONTEND_MODE=dev
       - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:8888}
       - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
       - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
@@ -83,11 +79,11 @@ services:
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./backend/Dockerfile
-    pull_policy: build  # Build from source if mycelia submodule exists, otherwise pull from GHCR
+    pull_policy: missing
+    command: deno run -A server.ts serve
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
     ports:
       - "${MYCELIA_BACKEND_PORT:-8888}:8888"
-    command: deno task dev
     environment:
       # Application URLs
       - MYCELIA_URL=${MYCELIA_URL:-http://localhost:8888}
@@ -140,9 +136,6 @@ services:
       - LOG_LEVEL=${MYCELIA_LOG_LEVEL:-INFO}
       - NODE_ENV=${NODE_ENV:-production}
       - JOB_TRIGGERS_FAST=${JOB_TRIGGERS_FAST:-true}
-    volumes:
-      - ${PROJECT_ROOT:-..}/mycelia/backend:/app
-      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/myceliasdk
     networks:
       - ushadow-network
     healthcheck:
@@ -166,13 +159,12 @@ services:
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./python/Dockerfile
-    pull_policy: build  # Build from source if mycelia submodule exists, otherwise pull from GHCR
+    pull_policy: missing
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-python-worker
     environment:
       - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:8888}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
     volumes:
-      - ${PROJECT_ROOT:-..}/mycelia/python:/app
       - mycelia_worker_data:/root/.cache
     networks:
       - ushadow-network

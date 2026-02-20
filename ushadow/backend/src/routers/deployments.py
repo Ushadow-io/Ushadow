@@ -564,10 +564,10 @@ async def remove_deployment(
     """Remove a deployment (stop and delete)."""
     manager = get_deployment_manager()
     try:
-        removed = await manager.remove_deployment(deployment_id)
-        if not removed:
-            raise HTTPException(status_code=404, detail="Deployment not found")
+        await manager.remove_deployment(deployment_id)
         return {"success": True, "message": f"Deployment {deployment_id} removed"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Remove failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

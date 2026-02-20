@@ -2,9 +2,21 @@
 # Persistent database layer that stays running across app restarts
 #
 # Usage:
-#   docker compose -f compose/docker-compose.infra.yml --profile core up -d   # Start core (mongo, redis)
+#   docker compose -f compose/docker-compose.infra.yml --profile infra up -d  # Start core (mongo, redis, keycloak)
+#   docker compose -f compose/docker-compose.infra.yml --profile llm up -d    # Start Ollama
 #   docker compose -f compose/docker-compose.infra.yml down                   # Stop (keeps data)
 #   docker compose -f compose/docker-compose.infra.yml down -v                # Stop and remove data
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  ollama:
+    display_name: "Ollama"
+    description: "Local LLM inference server with OpenAI-compatible API"
+    requires: []
+    provides: llm
+    tags: ["llm", "inference", "local"]
 
 name: infra
 
@@ -217,6 +229,24 @@ services:
       retries: 5
       start_period: 30s
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["llm", "ollama"]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - ushadow-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # tailscale:
   #   image: tailscale/tailscale:latest
   #   container_name: ushadow-tailscale
@@ -257,4 +287,6 @@ volumes:
   neo4j_data:
     driver: local
   tailscale_state:
+    driver: local
+  ollama_models:
     driver: local

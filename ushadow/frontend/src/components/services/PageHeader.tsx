@@ -23,9 +23,6 @@ export default function PageHeader({
         <div className="flex items-center space-x-2">
           <Layers className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
           <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-700">
-            BETA
-          </span>
         </div>
         <p className="mt-2 text-neutral-600 dark:text-neutral-400">
           Create and manage service instances from templates

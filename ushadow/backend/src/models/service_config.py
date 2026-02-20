@@ -78,6 +78,10 @@ class Template(BaseModel):
     # Installation status (whether user has added from registry)
     installed: bool = Field(default=False, description="Whether user has added this from the registry")
 
+    # Setup status
+    needs_setup: bool = Field(default=False, description="Whether required env vars are missing")
+    wizard: Optional[str] = Field(None, description="Setup wizard ID if available (e.g., 'mycelia')")
+
 
 class ConfigValues(BaseModel):
     """Configuration values for an instance."""

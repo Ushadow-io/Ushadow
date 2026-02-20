@@ -610,6 +610,19 @@ class DeploymentManager:
             else:
                 logger.info(f"No port conflicts detected for {resolved_service.service_id}")
 
+        # Start required infra services before deploying (local Docker only)
+        if unode.type != UNodeType.KUBERNETES and _is_local_deployment(unode_hostname):
+            _compose_registry = get_compose_registry()
+            _discovered = _compose_registry.get_service(service_id)
+            _infra_svcs = _discovered.infra_services if _discovered else []
+            if _infra_svcs:
+                logger.info(f"Starting infra services for {service_id}: {_infra_svcs}")
+                from src.services.docker_manager import get_docker_manager
+                _docker_mgr = get_docker_manager()
+                _ok, _msg = await _docker_mgr._start_infra_services(_infra_svcs)
+                if not _ok:
+                    raise ValueError(f"Failed to start infrastructure services: {_msg}")
+
         # Deploy using the platform
         try:
             deployment = await platform.deploy(
@@ -863,11 +876,36 @@ class DeploymentManager:
         logger.info(f"Deployment updated with {len(overrides_only)} overrides")
         return updated_deployment
 
+    async def _remove_orphaned_container(self, deployment_id: str) -> bool:
+        """
+        Remove a container by deployment_id label when the owning unode is no
+        longer registered.  Used as a fallback from remove_deployment().
+        """
+        try:
+            import docker
+            docker_client = docker.from_env()
+            containers = docker_client.containers.list(
+                all=True,
+                filters={"label": [f"ushadow.deployment_id={deployment_id}"]}
+            )
+            if not containers:
+                return False
+            for container in containers:
+                if container.status in ("running", "restarting"):
+                    container.stop(timeout=10)
+                container.remove(force=True)
+                logger.info(f"Removed orphaned container {container.name} (deployment {deployment_id})")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove orphaned deployment {deployment_id}: {e}")
+            return False
+
     async def remove_deployment(self, deployment_id: str) -> bool:
         """Remove a deployment (stop and delete)."""
         deployment = await self.get_deployment(deployment_id)
         if not deployment:
-            return False
+            # Unode may no longer be registered; try a direct label-based lookup
+            return await self._remove_orphaned_container(deployment_id)
 
         unode_dict = await self.unodes_collection.find_one({
             "hostname": deployment.unode_hostname
@@ -908,13 +946,13 @@ class DeploymentManager:
                 # Get container
                 container = docker_client.containers.get(deployment.container_id or deployment.container_name)
 
-                # Stop if running
-                if container.status == "running":
+                # Stop if running or restarting
+                if container.status in ("running", "restarting"):
                     container.stop(timeout=10)
                     logger.info(f"Stopped local container {deployment.container_name}")
 
                 # Remove container
-                container.remove()
+                container.remove(force=True)
                 logger.info(f"Removed local container {deployment.container_name}")
 
             except Exception as e:
