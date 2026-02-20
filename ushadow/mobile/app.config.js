@@ -36,6 +36,7 @@ module.exports = {
           ? ['io.ushadow.mobile.dev.refresh', 'io.ushadow.mobile.dev.processing']
           : ['io.ushadow.mobile.refresh', 'io.ushadow.mobile.processing'],
         ITSAppUsesNonExemptEncryption: false,
+        NSSupportsLiveActivities: true,
       },
       appleTeamId: '6SJ7NH4HSZ',
       buildNumber: '8',
@@ -64,6 +65,8 @@ module.exports = {
     plugins: [
       './plugins/withAndroidManifestFix.js',
       './plugins/withAndroidGradleFix.js',
+      './plugins/withNowPlayingModule.js',
+      '@bacons/apple-targets',
       'expo-router',
       '@react-native-voice/voice',
       ['expo-camera', { cameraPermission: 'Allow Ushadow to scan QR codes for connecting to your leader node.' }],

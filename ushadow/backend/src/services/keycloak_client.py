@@ -9,7 +9,9 @@ Refactored to use shared KeycloakOpenID instance from keycloak_settings.
 
 import logging
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
+import httpx
 from keycloak import KeycloakOpenID
 from keycloak.exceptions import KeycloakError
 
@@ -106,28 +108,53 @@ class KeycloakClient:
         """
         Refresh access token using refresh token.
 
-        Standard OAuth2 refresh token flow.
+        Calls the internal Keycloak URL (http://keycloak:8080) but sets X-Forwarded-Host
+        and X-Forwarded-Proto headers to match the public URL. This makes Keycloak compute
+        the issuer as the public URL, matching the iss claim in the refresh token — which
+        was issued when the user logged in via Tailscale (the public URL).
 
-        Args:
-            refresh_token: Valid refresh token
-
-        Returns:
-            New token response with fresh access_token, refresh_token, etc.
-
-        Raises:
-            KeycloakError: If token refresh fails (expired/invalid refresh token)
+        Without this, Keycloak sees http://keycloak:8080 as the issuer on refresh, which
+        doesn't match the token's iss (https://orange.spangled-kettle.ts.net), causing
+        "Invalid token issuer" errors.
         """
+        from src.config.keycloak_settings import get_keycloak_config
+
+        config = get_keycloak_config()
+        internal_url = config["url"]          # http://keycloak:8080
+        public_url = config["public_url"]     # https://orange.spangled-kettle.ts.net
+        realm = config["realm"]
+        client_id = config["frontend_client_id"]
+
+        parsed = urlparse(public_url)
+        token_url = f"{internal_url}/realms/{realm}/protocol/openid-connect/token"
+
+        logger.info(f"[KC-CLIENT] Refreshing token via {token_url} (forwarding as {public_url})")
+
         try:
-            logger.info("[KC-CLIENT] Refreshing access token")
-
-            tokens = self.keycloak_openid.refresh_token(refresh_token)
-
+            response = httpx.post(
+                token_url,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                },
+                headers={
+                    "X-Forwarded-Host": parsed.netloc,
+                    "X-Forwarded-Proto": parsed.scheme,
+                },
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            tokens = response.json()
             logger.info("[KC-CLIENT] ✅ Token refresh successful")
             return tokens
 
-        except KeycloakError as e:
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[KC-CLIENT] Token refresh failed: {e.response.status_code}: {e.response.text}")
+            raise KeycloakError(e.response.text) from e
+        except Exception as e:
             logger.error(f"[KC-CLIENT] Token refresh failed: {e}")
-            raise
+            raise KeycloakError(str(e)) from e
 
     def introspect_token(self, token: str, token_type_hint: str = "access_token") -> Dict[str, Any]:
         """

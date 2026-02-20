@@ -1,8 +1,8 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { OmiConnection } from 'friend-lite-react-native';
 import { Audio } from 'expo-av';
-import { useLockScreenControls } from './useLockScreenControls';
+import { useLiveActivity } from './useLiveActivity';
 
 // Type definitions for audio streaming services
 interface AudioStreamer {
@@ -91,8 +91,8 @@ export const useAudioManager = ({
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
 
-  // Lock screen controls for showing streaming status
-  const lockScreenControls = useLockScreenControls();
+  // Live Activity for showing streaming status on lock screen / Dynamic Island
+  const liveActivity = useLiveActivity();
 
   // Track previous WebSocket state to detect transitions
   const previousWsReadyStateRef = useRef<number | undefined>(undefined);
@@ -243,12 +243,8 @@ export const useAudioManager = ({
       // Then start OMI audio listener with offline-aware handler
       await startAudioListener(handleAudioData);
 
-      // Show lock screen controls with device info
-      await lockScreenControls.showStreamingControls({
-        title: 'OMI Audio Streaming',
-        artist: connectedDeviceId ? `Device: ${connectedDeviceId}` : 'OMI Device',
-        album: 'Ushadow',
-      });
+      // Start Live Activity for lock screen / Dynamic Island
+      await liveActivity.startActivity(connectedDeviceId || 'OMI Device');
 
       console.log('[useAudioManager] OMI audio streaming started successfully', { sessionId });
     } catch (error) {
@@ -268,7 +264,7 @@ export const useAudioManager = ({
     buildWebSocketUrl,
     handleAudioData,
     generateSessionId,
-    lockScreenControls,
+    liveActivity,
   ]);
 
   /**
@@ -286,8 +282,8 @@ export const useAudioManager = ({
     await stopAudioListener();
     audioStreamer.stopStreaming();
 
-    // Hide lock screen controls
-    await lockScreenControls.hideControls();
+    // Stop Live Activity
+    await liveActivity.stopActivity();
 
     // Deactivate audio session to allow iOS to suspend app if needed
     // (unless other audio is active)
@@ -336,12 +332,8 @@ export const useAudioManager = ({
         }
       });
 
-      // Show lock screen controls
-      await lockScreenControls.showStreamingControls({
-        title: 'Phone Microphone Streaming',
-        artist: userId || 'Phone',
-        album: 'Ushadow',
-      });
+      // Start Live Activity for lock screen / Dynamic Island
+      await liveActivity.startActivity('Phone Microphone');
 
       setIsPhoneAudioMode(true);
       console.log('[useAudioManager] Phone audio streaming started successfully');
@@ -358,7 +350,7 @@ export const useAudioManager = ({
     audioStreamer,
     phoneAudioRecorder,
     buildWebSocketUrl,
-    lockScreenControls,
+    liveActivity,
     userId,
   ]);
 
@@ -370,8 +362,8 @@ export const useAudioManager = ({
     await phoneAudioRecorder.stopRecording();
     audioStreamer.stopStreaming();
 
-    // Hide lock screen controls
-    await lockScreenControls.hideControls();
+    // Stop Live Activity
+    await liveActivity.stopActivity();
 
     setIsPhoneAudioMode(false);
   }, [phoneAudioRecorder, audioStreamer, lockScreenControls]);

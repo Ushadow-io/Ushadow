@@ -147,3 +147,9 @@ default_services:
   - chronicle-backend
   - chronicle-workers
   - mem0
+
+# Feed Configuration
+# Sources are managed here (config.overrides.yaml for user additions).
+# YouTube API key is stored in secrets.yaml under api_keys.youtube_api_key.
+feed:
+  sources: []

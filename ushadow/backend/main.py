@@ -20,7 +20,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.models.user import User  # Beanie document model
 from src.models.share import ShareToken  # Beanie document model
-from src.models.feed import PostSource, Post  # Beanie document model
+from src.models.feed import Post  # Beanie document model (PostSource uses SettingsStore)
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
@@ -134,7 +134,7 @@ async def lifespan(app: FastAPI):
     app.state.db = db
 
     # Initialize Beanie ODM with document models
-    await init_beanie(database=db, document_models=[User, ShareToken, PostSource, Post])
+    await init_beanie(database=db, document_models=[User, ShareToken, Post])
     logger.info("✓ Beanie ODM initialized")
     
     # Create admin user if explicitly configured in secrets.yaml
