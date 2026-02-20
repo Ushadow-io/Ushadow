@@ -27,6 +27,8 @@ post_create:
 
 # Commands to run before merging (aborts merge if any fail)
 pre_merge:
+  # Update ticket status to done when merging
+  - "kanban-cli move-to-done \"$WM_WORKTREE_PATH\" || true"
   # Ensure tests pass before merging
   # - "make test"  # Uncomment when test suite is ready
 

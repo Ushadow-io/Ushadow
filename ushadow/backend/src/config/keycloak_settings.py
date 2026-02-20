@@ -103,7 +103,7 @@ def get_keycloak_admin() -> KeycloakAdmin:
         settings = get_settings()
 
         # Get application realm to manage
-        app_realm = settings.get_sync("keycloak.realm", "master")
+        app_realm = settings.get_sync("keycloak.realm", "ushadow")
 
         # Internal URL for backend-to-Keycloak communication
         # Resolved by OmegaConf: ${oc.env:KC_URL,http://keycloak:8080}
