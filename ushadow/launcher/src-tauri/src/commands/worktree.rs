@@ -963,9 +963,11 @@ pub async fn create_worktree_with_workmux(
 
     let session_name = format!("ush-{}", name);
 
-    // Window name is the branch (sanitized for tmux — no slashes allowed)
+    // Window name: ushadow-{sanitized_branch} — matches window_prefix in .workmux.yaml so
+    // workmux dashboard can discover these windows by scanning all tmux sessions.
     let branch_for_window = branch_name_for_window.as_deref().unwrap_or(&name);
-    let window_name = branch_for_window.replace('/', "-").replace('\\', "-");
+    let sanitized = branch_for_window.replace('/', "-").replace('\\', "-");
+    let window_name = format!("ushadow-{}", sanitized);
 
     eprintln!("[create_worktree_with_workmux] Target session '{}', window '{}'", session_name, window_name);
 

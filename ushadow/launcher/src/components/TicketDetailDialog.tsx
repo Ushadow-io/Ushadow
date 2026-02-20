@@ -333,8 +333,10 @@ export function TicketDetailDialog({
       setSuccessMessage('Tmux window recreated successfully')
       setTimeout(() => setSuccessMessage(null), 3000)
 
-      // Open terminal — use branch_name (sanitized) as window identifier
-      const windowName = (ticket.branch_name?.replace(/\//g, '-')) || ticket.tmux_window_name || ''
+      // Open terminal — derive canonical window name from branch_name
+      const windowName = ticket.branch_name
+        ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+        : ticket.tmux_window_name || ''
       if (windowName) {
         await tauri.openTmuxInTerminal(
           windowName,
@@ -731,8 +733,11 @@ export function TicketDetailDialog({
                       setOpeningTerminal(true)
                       try {
                         const { tauri } = await import('../hooks/useTauri')
-                        // Use branch_name (sanitized) as window identifier; fall back to stored tmux_window_name
-                        const windowName = (ticket.branch_name?.replace(/\//g, '-')) || ticket.tmux_window_name || ''
+                        // Derive canonical window name from branch_name (ushadow- prefix matches .workmux.yaml).
+                        // Falls back to stored tmux_window_name for environments without a branch.
+                        const windowName = ticket.branch_name
+                          ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+                          : ticket.tmux_window_name || ''
                         await tauri.openTmuxInTerminal(
                           windowName,
                           ticket.worktree_path!,
