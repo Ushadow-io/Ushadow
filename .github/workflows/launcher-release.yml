@@ -143,27 +143,21 @@ jobs:
           fi
 
       - name: Import Apple signing certificate
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Verify signing identity
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
         run: |
-          # Decode the base64 certificate and import it into a temporary keychain
-          # so codesign can find it during the build without persisting credentials.
-          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
-
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$RUNNER_TEMP/cert.p12" \
-            -k "$KEYCHAIN_PATH" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-          security list-keychains -d user -s "$KEYCHAIN_PATH" "$(security list-keychains -d user | xargs)"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          rm "$RUNNER_TEMP/cert.p12"
+          echo "=== Available codesigning identities ==="
+          security find-identity -v -p codesigning
+          echo "=== Signing identity prefix ==="
+          echo "$APPLE_SIGNING_IDENTITY" | cut -c1-10
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
       - name: Pre-build kanban-cli universal binary
         working-directory: ${{ env.LAUNCHER_DIR }}
