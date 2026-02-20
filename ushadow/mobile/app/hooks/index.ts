@@ -30,7 +30,8 @@ export { useSessionTracking } from './useSessionTracking';
 export { useAppLifecycle } from './useAppLifecycle';
 export type { UseAppLifecycle } from './useAppLifecycle';
 
-export { useLockScreenControls } from './useLockScreenControls';
+export { useLiveActivity } from './useLiveActivity';
+export type { UseLiveActivity } from './useLiveActivity';
 
 export { useConnectionHealth } from './useConnectionHealth';
 export type { UseConnectionHealth } from './useConnectionHealth';

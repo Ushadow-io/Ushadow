@@ -8,7 +8,7 @@ import { useState, useCallback, useRef } from 'react';
 import { useAudioStreamer } from './useAudioStreamer';
 import { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
 import { useAppLifecycle } from './useAppLifecycle';
-import { useLockScreenControls } from './useLockScreenControls';
+import { useLiveActivity } from './useLiveActivity';
 
 export interface UseStreaming {
   // Combined state
@@ -50,8 +50,8 @@ export const useStreaming = (): UseStreaming => {
     getWebSocketReadyState,
   } = useAudioStreamer();
 
-  // Lock screen controls (iOS now-playing presence during standby)
-  const lockScreen = useLockScreenControls();
+  // Live Activity (iOS 16.2+) — lock screen + Dynamic Island recording indicator
+  const liveActivity = useLiveActivity();
 
   // Phone audio recorder
   const {
@@ -92,10 +92,7 @@ export const useStreaming = (): UseStreaming => {
       });
 
       console.log('[Streaming] Streaming started successfully');
-      await lockScreen.showStreamingControls({
-        title: 'Ushadow Recording',
-        artist: 'Phone Microphone',
-      });
+      await liveActivity.startActivity('Phone Microphone');
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[Streaming] Error starting streaming:', errorMessage);
@@ -107,7 +104,7 @@ export const useStreaming = (): UseStreaming => {
 
       throw err;
     }
-  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, lockScreen]);
+  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, liveActivity]);
 
   // Reconnect WebSocket when app returns to foreground (mic keeps recording during standby)
   useAppLifecycle({
@@ -136,10 +133,10 @@ export const useStreaming = (): UseStreaming => {
     }
 
     wsStop();
-    await lockScreen.hideControls();
+    await liveActivity.stopActivity();
 
     console.log('[Streaming] Streaming stopped');
-  }, [stopRecording, wsStop, lockScreen]);
+  }, [stopRecording, wsStop, liveActivity]);
 
   return {
     isStreaming,

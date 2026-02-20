@@ -186,13 +186,14 @@ services:
       - KC_DB_USERNAME=${POSTGRES_USER:-ushadow}
       - KC_DB_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
 
-      # Hostname v2 configuration (Keycloak 21+)
-      # KC_HOSTNAME_URL sets both frontend URL and token issuer
-      - KC_HOSTNAME_URL=${KC_HOSTNAME_URL:-http://100.105.225.45:8081}
-      - KC_HOSTNAME_STRICT=false  # Allow backend to use internal URL (http://keycloak:8080)
-      - KC_HTTP_ENABLED=true      # Enable HTTP (required for non-HTTPS KC_HOSTNAME_URL)
+      # Hostname v2 configuration (Keycloak 26+)
+      # KC_HOSTNAME_STRICT=false allows the backend to call via internal http://keycloak:8080.
+      # KC_PROXY_HEADERS=xforwarded lets Keycloak use X-Forwarded-Host/Proto for the issuer,
+      # so the backend can spoof the public hostname on internal calls to match the token issuer.
+      - KC_HOSTNAME_STRICT=false
+      - KC_HTTP_ENABLED=true
       - KC_HEALTH_ENABLED=true
-      - KC_PROXY_HEADERS=xforwarded  # Trust X-Forwarded-* headers (for Tailscale/reverse proxy)
+      - KC_PROXY_HEADERS=xforwarded
 
       # Additional Keycloak config
       - KC_REALM=${KC_REALM:-ushadow}  # Default realm
