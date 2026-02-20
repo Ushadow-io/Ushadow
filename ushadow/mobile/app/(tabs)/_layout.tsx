@@ -94,6 +94,11 @@ export default function TabLayout() {
           tabBarAccessibilityLabel: 'Memories Tab',
         }}
       />
+      {/* Sessions page is accessible via Connection Logs modal (home screen header) */}
+      <Tabs.Screen
+        name="sessions"
+        options={{ href: null }}
+      />
     </Tabs>
   );
 }

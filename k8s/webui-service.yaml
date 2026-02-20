@@ -3,11 +3,11 @@ kind: Service
 metadata:
   labels:
     io.kompose.service: webui
-  name: webui
+  name: ushadow-frontend
 spec:
   ports:
-    - name: "3000"
-      port: 3000
+    - name: "80"
+      port: 80
       targetPort: 80
   selector:
     io.kompose.service: webui

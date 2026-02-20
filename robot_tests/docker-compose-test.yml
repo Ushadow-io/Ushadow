@@ -1,0 +1,87 @@
+# docker-compose-test.yml
+# Isolated test environment for Robot Framework integration tests
+# Uses different ports to avoid conflicts with development environment
+
+name: ushadow-test
+
+services:
+  # Test Keycloak instance - isolated from development
+  keycloak-test:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    ports:
+      - "8181:8080"  # Avoid conflict with dev Keycloak on 8081
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_HEALTH_ENABLED=true
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://keycloak-db-test:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=keycloak
+    volumes:
+      - ../config/keycloak/realms:/opt/keycloak/data/import:ro
+    depends_on:
+      keycloak-db-test:
+        condition: service_healthy
+    # Note: Health check disabled - Keycloak container doesn't have curl
+    # Tests will wait for Keycloak to be ready before running
+    restart: unless-stopped
+
+  # Test Keycloak database
+  keycloak-db-test:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"  # Avoid conflict with dev postgres
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=keycloak
+    volumes:
+      - keycloak_test_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # Test MongoDB
+  mongo-test:
+    image: mongo:7
+    ports:
+      - "27118:27017"  # Avoid conflict with dev mongo on 27017
+    volumes:
+      - mongo_test_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand('ping').ok", "--quiet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # Test Redis
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6480:6379"  # Avoid conflict with dev redis on 6379
+    volumes:
+      - redis_test_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  keycloak_test_db:
+  mongo_test_data:
+  redis_test_data:
+
+networks:
+  default:
+    driver: bridge

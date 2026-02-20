@@ -32,6 +32,7 @@ class SetupStatusResponse(BaseModel):
     """Setup status response."""
     requires_setup: bool
     user_count: int
+    keycloak_user_count: int = 0  # Number of users registered in Keycloak
 
 
 class SetupRequest(BaseModel):
@@ -213,16 +214,29 @@ async def login(
 @router.get("/setup/status", response_model=SetupStatusResponse)
 async def get_setup_status(user_manager=Depends(get_user_manager)):
     """Check if initial setup is required.
-    
-    Returns true if no users exist in the system.
+
+    Returns user counts from both MongoDB and Keycloak.
+    keycloak_user_count is used by the frontend to disable Login when no users exist yet
+    (forcing new installs to register first).
     """
     try:
-        # Count users in the database
         user_count = await User.count()
-        
+
+        # Count Keycloak users — someone may have registered but not yet logged in
+        # (login creates the MongoDB record), so KC is the authoritative source.
+        # KeycloakAdminClient is our wrapper; users_count() is on the underlying .admin object.
+        keycloak_user_count = 0
+        try:
+            from src.services.keycloak_admin import get_keycloak_admin
+            kc_admin = get_keycloak_admin()
+            keycloak_user_count = kc_admin.admin.users_count()
+        except Exception as kc_err:
+            logger.warning(f"Could not get Keycloak user count: {kc_err}")
+
         return SetupStatusResponse(
-            requires_setup=user_count == 0,
-            user_count=user_count
+            requires_setup=user_count == 0 and keycloak_user_count == 0,
+            user_count=user_count,
+            keycloak_user_count=keycloak_user_count,
         )
     except Exception as e:
         logger.error(f"Error checking setup status: {e}")
@@ -406,6 +420,7 @@ class TokenExchangeRequest(BaseModel):
     code: str = Field(..., description="Authorization code from Keycloak")
     code_verifier: str = Field(..., description="PKCE code verifier")
     redirect_uri: str = Field(..., description="Redirect URI used in authorization request")
+    client_id: Optional[str] = Field(None, description="OAuth client ID (defaults to frontend client)")
 
 
 class TokenExchangeResponse(BaseModel):
@@ -437,6 +452,8 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
     from src.services.keycloak_client import get_keycloak_client
     from keycloak.exceptions import KeycloakError
 
+    logger.info(f"[TOKEN-EXCHANGE] Request received with client_id={request.client_id}")
+
     try:
         kc_client = get_keycloak_client()
 
@@ -444,7 +461,8 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
         tokens = kc_client.exchange_code_for_tokens(
             code=request.code,
             redirect_uri=request.redirect_uri,
-            code_verifier=request.code_verifier
+            code_verifier=request.code_verifier,
+            client_id=request.client_id
         )
 
         logger.info("[TOKEN-EXCHANGE] ✓ Successfully exchanged code for tokens")
@@ -482,7 +500,15 @@ class TokenRefreshRequest(BaseModel):
 async def refresh_access_token(request: TokenRefreshRequest):
     """Refresh access token using refresh token.
 
-    Standard OAuth 2.0 refresh token flow using python-keycloak.
+    Standard OAuth 2.0 refresh token flow with issuer URL translation.
+
+    Handles Docker network URL translation: tokens issued by external URLs
+    (localhost:8081, Tailscale) must be refreshed using the same URL, not
+    the internal Docker network URL (keycloak:8080).
+
+    IMPORTANT: Extracts the issuer from the refresh token to ensure
+    we use the same Keycloak URL that issued the token (handles multi-domain
+    scenarios where browser uses Tailscale hostname but backend sees IP).
 
     Args:
         request: Contains refresh token
@@ -494,14 +520,55 @@ async def refresh_access_token(request: TokenRefreshRequest):
         401: If refresh token is invalid or expired
         503: If Keycloak is unreachable
     """
-    from src.services.keycloak_client import get_keycloak_client
+    from keycloak import KeycloakOpenID
     from keycloak.exceptions import KeycloakError
+    from src.config.keycloak_settings import get_keycloak_connection, get_keycloak_config
+    import jwt
+    from urllib.parse import urlparse
 
     try:
-        kc_client = get_keycloak_client()
+        # Decode refresh token WITHOUT validation to extract issuer
+        # This is safe - we're only reading metadata, not trusting the token yet
+        decoded = jwt.decode(request.refresh_token, options={"verify_signature": False})
+        issuer = decoded.get("iss")
 
-        # Refresh token
-        tokens = kc_client.refresh_token(request.refresh_token)
+        if not issuer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token missing issuer claim"
+            )
+
+        # Extract server_url from issuer (removes /realms/xxx suffix)
+        # e.g., "https://orange.spangled-kettle.ts.net/realms/ushadow" -> "https://orange.spangled-kettle.ts.net"
+        if "/realms/" in issuer:
+            server_url = issuer.split("/realms/")[0]
+        else:
+            server_url = issuer
+
+        # CRITICAL: Translate public URLs to internal Docker network URLs
+        # When backend is inside Docker, external URLs (localhost/Tailscale) don't work
+        kc_config = get_keycloak_config()
+        issuer_parsed = urlparse(server_url)
+        public_parsed = urlparse(kc_config["public_url"])
+
+        if issuer_parsed.hostname == public_parsed.hostname and issuer_parsed.port == public_parsed.port:
+            # Issuer matches public URL -> use internal Docker network URL
+            server_url = kc_config["url"]
+            logger.info(f"[TOKEN-REFRESH] Translated public → internal: {server_url}")
+        else:
+            logger.info(f"[TOKEN-REFRESH] Using issuer URL: {server_url}")
+
+        # Create KeycloakOpenID client with the SAME URL that issued the token
+        # IMPORTANT: Use application realm (ushadow), NOT admin realm (master)
+        keycloak_openid = KeycloakOpenID(
+            server_url=server_url,
+            realm_name=kc_config["realm"],  # Application realm where tokens are issued
+            client_id=kc_config["frontend_client_id"],  # Public client (no secret needed)
+            client_secret_key=None,  # Explicit: public client has no secret
+        )
+
+        # Refresh token using the correct issuer URL
+        tokens = keycloak_openid.refresh_token(request.refresh_token)
 
         logger.info("[TOKEN-REFRESH] ✓ Successfully refreshed access token")
 
@@ -520,6 +587,8 @@ async def refresh_access_token(request: TokenRefreshRequest):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token refresh failed: {str(e)}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[TOKEN-REFRESH] Unexpected error: {e}", exc_info=True)
         raise HTTPException(

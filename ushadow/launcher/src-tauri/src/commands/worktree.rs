@@ -653,10 +653,10 @@ set -g terminal-overrides 'xterm*:smcup@:rmcup@'\n\
                 eprintln!("[open_in_vscode] ERROR: Failed to create tmux window: {}", stderr);
                 return Err(format!("Failed to create tmux window: {}", stderr));
             } else {
-                eprintln!("[open_in_vscode] ✓ Created tmux window '{}'", window_name);
+                eprintln!("[open_in_vscode] [OK] Created tmux window '{}'", window_name);
             }
         } else {
-            eprintln!("[open_in_vscode] ✓ Tmux window '{}' already exists", window_name);
+            eprintln!("[open_in_vscode] [OK] Tmux window '{}' already exists", window_name);
         }
 
         // Create .vscode directory if it doesn't exist
@@ -865,18 +865,18 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
 
     match stop_result {
         Ok(output) if output.status.success() => {
-            messages.push(format!("✓ Stopped containers for '{}'", env_name));
+            messages.push(format!("[OK] Stopped containers for '{}'", env_name));
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.contains("No such file") && !stderr.to_lowercase().contains("not found") {
                 eprintln!("[delete_environment] Warning: Failed to stop containers: {}", stderr);
-                messages.push(format!("⚠ Could not stop containers (may already be stopped)"));
+                messages.push(format!("[WARN] Could not stop containers (may already be stopped)"));
             }
         }
         Err(e) => {
             eprintln!("[delete_environment] Warning: Failed to run docker compose down: {}", e);
-            messages.push(format!("⚠ Could not stop containers (may already be stopped)"));
+            messages.push(format!("[WARN] Could not stop containers (may already be stopped)"));
         }
     }
 
@@ -890,7 +890,7 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
 
     match close_result {
         Ok(output) if output.status.success() => {
-            messages.push(format!("✓ Closed tmux window '{}'", window_name));
+            messages.push(format!("[OK] Closed tmux window '{}'", window_name));
         }
         Ok(_) | Err(_) => {
             // Tmux window might not exist, that's fine
@@ -906,7 +906,7 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
             eprintln!("[delete_environment] Removing worktree '{}'...", env_name);
             match remove_worktree(main_repo, env_name.clone()).await {
                 Ok(_) => {
-                    messages.push(format!("✓ Removed worktree '{}'", env_name));
+                    messages.push(format!("[OK] Removed worktree '{}'", env_name));
                 }
                 Err(e) => {
                     return Err(format!("Failed to remove worktree: {}", e));
@@ -921,7 +921,7 @@ pub async fn delete_environment(main_repo: String, env_name: String) -> Result<S
         Err(e) => {
             // Error checking worktree, log but don't fail
             eprintln!("[delete_environment] Warning: Could not check worktree existence: {}", e);
-            messages.push(format!("⚠ Could not check for worktree"));
+            messages.push(format!("[WARN] Could not check for worktree"));
         }
     }
 

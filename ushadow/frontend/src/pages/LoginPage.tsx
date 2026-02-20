@@ -3,11 +3,13 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 import AuthHeader from '../components/auth/AuthHeader'
 import { LogIn, ExternalLink, UserPlus } from 'lucide-react'
+import { setupApi } from '../services/api'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { isAuthenticated, isLoading, login, register } = useKeycloakAuth()
+  const [hasUsers, setHasUsers] = React.useState<boolean | null>(null)
 
   // Parse query parameters once
   const searchParams = new URLSearchParams(location.search)
@@ -17,6 +19,13 @@ export default function LoginPage() {
   // Get the intended destination from router state (set by ProtectedRoute) or from query param
   // Default to /cluster instead of / to avoid redirect loop
   const from = (location.state as { from?: string })?.from || returnTo || '/cluster'
+
+  // Check if any users exist in Keycloak — if not, disable Login to force registration
+  React.useEffect(() => {
+    setupApi.getSetupStatus()
+      .then(res => setHasUsers(res.data.keycloak_user_count > 0))
+      .catch(() => setHasUsers(true)) // Default to allowing login if check fails
+  }, [])
 
   // After successful login, redirect to intended destination
   // Note: Don't redirect if we're on the callback page - that's handled by OAuthCallback component
@@ -163,9 +172,16 @@ export default function LoginPage() {
 
             {/* Sign in with Keycloak Button */}
             <div className="space-y-4">
+              {/* Login disabled when no users exist — register first */}
+              {hasUsers === false && (
+                <p className="text-center text-sm" style={{ color: '#f59e0b' }} data-testid="login-no-users-notice">
+                  No users registered yet. Please register to create the first account.
+                </p>
+              )}
               <button
                 onClick={handleLogin}
-                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
+                disabled={hasUsers === false}
+                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
                 style={{
                   backgroundColor: '#3b82f6',
                   color: '#ffffff',

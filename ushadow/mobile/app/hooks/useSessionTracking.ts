@@ -5,7 +5,7 @@
  * Tracks active sessions and maintains session history.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import NetInfo from '@react-native-community/netinfo';
 import {
   StreamingSession,
@@ -49,9 +49,14 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
     loadData();
   }, []);
 
-  // Auto-save sessions when they change
+  // Auto-save sessions when they change (including empty state after clear)
+  const hasLoadedOnce = React.useRef(false);
   useEffect(() => {
-    if (!isLoading && sessions.length > 0) {
+    if (!isLoading) {
+      if (!hasLoadedOnce.current) {
+        hasLoadedOnce.current = true;
+        return; // Skip redundant save on initial load
+      }
       const saveData = async () => {
         await saveSessions(sessions);
       };

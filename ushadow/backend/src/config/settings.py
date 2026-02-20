@@ -46,6 +46,7 @@ class Source(str, Enum):
     ENV_FILE = "env_file"
     CAPABILITY = "capability"
     TEMPLATE_OVERRIDE = "template_override"  # services.{service_id} in config.overrides.yaml
+    INFRASTRUCTURE = "infrastructure"  # From deploy target infrastructure scan
     INSTANCE_OVERRIDE = "instance_override"  # instances.{deployment_id} in instance-overrides.yaml
     NOT_FOUND = "not_found"
 
@@ -140,6 +141,7 @@ class Settings:
             compose_defaults=compose_defaults,
             capability_values=capability_values,
             template_overrides=template_overrides,
+            infrastructure_overrides={},
             instance_overrides={},
         )
 
@@ -152,26 +154,28 @@ class Settings:
         Get settings preview for a deployment target.
 
         Args:
-            deploy_target: Target environment (e.g., "production", "staging")
+            deploy_target: Target environment (cluster ID, unode hostname, etc.)
             service_id: Service identifier
 
         Returns:
             Dict mapping env var names to Resolution objects
 
         Resolution layers applied:
-            config_default → compose_default → env_file → capability → template_override → deploy_env
+            config_default → compose_default → env_file → capability →
+            template_override → infrastructure
         """
         env_vars, compose_defaults, capability_values, template_overrides = \
             await self._load_service_context(service_id)
 
-        # Note: deploy_target is not used in current implementation
-        # Could add deploy_environments.{target} overrides layer in future
+        # Load infrastructure overrides from deploy target
+        infrastructure_overrides = await self._load_infrastructure_overrides(deploy_target)
 
         return await self._resolve_all(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
             template_overrides=template_overrides,
+            infrastructure_overrides=infrastructure_overrides,
             instance_overrides={},
         )
 
@@ -188,14 +192,39 @@ class Settings:
         Resolution layers applied:
             ALL layers (config_default → ... → instance_override)
         """
-        env_vars, compose_defaults, capability_values, template_overrides, instance_overrides = \
+        env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, deployment_target = \
             await self._load_deployment_context(deployment_id)
+
+        # Load infrastructure overrides from settings if deployment_target is specified
+        infrastructure_overrides = {}
+        if deployment_target and deployment_target.startswith("k8s://"):
+            # Parse cluster_id from deployment_target (format: k8s://{cluster_id}/{namespace})
+            try:
+                # Remove k8s:// prefix and split by /
+                parts = deployment_target[6:].split('/', 1)
+                cluster_id = parts[0] if parts else None
+
+                if cluster_id:
+                    logger.info(f"[Settings] Loading infrastructure overrides for cluster: {cluster_id}")
+
+                    # Load overrides from settings paths
+                    overrides_from_config = await self._store.get(f"infrastructure.overrides.{cluster_id}") or {}
+                    secrets_from_config = await self._store.get(f"infrastructure.secrets.{cluster_id}") or {}
+
+                    # Merge overrides and secrets
+                    infrastructure_overrides.update(overrides_from_config)
+                    infrastructure_overrides.update(secrets_from_config)
+
+                    logger.info(f"[Settings] Loaded {len(infrastructure_overrides)} infrastructure overrides for {cluster_id}")
+            except Exception as e:
+                logger.warning(f"Failed to parse deployment_target or load infrastructure overrides: {e}")
 
         results = await self._resolve_all(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
             capability_values=capability_values,
             template_overrides=template_overrides,
+            infrastructure_overrides=infrastructure_overrides,
             instance_overrides=instance_overrides,
         )
 
@@ -206,7 +235,12 @@ class Settings:
     # Suggestions (Public API)
     # -------------------------------------------------------------------------
 
-    async def get_suggestions(self, env_var: str) -> List[SettingSuggestion]:
+    async def get_suggestions(
+        self,
+        env_var: str,
+        cluster_id: Optional[str] = None,
+        filter_by_type: bool = False
+    ) -> List[SettingSuggestion]:
         """
         Get setting suggestions that could fill an environment variable.
 
@@ -214,11 +248,13 @@ class Settings:
 
         Args:
             env_var: Environment variable name
+            cluster_id: Optional cluster ID for infrastructure scan suggestions
+            filter_by_type: If True, filter suggestions by env var type (URL, HOST, PORT, etc.)
 
         Returns:
             List of SettingSuggestion objects
         """
-        return await self._build_suggestions(env_var)
+        return await self._build_suggestions(env_var, cluster_id=cluster_id, filter_by_type=filter_by_type)
 
     # -------------------------------------------------------------------------
     # Direct Access (Public API)
@@ -371,9 +407,139 @@ class Settings:
 
         return env_vars, compose_defaults, capability_values, template_overrides
 
+    async def _load_infrastructure_overrides(self, deploy_target: str) -> Dict[str, str]:
+        """
+        Load infrastructure overrides from deploy target.
+
+        Uses ComposeRegistry to read docker-compose.infra.yml and get env var
+        definitions, then overrides defaults with scanned endpoint data.
+
+        Args:
+            deploy_target: Target identifier (cluster ID, unode hostname, etc.)
+
+        Returns:
+            Dict mapping env var names to infrastructure values
+        """
+        from src.models.deploy_target import DeployTarget
+        from src.services.compose_registry import get_compose_registry
+
+        try:
+            # Get the deploy target with infrastructure data
+            target = await DeployTarget.from_id(deploy_target)
+
+            if not target.infrastructure:
+                logger.warning(f"No infrastructure data for deploy target: {deploy_target}")
+                # Continue to load manual overrides even if no auto-scanned data
+            else:
+                logger.debug(f"Infrastructure data available: {list(target.infrastructure.keys())}")
+
+            # Load default values from docker-compose.infra.yml
+            # This gives us env vars like KC_REALM that have defaults in the compose file
+            compose_registry = get_compose_registry()
+            infrastructure_overrides = {}
+
+            # Get all infrastructure services from compose registry
+            all_services = compose_registry.get_services()
+            for service in all_services:
+                # Only process infrastructure services (from docker-compose.infra.yml)
+                if not service.service_id.startswith('docker-compose.infra:'):
+                    continue
+
+                # Extract default env var values from the service definition
+                for env_var in service.required_env_vars + service.optional_env_vars:
+                    if env_var.has_default and env_var.default_value:
+                        infrastructure_overrides[env_var.name] = env_var.default_value
+                        logger.debug(f"[Infrastructure Default] {env_var.name} = {env_var.default_value}")
+
+            # Apply manual infrastructure overrides from settings
+            # For K8s clusters, use cluster_id to load overrides
+            # Overrides are stored at:
+            # - infrastructure.overrides.{cluster_id}
+            # - infrastructure.secrets.{cluster_id}
+            cluster_id = None
+            if target.type == "k8s":
+                # Extract cluster_id from raw_metadata
+                cluster_id = target.raw_metadata.get('cluster_id')
+                logger.debug(f"K8s cluster_id: {cluster_id}")
+
+            if cluster_id:
+                # Load infrastructure scan results (auto-detected values)
+                scan_values = await self._store.get(f"infrastructure.scans.{cluster_id}") or {}
+                if scan_values:
+                    infrastructure_overrides.update(scan_values)
+                    logger.info(f"Loaded {len(scan_values)} scanned infrastructure values for cluster {cluster_id}")
+
+                # Load manual overrides (user-configured overrides)
+                config_overrides = await self._store.get(f"infrastructure.overrides.{cluster_id}") or {}
+                secret_overrides = await self._store.get(f"infrastructure.secrets.{cluster_id}") or {}
+
+                # Apply manual overrides (these take priority over scanned values)
+                manual_overrides = {**config_overrides, **secret_overrides}
+                if manual_overrides:
+                    infrastructure_overrides.update(manual_overrides)
+                    logger.info(
+                        f"Applied {len(manual_overrides)} manual infrastructure overrides "
+                        f"({len(config_overrides)} config + {len(secret_overrides)} secrets) "
+                        f"for cluster {cluster_id}"
+                    )
+                    for env_var, value in manual_overrides.items():
+                        logger.debug(f"[Infrastructure Override] {env_var} = {value}")
+
+            if infrastructure_overrides:
+                logger.info(
+                    f"Loaded {len(infrastructure_overrides)} total infrastructure values from {deploy_target}"
+                )
+
+            return infrastructure_overrides
+
+        except Exception as e:
+            logger.warning(f"Could not load infrastructure for {deploy_target}: {e}")
+            return {}
+
+    def _parse_endpoint(self, endpoint: str) -> tuple[str, str]:
+        """Parse endpoint into host and port."""
+        if ':' in endpoint:
+            host, port = endpoint.rsplit(':', 1)
+            return host, port
+        return endpoint, ""
+
+    def _override_with_endpoint(
+        self,
+        env_var: str,
+        default_value: str,
+        host: str,
+        port: str,
+        endpoint: str
+    ) -> str:
+        """Override default value with scanned endpoint data."""
+        import re
+
+        var_upper = env_var.upper()
+
+        # HOST variables get the hostname
+        if 'HOST' in var_upper and 'HOSTNAME' not in var_upper:
+            return host
+
+        # PORT variables get the port
+        if 'PORT' in var_upper:
+            return port
+
+        # URL/URI variables get the default with hostname:port replaced
+        if 'URL' in var_upper or 'URI' in var_upper:
+            # Replace hostname:port in URL
+            pattern = r'(^[a-z]+://)[^:/]+(:[0-9]+)?(/.*)?$'
+            match = re.match(pattern, default_value)
+            if match:
+                protocol = match.group(1)
+                path = match.group(3) or ''
+                return f"{protocol}{host}:{port}{path}"
+
+        # Other variables use the default
+        return default_value
+
     async def _load_deployment_context(
         self, deployment_id: str
-    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
+    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str], Optional[str]]:
         """
         Load deployment context including template and instance overrides.
 
@@ -381,6 +547,9 @@ class Settings:
         1. deployment_id (future: from Deployment storage)
         2. config_id (current: ServiceConfig ID) - loads ServiceConfig to get template_id + overrides
         3. service_id/template_id (legacy: direct template reference)
+
+        Returns:
+            Tuple of (env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, deployment_target)
         """
         from src.services.compose_registry import get_compose_registry
         from src.services.capability_resolver import CapabilityResolver
@@ -391,10 +560,16 @@ class Settings:
 
         # Try to load as ServiceConfig first (handles config_id format)
         service_config = config_mgr.get_service_config(deployment_id)
+        deployment_target = None
 
         if service_config:
             # This is a config_id - use ServiceConfig
             logger.info(f"[Settings] for_deployment({deployment_id}): Found ServiceConfig, template={service_config.template_id}")
+
+            # Extract deployment_target for infrastructure context
+            deployment_target = service_config.deployment_target
+            if deployment_target:
+                logger.info(f"[Settings] Deployment target: {deployment_target}")
 
             # Extract service_id from template_id
             # Template IDs are like "chronicle-backend" (compose services) or "openai" (providers)
@@ -425,7 +600,7 @@ class Settings:
 
         if not service:
             logger.error(f"[Settings] Service '{service_id}' not found in registry")
-            return [], {}, {}, {}, {}
+            return [], {}, {}, {}, {}, None
 
         env_vars = [ev.name for ev in service.required_env_vars + service.optional_env_vars]
         logger.info(f"[Settings] Collected {len(env_vars)} env vars from service schema")
@@ -477,7 +652,7 @@ class Settings:
         for env_var, value in instance_overrides_from_config.items():
             instance_overrides[env_var] = value
 
-        return env_vars, compose_defaults, capability_values, template_overrides, instance_overrides
+        return env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, deployment_target
 
     async def _resolve_all(
         self,
@@ -485,15 +660,25 @@ class Settings:
         compose_defaults: Dict[str, str],
         capability_values: Dict[str, str],
         template_overrides: Dict[str, str],
+        infrastructure_overrides: Dict[str, str],
         instance_overrides: Dict[str, str],
     ) -> Dict[str, Resolution]:
         """Resolve all env vars through the priority hierarchy."""
         results: Dict[str, Resolution] = {}
 
-        for env_var in env_vars:
+        # Collect all env var names from schema AND all override sources
+        # This ensures we resolve vars that are only in overrides (not in schema)
+        all_env_vars = set(env_vars)
+        all_env_vars.update(compose_defaults.keys())
+        all_env_vars.update(capability_values.keys())
+        all_env_vars.update(template_overrides.keys())
+        all_env_vars.update(infrastructure_overrides.keys())
+        all_env_vars.update(instance_overrides.keys())
+
+        for env_var in all_env_vars:
             # Check from highest to lowest priority
 
-            # 6. Instance override (highest)
+            # 7. Instance override (highest)
             if env_var in instance_overrides:
                 value = instance_overrides[env_var]
                 if value and str(value).strip():
@@ -517,7 +702,7 @@ class Settings:
                         )
                         continue
 
-            # 5. Template override
+            # 6. Template override
             if env_var in template_overrides:
                 value = template_overrides[env_var]
                 if value and str(value).strip():
@@ -540,6 +725,17 @@ class Settings:
                             path=None
                         )
                         continue
+
+            # 5. Infrastructure (from deploy target)
+            if env_var in infrastructure_overrides:
+                value = infrastructure_overrides[env_var]
+                if value and str(value).strip():
+                    results[env_var] = Resolution(
+                        value=str(value),
+                        source=Source.INFRASTRUCTURE,
+                        path=f"infrastructure.{env_var}"
+                    )
+                    continue
 
             # 4. Capability/provider wiring
             if env_var in capability_values:
@@ -625,8 +821,18 @@ class Settings:
         env_var_name: str,
         provider_registry=None,
         capabilities: Optional[List[str]] = None,
+        cluster_id: Optional[str] = None,
+        filter_by_type: bool = False,
     ) -> List[SettingSuggestion]:
-        """Build setting suggestions for an env var."""
+        """
+        Build setting suggestions for an env var.
+
+        Args:
+            env_var_name: Environment variable name
+            provider_registry: Optional provider registry
+            capabilities: Optional capability requirements
+            cluster_id: Optional cluster ID for infrastructure scan suggestions
+        """
         suggestions = []
         seen_paths = set()
         config = await self._store._get_config_as_dict()
@@ -682,8 +888,23 @@ class Settings:
 
                 docker_mgr = get_docker_manager()
 
+                # Get installed services if filtering by type
+                installed_services = set()
+                if filter_by_type:
+                    try:
+                        status = await docker_mgr.get_service_status()
+                        installed_services = {svc['name'] for svc in status.get('services', []) if svc.get('installed')}
+                    except Exception as e:
+                        logger.warning(f"Failed to get installed services: {e}")
+                        # If we can't get installed services, include all for backward compatibility
+                        installed_services = set(docker_mgr.MANAGEABLE_SERVICES.keys())
+
                 # Get all manageable services
                 for service_name, service_config in docker_mgr.MANAGEABLE_SERVICES.items():
+                    # Skip if filtering and service not installed
+                    if filter_by_type and installed_services and service_name not in installed_services:
+                        continue
+
                     # Create a dynamic suggestion path for this service URL
                     suggestion_path = f"service_urls.{service_name}"
 
@@ -741,6 +962,10 @@ class Settings:
                             capability=capability,
                             provider_name=provider.name,
                         ))
+
+        # Infrastructure scan values are now stored in settings at
+        # infrastructure.scans.{cluster_id}.{env_var}
+        # OmegaConf's fuzzy matching will naturally find them
 
         return suggestions
 

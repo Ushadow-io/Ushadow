@@ -1,8 +1,8 @@
 services:
   parakeet-asr:
     build:
-      context: .
-      dockerfile: Dockerfile_Parakeet
+      context: ../parakeet
+      dockerfile: Dockerfile
       args:
         PYTORCH_CUDA_VERSION: ${PYTORCH_CUDA_VERSION:-cu126}
     image: parakeet-asr:latest
@@ -22,7 +22,8 @@ services:
               capabilities: [gpu]
     environment:
       - HF_HOME=/models
-      - PARAKEET_MODEL=$PARAKEET_MODEL
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PARAKEET_MODEL=${PARAKEET_MODEL:-arakeet-tdt-0.6b-v2}
       # Enhanced chunking configuration
       - CHUNKING_ENABLED=${CHUNKING_ENABLED:-true}
       - CHUNK_DURATION_SECONDS=${CHUNK_DURATION_SECONDS:-30.0}

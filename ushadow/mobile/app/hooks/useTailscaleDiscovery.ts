@@ -28,7 +28,7 @@ const LEADER_PORT = 8000;
 // Timeout for probes (ms)
 const PROBE_TIMEOUT = 3000;
 // Timeout for fetching leader info (ms)
-const LEADER_INFO_TIMEOUT = 5000;
+const LEADER_INFO_TIMEOUT = 15000;  // Increased from 5s to 15s for Tailscale latency
 
 /**
  * QR code data structure from web dashboard (v2 - minimal)
@@ -92,10 +92,13 @@ const probeLeader = async (
   ip: string,
   port: number = LEADER_PORT
 ): Promise<{ reachable: boolean; hostname?: string }> => {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.log(`[Discovery] Probe timeout for ${ip}:${port}, aborting...`);
+    controller.abort();
+  }, PROBE_TIMEOUT);
 
+  try {
     // Use HTTPS for Tailscale hostnames (.ts.net), HTTP for IP addresses
     const protocol = ip.includes('.ts.net') ? 'https' : 'http';
     const portSuffix = protocol === 'https' ? '' : `:${port}`;
@@ -107,8 +110,6 @@ const probeLeader = async (
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
     if (response.ok) {
       try {
         const data = await response.json();
@@ -119,8 +120,15 @@ const probeLeader = async (
     }
     return { reachable: false };
   } catch (e) {
-    console.log(`[Discovery] Probe failed for ${ip}:${port}:`, e);
+    if (e instanceof Error && e.name === 'AbortError') {
+      console.log(`[Discovery] Probe aborted (timeout after ${PROBE_TIMEOUT}ms) for ${ip}:${port}`);
+    } else {
+      console.log(`[Discovery] Probe failed for ${ip}:${port}:`, e);
+    }
     return { reachable: false };
+  } finally {
+    // Ensure timeout is always cleared
+    clearTimeout(timeoutId);
   }
 };
 
@@ -144,10 +152,13 @@ const fetchLeaderInfoFromApi = async (
     url = `${protocol}://${urlOrIp}${portSuffix}/api/unodes/leader/info`;
   }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), LEADER_INFO_TIMEOUT);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.log('[Discovery] Request timeout, aborting...');
+    controller.abort();
+  }, LEADER_INFO_TIMEOUT);
 
+  try {
     console.log('[Discovery] Fetching leader info from:', url);
     const response = await fetch(url, {
       method: 'GET',
@@ -164,8 +175,15 @@ const fetchLeaderInfoFromApi = async (
     console.log(`[Discovery] Failed to fetch leader info: ${response.status}`);
     return null;
   } catch (e) {
-    console.log(`[Discovery] Error fetching leader info from ${url}:`, e);
+    if (e instanceof Error && e.name === 'AbortError') {
+      console.log(`[Discovery] Request aborted (timeout after ${LEADER_INFO_TIMEOUT}ms)`);
+    } else {
+      console.log(`[Discovery] Error fetching leader info from ${url}:`, e);
+    }
     return null;
+  } finally {
+    // Ensure timeout is always cleared
+    clearTimeout(timeoutId);
   }
 };
 
@@ -244,22 +262,20 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
       setError(null);
 
       // Validate the data
-      if (!data.ip || !data.port) {
-        setError('Invalid QR code: missing connection details');
+      if (!data.api_url) {
+        setError('Invalid QR code: missing api_url');
         return;
       }
 
-      // Check if it's a valid Tailscale IP
-      if (!isTailscaleIp(data.ip)) {
-        setError(`Invalid Tailscale IP: ${data.ip}. Expected 100.64.x.x - 100.127.x.x`);
-        return;
-      }
+      const parsedUrl = new URL(data.api_url);
+      const parsedIp = parsedUrl.hostname;
+      const parsedPort = parsedUrl.port ? parseInt(parsedUrl.port, 10) : LEADER_PORT;
 
       // Save minimal scanned server config (full details fetched after connection)
       const serverConfig: SavedServerConfig = {
         hostname: data.hostname || 'leader',
-        tailscaleIp: data.ip,
-        port: data.port,
+        tailscaleIp: parsedIp,
+        port: parsedPort,
         lastConnected: 0,  // Not connected yet
       };
 
@@ -352,51 +368,43 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
       setConnectionStatus('connecting');
 
       // Validate the data
-      if (!data.ip || !data.port) {
-        const errorMsg = 'Invalid QR code: missing connection details';
+      if (!data.api_url) {
+        const errorMsg = 'Invalid QR code: missing api_url';
         setError(errorMsg);
         setConnectionStatus('failed');
         return { success: false, leader: null, unodes: [], error: errorMsg };
       }
 
-      // Check if it's a valid Tailscale IP
-      if (!isTailscaleIp(data.ip)) {
-        const errorMsg = `Invalid Tailscale IP: ${data.ip}. Expected 100.64.x.x - 100.127.x.x`;
-        setError(errorMsg);
-        setConnectionStatus('failed');
-        return { success: false, leader: null, unodes: [], error: errorMsg };
-      }
+      const parsedUrl = new URL(data.api_url);
+      const parsedIp = parsedUrl.hostname;
+      const parsedPort = parsedUrl.port ? parseInt(parsedUrl.port, 10) : LEADER_PORT;
 
       // Save minimal server config first (including api_url from QR)
       const serverConfig: SavedServerConfig = {
         hostname: data.hostname || 'leader',
-        tailscaleIp: data.ip,
-        port: data.port,
+        tailscaleIp: parsedIp,
+        port: parsedPort,
         apiUrl: data.api_url,
         lastConnected: 0,
       };
       await AsyncStorage.setItem(SCANNED_SERVER_KEY, JSON.stringify(serverConfig));
       setScannedServer(serverConfig);
 
-      // Fetch leader info directly from api_url (no separate probe needed)
-      const info = await fetchLeaderInfoFromApi(data.api_url || data.ip, data.port);
+      // Fetch leader info directly from api_url
+      const info = await fetchLeaderInfoFromApi(data.api_url);
 
       if (info) {
 
         // Build DiscoveredLeader with info from API (or defaults)
-        // Use HTTPS URL from QR code, falling back to constructed URL with correct protocol
-        // Extract base URL by removing any /api/... path
-        const baseApiUrl = data.api_url
-          ? data.api_url.replace(/\/api\/.*$/, '')
-          : buildApiUrl(data.ip, data.port);
+        const baseApiUrl = data.api_url.replace(/\/api\/.*$/, '');
         const discoveredLeader: DiscoveredLeader = {
           hostname: info.hostname || data.hostname || 'leader',
-          tailscaleIp: info?.tailscale_ip || data.ip,
+          tailscaleIp: info?.tailscale_ip || parsedIp,
           apiUrl: baseApiUrl,
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || buildWsUrl(data.ip, data.port, '/ws_pcm'),
-          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(data.ip, data.port, '/ws_pcm'),
-          wsOmiUrl: info?.ws_omi_url || buildWsUrl(data.ip, data.port, '/ws_omi'),
+          streamUrl: info?.ws_pcm_url || buildWsUrl(parsedIp, parsedPort, '/ws_pcm'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(parsedIp, parsedPort, '/ws_pcm'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(parsedIp, parsedPort, '/ws_omi'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -405,8 +413,8 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
         // Save for quick reconnection
         const config: SavedServerConfig = {
           hostname: discoveredLeader.hostname,
-          tailscaleIp: data.ip,
-          port: data.port,
+          tailscaleIp: parsedIp,
+          port: parsedPort,
           lastConnected: Date.now(),
           leaderInfo: info || undefined,
         };

@@ -7,6 +7,13 @@ set -e  # Exit on error
 
 cd "$(dirname "$0")"
 
+# Ensure bundled resources exist
+if [ ! -d "src-tauri/bundled" ]; then
+    echo "📦 Bundled resources not found, running bundle-resources.sh..."
+    bash bundle-resources.sh
+    echo ""
+fi
+
 echo "🧹 Cleaning caches..."
 
 # Clear Rust build cache

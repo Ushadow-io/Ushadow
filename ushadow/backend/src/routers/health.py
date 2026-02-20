@@ -44,7 +44,8 @@ class HealthResponse(BaseModel):
 
 
 async def check_mongodb_health(request: Request) -> ServiceHealth:
-    """Check MongoDB connectivity and responsiveness."""
+    """Check MongoDB connectivity and responsiveness with 5s timeout."""
+    import asyncio
     start = time.time()
     try:
         # Get MongoDB client from app state (set in lifespan)
@@ -57,14 +58,24 @@ async def check_mongodb_health(request: Request) -> ServiceHealth:
                 message="MongoDB client not initialized"
             )
 
-        # Ping the database
-        await db.command("ping")
+        # Ping the database with 5-second timeout
+        await asyncio.wait_for(db.command("ping"), timeout=5.0)
         latency_ms = (time.time() - start) * 1000
 
         return ServiceHealth(
             status="healthy",
             healthy=True,
             critical=True,
+            latency_ms=round(latency_ms, 2)
+        )
+    except asyncio.TimeoutError:
+        latency_ms = (time.time() - start) * 1000
+        logger.warning("MongoDB health check timed out after 5s")
+        return ServiceHealth(
+            status="unhealthy",
+            healthy=False,
+            critical=True,
+            message="Connection timeout (5s)",
             latency_ms=round(latency_ms, 2)
         )
     except Exception as e:
@@ -80,7 +91,8 @@ async def check_mongodb_health(request: Request) -> ServiceHealth:
 
 
 async def check_redis_health(request: Request) -> ServiceHealth:
-    """Check Redis connectivity and responsiveness."""
+    """Check Redis connectivity and responsiveness with 5s timeout."""
+    import asyncio
     start = time.time()
     try:
         # Get Redis client from app state (set in lifespan)
@@ -89,10 +101,15 @@ async def check_redis_health(request: Request) -> ServiceHealth:
             # Try to create a temporary connection for health check
             import redis.asyncio as redis
             redis_url = os.environ.get("REDIS_URL", "redis://redis:6379")
-            redis_client = redis.from_url(redis_url, decode_responses=True)
+            redis_client = redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=5.0,
+                socket_timeout=5.0
+            )
 
-        # Ping Redis
-        await redis_client.ping()
+        # Ping Redis with 5-second timeout
+        await asyncio.wait_for(redis_client.ping(), timeout=5.0)
         latency_ms = (time.time() - start) * 1000
 
         # Close temporary connection if we created one
@@ -103,6 +120,16 @@ async def check_redis_health(request: Request) -> ServiceHealth:
             status="healthy",
             healthy=True,
             critical=True,
+            latency_ms=round(latency_ms, 2)
+        )
+    except asyncio.TimeoutError:
+        latency_ms = (time.time() - start) * 1000
+        logger.warning("Redis health check timed out after 5s")
+        return ServiceHealth(
+            status="unhealthy",
+            healthy=False,
+            critical=True,
+            message="Connection timeout (5s)",
             latency_ms=round(latency_ms, 2)
         )
     except Exception as e:

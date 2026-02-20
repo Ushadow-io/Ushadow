@@ -20,11 +20,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.models.user import User  # Beanie document model
 from src.models.share import ShareToken  # Beanie document model
+from src.models.feed import PostSource, Post  # Beanie document model
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
 from src.routers import kubernetes, tailscale, unodes, docker, sse
 from src.routers import github_import, audio_relay, memories, share, keycloak_admin, dashboard
+from src.routers import feed
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -37,11 +39,15 @@ from src.utils.telemetry import TelemetryClient
 from src.utils.version import VERSION as BACKEND_VERSION
 from src.utils.mongodb import get_mongodb_uri
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure logging — use plain StreamHandler to avoid Rich's narrow column format.
+# Uvicorn auto-detects Rich if installed and wraps output to Docker's 80-col terminal.
+# Explicitly setting a handler here prevents that auto-detection.
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler], force=True)
 logger = logging.getLogger(__name__)
 
 # Telemetry configuration
@@ -128,7 +134,7 @@ async def lifespan(app: FastAPI):
     app.state.db = db
 
     # Initialize Beanie ODM with document models
-    await init_beanie(database=db, document_models=[User, ShareToken])
+    await init_beanie(database=db, document_models=[User, ShareToken, PostSource, Post])
     logger.info("✓ Beanie ODM initialized")
     
     # Create admin user if explicitly configured in secrets.yaml
@@ -204,6 +210,7 @@ app.include_router(memories.router, tags=["memories"])
 app.include_router(share.router, tags=["sharing"])
 app.include_router(keycloak_admin.router, prefix="/api/keycloak", tags=["keycloak-admin"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(feed.router, tags=["feed"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)

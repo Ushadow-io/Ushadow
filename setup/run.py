@@ -300,16 +300,18 @@ NEO4J_PASSWORD=password
 # ==========================================
 # KEYCLOAK SSO CONFIGURATION
 # ==========================================
-# These env vars are used for deployment overrides via OmegaConf interpolation
-KEYCLOAK_URL=http://keycloak:8080
-KEYCLOAK_EXTERNAL_URL=http://localhost:8081
-KEYCLOAK_REALM=ushadow
-KEYCLOAK_CLIENT_ID=ushadow-frontend
-KEYCLOAK_CLIENT_SECRET=
-KEYCLOAK_ADMIN=admin
-KEYCLOAK_ADMIN_PASSWORD=admin
-KEYCLOAK_PORT=8081
-KEYCLOAK_MGMT_PORT=9000
+# KC_ prefix = Keycloak's native env var format (read directly by OmegaConf)
+KC_URL=http://keycloak:8080
+KC_HOSTNAME_URL=http://localhost:8081
+KC_MOBILE_URL=
+KC_REALM=ushadow
+KC_FRONTEND_CLIENT_ID=ushadow-frontend
+KC_BACKEND_CLIENT_ID=ushadow-backend
+KC_CLIENT_SECRET=
+KC_BOOTSTRAP_ADMIN_USERNAME=admin
+KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+KC_PORT=8081
+KC_MGMT_PORT=9000
 """
 
     env_file.write_text(env_content)

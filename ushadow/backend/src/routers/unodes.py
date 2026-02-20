@@ -391,6 +391,7 @@ class LeaderInfoResponse(BaseModel):
     # API URLs for specific services
     ushadow_api_url: str  # Main ushadow backend API
     chronicle_api_url: Optional[str] = None  # Chronicle/OMI backend API (if running)
+    keycloak_url: Optional[str] = None  # Keycloak authentication URL
 
     # Streaming URLs (only available when Chronicle service is running)
     ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
@@ -517,6 +518,10 @@ async def get_leader_info():
                 ws_omi_url=service_ws_omi_url,
             ))
 
+    # Build Keycloak URL for mobile devices (exposed on port 8081)
+    # Use HOST's Tailscale IP (leader's IP, not container's IP)
+    keycloak_url = f"http://{leader.tailscale_ip}:8081"
+
     return LeaderInfoResponse(
         hostname=leader.hostname,
         envname=leader.envname,
@@ -527,6 +532,7 @@ async def get_leader_info():
         api_port=api_port,
         ushadow_api_url=ushadow_api_url,
         chronicle_api_url=chronicle_api_url,
+        keycloak_url=keycloak_url,
         ws_pcm_url=ws_pcm_url,
         ws_omi_url=ws_omi_url,
         unodes=unodes,
@@ -568,17 +574,22 @@ async def get_unode_info(hostname: str):
     api_url = f"http://{unode.tailscale_ip}:{port}"
 
     # Get Keycloak configuration
-    from src.config.keycloak_settings import get_keycloak_config, is_keycloak_enabled
+    from src.config.keycloak_settings import get_keycloak_config
 
-    keycloak_config = None
-    if is_keycloak_enabled():
-        kc_config = get_keycloak_config()
-        keycloak_config = {
-            "enabled": True,
-            "public_url": kc_config.get("public_url"),
-            "realm": kc_config.get("realm"),
-            "frontend_client_id": kc_config.get("frontend_client_id"),
-        }
+    kc_config = get_keycloak_config()
+
+    # Mobile URL: explicit override > auto-derived from Tailscale IP + KC port
+    kc_port = os.getenv("KC_PORT", "8081")
+    mobile_url = kc_config.get("mobile_url") or f"http://{unode.tailscale_ip}:{kc_port}"
+
+    keycloak_config = {
+        "enabled": True,  # If this endpoint is reached, Keycloak is configured
+        "public_url": kc_config.get("public_url"),
+        "mobile_url": mobile_url,
+        "realm": kc_config.get("realm"),
+        "frontend_client_id": kc_config.get("frontend_client_id"),
+        "mobile_client_id": "ushadow-mobile",  # Dedicated mobile client
+    }
 
     return UNodeInfoResponse(
         hostname=unode.hostname,

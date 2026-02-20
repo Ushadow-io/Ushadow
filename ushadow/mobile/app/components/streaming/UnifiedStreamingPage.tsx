@@ -65,7 +65,7 @@ import { RelayStatus } from '../../hooks/useAudioStreamer';
 
 interface UnifiedStreamingPageProps {
   authToken: string | null;
-  onAuthRequired?: () => void;
+  onAuthRequired?: (opts?: { apiUrl?: string; hostname?: string }) => void;
   onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
   onBluetoothLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
   onSessionStart?: (source: SessionSourceType, codec: 'pcm' | 'opus') => Promise<string>;
@@ -624,10 +624,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   }, [selectedSource]);
 
   // Handle UNode found
-  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string) => {
+  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
     const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
     const savedUnode = await saveUnode({
       name,
+      hostname,
       apiUrl,
       chronicleApiUrl,
       streamUrl,
@@ -645,7 +646,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     setSelectedUnodeId(savedUnode.id);
     await setActiveUnodeStorage(savedUnode.id);
     setShowUnodeDiscovery(false);
-  }, []);
+
+    // If not authenticated, immediately prompt login with the new unode's connection details
+    if (!authToken && onAuthRequired) {
+      onAuthRequired({ apiUrl, hostname });
+    }
+  }, [authToken, onAuthRequired]);
 
   // Handle UNode removed
   const handleRemoveUnode = useCallback(async (unodeId: string) => {

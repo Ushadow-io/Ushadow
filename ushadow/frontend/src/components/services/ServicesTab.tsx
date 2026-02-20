@@ -16,6 +16,7 @@ interface ServicesTabProps {
   providerTemplates: Template[]
   serviceStatuses: Record<string, any>
   deployments: any[]
+  togglingDeployments: Set<string>
   splitServicesEnabled?: boolean // Feature flag for split services view
   onAddConfig: (serviceId: string) => void
   onWiringChange: (consumerId: string, capability: string, sourceConfigId: string) => Promise<void>
@@ -43,6 +44,7 @@ export default function ServicesTab({
   providerTemplates,
   serviceStatuses,
   deployments,
+  togglingDeployments,
   splitServicesEnabled = false,
   onAddConfig,
   onWiringChange,
@@ -110,6 +112,7 @@ export default function ServicesTab({
                   initialConfigs={templateConfigs}
                   instanceCount={templateConfigs.length}
                   deployments={serviceDeployments}
+                  togglingDeployments={togglingDeployments}
                   onStopDeployment={onStopDeployment}
                   onRestartDeployment={onRestartDeployment}
                   onRemoveDeployment={onRemoveDeployment}
@@ -245,6 +248,7 @@ export default function ServicesTab({
         initialConfigs={templateConfigs}
         instanceCount={templateConfigs.length}
         deployments={serviceDeployments}
+        togglingDeployments={togglingDeployments}
         onStopDeployment={onStopDeployment}
         onRestartDeployment={onRestartDeployment}
         onRemoveDeployment={onRemoveDeployment}

@@ -78,6 +78,7 @@ def env_var_matches_setting(env_name: str, setting_path: str) -> bool:
     """Check if an env var name matches a setting path.
 
     Treats underscores in env var as equivalent to dots in setting path.
+    Also handles special prefix mappings (e.g., KC_ → keycloak.).
 
     Args:
         env_name: Environment variable name (e.g., "OPENAI_API_KEY")
@@ -91,7 +92,29 @@ def env_var_matches_setting(env_name: str, setting_path: str) -> bool:
         True
         >>> env_var_matches_setting("OPENAI_API_KEY", "api_keys.openai_api_key")
         True
+        >>> env_var_matches_setting("KC_ENABLED", "keycloak.enabled")
+        True
+        >>> env_var_matches_setting("KC_REALM", "keycloak.realm")
+        True
     """
+    # Special prefix mappings for common env var conventions
+    PREFIX_MAPPINGS = {
+        'kc.': 'keycloak.',  # KC_* → keycloak.*
+    }
+
     env_normalized = env_name.lower().replace('_', '.')
     path_normalized = setting_path.lower().replace('_', '.')
-    return path_normalized == env_normalized or path_normalized.endswith('.' + env_normalized)
+
+    # Try direct match first
+    if path_normalized == env_normalized or path_normalized.endswith('.' + env_normalized):
+        return True
+
+    # Try with prefix mappings
+    for env_prefix, path_prefix in PREFIX_MAPPINGS.items():
+        if env_normalized.startswith(env_prefix):
+            # Replace KC.* with keycloak.* and try again
+            mapped_env = env_normalized.replace(env_prefix, path_prefix, 1)
+            if path_normalized == mapped_env or path_normalized.endswith('.' + mapped_env):
+                return True
+
+    return False

@@ -1,0 +1,232 @@
+require 'json'
+
+# Fastlane Fastfile
+# iOS deployment automation for ushadow mobile app
+#
+# Available lanes:
+#   fastlane beta        - Build and upload to TestFlight (fastest!)
+#   fastlane build       - Build only (no upload)
+#   fastlane submit      - Submit existing build to TestFlight
+#   fastlane bump_build  - Increment build number
+
+# Uncomment the line if you want fastlane to automatically update itself
+# update_fastlane
+
+default_platform(:ios)
+
+platform :ios do
+  # Configuration (production variant - bundle ID io.ushadow.mobile)
+  SCHEME = "ushadow"
+  WORKSPACE = "./ios/ushadow.xcworkspace"
+  PROJECT = "./ios/ushadow.xcodeproj"
+
+  before_all do
+    # No git state checks - allow deploys with uncommitted changes
+  end
+
+  # ========================================
+  # Main Lanes
+  # ========================================
+
+  desc "Build and upload to TestFlight"
+  desc "This is the fastest way to deploy - no EAS queues!"
+  lane :beta do
+    # Establish API key first so it's available for all subsequent actions
+    # (provisioning profile fetch, build number query, and upload)
+    api_key = app_store_connect_api_key_from_env
+
+    # Step 1: Sync build number with App Store Connect
+    # Takes the max of ASC's latest + current project build to handle builds
+    # still processing in Apple's pipeline (which ASC may not reflect yet).
+    UI.message("📦 Syncing build number with App Store Connect...")
+
+    asc_build = app_store_build_number(
+      app_identifier: "io.ushadow.mobile",
+      live: false,  # Check TestFlight builds, not live App Store
+      api_key: api_key,
+    ).to_i
+    project_build = get_build_number(xcodeproj: PROJECT).to_i
+    latest_build = [asc_build, project_build].max
+    next_build = latest_build + 1
+
+    UI.message("ASC build: #{asc_build}, project build: #{project_build} → using #{next_build}")
+
+    increment_build_number(
+      build_number: next_build,
+      xcodeproj: PROJECT
+    )
+
+    # Get current version info
+    version = get_version_number(xcodeproj: PROJECT, target: SCHEME)
+    build = get_build_number(xcodeproj: PROJECT)
+
+    UI.success("Building version #{version} (#{build})")
+
+    # Step 2: Build the app
+    UI.message("🔨 Building iOS app...")
+    build_app
+
+    # Step 3: Upload to TestFlight
+    ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
+    UI.message("IPA path: #{ipa_path}")
+    ipa_build = sh("unzip -p '#{ipa_path}' 'Payload/ushadow.app/Info.plist' | plutil -extract CFBundleVersion raw -o - -").strip rescue "unknown"
+    UI.message("Build number inside IPA: #{ipa_build}")
+
+    UI.message("🚀 Uploading to TestFlight...")
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ipa_path,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,  # Set to true to distribute to external testers
+      notify_external_testers: false,
+      changelog: "Build #{build} - Automated deployment via Fastlane"
+    )
+
+    UI.success("✅ Successfully uploaded to TestFlight!")
+    UI.success("Version: #{version} (Build: #{build})")
+    UI.message("📱 Build will appear in TestFlight in ~5-10 minutes")
+  end
+
+  desc "Build iOS app only (no upload)"
+  lane :build do
+    UI.message("🔨 Building iOS app...")
+
+    build_app(
+      skip_package_ipa: false,
+      export_method: "app-store"
+    )
+
+    UI.success("✅ Build complete!")
+    UI.message("IPA location: #{lane_context[SharedValues::IPA_OUTPUT_PATH]}")
+  end
+
+  desc "Submit existing build to TestFlight"
+  desc "Use this if you already have a .ipa file"
+  lane :submit do |options|
+    api_key = app_store_connect_api_key_from_env
+    ipa_path = options[:ipa] ||
+               lane_context[SharedValues::IPA_OUTPUT_PATH] ||
+               File.expand_path("../build/ushadow.ipa", __dir__)
+
+    unless File.exist?(ipa_path)
+      UI.user_error!("No IPA file found at #{ipa_path}. Run 'make fastlane-beta' to build first.")
+    end
+
+    UI.message("Using IPA: #{ipa_path}")
+
+    UI.message("🚀 Uploading to TestFlight...")
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ipa_path,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,
+      notify_external_testers: false
+    )
+
+    UI.success("✅ Successfully uploaded to TestFlight!")
+  end
+
+  desc "Increment build number (synced with App Store Connect)"
+  lane :bump_build do
+    asc_build = app_store_build_number(
+      app_identifier: "io.ushadow.mobile",
+      live: false,
+    ).to_i
+    project_build = get_build_number(xcodeproj: PROJECT).to_i
+    latest_build = [asc_build, project_build].max
+    next_build = latest_build + 1
+    increment_build_number(build_number: next_build, xcodeproj: PROJECT)
+    version = get_version_number(xcodeproj: PROJECT, target: SCHEME)
+    build = get_build_number(xcodeproj: PROJECT)
+    UI.success("ASC: #{asc_build}, project: #{project_build} → New build: #{build} (version #{version})")
+  end
+
+  # ========================================
+  # Helper Lanes
+  # ========================================
+
+  # ========================================
+  # Build Configuration
+  # ========================================
+
+  desc "Build the iOS app"
+  private_lane :build_app do |options|
+    eas_config = JSON.parse(File.read("../eas.json"))
+    team_id    = eas_config.dig('submit', 'production', 'ios', 'appleTeamId') || '6SJ7NH4HSZ'
+
+    # Regenerate the iOS project with production variant (bundle ID io.ushadow.mobile)
+    # This ensures the correct bundle ID is baked into the Xcode project before building.
+    UI.message("🔧 Running expo prebuild for production variant...")
+    sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
+
+    # Download/refresh the App Store distribution provisioning profile.
+    # sigh fetches it from Apple and installs it into ~/Library/MobileDevice/Provisioning Profiles/
+    # This is what EAS does behind the scenes with its stored credentials.
+    UI.message("📲 Fetching App Store distribution provisioning profile...")
+    profile = get_provisioning_profile(
+      app_identifier: "io.ushadow.mobile",
+      team_id: team_id,
+      api_key: app_store_connect_api_key_from_env,
+    )
+
+    # sigh stores the UUID and name in lane context after download
+    profile_uuid = ENV["sigh_io.ushadow.mobile_appstore_profile-uuid"]
+    profile_name = ENV["sigh_io.ushadow.mobile_appstore_profile-name"]
+    UI.success("Using profile: #{profile_name} (#{profile_uuid})")
+
+    # Build with distribution identity and the explicit profile
+    gym(
+      workspace: WORKSPACE,
+      scheme: SCHEME,
+      export_method: "app-store",
+      configuration: "Release",
+      clean: true,
+
+      output_directory: "./build",
+      output_name: "ushadow.ipa",
+
+      export_options: {
+        method: "app-store",
+        teamID: team_id,
+        compileBitcode: false,
+        provisioningProfiles: {
+          "io.ushadow.mobile" => profile_uuid,
+        },
+      },
+
+      skip_package_ipa: options[:skip_package_ipa] || false,
+    )
+  end
+
+  # Build the App Store Connect API key object from the EAS API key env vars.
+  # EAS already set these up (Key ID: H96BWR4X7Q) so we reuse them here.
+  private_lane :app_store_connect_api_key_from_env do
+    # These can be set in .env.local
+    # If not set, Fastlane will fall back to interactive Apple ID login
+    if ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"] &&
+       ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"] &&
+       ENV["APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"]
+      app_store_connect_api_key(
+        key_id:        ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"].strip,
+        issuer_id:     ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"].strip,
+        key_filepath:  File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"].strip),
+      )
+    else
+      nil  # Fall back to Apple ID / password auth
+    end
+  end
+
+  # ========================================
+  # Error Handling
+  # ========================================
+
+  error do |lane, exception|
+    UI.error("Error in lane '#{lane}':")
+    UI.error(exception.message)
+  end
+
+  after_all do |lane|
+    # This block is called, only if the executed lane was successful
+    UI.success("Successfully completed '#{lane}' lane! 🎉")
+  end
+end

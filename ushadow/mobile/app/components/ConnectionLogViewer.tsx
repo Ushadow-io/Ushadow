@@ -22,7 +22,7 @@ import {
   ConnectionState,
   CONNECTION_TYPE_LABELS,
 } from '../types/connectionLog';
-import { StreamingSession } from '../types/streamingSession';
+import { StreamingSession, isSessionActive } from '../types/streamingSession';
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 
 interface ConnectionLogViewerProps {
@@ -91,6 +91,13 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
   onClearSessions,
 }) => {
   const [activeTab, setActiveTab] = useState<FilterType>('all');
+  const [sessionFilter, setSessionFilter] = useState<'all' | 'active' | 'failed'>('all');
+
+  const filteredSessions = useMemo(() => {
+    if (sessionFilter === 'active') return sessions.filter(isSessionActive);
+    if (sessionFilter === 'failed') return sessions.filter(s => !!s.error);
+    return sessions;
+  }, [sessions, sessionFilter]);
 
   const filteredEntries = useMemo(() => {
     if (activeTab === 'all') return entries;
@@ -344,7 +351,7 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
         <View style={styles.countContainer}>
           <Text style={styles.countText}>
             {isSessionsView
-              ? `${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'}`
+              ? `${filteredSessions.length} ${filteredSessions.length === 1 ? 'session' : 'sessions'}`
               : `${filteredEntries.length} ${filteredEntries.length === 1 ? 'entry' : 'entries'}`
             }
           </Text>
@@ -379,10 +386,32 @@ export const ConnectionLogViewer: React.FC<ConnectionLogViewerProps> = ({
           </View>
         </View>
 
+        {/* Session Filter Chips */}
+        {isSessionsView && (
+          <View style={styles.sessionFilterContainer} testID="session-filter-chips">
+            {([
+              { key: 'all', label: `All (${sessions.length})` },
+              { key: 'active', label: `Active (${sessions.filter(isSessionActive).length})` },
+              { key: 'failed', label: `Failed (${sessions.filter(s => !!s.error).length})` },
+            ] as const).map(({ key, label }) => (
+              <TouchableOpacity
+                key={key}
+                style={[styles.sessionFilterChip, sessionFilter === key && styles.sessionFilterChipActive]}
+                onPress={() => setSessionFilter(key)}
+                testID={`session-filter-${key}`}
+              >
+                <Text style={[styles.sessionFilterText, sessionFilter === key && styles.sessionFilterTextActive]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* Content List */}
         {isSessionsView ? (
           <FlatList
-            data={sessions}
+            data={filteredSessions}
             keyExtractor={(item) => item.id}
             renderItem={renderSessionItem}
             ListEmptyComponent={renderEmptyState}
@@ -629,6 +658,34 @@ const styles = StyleSheet.create({
   sessionErrorText: {
     fontSize: fontSize.sm,
     color: colors.error.light,
+  },
+  sessionFilterContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  sessionFilterChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.full,
+    backgroundColor: theme.backgroundCard,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  sessionFilterChipActive: {
+    backgroundColor: colors.warning.default,
+    borderColor: colors.warning.default,
+  },
+  sessionFilterText: {
+    fontSize: fontSize.sm,
+    color: theme.textMuted,
+  },
+  sessionFilterTextActive: {
+    color: theme.background,
+    fontWeight: '600',
   },
 });
 

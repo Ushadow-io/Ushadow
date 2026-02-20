@@ -238,8 +238,8 @@ class ComposeServiceRegistry:
             logger.warning(f"Compose directory not found: {self.compose_dir}")
             return
 
-        # Find compose files (pattern: *-compose.yaml or *-compose.yml)
-        patterns = ["*-compose.yaml", "*-compose.yml"]
+        # Find all YAML files in compose directory
+        patterns = ["*.yaml", "*.yml"]
         compose_files = []
         for pattern in patterns:
             compose_files.extend(self.compose_dir.glob(pattern))

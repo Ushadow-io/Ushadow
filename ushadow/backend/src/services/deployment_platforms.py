@@ -247,6 +247,7 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
                 "com.docker.compose.project": project_name,
+                "com.docker.compose.service": resolved_service.service_id,  # Required for docker_manager to find services
             }
 
             # Use ushadow-network to communicate with infrastructure (mongo, redis, qdrant)
@@ -436,6 +437,7 @@ class DockerDeployPlatform(DeployPlatform):
             "ushadow.unode_hostname": hostname,
             "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
             "ushadow.backend_type": "docker",
+            "com.docker.compose.service": resolved_service.service_id,  # Required for docker_manager to find services
         }
 
         payload = {
@@ -613,20 +615,27 @@ class DockerDeployPlatform(DeployPlatform):
         deployments = []
 
         try:
-            if self._is_local_deployment(target.identifier):
-                # Query local Docker
-                docker_client = docker.from_env()
-                filters = {"label": [
-                    "ushadow.deployment_id",
-                    f"ushadow.unode_hostname={target.identifier}"
-                ]}
+            # Query local Docker for containers (works for both local and "remote" unodes on same host)
+            docker_client = docker.from_env()
+            filters = {"label": [
+                "ushadow.deployment_id",
+                f"ushadow.unode_hostname={target.identifier}"
+            ]}
 
-                if service_id:
-                    filters["label"].append(f"ushadow.service_id={service_id}")
+            if service_id:
+                filters["label"].append(f"ushadow.service_id={service_id}")
 
-                containers = docker_client.containers.list(all=True, filters=filters)
+            containers = docker_client.containers.list(all=True, filters=filters)
 
-                for container in containers:
+            if containers and not self._is_local_deployment(target.identifier):
+                logger.info(f"[list_deployments] Found {len(containers)} local containers for remote unode {target.identifier}")
+            elif not containers and not self._is_local_deployment(target.identifier):
+                # No local containers found for remote unode
+                logger.warning(f"No local containers found for {target.identifier}. Remote deployment listing not yet implemented.")
+                return deployments
+
+            # Process all found containers
+            for container in containers:
                     labels = container.labels
 
                     # Extract deployment info from labels
@@ -719,11 +728,6 @@ class DockerDeployPlatform(DeployPlatform):
                     )
 
                     deployments.append(deployment)
-
-            else:
-                # Query remote unode manager
-                # TODO: Implement remote query via unode manager API
-                logger.warning(f"Remote deployment listing not yet implemented for {target.identifier}")
 
         except Exception as e:
             logger.error(f"Failed to list deployments: {e}")

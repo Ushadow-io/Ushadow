@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ushadow-config
-  namespace: ushadow
-data:
-  ENV_NAME: "purple"
-  # Add other non-sensitive env vars from .env as needed
-  # BACKEND_PORT, WEBUI_PORT, etc.

@@ -19,3 +19,13 @@ android/
 # Misc
 *.log
 .DS_Store
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+fastlane/README.md
+*.ipa
+*.dSYM.zip
+build/
