@@ -84,12 +84,10 @@ pub async fn create_ticket_worktree(
         format!("ticket-{}", request.ticket_id)
     };
 
-    // Session = ush-{env_name}, window = ushadow-{sanitized_branch}.
-    // The "ushadow-" prefix matches window_prefix in .workmux.yaml so workmux dashboard
-    // can find these windows by scanning all sessions.  No ticket ID suffix — branch names
-    // are unique within a session.
-    let sanitized_branch = branch_name.replace('/', "-").replace('\\', "-");
-    let tmux_window_name = format!("ushadow-{}", sanitized_branch);
+    // Session = ush-{env_name}, window = ushadow-{env_name}.
+    // workmux identifies windows by the worktree directory basename, so the window name must
+    // be {window_prefix}{dir_basename} (env_name = the directory name, not the branch name).
+    let tmux_window_name = format!("ushadow-{}", request.environment_name);
     let tmux_session_name = format!("ush-{}", request.environment_name);
 
     // Create worktree with tmux integration (custom_window_name=None — derived inside)
@@ -139,10 +137,9 @@ pub async fn attach_ticket_to_worktree(
         .unwrap_or("ushadow")
         .to_string();
 
-    // Session = ush-{env}, window = ushadow-{sanitized_branch} (workmux-compatible prefix)
-    let sanitized_branch = branch_name.replace('/', "-").replace('\\', "-");
+    // Session = ush-{env}, window = ushadow-{env_name} (workmux uses dir basename as handle)
     let tmux_session_name = format!("ush-{}", env_name);
-    let tmux_window_name = format!("ushadow-{}", sanitized_branch);
+    let tmux_window_name = format!("ushadow-{}", env_name);
 
     // Ensure tmux server is running
     shell_command("tmux start-server")

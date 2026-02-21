@@ -145,15 +145,13 @@ jobs:
       - name: Check Apple certificate secret
         id: check_cert
         run: |
-          # SIGNING DISABLED — re-enable by restoring the secret check below
-          echo "has_cert=false" >> $GITHUB_OUTPUT
-          # if [ -n "$APPLE_CERTIFICATE" ]; then
-          #   echo "has_cert=true" >> $GITHUB_OUTPUT
-          # else
-          #   echo "has_cert=false" >> $GITHUB_OUTPUT
-          # fi
-        # env:
-        #   APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "has_cert=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_cert=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
 
       - name: Import Apple signing certificate
         if: steps.check_cert.outputs.has_cert == 'true'
@@ -215,7 +213,11 @@ jobs:
 
       - name: Build Tauri app (Universal)
         working-directory: ${{ env.LAUNCHER_DIR }}
-        run: npm run tauri:build:macos
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          npm run tauri:build:macos
 
       - name: Notarize and staple DMG
         if: steps.check_cert.outputs.has_cert == 'true'
@@ -235,15 +237,14 @@ jobs:
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait \
-            --output-format json \
-            --verbose 2>&1 | tee /tmp/notarize-result.json
-          STATUS=$(python3 -c "import json,sys; d=json.load(open('/tmp/notarize-result.json')); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
-          if [ "$STATUS" != "Accepted" ]; then
-            echo "Notarization status: $STATUS"
+            --verbose 2>&1 | tee /tmp/notarize-output.txt
+          if grep -q "status: Accepted" /tmp/notarize-output.txt; then
+            echo "✓ Notarized — stapling ticket to DMG"
+            xcrun stapler staple "$DMG"
+          else
+            echo "✗ Notarization failed"
             exit 1
           fi
-          echo "✓ Notarized — stapling ticket to DMG"
-          xcrun stapler staple "$DMG"
 
       - name: Find and upload artifacts
         uses: actions/upload-artifact@v4

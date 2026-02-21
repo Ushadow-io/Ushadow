@@ -957,17 +957,16 @@ pub async fn create_worktree_with_workmux(
     eprintln!("[create_worktree_with_workmux] Worktree created at: {}", worktree.path);
 
     // New model: one tmux session per environment, named ush-{env}.
-    // Window name = sanitized branch name (slashes → dashes).
     // custom_window_name is kept in the signature for backwards-compat but is ignored.
     let _ = custom_window_name;
+    let _ = branch_name_for_window;
 
     let session_name = format!("ush-{}", name);
 
-    // Window name: ushadow-{sanitized_branch} — matches window_prefix in .workmux.yaml so
-    // workmux dashboard can discover these windows by scanning all tmux sessions.
-    let branch_for_window = branch_name_for_window.as_deref().unwrap_or(&name);
-    let sanitized = branch_for_window.replace('/', "-").replace('\\', "-");
-    let window_name = format!("ushadow-{}", sanitized);
+    // Window name: ushadow-{env_name} — workmux uses the worktree directory basename as its
+    // handle, so this must match {window_prefix}{dir_basename} from .workmux.yaml.
+    // Using the branch name here would break `workmux list`, `workmux dashboard`, and merge.
+    let window_name = format!("ushadow-{}", name);
 
     eprintln!("[create_worktree_with_workmux] Target session '{}', window '{}'", session_name, window_name);
 
@@ -1076,6 +1075,19 @@ pub async fn merge_worktree_with_rebase(
 
     if !output.status.success() {
         return Err(format!("Workmux merge failed:\nstdout: {}\nstderr: {}", stdout, stderr));
+    }
+
+    // Kill the per-env session — workmux merge closes the window but leaves the session orphaned.
+    let session_name = format!("ush-{}", name);
+    let kill_result = shell_command(&format!("tmux kill-session -t {}", session_name))
+        .output();
+    match kill_result {
+        Ok(output) if output.status.success() => {
+            eprintln!("[merge_worktree_with_rebase] ✓ Killed tmux session '{}'", session_name);
+        }
+        _ => {
+            eprintln!("[merge_worktree_with_rebase] Note: session '{}' not found (already gone)", session_name);
+        }
     }
 
     Ok(format!("Merged and cleaned up worktree '{}'\n{}", name, stdout))

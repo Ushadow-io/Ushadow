@@ -4891,7 +4891,7 @@ dependencies = [
 
 [[package]]
 name = "ushadow-launcher"
-version = "0.8.14"
+version = "0.8.16"
 dependencies = [
  "chrono",
  "dirs",
