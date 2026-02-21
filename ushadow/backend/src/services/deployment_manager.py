@@ -245,6 +245,10 @@ class DeploymentManager:
         cmd = ["docker", "compose", "-f", str(compose_path)]
         if project_name:
             cmd.extend(["-p", project_name])
+        # Activate any profiles required by this service so profiled services
+        # are included in the resolved compose output
+        for profile in (service.profiles or []):
+            cmd.extend(["--profile", profile])
         cmd.append("config")
 
         logger.info(

@@ -229,3 +229,4 @@ class ServiceConfigSummary(BaseModel):
     name: str
     provides: Optional[str] = None
     description: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None

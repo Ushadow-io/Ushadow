@@ -15,7 +15,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 
-import { api, settingsApi, deploymentsApi, DeployTarget, Deployment } from '../services/api'
+import { api, settingsApi, svcConfigsApi, deploymentsApi, DeployTarget, Deployment } from '../services/api'
 import { useWizard } from '../contexts/WizardContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
@@ -337,13 +337,29 @@ export default function LocalServicesWizard() {
     setIsSubmitting(true)
     try {
       const data = methods.getValues()
-      await settingsApi.update({
-        'service_preferences.llm': {
-          provider: 'local',
-          url: data.llm.mode === 'container' ? 'http://localhost:11434' : data.llm.url,
-          model: data.llm.model || 'llama3.2',
-        },
-      })
+      const url = data.llm.mode === 'container' ? 'http://ollama:11434' : data.llm.url
+      const model = data.llm.model || 'llama3.2'
+
+      // Save as a ServiceConfig using credential keys so the capability resolver picks them up
+      try {
+        await svcConfigsApi.createServiceConfig({
+          id: 'ollama',
+          template_id: 'ollama',
+          name: 'Ollama',
+          config: { base_url: url, model },
+        })
+      } catch {
+        // Config already exists — update it
+        await svcConfigsApi.updateServiceConfig('ollama', { config: { base_url: url, model } })
+      }
+
+      // Mark ollama as installed so it appears in the wiring board and capability selector
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes('ollama')) {
+        await settingsApi.update({ installed_services: [...currentInstalled, 'ollama'] })
+      }
+
       setMessage({ type: 'success', text: 'LLM configuration saved.' })
       return true
     } catch (error) {
@@ -358,19 +374,45 @@ export default function LocalServicesWizard() {
     setIsSubmitting(true)
     try {
       const data = methods.getValues()
-      const url =
-        data.transcription.mode === 'parakeet'
-          ? 'http://localhost:9000'
-          : data.transcription.mode === 'faster-whisper'
-            ? 'http://localhost:10300'
-            : data.transcription.url
-      await settingsApi.update({
-        'service_preferences.transcription': {
-          provider: 'local',
-          url,
-          type: data.transcription.mode,
-        },
-      })
+
+      // Map wizard mode to provider template ID and server_url credential value
+      let providerId: string
+      let serverUrl: string | null = null
+
+      if (data.transcription.mode === 'parakeet') {
+        providerId = 'parakeet'
+        // Parakeet uses its default URL from the provider registry; no explicit URL needed
+      } else if (data.transcription.mode === 'faster-whisper') {
+        // faster-whisper serves an OpenAI-compatible whisper API — map to whisper-local provider
+        providerId = 'whisper-local'
+        serverUrl = 'http://faster-whisper:8000'
+      } else {
+        // Manual whisper URL
+        providerId = 'whisper-local'
+        serverUrl = data.transcription.url
+      }
+
+      // Save as a ServiceConfig using credential keys so the capability resolver picks them up
+      const configValues = serverUrl ? { server_url: serverUrl } : {}
+      try {
+        await svcConfigsApi.createServiceConfig({
+          id: providerId,
+          template_id: providerId,
+          name: providerId === 'parakeet' ? 'Parakeet' : 'Whisper (local)',
+          config: configValues,
+        })
+      } catch {
+        // Config already exists — update it
+        await svcConfigsApi.updateServiceConfig(providerId, { config: configValues })
+      }
+
+      // Mark provider as installed so it appears in the wiring board and capability selector
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes(providerId)) {
+        await settingsApi.update({ installed_services: [...currentInstalled, providerId] })
+      }
+
       updateServiceStatus('apiKeys', true)
       setMessage({ type: 'success', text: 'Transcription configuration saved.' })
       return true
@@ -505,16 +547,24 @@ interface LLMStepProps {
   ollamaStatus: ContainerInfo
   availableModels: string[]
   loadingModels: boolean
+  pullModelName: string
+  pullingModel: boolean
   onStartOllama: () => void
   onRefreshModels: () => void
+  onPullModel: (name: string) => void
+  onPullModelNameChange: (name: string) => void
 }
 
 function LLMStep({
   ollamaStatus,
   availableModels,
   loadingModels,
+  pullModelName,
+  pullingModel,
   onStartOllama,
   onRefreshModels,
+  onPullModel,
+  onPullModelNameChange,
 }: LLMStepProps) {
   const { register, watch, setValue } = useFormContext<FormData>()
   const mode = watch('llm.mode')
@@ -609,17 +659,40 @@ function LLMStep({
                   Loading models...
                 </div>
               ) : availableModels.length === 0 ? (
-                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-1">
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-3">
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-200">No models installed</p>
                   <p className="text-xs text-amber-700 dark:text-amber-300">
                     Pull a model to get started:
                   </p>
-                  <code className="block text-xs bg-amber-100 dark:bg-amber-900/40 px-2 py-1 rounded font-mono text-amber-900 dark:text-amber-100">
-                    ollama pull llama3.2
-                  </code>
-                  <p className="text-xs text-amber-700 dark:text-amber-300">
-                    Then click Refresh above.
-                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      data-testid="local-services-pull-model-name"
+                      type="text"
+                      value={pullModelName}
+                      onChange={(e) => onPullModelNameChange(e.target.value)}
+                      placeholder="llama3.2"
+                      className="input flex-1 text-sm"
+                      disabled={pullingModel}
+                    />
+                    <button
+                      data-testid="local-services-pull-model-btn"
+                      type="button"
+                      onClick={() => onPullModel(pullModelName)}
+                      disabled={pullingModel || !pullModelName.trim()}
+                      className="btn-primary flex items-center gap-2 whitespace-nowrap"
+                    >
+                      {pullingModel ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" />Pulling...</>
+                      ) : (
+                        'Pull Model'
+                      )}
+                    </button>
+                  </div>
+                  {pullingModel && (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Downloading model — this may take a few minutes depending on size.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <select

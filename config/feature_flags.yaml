@@ -89,7 +89,7 @@ flags:
 
   # Service Configs - Show custom service instance configurations
   service_configs:
-    enabled: false
+    enabled: true
     description: "Show custom service config instances in the Services tab (multi-instance
       per template)"
     type: release
@@ -110,7 +110,7 @@ flags:
 
   # Chronicle - Conversation history and timeline view
   chronicle:
-    enabled: true
+    enabled: false
     description: "Chronicle - Conversation history and timeline view"
     type: release
 

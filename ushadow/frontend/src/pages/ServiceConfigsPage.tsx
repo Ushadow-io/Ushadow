@@ -844,6 +844,13 @@ export default function ServiceConfigsPage() {
         await settingsApi.update(settingsUpdates)
       }
 
+      // Mark provider as installed so it appears in wiring board and instance list
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes(providerId)) {
+        await settingsApi.update({ installed_services: [...currentInstalled, providerId] })
+      }
+
       // Refresh data
       refreshData()
 
@@ -1100,6 +1107,13 @@ export default function ServiceConfigsPage() {
 
           if (Object.keys(updates).length > 0) {
             await settingsApi.update(updates)
+          }
+
+          // Mark provider as installed so it appears in wiring board and instance list
+          const currentConfig = await settingsApi.getConfig()
+          const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+          if (!currentInstalled.includes(editingProvider.id)) {
+            await settingsApi.update({ installed_services: [...currentInstalled, editingProvider.id] })
           }
 
           setMessage({ type: 'success', text: `${editingProvider.name} settings updated` })

@@ -130,12 +130,12 @@ export default function LoginPage() {
       />
 
       <div className="flex-1 flex items-center justify-center py-4 px-4 sm:px-6 lg:px-8 relative z-10">
-        <div className="max-w-md w-full space-y-6">
+        <div className="max-w-md w-full space-y-4 sm:space-y-6">
           <AuthHeader subtitle="Sign in with your account" />
 
           {/* Login Card */}
           <div
-            className="rounded-lg shadow-xl p-8 space-y-6 animate-slide-up"
+            className="rounded-lg shadow-xl p-5 sm:p-8 space-y-4 sm:space-y-6 animate-slide-up"
             style={{
               backgroundColor: '#1a1a1a',
               border: '1px solid #27272a',
@@ -162,7 +162,7 @@ export default function LoginPage() {
             )}
 
             <div className="text-center space-y-2">
-              <h2 className="text-xl font-semibold" style={{ color: '#ffffff' }}>
+              <h2 className="text-lg sm:text-xl font-semibold" style={{ color: '#ffffff' }}>
                 Welcome to Ushadow
               </h2>
               <p className="text-sm" style={{ color: '#a1a1aa' }}>

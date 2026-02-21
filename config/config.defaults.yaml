@@ -154,14 +154,18 @@ default_services:
 # default_services, overriding the list above.
 service_profiles:
   default:
-    - chronicle-backend
-    - chronicle-workers
-    - mem0
+    display_name: "Chronicle + Memory"
+    services:
+      - chronicle-backend
+      - chronicle-workers
+      - mem0
   mycelia:
-    - mycelia-backend
-    - mycelia-frontend
-    - mycelia-python-worker
-    - mem0
+    display_name: "Mycelia + Memory"
+    services:
+      - mycelia-backend
+      - mycelia-frontend
+      - mycelia-python-worker
+      - mem0
 
 # Feed Configuration
 # Sources are managed here (config.overrides.yaml for user additions).

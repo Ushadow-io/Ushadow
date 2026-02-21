@@ -72,6 +72,8 @@ export interface FlatServiceCardProps {
   providerTemplates: Template[]
   /** Pre-fetched configs to avoid duplicate API calls */
   initialConfigs?: ServiceConfigSummary[]
+  /** All service configs (provider configs included) for capability dropdown lookups */
+  allConfigs?: ServiceConfigSummary[]
   /** Number of configured instances */
   instanceCount?: number
   /** Active deployments for this service */
@@ -428,6 +430,7 @@ export function FlatServiceCard({
   onDeploy,
   providerTemplates,
   initialConfigs,
+  allConfigs,
   instanceCount = 0,
   deployments = [],
   togglingDeployments = new Set(),
@@ -443,13 +446,18 @@ export function FlatServiceCard({
   onWorkerWiringChange,
   onWorkerWiringClear,
 }: FlatServiceCardProps) {
-  // Memoize hook options to avoid recreating on each render
+  // Memoize hook options to avoid recreating on each render.
+  // Use allConfigs (all service configs) for provider lookups — initialConfigs contains
+  // only this service's own compose configs and is wrong for filtering provider configs.
   const hookOptions = useMemo<UseProviderConfigsOptions | undefined>(() => {
-    if (providerTemplates && initialConfigs) {
-      return { initialTemplates: providerTemplates, initialConfigs }
+    if (providerTemplates && allConfigs) {
+      return { initialTemplates: providerTemplates, initialConfigs: allConfigs }
+    }
+    if (providerTemplates) {
+      return { initialTemplates: providerTemplates }
     }
     return undefined
-  }, [providerTemplates, initialConfigs])
+  }, [providerTemplates, allConfigs])
   const [startingWorker, setStartingWorker] = useState<string | null>(null)
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null)
   const [creatingCapability, setCreatingCapability] = useState<string | null>(null)

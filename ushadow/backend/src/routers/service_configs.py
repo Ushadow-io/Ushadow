@@ -69,8 +69,14 @@ async def get_template_env_config(
     Returns same format as /api/services/{name}/env for unified frontend handling.
     """
     from src.config import get_settings, Source
+    from src.services.template_service import list_templates
 
-    template = await get_template(template_id, current_user)
+    # Search provider templates specifically — compose templates share IDs (e.g. 'ollama')
+    # but have empty config_schema. Provider templates have the credential definitions.
+    provider_templates = await list_templates(source='provider')
+    template = next((t for t in provider_templates if t.id == template_id), None)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Provider template not found: {template_id}")
     settings_v2 = get_settings()
 
     result = []

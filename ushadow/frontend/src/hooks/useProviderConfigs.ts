@@ -81,8 +81,9 @@ function getConfigSummary(template: Template, config?: Record<string, any>): str
 
   if (config) {
     for (const key of summaryKeys) {
-      if (config[key]) {
-        return String(config[key])
+      const val = config[key]
+      if (typeof val === 'string' && val) {
+        return val
       }
     }
   }
@@ -239,7 +240,7 @@ export function useProviderConfigs(
         templateId: c.template_id,
         mode: template?.mode,
         configured: true, // If it exists as a config, it's been configured
-        configSummary: undefined, // TODO: Load from config details if needed
+        configSummary: template ? getConfigSummary(template, c.config) : undefined,
       }
     })
 

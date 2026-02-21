@@ -110,6 +110,7 @@ export default function ServicesTab({
                   wiring={consumerWiring}
                   providerTemplates={providerTemplates}
                   initialConfigs={templateConfigs}
+                  allConfigs={instances}
                   instanceCount={templateConfigs.length}
                   deployments={serviceDeployments}
                   togglingDeployments={togglingDeployments}
@@ -246,6 +247,7 @@ export default function ServicesTab({
         wiring={consumerWiring}
         providerTemplates={providerTemplates}
         initialConfigs={templateConfigs}
+        allConfigs={instances}
         instanceCount={templateConfigs.length}
         deployments={serviceDeployments}
         togglingDeployments={togglingDeployments}
