@@ -51,6 +51,7 @@ export default function HomeScreen() {
 
   // UI state
   const [showLogViewer, setShowLogViewer] = useState(false);
+  const [autoStartKeycloak, setAutoStartKeycloak] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     createInitialConnectionState()
   );
@@ -86,9 +87,11 @@ export default function HomeScreen() {
           const hostname = activeUnode.hostname || activeUnode.name;
 
           setCurrentHostname(hostname);
-          setCurrentApiUrl(apiUrl || activeUnode.apiUrl);
+          // Always prefer the active unode's URL — getApiUrl() returns the last
+          // successful login URL which may point to a different (old) server.
+          setCurrentApiUrl(activeUnode.apiUrl);
           console.log('[Home] Loaded active unode hostname:', hostname);
-          console.log('[Home] Loaded API URL:', apiUrl || activeUnode.apiUrl);
+          console.log('[Home] Loaded API URL:', activeUnode.apiUrl);
         } else if (apiUrl) {
           setCurrentApiUrl(apiUrl);
           console.log('[Home] Loaded API URL (no active unode):', apiUrl);
@@ -139,6 +142,7 @@ export default function HomeScreen() {
               // Populate connection info from the freshly scanned unode
               setCurrentApiUrl(activeUnode.apiUrl);
               setCurrentHostname(activeUnode.hostname || activeUnode.name);
+              setAutoStartKeycloak(true);
               setShowLoginScreen(true);
             }
           }
@@ -156,6 +160,7 @@ export default function HomeScreen() {
       const info = await getAuthInfo();
       setAuthInfo(info);
       setShowLoginScreen(false);
+      setAutoStartKeycloak(false);
       setConnectionState((prev) => ({ ...prev, server: 'connected' }));
       logEvent('server', 'connected', 'Login successful', info?.email);
     },
@@ -272,10 +277,11 @@ export default function HomeScreen() {
       {/* Login Screen Modal */}
       <LoginScreen
         visible={showLoginScreen}
-        onClose={() => setShowLoginScreen(false)}
+        onClose={() => { setShowLoginScreen(false); setAutoStartKeycloak(false); }}
         onLoginSuccess={handleLoginSuccess}
         initialApiUrl={currentApiUrl}
         hostname={currentHostname}
+        autoStartKeycloak={autoStartKeycloak}
       />
 
       {/* Connection Log Viewer Modal */}

@@ -22,6 +22,7 @@ from src.models.feed import (
     SourceCreate,
 )
 from src.services.interest_extractor import InterestExtractor
+from src.services.mastodon_oauth import MastodonOAuthService
 from src.services.post_fetcher import PostFetcher
 from src.services.post_scorer import PostScorer
 
@@ -82,6 +83,53 @@ class FeedService:
             for s in all_sources
             if s.get("user_id") == user_id
         ]
+
+    async def get_mastodon_auth_url(
+        self, instance_url: str, redirect_uri: str
+    ) -> str:
+        """Register app (or reuse cached) and return Mastodon authorization URL."""
+        oauth = MastodonOAuthService()
+        return await oauth.get_authorization_url(instance_url, redirect_uri)
+
+    async def connect_mastodon(
+        self,
+        user_id: str,
+        instance_url: str,
+        code: str,
+        redirect_uri: str,
+        name: str,
+    ) -> PostSource:
+        """Exchange OAuth code for a token and create/update a Mastodon source.
+
+        If a source already exists for this user + instance, the token is
+        refreshed in-place. Otherwise a new PostSource is created.
+        """
+        oauth = MastodonOAuthService()
+        access_token = await oauth.exchange_code(instance_url, code, redirect_uri)
+
+        normalised_url = instance_url.rstrip("/")
+        existing = await PostSource.find_one(
+            PostSource.user_id == user_id,
+            PostSource.platform_type == "mastodon",
+            PostSource.instance_url == normalised_url,
+        )
+        if existing:
+            existing.access_token = access_token
+            existing.name = name
+            await existing.save()
+            logger.info(f"Updated Mastodon token for {user_id} on {normalised_url}")
+            return existing
+
+        source = PostSource(
+            user_id=user_id,
+            name=name,
+            platform_type="mastodon",
+            instance_url=normalised_url,
+            access_token=access_token,
+        )
+        await source.insert()
+        logger.info(f"Connected Mastodon account for {user_id} on {normalised_url}")
+        return source
 
     async def remove_source(self, user_id: str, source_id: str) -> bool:
         """Remove a post source from config."""
