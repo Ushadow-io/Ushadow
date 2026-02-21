@@ -177,19 +177,26 @@ platform :ios do
     # Download/refresh the App Store distribution provisioning profile.
     # sigh fetches it from Apple and installs it into ~/Library/MobileDevice/Provisioning Profiles/
     # This is what EAS does behind the scenes with its stored credentials.
-    UI.message("📲 Fetching App Store distribution provisioning profile...")
-    profile = get_provisioning_profile(
+    UI.message("📲 Fetching App Store distribution provisioning profiles...")
+    get_provisioning_profile(
       app_identifier: "io.ushadow.mobile",
       team_id: team_id,
       api_key: app_store_connect_api_key_from_env,
     )
-
-    # sigh stores the UUID and name in lane context after download
     profile_uuid = ENV["sigh_io.ushadow.mobile_appstore_profile-uuid"]
     profile_name = ENV["sigh_io.ushadow.mobile_appstore_profile-name"]
-    UI.success("Using profile: #{profile_name} (#{profile_uuid})")
+    UI.success("Main app profile: #{profile_name} (#{profile_uuid})")
 
-    # Build with distribution identity and the explicit profile
+    get_provisioning_profile(
+      app_identifier: "io.ushadow.mobile.widget",
+      team_id: team_id,
+      api_key: app_store_connect_api_key_from_env,
+    )
+    widget_profile_uuid = ENV["sigh_io.ushadow.mobile.widget_appstore_profile-uuid"]
+    widget_profile_name = ENV["sigh_io.ushadow.mobile.widget_appstore_profile-name"]
+    UI.success("Widget profile: #{widget_profile_name} (#{widget_profile_uuid})")
+
+    # Build with distribution identity and the explicit profiles for each target
     gym(
       workspace: WORKSPACE,
       scheme: SCHEME,
@@ -205,7 +212,8 @@ platform :ios do
         teamID: team_id,
         compileBitcode: false,
         provisioningProfiles: {
-          "io.ushadow.mobile" => profile_uuid,
+          "io.ushadow.mobile"        => profile_uuid,
+          "io.ushadow.mobile.widget" => widget_profile_uuid,
         },
       },
 
