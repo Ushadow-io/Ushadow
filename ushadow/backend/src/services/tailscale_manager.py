@@ -92,15 +92,22 @@ class TailscaleManager:
         """Initialize TailscaleManager.
 
         Args:
-            docker_client: Docker client instance. If None, creates from environment.
+            docker_client: Docker client instance. If None, created lazily on first use.
         """
-        self.docker_client = docker_client or docker.from_env()
+        self._docker_client = docker_client  # None = not yet attempted
         self.env_name = os.getenv("COMPOSE_PROJECT_NAME", "").strip() or "ushadow"
 
         # Cache for auth URL to avoid regenerating nodekeys unnecessarily
         self._cached_auth_url: Optional[AuthUrlResponse] = None
         self._auth_url_timestamp: Optional[float] = None
         self._auth_url_cache_ttl: int = 300  # 5 minutes
+
+    @property
+    def docker_client(self) -> docker.DockerClient:
+        """Lazily initialize Docker client on first use (fails gracefully in K8s)."""
+        if self._docker_client is None:
+            self._docker_client = docker.from_env()
+        return self._docker_client
 
     # ========================================================================
     # Container Management

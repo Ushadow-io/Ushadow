@@ -927,6 +927,7 @@ export default function ServiceConfigsPage() {
               const envData = envResponse.data
 
               const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+                .sort((a, b) => a.name.localeCompare(b.name))
               setEnvVars(allEnvVars)
 
               // Load wiring connections for this instance to get provider-supplied values
@@ -976,12 +977,14 @@ export default function ServiceConfigsPage() {
                   const instanceValue = initialConfig[envVar.name]
 
                   if (instanceValue !== undefined) {
-                    // ServiceConfig has an override
+                    // ServiceConfig has an override — value may be a string or a
+                    // { _from_setting: "path" } reference object from the Map dropdown.
+                    const isRef = instanceValue !== null && typeof instanceValue === 'object' && '_from_setting' in instanceValue
                     initialEnvConfigs[envVar.name] = {
                       name: envVar.name,
-                      source: 'new_setting',
-                      value: instanceValue,
-                      setting_path: undefined,
+                      source: isRef ? 'setting' : 'new_setting',
+                      value: isRef ? (envVar.resolved_value || '') : String(instanceValue ?? ''),
+                      setting_path: isRef ? instanceValue._from_setting : undefined,
                       new_setting_path: undefined,
                     }
                   } else {
@@ -1386,6 +1389,7 @@ export default function ServiceConfigsPage() {
         const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget)
         const envData = envResponse.data
         allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+          .sort((a, b) => a.name.localeCompare(b.name))
       } catch (error: any) {
         // If service doesn't have env config (404), that's okay - just means no env vars to edit
         if (error.response?.status !== 404) {

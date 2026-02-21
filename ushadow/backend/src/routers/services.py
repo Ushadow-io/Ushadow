@@ -457,7 +457,12 @@ async def get_service_connection_info(
     proxy_url = get_relative_proxy_url(name)
 
     # Direct container URL (for health checks only - not exposed in API)
-    direct_container_url = f"http://{container_name}:{internal_port}"
+    # K8s deployments need cluster DNS; Docker uses plain container name
+    if matching_deployment and matching_deployment.backend_type == "kubernetes":
+        namespace = (matching_deployment.backend_metadata or {}).get("namespace", "default")
+        direct_container_url = f"http://{container_name}.{namespace}.svc.cluster.local:{internal_port}"
+    else:
+        direct_container_url = f"http://{container_name}:{internal_port}"
 
     # Internal URL (for backend-to-service communication)
     # Use proxy with full backend hostname for stable service discovery
@@ -560,13 +565,15 @@ async def proxy_service_request(
     for deployment in all_deployments:
         # Match by service_id (now just the service name, e.g., "chronicle-backend")
         if deployment.service_id == name:
-            # Scope to this environment: accept project-prefixed containers (e.g. "ushadow-ollama")
-            # OR explicitly-named containers (e.g. container_name: ollama) which have no prefix
-            if deployment.container_name:
-                has_project_prefix = deployment.container_name.startswith(f"{project_name}-")
-                is_explicitly_named = deployment.container_name == name
-                if not has_project_prefix and not is_explicitly_named:
-                    continue
+            # K8s deployments use pod names, not compose-prefixed container names — skip prefix filter
+            if deployment.backend_type != "kubernetes":
+                # Scope to this environment: accept project-prefixed containers (e.g. "ushadow-ollama")
+                # OR explicitly-named containers (e.g. container_name: ollama) which have no prefix
+                if deployment.container_name:
+                    has_project_prefix = deployment.container_name.startswith(f"{project_name}-")
+                    is_explicitly_named = deployment.container_name == name
+                    if not has_project_prefix and not is_explicitly_named:
+                        continue
             # Prefer running deployments
             if deployment.status == "running":
                 matching_deployment = deployment
@@ -578,19 +585,20 @@ async def proxy_service_request(
         # Extract container details from deployment
         container_name = matching_deployment.container_name
 
-        # Verify the container actually exists and is running
-        try:
-            container = docker_mgr._client.containers.get(container_name)
-            if container.status != "running":
-                logger.warning(f"[PROXY] Deployment container {container_name} exists but is not running (status: {container.status}), ignoring deployment")
+        # K8s deployments are verified via cluster DNS — no Docker socket needed
+        if matching_deployment.backend_type != "kubernetes":
+            # Verify the Docker container actually exists and is running
+            try:
+                container = docker_mgr._client.containers.get(container_name)
+                if container.status != "running":
+                    logger.warning(f"[PROXY] Deployment container {container_name} exists but is not running (status: {container.status}), ignoring deployment")
+                    matching_deployment = None
+            except Exception as e:
+                logger.warning(f"[PROXY] Deployment container {container_name} not found: {e}, ignoring deployment")
                 matching_deployment = None
-        except Exception as e:
-            logger.warning(f"[PROXY] Deployment container {container_name} not found: {e}, ignoring deployment")
-            matching_deployment = None
 
     if matching_deployment:
-        # For Docker networking, we need the CONTAINER port, not the host port
-        # Parse from deployed_config ports if available
+        # Parse the container port from deployed_config
         internal_port = 8000  # default
         if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
             ports = matching_deployment.deployed_config["ports"]
@@ -603,32 +611,38 @@ async def proxy_service_request(
                 else:
                     internal_port = int(first_port)
 
-        # Check if remote deployment using unode labels (more reliable than hostname matching)
-        # Fetch the unode to check its labels
-        from src.services.unode_manager import get_unode_manager
+        if matching_deployment.backend_type == "kubernetes":
+            # K8s: route to pod via cluster DNS — no unode/remote check needed
+            namespace = (matching_deployment.backend_metadata or {}).get("namespace", "default")
+            internal_url = f"http://{container_name}.{namespace}.svc.cluster.local:{internal_port}"
+            logger.info(f"[PROXY] Using K8s service: {internal_url} (deployment_id={matching_deployment.id})")
+        else:
+            # Docker: check if this is a remote deployment (on a different unode)
+            from src.services.unode_manager import get_unode_manager
 
-        try:
-            unode_mgr = await get_unode_manager()
-            unode = await unode_mgr.get_unode(matching_deployment.unode_hostname)
-            # Check for is_local label - if not present or "false", treat as remote
-            is_local = unode and unode.labels.get("is_local") == "true"
-            is_remote = not is_local
+            try:
+                unode_mgr = await get_unode_manager()
+                unode = await unode_mgr.get_unode(matching_deployment.unode_hostname)
+                # Check for is_local label - if not present or "false", treat as remote
+                is_local = unode and unode.labels.get("is_local") == "true"
+                is_remote = not is_local
 
-            logger.info(f"[PROXY] Deployment check: unode={matching_deployment.unode_hostname}, is_local={is_local}, labels={unode.labels if unode else 'N/A'}")
-        except Exception as e:
-            # If we can't fetch the unode, fall back to treating it as remote for safety
-            logger.warning(f"[PROXY] Could not fetch unode {matching_deployment.unode_hostname}: {e}")
-            is_remote = True
+                logger.info(f"[PROXY] Deployment check: unode={matching_deployment.unode_hostname}, is_local={is_local}, labels={unode.labels if unode else 'N/A'}")
+            except Exception as e:
+                # If we can't fetch the unode, fall back to treating it as remote for safety
+                logger.warning(f"[PROXY] Could not fetch unode {matching_deployment.unode_hostname}: {e}")
+                is_remote = True
 
-        if is_remote:
-            # For remote deployments, proxy through the remote unode manager
-            # TODO: Implement remote proxy via unode manager API
-            raise HTTPException(
-                status_code=501,
-                detail=f"Remote service proxy not yet implemented for {name} on {matching_deployment.unode_hostname}"
-            )
+            if is_remote:
+                # For remote deployments, proxy through the remote unode manager
+                # TODO: Implement remote proxy via unode manager API
+                raise HTTPException(
+                    status_code=501,
+                    detail=f"Remote service proxy not yet implemented for {name} on {matching_deployment.unode_hostname}"
+                )
 
-        logger.info(f"[PROXY] Using deployed service: {container_name}:{internal_port} (deployment_id={matching_deployment.id})")
+            internal_url = f"http://{container_name}:{internal_port}"
+            logger.info(f"[PROXY] Using Docker service: {internal_url} (deployment_id={matching_deployment.id})")
 
     elif name in docker_mgr.MANAGEABLE_SERVICES:
         # Fall back to MANAGEABLE_SERVICES (infrastructure services)
@@ -668,7 +682,8 @@ async def proxy_service_request(
             # Get container object to extract name
             container = docker_mgr._client.containers.get(service_info.container_id)
             container_name = container.name
-            logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {container_name}:{internal_port}")
+            internal_url = f"http://{container_name}:{internal_port}"
+            logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {internal_url}")
         except Exception as e:
             target_url = f"http://{container_name if 'container_name' in locals() else 'unknown'}:{internal_port}"
             logger.error(f"[PROXY] Failed to get container details for {name}: {e}")
@@ -683,8 +698,6 @@ async def proxy_service_request(
             status_code=404,
             detail=f"Service '{name}' not found in deployments or MANAGEABLE_SERVICES"
         )
-
-    internal_url = f"http://{container_name}:{internal_port}"
 
     # Log the exact URL we're going to proxy to
     logger.info(f"[PROXY DEBUG] Container: {container_name}, Internal Port: {internal_port}, Full URL: {internal_url}")

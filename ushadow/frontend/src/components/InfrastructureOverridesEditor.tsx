@@ -84,11 +84,13 @@ export default function InfrastructureOverridesEditor({
       setSaving(true)
       setError(null)
 
-      // Save previously stored overrides (source='override') and newly user-entered values (source='new_setting')
-      // Excludes compose defaults and infra-locked values
+      // Save all non-locked values — compose defaults, overrides, and user-entered values.
+      // Infra-scan locked values (HOST, PORT, URL from cluster scan) are excluded.
+      // This ensures compose defaults (e.g. MONGODB_USERNAME=root) are persisted so
+      // _from_setting references to infrastructure.overrides.{cluster}.* resolve correctly.
       const overrides: Record<string, string> = {}
       Object.entries(envConfigs).forEach(([name, config]) => {
-        if ((config.source === 'override' || config.source === 'new_setting') && config.value) {
+        if (!config.locked && config.value) {
           overrides[name] = config.value
         }
       })

@@ -14,8 +14,7 @@ from typing import Optional
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .keycloak_auth import get_keycloak_user_from_token
-from .keycloak_user_sync import get_mongodb_user_id_for_keycloak_user
+from .keycloak import get_keycloak_user_from_token, get_mongodb_user_id_for_keycloak_user
 from .auth import generate_jwt_for_service
 
 logger = logging.getLogger(__name__)

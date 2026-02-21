@@ -28,6 +28,7 @@ from src.routers import kubernetes, tailscale, unodes, docker, sse
 from src.routers import github_import, audio_relay, memories, share, keycloak_admin, dashboard
 from src.routers import feed
 from src.routers import settings as settings_api
+from src.routers import connect
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
@@ -214,6 +215,7 @@ app.include_router(share.router, tags=["sharing"])
 app.include_router(keycloak_admin.router, prefix="/api/keycloak", tags=["keycloak-admin"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(feed.router, tags=["feed"])
+app.include_router(connect.router, tags=["connect"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)

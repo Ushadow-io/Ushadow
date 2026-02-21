@@ -276,6 +276,7 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
         hostname: data.hostname || 'leader',
         tailscaleIp: parsedIp,
         port: parsedPort,
+        apiUrl: data.api_url,
         lastConnected: 0,  // Not connected yet
       };
 

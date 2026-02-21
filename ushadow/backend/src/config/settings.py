@@ -266,7 +266,8 @@ class Settings:
         self,
         env_var: str,
         cluster_id: Optional[str] = None,
-        filter_by_type: bool = False
+        filter_by_type: bool = False,
+        infra_scan_values: Optional[Dict[str, str]] = None,
     ) -> List[SettingSuggestion]:
         """
         Get setting suggestions that could fill an environment variable.
@@ -277,11 +278,17 @@ class Settings:
             env_var: Environment variable name
             cluster_id: Optional cluster ID for infrastructure scan suggestions
             filter_by_type: If True, filter suggestions by env var type (URL, HOST, PORT, etc.)
+            infra_scan_values: Pre-computed infra scan values for this env var (from for_deploy_config)
 
         Returns:
             List of SettingSuggestion objects
         """
-        return await self._build_suggestions(env_var, cluster_id=cluster_id, filter_by_type=filter_by_type)
+        return await self._build_suggestions(
+            env_var,
+            cluster_id=cluster_id,
+            filter_by_type=filter_by_type,
+            infra_scan_values=infra_scan_values,
+        )
 
     # -------------------------------------------------------------------------
     # Direct Access (Public API)
@@ -651,17 +658,21 @@ class Settings:
 
     async def _load_infrastructure_overrides(self, deploy_target: str) -> Dict[str, str]:
         """
-        Load user-saved infrastructure overrides for a deploy target.
+        Load infrastructure overrides for a deploy target.
 
-        Returns raw (unmasked) values suitable for actual deployment.
-        Only covers the manual override layer — scan-derived defaults are
-        handled separately by _load_infrastructure_defaults.
+        Returns a merged dict of two layers (user store overrides win):
+          1. Compose defaults from docker-compose.infra.yml for non-HOST/PORT/URL vars
+             (credential vars like MONGODB_USERNAME, KC_DB_PASSWORD default values)
+          2. User-saved manual overrides from the settings store
+
+        HOST/PORT/URL vars are excluded — those come from K8s cluster scan via
+        _load_infrastructure_defaults and land at the lower-priority layer 5.
 
         Args:
             deploy_target: Deployment target ID (e.g. "anubis.k8s.purple")
 
         Returns:
-            Dict mapping env var names to their raw values from the settings store.
+            Dict mapping env var names to their values.
         """
         from src.models.deploy_target import DeployTarget
         from src.config import get_settings_store
@@ -671,14 +682,37 @@ class Settings:
             if target.type != "k8s":
                 return {}
 
-            # Use cluster name (stable) rather than cluster_id (changes on re-add)
             cluster_name = target.name
             if not cluster_name:
                 return {}
 
             store = get_settings_store()
+
+            # Layer 1: compose defaults from docker-compose.infra.yml (non-HOST/PORT/URL)
+            # These fill credential/config vars without requiring any user action.
+            from src.services.compose_registry import get_compose_registry
+            from src.services.infrastructure_env_service import _sanitize_compose_default, _SCANNABLE_VAR
+
+            result: Dict[str, str] = {}
+            compose_registry = get_compose_registry()
+            for service in compose_registry.get_services():
+                if "infra" not in str(service.compose_file):
+                    continue
+                for env_var in service.required_env_vars + service.optional_env_vars:
+                    if not env_var.has_default or not env_var.default_value:
+                        continue
+                    if _SCANNABLE_VAR.search(env_var.name):
+                        continue  # HOST/PORT/URL — resolved from K8s scan, not here
+                    clean = _sanitize_compose_default(env_var.default_value)
+                    if clean:
+                        result[env_var.name] = clean
+
+            # Layer 2: user-saved overrides from the settings store (take priority)
             overrides: Dict[str, str] = await store.get(f"infrastructure.overrides.{cluster_name}") or {}
-            result = {name: value for name, value in overrides.items() if value}
+            for name, value in overrides.items():
+                if value:
+                    result[name] = str(value)
+
             if result:
                 logger.info(f"Loaded {len(result)} infrastructure overrides for {cluster_name}")
             return result
@@ -720,11 +754,24 @@ class Settings:
             service_id = service_config.template_id
 
             # Get instance overrides from ServiceConfig.config
-            # These are raw mappings like "@settings.api_keys.openai_api_key"
+            # Values can be plain strings or { _from_setting: "path" } references (from Map dropdown).
             instance_overrides_from_config = {}
             if service_config.config and service_config.config.values:
                 for env_var, value in service_config.config.values.items():
-                    if value:
+                    if isinstance(value, dict) and '_from_setting' in value:
+                        setting_path = value['_from_setting']
+                        resolved = await self._store.get(setting_path)
+                        if resolved:
+                            instance_overrides_from_config[env_var] = str(resolved)
+                            logger.info(f"[Load] [ServiceConfig Override] {env_var} = <resolved from {setting_path}>")
+                        else:
+                            # infrastructure.overrides.* paths may not be in the store but still
+                            # resolve via _load_infrastructure_overrides (compose defaults layer).
+                            if setting_path.startswith("infrastructure.overrides."):
+                                logger.debug(f"[Load] [ServiceConfig Override] {env_var}: {setting_path!r} not in store, will resolve via infrastructure layer")
+                            else:
+                                logger.warning(f"[Load] [ServiceConfig Override] {env_var}: _from_setting path {setting_path!r} resolved to None")
+                    elif value:
                         instance_overrides_from_config[env_var] = str(value)
                         logger.info(f"[Load] [ServiceConfig Override] {env_var} = {value}")
         else:
@@ -944,7 +991,69 @@ class Settings:
                 path=None
             )
 
+        # Post-process: inject credentials into URI/URL vars that came from infra scan.
+        # K8s infra scan produces URIs without auth (e.g., mongodb://mongo.ns.svc:27017).
+        # If USER/PASSWORD are resolved from higher-priority layers, embed them.
+        self._inject_uri_credentials(results)
+
         return results
+
+    def _inject_uri_credentials(self, results: Dict[str, "Resolution"]) -> None:
+        """
+        Inject user/password credentials into URI vars that lack them.
+
+        Scans for vars named *_URI or *_URL that have no '@' in the authority
+        section, then looks for a matching *_USER and *_PASSWORD var. If found,
+        rewrites the URI to include the credentials.
+
+        Example: MONGODB_URI=mongodb://mongo:27017 + MONGODB_USER=root +
+                 MONGODB_PASSWORD=secret → mongodb://root:secret@mongo:27017
+        """
+        from urllib.parse import urlparse, urlunparse
+
+        def _get_val(var: str) -> Optional[str]:
+            r = results.get(var)
+            return r.value if r and r.value and str(r.value).strip() else None
+
+        for env_var in list(results.keys()):
+            var_upper = env_var.upper()
+            if 'URI' not in var_upper and 'URL' not in var_upper:
+                continue
+
+            uri = _get_val(env_var)
+            if not uri or '://' not in uri or '@' in uri:
+                continue  # Already has credentials or not a URI
+
+            # Derive the prefix (e.g., "MONGODB" from "MONGODB_URI")
+            prefix = var_upper.rsplit('_', 1)[0]
+            user = _get_val(f"{prefix}_USER") or _get_val(f"{prefix}_USERNAME")
+            password = _get_val(f"{prefix}_PASSWORD") or _get_val(f"{prefix}_PASS")
+
+            if not user and not password:
+                continue  # No credentials to inject
+
+            try:
+                parsed = urlparse(uri)
+                auth = f"{user or ''}:{password}" if password else (user or '')
+                netloc = f"{auth}@{parsed.hostname}"
+                if parsed.port:
+                    netloc += f":{parsed.port}"
+                new_uri = urlunparse(parsed._replace(netloc=netloc))
+
+                # Append authSource if available and not already in query
+                auth_source = _get_val(f"{prefix}_AUTH_SOURCE")
+                if auth_source and '?' not in new_uri:
+                    new_uri += f"?authSource={auth_source}"
+
+                existing = results[env_var]
+                results[env_var] = Resolution(
+                    value=new_uri,
+                    source=existing.source,
+                    path=existing.path,
+                )
+                logger.info(f"[Credentials] Injected credentials into {env_var} (prefix={prefix})")
+            except Exception as exc:
+                logger.warning(f"[Credentials] Could not inject credentials into {env_var}: {exc}")
 
     async def _find_config_default(self, env_var: str) -> Optional[Tuple[str, Any]]:
         """Find a config default value for an env var."""
@@ -979,6 +1088,7 @@ class Settings:
         capabilities: Optional[List[str]] = None,
         cluster_id: Optional[str] = None,
         filter_by_type: bool = False,
+        infra_scan_values: Optional[Dict[str, str]] = None,
     ) -> List[SettingSuggestion]:
         """
         Build setting suggestions for an env var.
@@ -988,15 +1098,23 @@ class Settings:
             provider_registry: Optional provider registry
             capabilities: Optional capability requirements
             cluster_id: Optional cluster ID for infrastructure scan suggestions
+            infra_scan_values: Pre-computed infrastructure scan values (env_var → value)
         """
         suggestions = []
         seen_paths = set()
-        config = await self._store._get_config_as_dict()
 
         expected_type = infer_setting_type(env_var_name)
 
-        # Search all config sections, filter by value type
+        config = await self._store._get_config_as_dict()
+
+        # Only scan user-meaningful config sections.
+        # Noisy sections (network, environment, infrastructure, services, …) are
+        # either redundant with the infra-scan below or irrelevant to the user.
+        SCANNABLE_SECTIONS = {'api_keys', 'settings', 'capabilities'}
+
         for section, section_data in config.items():
+            if section not in SCANNABLE_SECTIONS:
+                continue
             if not isinstance(section_data, dict):
                 continue
 
@@ -1023,7 +1141,10 @@ class Settings:
                     is_compatible = (value_type == 'url' or
                                     (value_type == 'empty' and 'url' in key.lower()))
                 else:
-                    is_compatible = value_type in ('string', 'empty', 'bool', 'number')
+                    # Generic string vars (e.g., MONGODB_USER) — don't suggest api_keys
+                    # entries, those are secrets and should only appear for secret-type vars.
+                    is_compatible = (section != 'api_keys' and
+                                     value_type in ('string', 'empty', 'bool', 'number'))
 
                 if not is_compatible:
                     continue
@@ -1033,7 +1154,7 @@ class Settings:
                     path=path,
                     label=key.replace("_", " ").title(),
                     has_value=has_value,
-                    value=mask_secret_value(str_value, path) if has_value else None,
+                    value=str_value if has_value else None,
                 ))
 
         # Add service URLs if env var is URL type
@@ -1114,14 +1235,42 @@ class Settings:
                             path=env_map.settings_path,
                             label=f"{provider.name}: {env_map.label or env_map.key}",
                             has_value=has_value,
-                            value=mask_secret_value(str_value, env_map.settings_path) if has_value else None,
+                            value=str_value if has_value else None,
                             capability=capability,
                             provider_name=provider.name,
                         ))
 
-        # Infrastructure scan values are now stored in settings at
-        # infrastructure.scans.{cluster_id}.{env_var}
-        # OmegaConf's fuzzy matching will naturally find them
+        # Infrastructure suggestions for K8s cluster.
+        # Only show exact-match and same-service-prefix vars (e.g. MONGODB_* for MONGODB_USER).
+        # "Everything else" (different service) is too noisy and rarely useful.
+        if cluster_id and infra_scan_values:
+            # Determine same-service prefix (e.g. "MONGODB" for "MONGODB_USER")
+            parts = env_var_name.split("_")
+            same_prefix = parts[0] if parts else ""
+
+            def _suggestion_sort_key(name: str) -> int:
+                if name == env_var_name:
+                    return 0  # Exact match first
+                if same_prefix and name.startswith(same_prefix):
+                    return 1  # Same service prefix second
+                return 2      # Everything else — excluded
+
+            for var_name in sorted(infra_scan_values.keys(), key=_suggestion_sort_key):
+                if _suggestion_sort_key(var_name) > 1:
+                    break  # Sorted, so once we hit unrelated vars we're done
+                value = infra_scan_values[var_name]
+                if not value:
+                    continue
+                path = f"infrastructure.overrides.{cluster_id}.{var_name}"
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                suggestions.append(SettingSuggestion(
+                    path=path,
+                    label=var_name.replace("_", " ").title(),
+                    has_value=True,
+                    value=str(value),
+                ))
 
         return suggestions
 

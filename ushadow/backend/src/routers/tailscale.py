@@ -668,125 +668,124 @@ async def get_container_status(
 async def get_mobile_connection_qr(
     current_user: User = Depends(get_current_user)
 ) -> MobileConnectionQR:
-    """Generate QR code for mobile app to connect to this leader.
+    """Generate QR code for mobile app to connect to this ushadow instance.
 
-    The QR code contains minimal connection details (hostname, Tailscale IP, port)
-    plus an auth token for automatic authentication with ushadow and chronicle.
-    After scanning, the mobile app fetches full details from /api/unodes/leader/info
+    K8s:    api_url points to /api/connect — the platform-agnostic bootstrap
+            endpoint. No leader unode required; uses USHADOW_PUBLIC_URL.
+    Docker: api_url points to /api/unodes/{leader}/info — traditional flow.
     """
+    import os
+    import io
+    import base64
+    import qrcode
+    from urllib.parse import urlparse
+    from src.utils.environment import is_kubernetes
+    from src.utils.auth_helpers import get_user_id, get_user_email
+
     try:
-        manager = get_tailscale_manager()
-        status = manager.get_container_status()
-
-        # Validate container is ready
-        if not status.exists:
-            raise HTTPException(
-                status_code=400,
-                detail="Tailscale is not configured. Complete Tailscale setup first."
-            )
-
-        if not status.running:
-            raise HTTPException(
-                status_code=400,
-                detail="Tailscale is not running. Complete Tailscale setup first."
-            )
-
-        if not status.authenticated:
-            raise HTTPException(
-                status_code=400,
-                detail="Tailscale is not authenticated. Complete authentication first."
-            )
-
-        if not status.hostname or not status.ip_address:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not get Tailscale connection details. Please try again."
-            )
-
         config = get_settings()
         api_port = config.get_sync("network.backend_public_port") or 8000
 
-        # Get unode manager to fetch unode hostname and envname
-        from src.services.unode_manager import get_unode_manager
-        from src.models.unode import UNodeRole
+        # ── Resolve hostname, ip_address, api_url, envname ──────────────────
+        if is_kubernetes():
+            # K8s: no Docker socket, no leader unode — env vars are the source of truth
+            public_url = os.environ.get("USHADOW_PUBLIC_URL", "").rstrip("/")
+            if not public_url:
+                raise HTTPException(
+                    status_code=503,
+                    detail="USHADOW_PUBLIC_URL is not set in the K8s deployment.",
+                )
+            parsed_public = urlparse(public_url)
+            hostname = parsed_public.netloc          # e.g. "ush.spangled-kettle.ts.net"
+            ip_address = hostname                    # K8s has no separate Tailscale IP
+            api_url = f"{public_url}/api/connect"   # mobile bootstrap endpoint
+            envname = os.environ.get("USHADOW_CLUSTER_NAME", "k8s")
+            # Derive external port from URL scheme (443 for HTTPS, 80 for HTTP)
+            api_port = parsed_public.port or (443 if parsed_public.scheme == "https" else 80)
 
-        unode_manager = await get_unode_manager()
-        leader_unode = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
+        else:
+            # Docker / compose: get hostname from running Tailscale container
+            hostname = None
+            ip_address = None
 
-        if not leader_unode:
-            raise HTTPException(
-                status_code=500,
-                detail="Could not find leader unode. Please ensure unode is registered."
-            )
+            manager = get_tailscale_manager()
+            docker_status = manager.get_container_status()
+            if docker_status.exists and docker_status.running and docker_status.authenticated:
+                hostname = docker_status.hostname
+                ip_address = docker_status.ip_address
 
-        # Build full API URL for unode info endpoint
-        # Use unode hostname, not Tailscale hostname
-        api_url = f"https://{status.hostname}/api/unodes/{leader_unode.hostname}/info"
+            if not hostname or not ip_address:
+                ts_status = get_tailscale_status()
+                hostname = hostname or ts_status.hostname
+                ip_address = ip_address or ts_status.ip
 
-        # Auto-register mobile redirect URIs in Keycloak
+            if not hostname or not ip_address:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Tailscale is not configured or not authenticated. "
+                           "Complete Tailscale setup first.",
+                )
+
+            # Leader unode provides the stable hostname and envname
+            from src.services.unode_manager import get_unode_manager
+            from src.models.unode import UNodeRole
+
+            unode_manager = await get_unode_manager()
+            leader_unode = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
+            if not leader_unode:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Could not find leader unode. Please ensure unode is registered.",
+                )
+
+            api_url = f"https://{hostname}/api/unodes/{leader_unode.hostname}/info"
+            envname = leader_unode.envname
+
+        # ── Auto-register mobile Keycloak redirect URIs (non-fatal) ─────────
         from src.services.keycloak import get_keycloak_admin
-
         try:
             keycloak_admin = get_keycloak_admin()
-            mobile_uris = [
-                "ushadow://*",  # Production mobile app
-                "exp://localhost:8081/--/oauth/callback",  # Expo Go development
-                "exp://*",  # Expo Go wildcard
-            ]
             await keycloak_admin.update_client_redirect_uris(
                 client_id="ushadow-frontend",
-                redirect_uris=mobile_uris,
-                merge=True
+                redirect_uris=["ushadow://*", "exp://localhost:8081/--/oauth/callback", "exp://*"],
+                merge=True,
             )
-            logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Keycloak")
         except Exception as e:
             logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
-            # Non-fatal - continue with QR generation
 
-        # Generate auth token for mobile app (valid for ushadow and chronicle)
-        # Both services now share the same database (ushadow-blue) so user IDs match
-        from src.utils.auth_helpers import get_user_id, get_user_email
-
+        # ── Auth token ───────────────────────────────────────────────────────
         auth_token = generate_jwt_for_service(
             user_id=get_user_id(current_user),
             user_email=get_user_email(current_user),
-            audiences=["ushadow", "chronicle"]
+            audiences=["ushadow", "chronicle"],
         )
 
-        # Connection data for QR code (v4 includes envname)
+        # ── Build QR payload ─────────────────────────────────────────────────
         connection_data = {
             "type": "ushadow-connect",
-            "v": 4,  # Version 4 includes envname
-            "hostname": leader_unode.hostname,  # UNode hostname (e.g., "orion")
-            "ip": status.ip_address,            # Tailscale IP
+            "v": 4,
+            "hostname": hostname,
+            "ip": ip_address,
             "port": api_port,
             "api_url": api_url,
             "auth_token": auth_token,
-            "envname": leader_unode.envname,    # Environment name (e.g., "orange")
+            "envname": envname,
         }
 
-        # Generate QR code
-        import io
-        import base64
-        import qrcode
-
+        # ── Render QR image ──────────────────────────────────────────────────
         qr = qrcode.QRCode(version=1, box_size=10, border=4)
         qr.add_data(json.dumps(connection_data))
         qr.make(fit=True)
-
         img = qr.make_image(fill_color="black", back_color="white")
-
-        # Convert to data URL
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        qr_code_data = f"data:image/png;base64,{img_str}"
+        qr_code_data = f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
 
         return MobileConnectionQR(
             qr_code_data=qr_code_data,
             connection_data=connection_data,
-            hostname=status.hostname,
-            tailscale_ip=status.ip_address,
+            hostname=hostname,
+            tailscale_ip=ip_address,
             api_port=api_port,
             api_url=api_url,
             auth_token=auth_token,
@@ -798,7 +797,7 @@ async def get_mobile_connection_qr(
         logger.error(f"Error generating mobile connection QR: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate connection QR: {str(e)}"
+            detail=f"Failed to generate connection QR: {str(e)}",
         )
 
 

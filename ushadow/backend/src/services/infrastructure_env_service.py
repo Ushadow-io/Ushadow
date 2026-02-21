@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 _SECRET_PATTERNS = re.compile(r"KEY|SECRET|PASSWORD|TOKEN|CREDENTIAL", re.IGNORECASE)
 _COMPOSE_SUBSTITUTION = re.compile(r"\$\{[^}]+\}")
 
+# Vars matching these patterns are set by infra scans (K8s service discovery).
+# They must NOT be seeded from compose defaults because the scan values take priority
+# in _resolve_all only at a lower level than infra_overrides.
+_SCANNABLE_VAR = re.compile(r"(^|_)(HOST|PORT|URL|URI)($|_)", re.IGNORECASE)
+
 
 def _is_secret(name: str) -> bool:
     return bool(_SECRET_PATTERNS.search(name))
@@ -39,6 +44,49 @@ def _sanitize_compose_default(value: str) -> str:
             return inner.split("-", 1)[1]
         return ""
     return _COMPOSE_SUBSTITUTION.sub(_replace, value)
+
+
+async def ensure_compose_defaults_seeded(cluster_name: str, settings_store) -> None:
+    """
+    Seed docker-compose.infra.yml defaults into OmegaConf for a cluster if not already done.
+
+    This ensures _from_setting references like
+    ``infrastructure.overrides.{cluster}.MONGODB_USERNAME`` resolve correctly even
+    before the user has manually visited the Infrastructure page.
+
+    Safe to call repeatedly — no-ops if overrides already exist.
+
+    Args:
+        cluster_name: Stable cluster name (e.g. "k8s", "anubis")
+        settings_store: SettingsStore instance
+    """
+    from src.services.compose_registry import get_compose_registry
+
+    existing: Dict[str, str] = await settings_store.get(f"infrastructure.overrides.{cluster_name}") or {}
+
+    compose_registry = get_compose_registry()
+    defaults: Dict[str, str] = {}
+    for service in compose_registry.get_services():
+        if "infra" not in str(service.compose_file):
+            continue
+        for env_var in service.required_env_vars + service.optional_env_vars:
+            if env_var.has_default and env_var.default_value:
+                # Skip HOST/PORT/URL/URI vars — those are set by infra scans and
+                # have Docker-specific values (e.g. "mongo") that would be wrong on K8s.
+                if _SCANNABLE_VAR.search(env_var.name):
+                    continue
+                # Only seed vars not already saved — never overwrite user values.
+                if env_var.name in existing:
+                    continue
+                clean = _sanitize_compose_default(env_var.default_value)
+                if clean:
+                    defaults[env_var.name] = clean
+
+    if defaults:
+        await settings_store.update({f"infrastructure.overrides.{cluster_name}": defaults})
+        logger.info(
+            f"[infra] Seeded {len(defaults)} compose defaults for {cluster_name!r}: {sorted(defaults)}"
+        )
 
 
 async def resolve_infrastructure_env_vars(
@@ -121,6 +169,7 @@ async def resolve_infrastructure_env_vars(
         cluster_name = target.name
         overrides: Dict[str, str] = await settings_store.get(f"infrastructure.overrides.{cluster_name}") or {}
         logger.debug(f"[infra-overrides] cluster_name={cluster_name!r}, found {len(overrides)} override keys")
+
         for name, value in overrides.items():
             if value:
                 result[name] = _entry(name, value, "override", False)

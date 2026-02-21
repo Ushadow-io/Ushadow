@@ -696,6 +696,10 @@ class DeploymentManager:
         if not deployment:
             raise ValueError(f"Deployment not found: {deployment_id}")
 
+        # K8s deployments: scale to 0 via platform
+        if deployment.backend_type == "kubernetes":
+            return await self._stop_k8s_deployment(deployment)
+
         # Check if this is a local deployment
         if _is_local_deployment(deployment.unode_hostname):
             # Local deployment - use Docker API directly
@@ -910,6 +914,51 @@ class DeploymentManager:
             logger.error(f"Failed to remove orphaned deployment {deployment_id}: {e}")
             return False
 
+    async def _stop_k8s_deployment(self, deployment: Deployment) -> Deployment:
+        """Scale a Kubernetes deployment to 0 replicas."""
+        from src.services.kubernetes import get_kubernetes_manager
+        from src.services.deployment_platforms import KubernetesDeployPlatform
+        from src.utils.environment import get_env_name
+
+        cluster_id = deployment.backend_metadata.get("cluster_id")
+        namespace = deployment.backend_metadata.get("namespace", "ushadow")
+
+        try:
+            k8s_mgr = await get_kubernetes_manager()
+            clusters = await k8s_mgr.list_clusters()
+            cluster = next((c for c in clusters if c.cluster_id == cluster_id), None)
+            if not cluster:
+                logger.error(f"K8s cluster {cluster_id} not found for deployment {deployment.id}")
+                deployment.status = DeploymentStatus.FAILED
+                return deployment
+
+            target = DeployTarget(
+                id=cluster.deployment_target_id,
+                type="k8s",
+                name=cluster.name,
+                identifier=cluster.cluster_id,
+                environment=get_env_name(),
+                status=cluster.status.value,
+                namespace=namespace,
+                infrastructure=None,
+                raw_metadata=cluster.model_dump(),
+            )
+
+            platform = KubernetesDeployPlatform(k8s_mgr)
+            success = await platform.stop(target, deployment)
+            if success:
+                deployment.status = DeploymentStatus.STOPPED
+                deployment.stopped_at = datetime.now(timezone.utc)
+
+        except RuntimeError:
+            pass  # KubernetesManager not initialized
+        except Exception as e:
+            logger.error(f"Failed to stop K8s deployment {deployment.id}: {e}")
+            deployment.error = str(e)
+            deployment.status = DeploymentStatus.FAILED
+
+        return deployment
+
     async def _remove_k8s_deployment(self, deployment: Deployment) -> bool:
         """Remove a Kubernetes deployment via KubernetesDeployPlatform."""
         from src.services.kubernetes import get_kubernetes_manager
@@ -963,39 +1012,40 @@ class DeploymentManager:
             "hostname": deployment.unode_hostname
         })
 
-        if unode_dict:
-            unode = UNode(**unode_dict)
+        if not unode_dict:
+            logger.error(f"UNode not found for deployment {deployment_id}: {deployment.unode_hostname}")
+            return False
 
-            # Create deployment target from unode with standardized fields
-            from src.models.unode import UNodeType, UNodeRole
-            from src.utils.deployment_targets import parse_deployment_target_id
+        unode = UNode(**unode_dict)
 
-            parsed = parse_deployment_target_id(unode.deployment_target_id)
-            is_leader = unode.role == UNodeRole.LEADER
+        from src.models.unode import UNodeType, UNodeRole
+        from src.utils.deployment_targets import parse_deployment_target_id
 
-            target = DeployTarget(
-                id=unode.deployment_target_id,
-                type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
-                name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
-                identifier=unode.hostname,
-                environment=parsed["environment"],
-                status=unode.status.value if unode.status else "unknown",
-                provider="local" if is_leader else "remote",
-                region=None,
-                is_leader=is_leader,
-                namespace=None,
-                infrastructure=None,
-                raw_metadata=unode.model_dump()
-            )
+        parsed = parse_deployment_target_id(unode.deployment_target_id)
+        is_leader = unode.role == UNodeRole.LEADER
 
-            # Get appropriate deployment platform
-            platform = get_deploy_platform(target)
+        target = DeployTarget(
+            id=unode.deployment_target_id,
+            type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
+            name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
+            identifier=unode.hostname,
+            environment=parsed["environment"],
+            status=unode.status.value if unode.status else "unknown",
+            provider="local" if is_leader else "remote",
+            region=None,
+            is_leader=is_leader,
+            namespace=None,
+            infrastructure=None,
+            raw_metadata=unode.model_dump()
+        )
 
+        platform = get_deploy_platform(target)
+
+        if _is_local_deployment(deployment.unode_hostname):
+            # Local deployment: use Docker API directly (no unode manager running locally)
             try:
                 import docker
                 docker_client = docker.from_env()
-
-                # Get container
                 container = docker_client.containers.get(deployment.container_id or deployment.container_name)
 
                 # Stop if running or restarting
@@ -1006,49 +1056,16 @@ class DeploymentManager:
                 # Remove container
                 container.remove(force=True)
                 logger.info(f"Removed local container {deployment.container_name}")
-
             except Exception as e:
                 logger.error(f"Failed to remove local deployment {deployment_id}: {e}")
                 return False
         else:
-            # Remote deployment - use unode manager API
-            unode_dict = await self.unodes_collection.find_one({
-                "hostname": deployment.unode_hostname
-            })
-
-            if unode_dict:
-                unode = UNode(**unode_dict)
-
-                # Create deployment target from unode with standardized fields
-                from src.models.unode import UNodeType, UNodeRole
-                from src.utils.deployment_targets import parse_deployment_target_id
-
-                parsed = parse_deployment_target_id(unode.deployment_target_id)
-                is_leader = unode.role == UNodeRole.LEADER
-
-                target = DeployTarget(
-                    id=unode.deployment_target_id,
-                    type="k8s" if unode.type == UNodeType.KUBERNETES else "docker",
-                    name=f"{unode.hostname} ({'Leader' if is_leader else 'Remote'})",
-                    identifier=unode.hostname,
-                    environment=parsed["environment"],
-                    status=unode.status.value if unode.status else "unknown",
-                    provider="local" if is_leader else "remote",
-                    region=None,
-                    is_leader=is_leader,
-                    namespace=None,
-                    infrastructure=None,
-                    raw_metadata=unode.model_dump()
-                )
-
-                # Get appropriate deployment platform
-                platform = get_deploy_platform(target)
-
-                try:
-                    await platform.remove(target, deployment)
-                except Exception as e:
-                    logger.warning(f"Failed to remove deployment on node: {e}")
-                    return False
+            # Remote deployment: use platform abstraction (calls unode manager API)
+            try:
+                await platform.remove(target, deployment)
+            except Exception as e:
+                logger.warning(f"Failed to remove deployment on node: {e}")
+                return False
 
         # Remove tailscale serve route for local Docker deployments
         if deployment.backend_type == "docker" and _is_local_deployment(deployment.unode_hostname):
@@ -1062,12 +1079,12 @@ class DeploymentManager:
         """
         Get a deployment by ID by querying runtime.
 
-        Queries all online unodes until deployment is found.
+        Queries all online unodes and K8s clusters until deployment is found.
         """
         from src.models.unode import UNodeType, UNodeRole
         from src.utils.deployment_targets import parse_deployment_target_id
 
-        # Query all online unodes
+        # Query all online unodes (Docker deployments)
         cursor = self.unodes_collection.find({"status": "online"})
         async for unode_dict in cursor:
             unode = UNode(**unode_dict)
@@ -1097,6 +1114,41 @@ class DeploymentManager:
 
             if deployment:
                 return deployment
+
+        # Also search K8s clusters directly (mirrors list_deployments)
+        try:
+            from src.services.kubernetes import get_kubernetes_manager
+            from src.services.deployment_platforms import KubernetesDeployPlatform
+            from src.utils.environment import get_env_name
+
+            k8s_mgr = await get_kubernetes_manager()
+            clusters = await k8s_mgr.list_clusters()
+            k8s_platform = KubernetesDeployPlatform(k8s_mgr)
+
+            for cluster in clusters:
+                if cluster.status.value != "connected":
+                    continue
+
+                target = DeployTarget(
+                    id=cluster.deployment_target_id,
+                    type="k8s",
+                    name=cluster.name,
+                    identifier=cluster.cluster_id,
+                    environment=get_env_name(),
+                    status=cluster.status.value,
+                    namespace=cluster.namespace,
+                    infrastructure=None,
+                    raw_metadata=cluster.model_dump(),
+                )
+
+                for dep in await k8s_platform.list_deployments(target):
+                    if dep.id == deployment_id:
+                        return dep
+
+        except RuntimeError:
+            pass  # KubernetesManager not initialized
+        except Exception as e:
+            logger.error(f"Failed to search K8s clusters in get_deployment: {e}")
 
         return None
 

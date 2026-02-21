@@ -94,6 +94,7 @@ help:
 	@echo "  make k8s-add-service-dns SVC=<name> NS=<ns> NAMES=\"<aliases>\" - Add service to DNS"
 	@echo "  make k8s-add-service-dns-interactive - Add service (interactive)"
 	@echo "  make k8s-show-dns                    - Show current DNS mappings"
+	@echo "  make k8s-config-show                 - Show saved infra config (overrides + scans)"
 	@echo "  make k8s-test-dns                    - Test DNS resolution"
 	@echo ""
 	@echo "Keycloak realm management (Docker):"
@@ -514,6 +515,15 @@ k8s-show-dns: ## Show current DNS mappings
 	@echo ""
 	@kubectl get configmap chakra-dns-hosts -n kube-system -o jsonpath='{.data.chakra\.hosts}' 2>/dev/null || \
 		echo "❌ DNS ConfigMap not found. Run setup first."
+
+k8s-config-show: ## Show saved K8s infrastructure config (overrides + scan results + secrets)
+	@echo "📋 K8s Infrastructure Config"
+	@echo ""
+	@echo "=== config.overrides.yaml (infrastructure section) ==="
+	@python3 -c "import yaml; d=yaml.safe_load(open('config/config.overrides.yaml')) or {}; i=d.get('infrastructure',{}); print(yaml.dump({'infrastructure':i},default_flow_style=False).rstrip() if i else '  (empty)')" 2>/dev/null || echo "  (file not found)"
+	@echo ""
+	@echo "=== SECRETS/secrets.yaml (infrastructure section, values masked) ==="
+	@python3 -c "import yaml,re; d=yaml.safe_load(open('config/SECRETS/secrets.yaml')) or {}; i=d.get('infrastructure',{}); s=yaml.dump({'infrastructure':i},default_flow_style=False) if i else '  (empty)'; print(re.sub(r'(?<=: )\S.*', '****', s).rstrip())" 2>/dev/null || echo "  (file not found)"
 
 k8s-test-dns: ## Test DNS resolution for ushadow services
 	@./k8s/scripts/dns/test-ushadow-dns.sh

@@ -32,10 +32,10 @@ def get_proxy_url(service_name: str) -> str:
     Returns:
         Full URL to the ushadow proxy for this service.
     """
-    from src.utils.environment import get_environment_info
+    from src.utils.environment import get_environment_info, is_kubernetes
     env = get_environment_info()
 
-    if env.is_kubernetes():
+    if is_kubernetes():
         return _k8s_proxy_url(service_name, env.k8s_namespace)
     return _docker_proxy_url(service_name, env.compose_project_name)
 

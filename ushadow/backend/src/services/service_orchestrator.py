@@ -522,13 +522,42 @@ class ServiceOrchestrator:
         else:
             resolutions = await settings_v2.for_service(service.service_id)
 
+        # Extract cluster name and infra vars for suggestions (K8s targets only).
+        # Include compose defaults (source='default') and user overrides (source='override').
+        # Both resolve correctly via _load_infrastructure_overrides at deploy time.
+        # Exclude K8s scan values (source='infrastructure') — those are HOST/PORT/URL vars
+        # that auto-resolve via _load_infrastructure_defaults and aren't stored at the path.
+        infra_cluster_name = None
+        infra_scan_values: Dict[str, str] = {}
+        if deploy_target:
+            try:
+                from src.models.deploy_target import DeployTarget
+                from src.services.infrastructure_env_service import resolve_infrastructure_env_vars
+                from src.config import get_settings_store
+                t = await DeployTarget.from_id(deploy_target)
+                if t.type == "k8s":
+                    infra_cluster_name = t.name
+                    store = get_settings_store()
+                    infra_vars = await resolve_infrastructure_env_vars(t, store)
+                    infra_scan_values = {
+                        ev["name"]: ev["value"]
+                        for ev in infra_vars
+                        if ev.get("value") and ev.get("source") != "infrastructure"
+                    }
+            except Exception:
+                pass
+
         # Build env var config from schema + resolutions + suggestions
         async def build_env_var_info(ev: EnvVarConfig, is_required: bool) -> Dict[str, Any]:
             """Build single env var info from schema and resolution."""
             from src.config import Source
 
             resolution = resolutions.get(ev.name)
-            suggestions = await settings_v2.get_suggestions(ev.name)
+            suggestions = await settings_v2.get_suggestions(
+                ev.name,
+                cluster_id=infra_cluster_name,
+                infra_scan_values=infra_scan_values,
+            )
 
             # Map Source enum to string for API response
             source = resolution.source.value if resolution else "default"
