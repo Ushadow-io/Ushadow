@@ -136,45 +136,18 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
       )
       const envData = envResponse.data
 
-      // Initialize env vars and configs (EXACT same pattern as ServicesPage)
+      // Backend already resolves infra values when deploy_target is passed — use directly.
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
       setEnvVars(allEnvVars)
 
-      // Use API response data directly (backend already did smart mapping)
-      // ONLY override with infrastructure detection for K8s-specific values
       const initialConfigs: Record<string, EnvVarConfig> = {}
       allEnvVars.forEach(envVar => {
-        // Skip infrastructure detection if no services detected or in create-config mode without target
-        const hasInfraServices = infraServices && Object.keys(infraServices).length > 0
-        const infraValue = hasInfraServices ? getInfraValueForEnvVar(envVar.name, infraServices) : null
-        console.log(`🔍 Checking env var ${envVar.name}:`, { infraValue, hasInfraServices, infraServices })
-
-        if (infraValue) {
-          // Pre-fill with infrastructure value for K8s cluster-specific endpoints
-          // Don't lock - user should be able to override if needed
-          // Mark as NOT template default since this is detected infra
-          initialConfigs[envVar.name] = {
-            name: envVar.name,
-            source: 'new_setting',
-            value: infraValue,
-            new_setting_path: `api_keys.${envVar.name.toLowerCase()}`,
-            setting_path: undefined,
-            locked: false,  // Allow editing - infra values are suggestions, not requirements
-            provider_name: 'K8s Infrastructure',
-            _isTemplateDefault: false  // This is detected infrastructure, should be saved
-          }
-        } else {
-          // Use data from API response (backend already mapped to settings)
-          // Mark as NOT user-modified initially - these are template defaults
-          const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
-          initialConfigs[envVar.name] = {
-            name: envVar.name,
-            source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
-            setting_path: envVar.setting_path,
-            value: fallbackValue,
-            new_setting_path: undefined,
-            _isTemplateDefault: true  // Mark as coming from template, not user override
-          }
+        initialConfigs[envVar.name] = {
+          name: envVar.name,
+          source: (envVar.source as EnvVarConfig['source']) || 'default',
+          setting_path: envVar.setting_path,
+          value: envVar.resolved_value || envVar.value || envVar.default_value || '',
+          new_setting_path: undefined,
         }
       })
 
@@ -427,44 +400,18 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
         )
         const envData = envResponse.data
 
-        // Re-initialize env vars and configs with new infrastructure detection
+        // Backend resolved infra values for this target — use directly.
         const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
         setEnvVars(allEnvVars)
 
-        // Re-detect infrastructure values with new target
         const updatedConfigs: Record<string, EnvVarConfig> = {}
         allEnvVars.forEach(envVar => {
-          const hasInfraServices = infraData && Object.keys(infraData).length > 0
-          const infraValue = hasInfraServices ? getInfraValueForEnvVar(envVar.name, infraData) : null
-
-          if (infraValue) {
-            // Infrastructure detected - use 'infra' source to display nicely
-            updatedConfigs[envVar.name] = {
-              name: envVar.name,
-              source: 'infra',
-              value: infraValue,
-              new_setting_path: undefined,
-              setting_path: undefined,
-              locked: true,  // Lock to prevent accidental changes
-              provider_name: `${target.type === 'k8s' ? 'K8s' : 'Docker'} Infrastructure`,
-              _isTemplateDefault: false  // Infrastructure values should be saved
-            }
-          } else {
-            // Use existing config or template default
-            const existing = envConfigs[envVar.name]
-            if (existing) {
-              updatedConfigs[envVar.name] = existing
-            } else {
-              const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
-              updatedConfigs[envVar.name] = {
-                name: envVar.name,
-                source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
-                setting_path: envVar.setting_path,
-                value: fallbackValue,
-                new_setting_path: undefined,
-                _isTemplateDefault: true  // Template default
-              }
-            }
+          updatedConfigs[envVar.name] = {
+            name: envVar.name,
+            source: (envVar.source as EnvVarConfig['source']) || 'default',
+            setting_path: envVar.setting_path,
+            value: envVar.resolved_value || envVar.value || envVar.default_value || '',
+            new_setting_path: undefined,
           }
         })
 
@@ -702,7 +649,7 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
           </div>
         ) : (
           <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
-            {envVars.map((envVar) => {
+            {[...envVars].sort((a, b) => a.name.localeCompare(b.name)).map((envVar) => {
               const config = envConfigs[envVar.name] || {
                 name: envVar.name,
                 source: 'default',

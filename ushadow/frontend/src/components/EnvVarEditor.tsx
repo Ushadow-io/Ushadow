@@ -1,43 +1,39 @@
 import { useState } from 'react'
-import { Pencil, Lock } from 'lucide-react'
+import { Lock, KeyRound, Link } from 'lucide-react'
 import { EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface EnvVarEditorProps {
   envVar: EnvVarInfo
   config: EnvVarConfig
   onChange: (updates: Partial<EnvVarConfig>) => void
-  mode?: 'config' | 'deploy' | 'target'  // Mode affects what options are shown
+  mode?: 'config' | 'deploy' | 'target'
 }
 
 /**
- * Shared component for editing environment variable configuration.
+ * Layout: [label w-40] [Map|Edit btn] [icon slot] [content area]
  *
- * Supports:
- * - Mapping to existing settings (via dropdown of suggestions)
- * - Manual value entry (auto-creates new settings)
- * - Secret masking
- * - Locked fields (provider-supplied values)
+ * Map/Edit button:
+ *   - "Map"  → not in mapping mode; click to show settings dropdown
+ *   - "Edit" → in mapping mode; click to switch back to direct text entry
  *
- * Modes:
- * - 'config': Creating a ServiceConfig (shows @settings.path mappings primarily)
- * - 'deploy': Deploying a service (shows runtime/deployment options, default)
- * - 'target': Per-target overrides (shows target-specific values)
+ * Icon slot (one of):
+ *   - Lock     → locked field (provider/infra supplied)
+ *   - Link     → mapped to a settings path
+ *   - KeyRound → secret value (unlocked, unmapped)
+ *   - (empty)  → normal field
  *
- * Used by:
- * - ServicesPage (for Docker service configuration)
- * - DeployModal (for K8s/Docker deployment configuration)
- * - ServiceConfigsPage (for instance configuration)
+ * Editing:
+ *   - Unmapped field: click the value text to edit in place (no pencil icon)
+ *   - Mapped field: use dropdown to change mapping, or click Edit to override with literal
  */
 export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy' }: EnvVarEditorProps) {
   const [editing, setEditing] = useState(false)
-  // If setting_path is set, this is a "mapped" value - show mapping mode
   const isMapped = !!config.setting_path
   const [showMapping, setShowMapping] = useState(isMapped)
 
-  const isSecret = envVar.name.includes('KEY') || envVar.name.includes('SECRET') || envVar.name.includes('PASSWORD')
+  const isSecret = envVar.is_secret ?? false
   const isLocked = config.locked || envVar.locked || false
 
-  // Generate setting path from env var name for auto-creating settings
   const autoSettingPath = () => {
     const name = envVar.name.toLowerCase()
     if (name.includes('api_key') || name.includes('key') || name.includes('secret') || name.includes('token')) {
@@ -46,7 +42,6 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
     return `settings.${name}`
   }
 
-  // Handle value input - auto-create setting
   const handleValueChange = (value: string) => {
     if (value) {
       onChange({ source: 'new_setting', new_setting_path: autoSettingPath(), value, setting_path: undefined })
@@ -55,47 +50,34 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
     }
   }
 
-  // Locked fields - provided by wired providers or infrastructure
-  if (isLocked) {
-    const displayValue = config.value || ''
-    const isMaskedSecret = isSecret && displayValue.length > 0
-    const maskedValue = isMaskedSecret ? '•'.repeat(Math.min(displayValue.length, 20)) : displayValue
-
-    return (
-      <div
-        className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-blue-50 dark:bg-blue-900/10"
-        data-testid={`env-var-editor-${envVar.name}`}
-      >
-        {/* Label */}
-        <span
-          className="text-xs font-medium text-neutral-700 dark:text-neutral-300 w-40 truncate flex-shrink-0"
-          title={envVar.name}
-        >
-          {envVar.name}
-          {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
-        </span>
-
-        {/* Padlock icon */}
-        <div className="flex-shrink-0" title="Locked - provided by infrastructure or provider">
-          <Lock className="w-3 h-3 text-blue-600 dark:text-blue-400" />
-        </div>
-
-        {/* Value display */}
-        <div className="flex-1 min-w-0 flex items-center gap-2">
-          <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono" title={displayValue}>
-            {maskedValue}
-          </span>
-          <span className="ml-auto px-1.5 py-0.5 text-[10px] rounded bg-blue-600/20 text-blue-700 dark:text-blue-300 flex-shrink-0">
-            {config.provider_name || 'provider'}
-          </span>
-        </div>
-      </div>
-    )
+  const handleSwitchToEdit = () => {
+    setShowMapping(false)
+    setEditing(true)
+    // Clear the mapping so the value becomes a literal override
+    onChange({ source: 'new_setting', setting_path: undefined, new_setting_path: autoSettingPath(), value: config.value })
   }
+
+  // Row background
+  const rowBg = isSecret
+    ? 'bg-purple-50 dark:bg-purple-900/10'
+    : isLocked
+      ? 'bg-blue-50 dark:bg-blue-900/10'
+      : 'bg-white dark:bg-neutral-800'
+
+  // Icon slot
+  const iconSlot = isLocked
+    ? <Lock className={`w-3 h-3 flex-shrink-0 ${isSecret ? 'text-purple-500 dark:text-purple-400' : 'text-blue-600 dark:text-blue-400'}`} title="Locked" />
+    : showMapping
+      ? <Link className="w-3 h-3 flex-shrink-0 text-primary-400 dark:text-primary-400" title="Mapped to setting" />
+      : isSecret
+        ? <KeyRound className="w-3 h-3 flex-shrink-0 text-purple-500 dark:text-purple-400" title="Secret" />
+        : <span className="w-3 h-3 flex-shrink-0" />
+
+  const displayValue = config.value || ''
 
   return (
     <div
-      className="flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 bg-white dark:bg-neutral-800"
+      className={`flex items-center gap-2 px-3 py-2 border-b border-neutral-100 dark:border-neutral-700 last:border-0 ${rowBg}`}
       data-testid={`env-var-editor-${envVar.name}`}
     >
       {/* Label */}
@@ -107,24 +89,27 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
         {envVar.is_required && <span className="text-error-500 ml-0.5">*</span>}
       </span>
 
-      {/* Map button - LEFT of input */}
+      {/* Map / Edit toggle button */}
       <button
-        onClick={() => setShowMapping(!showMapping)}
+        onClick={() => showMapping ? handleSwitchToEdit() : setShowMapping(true)}
         className={`px-2 py-1 text-xs rounded transition-colors flex-shrink-0 ${
           showMapping
             ? 'bg-primary-900/30 text-primary-300'
             : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700'
         }`}
-        title={showMapping ? 'Enter value' : 'Map to setting'}
+        title={showMapping ? 'Switch to direct value entry' : 'Map to a setting'}
         data-testid={`map-button-${envVar.name}`}
       >
-        Map
+        {showMapping ? 'Edit' : 'Map'}
       </button>
 
-      {/* Input area */}
+      {/* Icon slot */}
+      {iconSlot}
+
+      {/* Content area */}
       <div className="flex-1 min-w-0 flex items-center gap-2">
         {showMapping ? (
-          // Mapping mode - styled dropdown
+          // Mapping mode — settings path dropdown
           <select
             value={config.setting_path || ''}
             onChange={(e) => {
@@ -141,58 +126,37 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
             data-testid={`map-select-${envVar.name}`}
           >
             <option value="">select...</option>
-            {/* If current setting_path isn't in suggestions, show it as an option */}
             {config.setting_path && !envVar.suggestions.some(s => s.path === config.setting_path) && (
               <option value={config.setting_path}>
-                {config.setting_path} {config.value ? `→ ${config.value.length > 20 ? config.value.substring(0, 20) + '...' : config.value}` : '(current)'}
+                {config.setting_path}{config.value ? ` → ${config.value.length > 20 ? config.value.substring(0, 20) + '...' : config.value}` : ' (current)'}
               </option>
             )}
             {envVar.suggestions.map((s) => {
-              // Truncate long values to prevent horizontal scrolling
-              const displayValue = s.value && s.value.length > 30 ? s.value.substring(0, 30) + '...' : s.value
+              const sv = s.value && s.value.length > 30 ? s.value.substring(0, 30) + '...' : s.value
               return (
                 <option key={s.path} value={s.path}>
-                  {s.path}
-                  {displayValue ? ` → ${displayValue}` : ''}
+                  {s.path}{sv ? ` → ${sv}` : ''}
                 </option>
               )
             })}
           </select>
-        ) : config.value && !editing ? (
-          // Has resolved value - show with source badge
+        ) : isLocked && !editing ? (
+          // Locked: read-only value + source badge
           <>
-            <button
-              onClick={() => setEditing(true)}
-              className="text-neutral-500 hover:text-neutral-300 flex-shrink-0"
-              title="Edit"
-            >
-              <Pencil className="w-3 h-3" />
-            </button>
-            <span className="text-xs text-neutral-300 truncate font-mono" title={config.value}>
-              {isSecret ? '•'.repeat(Math.min(config.value.length, 20)) : config.value}
+            <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono flex-1" title={displayValue}>
+              {displayValue}
             </span>
             <span className={`ml-auto px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
-              config.source === 'env_file' ? 'bg-green-600/20 text-green-400' :
-              config.source === 'capability' ? 'bg-blue-600/20 text-blue-400' :
-              config.source === 'infra' ? 'bg-cyan-600/20 text-cyan-400' :
-              config.source === 'config_default' ? 'bg-purple-600/20 text-purple-400' :
-              config.source === 'compose_default' ? 'bg-neutral-700 text-neutral-400' :
-              'bg-neutral-700 text-neutral-400'
+              isSecret ? 'bg-purple-600/20 text-purple-700 dark:text-purple-300' : 'bg-blue-600/20 text-blue-700 dark:text-blue-300'
             }`}>
-              {config.source === 'env_file' ? '.env' :
-               config.source === 'capability' ? 'provider' :
-               config.source === 'infra' ? 'infra' :
-               config.source === 'config_default' ? 'config' :
-               config.source === 'compose_default' ? 'default' :
-               config.source === 'default' ? 'default' :
-               config.source}
+              {config.provider_name || 'provider'}
             </span>
           </>
-        ) : (
-          // No value or editing - show input
+        ) : editing || !displayValue ? (
+          // Editing or empty — text input
           <input
-            type={isSecret ? 'password' : 'text'}
-            value={config.value || ''}
+            type="text"
+            value={displayValue}
             onChange={(e) => handleValueChange(e.target.value)}
             placeholder="enter value"
             className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
@@ -201,6 +165,32 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
             onBlur={() => setEditing(false)}
             data-testid={`value-input-${envVar.name}`}
           />
+        ) : (
+          // Has value, not editing — click to edit
+          <>
+            <span
+              className="text-xs text-neutral-300 truncate font-mono flex-1 cursor-text hover:text-neutral-100"
+              title={`${displayValue} — click to edit`}
+              onClick={() => setEditing(true)}
+              data-testid={`value-display-${envVar.name}`}
+            >
+              {displayValue}
+            </span>
+            <span className={`ml-auto px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
+              config.source === 'env_file' ? 'bg-green-600/20 text-green-400' :
+              config.source === 'capability' ? 'bg-blue-600/20 text-blue-400' :
+              config.source === 'infra' ? 'bg-cyan-600/20 text-cyan-400' :
+              config.source === 'config_default' ? 'bg-purple-600/20 text-purple-400' :
+              'bg-neutral-700 text-neutral-400'
+            }`}>
+              {config.source === 'env_file' ? '.env' :
+               config.source === 'capability' ? 'provider' :
+               config.source === 'infra' ? 'infra' :
+               config.source === 'config_default' ? 'config' :
+               config.source === 'default' ? 'default' :
+               config.source}
+            </span>
+          </>
         )}
       </div>
     </div>

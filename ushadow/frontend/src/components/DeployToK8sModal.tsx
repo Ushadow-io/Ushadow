@@ -141,42 +141,24 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       console.log('📦 Selected service:', service.service_id)
       console.log('🔧 Current infraServices state:', infraServices)
 
-      // Load environment variable schema with suggestions from settingsStore
-      const envResponse = await servicesApi.getEnvConfig(service.service_id)
+      // Load environment variable schema — pass the cluster's deployment_target_id so the
+      // backend resolves infrastructure values (mongo, redis, etc.) for this specific cluster.
+      const deployTargetId = selectedCluster?.deployment_target_id
+      const envResponse = await servicesApi.getEnvConfig(service.service_id, deployTargetId)
       const envData = envResponse.data
 
-      // Initialize env vars and configs (EXACT same pattern as ServicesPage)
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
       setEnvVars(allEnvVars)
 
-      // Use API response data directly (backend already did smart mapping)
-      // ONLY override with infrastructure detection for K8s-specific values
+      // Use backend-resolved values directly — no frontend override needed.
       const initialConfigs: Record<string, EnvVarConfig> = {}
       allEnvVars.forEach(envVar => {
-        const infraValue = getInfraValueForEnvVar(envVar.name, infraServices)
-        console.log(`🔍 Checking env var ${envVar.name}:`, { infraValue, infraServices })
-
-        if (infraValue) {
-          // Override with infrastructure value for K8s cluster-specific endpoints
-          // Mark as locked so user can't edit
-          initialConfigs[envVar.name] = {
-            name: envVar.name,
-            source: 'new_setting',
-            value: infraValue,
-            new_setting_path: `api_keys.${envVar.name.toLowerCase()}`,
-            setting_path: undefined,
-            locked: true,
-            provider_name: 'K8s Infrastructure'
-          }
-        } else {
-          // Use data from API response (backend already mapped to settings)
-          initialConfigs[envVar.name] = {
-            name: envVar.name,
-            source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
-            setting_path: envVar.setting_path,
-            value: envVar.value,
-            new_setting_path: undefined
-          }
+        initialConfigs[envVar.name] = {
+          name: envVar.name,
+          source: (envVar.source as EnvVarConfig['source']) || 'default',
+          setting_path: envVar.setting_path,
+          value: envVar.resolved_value || envVar.value || '',
+          new_setting_path: undefined,
         }
       })
 
@@ -518,7 +500,7 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
           </div>
         ) : (
           <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
-            {envVars.map((envVar) => {
+            {[...envVars].sort((a, b) => a.name.localeCompare(b.name)).map((envVar) => {
               const config = envConfigs[envVar.name] || {
                 name: envVar.name,
                 source: 'default',
