@@ -15,7 +15,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 
-import { settingsApi, servicesApi } from '../services/api'
+import { api, settingsApi, svcConfigsApi, deploymentsApi, DeployTarget, Deployment } from '../services/api'
 import { useWizard } from '../contexts/WizardContext'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
@@ -48,7 +48,7 @@ const schema = z.object({
     model: z.string().optional(),
   }),
   transcription: z.object({
-    mode: z.enum(['parakeet', 'whisper']),
+    mode: z.enum(['parakeet', 'faster-whisper', 'whisper']),
     url: z.string().url('Must be a valid URL').optional().or(z.literal('')),
   }),
 })
@@ -70,8 +70,9 @@ export default function LocalServicesWizard() {
 
   const [message, setMessage] = useState<WizardMessage | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [deployTarget, setDeployTarget] = useState<DeployTarget | null>(null)
 
-  // Container states
+  // Container states — names must match the service name in the compose file
   const [ollamaStatus, setOllamaStatus] = useState<ContainerInfo>({
     name: 'ollama',
     displayName: 'Ollama',
@@ -79,19 +80,27 @@ export default function LocalServicesWizard() {
   })
 
   const [parakeetStatus, setParakeetStatus] = useState<ContainerInfo>({
-    name: 'parakeet',
+    name: 'parakeet-asr',
     displayName: 'Parakeet',
     status: 'unknown',
   })
 
+  const [fasterWhisperStatus, setFasterWhisperStatus] = useState<ContainerInfo>({
+    name: 'faster-whisper',
+    displayName: 'Faster Whisper',
+    status: 'unknown',
+  })
+
   const [coreContainers, setCoreContainers] = useState<ContainerInfo[]>([
-    { name: 'openmemory', displayName: 'OpenMemory', status: 'unknown' },
+    { name: 'mem0', displayName: 'OpenMemory', status: 'unknown' },
     { name: 'chronicle-backend', displayName: 'Chronicle', status: 'unknown' },
   ])
 
   // Available Ollama models
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
+  const [pullModelName, setPullModelName] = useState('llama3.2')
+  const [pullingModel, setPullingModel] = useState(false)
 
   const methods = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -112,63 +121,62 @@ export default function LocalServicesWizard() {
   // Set mode to 'local' when this wizard starts
   useEffect(() => {
     setMode('local')
-    checkContainerStatuses()
+    loadDeployTarget()
   }, [])
+
+  const loadDeployTarget = async () => {
+    try {
+      const response = await deploymentsApi.listTargets()
+      const leader = response.data.find((t: DeployTarget) => t.type === 'docker' && t.is_leader)
+      if (leader) {
+        setDeployTarget(leader)
+        checkContainerStatuses(leader)
+      }
+    } catch (error) {
+      console.error('Failed to load deployment targets:', error)
+    }
+  }
 
   // Check container statuses when entering start_services step
   useEffect(() => {
-    if (wizard.currentStep.id === 'start_services') {
-      checkCoreContainerStatuses()
+    if (wizard.currentStep.id === 'start_services' && deployTarget) {
+      checkCoreContainerStatuses(deployTarget)
     }
-  }, [wizard.currentStep.id])
+  }, [wizard.currentStep.id, deployTarget])
 
-  const checkContainerStatuses = async () => {
+  const checkContainerStatuses = async (target: DeployTarget) => {
     try {
-      const response = await servicesApi.getInstalled()
-      const services = response.data
+      const response = await deploymentsApi.listDeployments({ unode_hostname: target.identifier })
+      const deployments: Deployment[] = response.data
 
-      // Check Ollama
-      const ollamaService = services.find((s) => s.service_name.includes('ollama'))
-      if (ollamaService) {
-        setOllamaStatus((prev) => ({
-          ...prev,
-          status: ollamaService.status === 'running' ? 'running' : 'stopped',
-        }))
-        if (ollamaService.status === 'running') {
-          fetchOllamaModels()
-        }
+      const findStatus = (name: string) => {
+        const d = deployments.find((dep) => dep.service_id.includes(name))
+        return d?.status === 'running' ? 'running' : d ? 'stopped' : 'stopped'
       }
 
-      // Check Parakeet
-      const parakeetService = services.find((s) => s.service_name.includes('parakeet'))
-      if (parakeetService) {
-        setParakeetStatus((prev) => ({
-          ...prev,
-          status: parakeetService.status === 'running' ? 'running' : 'stopped',
-        }))
-      }
+      const ollamaRunning = findStatus('ollama') === 'running'
+      setOllamaStatus((prev) => ({ ...prev, status: findStatus('ollama') as ContainerInfo['status'] }))
+      setParakeetStatus((prev) => ({ ...prev, status: findStatus('parakeet-asr') as ContainerInfo['status'] }))
+      setFasterWhisperStatus((prev) => ({ ...prev, status: findStatus('faster-whisper') as ContainerInfo['status'] }))
+
+      if (ollamaRunning) fetchOllamaModels()
     } catch (error) {
       console.error('Failed to check container statuses:', error)
     }
   }
 
-  const checkCoreContainerStatuses = async () => {
+  const checkCoreContainerStatuses = async (target: DeployTarget) => {
     try {
-      const response = await servicesApi.getInstalled()
-      const services = response.data
+      const response = await deploymentsApi.listDeployments({ unode_hostname: target.identifier })
+      const deployments: Deployment[] = response.data
 
       setCoreContainers((prev) =>
         prev.map((container) => {
-          const serviceInfo = services.find(
-            (s) => s.service_name === container.name || s.service_name.includes(container.name)
-          )
-          if (serviceInfo) {
-            return {
-              ...container,
-              status: serviceInfo.status === 'running' ? 'running' : 'stopped',
-            }
+          const deployment = deployments.find((d) => d.service_id.includes(container.name))
+          return {
+            ...container,
+            status: deployment?.status === 'running' ? 'running' : 'stopped',
           }
-          return { ...container, status: 'stopped' }
         })
       )
     } catch (error) {
@@ -176,20 +184,31 @@ export default function LocalServicesWizard() {
     }
   }
 
+  const pullOllamaModel = async (modelName: string) => {
+    if (!modelName.trim()) return
+    setPullingModel(true)
+    setMessage({ type: 'success', text: `Pulling ${modelName}... this may take a few minutes.` })
+    try {
+      await api.post('/api/services/ollama/proxy/api/pull', { name: modelName.trim(), stream: false })
+      setMessage({ type: 'success', text: `Model ${modelName} pulled successfully!` })
+      await fetchOllamaModels()
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to pull ${modelName}. Is Ollama running?` })
+    } finally {
+      setPullingModel(false)
+    }
+  }
+
   const fetchOllamaModels = async () => {
     setLoadingModels(true)
     try {
-      // Try to fetch models from Ollama API
-      const url = methods.getValues('llm.url') || 'http://localhost:11434'
-      const response = await fetch(`${url}/api/tags`)
-      const data = await response.json()
-      if (data.models) {
-        setAvailableModels(data.models.map((m: any) => m.name))
-      }
+      // Proxy through backend to avoid CORS and use Docker network routing
+      const response = await api.get('/api/services/ollama/proxy/api/tags')
+      const models: string[] = (response.data?.models ?? []).map((m: any) => m.name)
+      setAvailableModels(models)
     } catch (error) {
       console.error('Failed to fetch Ollama models:', error)
-      // Set some common models as fallback
-      setAvailableModels(['llama3.2', 'llama3.1', 'mistral', 'phi3', 'gemma2'])
+      setAvailableModels([])
     } finally {
       setLoadingModels(false)
     }
@@ -199,89 +218,92 @@ export default function LocalServicesWizard() {
     containerName: string,
     setStatus: React.Dispatch<React.SetStateAction<ContainerInfo>>
   ) => {
+    if (!deployTarget) {
+      setMessage({ type: 'error', text: 'No deployment target available' })
+      return
+    }
     setStatus((prev) => ({ ...prev, status: 'starting' }))
 
     try {
-      await servicesApi.startService(containerName)
+      await deploymentsApi.deploy(containerName, deployTarget.identifier)
 
-      // Poll for status
       let attempts = 0
-      const maxAttempts = 15
+      const maxAttempts = 60
 
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await servicesApi.getDockerDetails(containerName)
-          const isRunning = response.data.status === 'running'
+          const response = await deploymentsApi.listDeployments({ unode_hostname: deployTarget.identifier })
+          const deployment = response.data.find((d: Deployment) => d.service_id.includes(containerName))
 
-          if (isRunning) {
+          if (deployment?.status === 'running') {
             setStatus((prev) => ({ ...prev, status: 'running' }))
-
-            // If Ollama, fetch models
-            if (containerName === 'ollama') {
-              setTimeout(fetchOllamaModels, 2000)
-            }
-
+            if (containerName === 'ollama') setTimeout(fetchOllamaModels, 2000)
             setMessage({ type: 'success', text: `${containerName} started successfully!` })
+            return
+          }
+
+          if (deployment?.status === 'failed') {
+            setStatus((prev) => ({ ...prev, status: 'error', error: 'Deployment failed' }))
+            setMessage({ type: 'error', text: `Failed to start ${containerName}` })
             return
           }
 
           if (attempts < maxAttempts) {
             setTimeout(pollStatus, 2000)
           } else {
-            setStatus((prev) => ({
-              ...prev,
-              status: 'error',
-              error: 'Timeout waiting for container to start',
-            }))
+            setStatus((prev) => ({ ...prev, status: 'error', error: 'Timeout waiting for container to start' }))
           }
         } catch (err) {
-          if (attempts < maxAttempts) {
-            setTimeout(pollStatus, 2000)
-          }
+          if (attempts < maxAttempts) setTimeout(pollStatus, 2000)
         }
       }
 
       setTimeout(pollStatus, 2000)
     } catch (error) {
-      setStatus((prev) => ({
-        ...prev,
-        status: 'error',
-        error: getErrorMessage(error, 'Failed to start'),
-      }))
+      setStatus((prev) => ({ ...prev, status: 'error', error: getErrorMessage(error, 'Failed to start') }))
       setMessage({ type: 'error', text: getErrorMessage(error, `Failed to start ${containerName}`) })
     }
   }
 
   const startCoreContainer = async (containerName: string) => {
+    if (!deployTarget) {
+      setMessage({ type: 'error', text: 'No deployment target available' })
+      return
+    }
     setCoreContainers((prev) =>
       prev.map((c) => (c.name === containerName ? { ...c, status: 'starting' } : c))
     )
 
     try {
-      await servicesApi.startService(containerName)
+      await deploymentsApi.deploy(containerName, deployTarget.identifier)
 
       let attempts = 0
-      const maxAttempts = 10
+      const maxAttempts = 60
 
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await servicesApi.getDockerDetails(containerName)
-          const isRunning = response.data.status === 'running'
+          const response = await deploymentsApi.listDeployments({ unode_hostname: deployTarget.identifier })
+          const deployment = response.data.find((d: Deployment) => d.service_id.includes(containerName))
 
-          if (isRunning) {
+          if (deployment?.status === 'running') {
             setCoreContainers((prev) =>
               prev.map((c) => (c.name === containerName ? { ...c, status: 'running' } : c))
             )
-
-            if (containerName === 'openmemory') {
+            if (containerName === 'mem0') {
               updateServiceStatus('openMemory', { configured: true, running: true })
             } else if (containerName === 'chronicle-backend') {
               updateServiceStatus('chronicle', { configured: true, running: true })
             }
-
             setMessage({ type: 'success', text: `${containerName} started successfully!` })
+            return
+          }
+
+          if (deployment?.status === 'failed') {
+            setCoreContainers((prev) =>
+              prev.map((c) => (c.name === containerName ? { ...c, status: 'error', error: 'Deployment failed' } : c))
+            )
             return
           }
 
@@ -290,16 +312,12 @@ export default function LocalServicesWizard() {
           } else {
             setCoreContainers((prev) =>
               prev.map((c) =>
-                c.name === containerName
-                  ? { ...c, status: 'error', error: 'Timeout waiting for container' }
-                  : c
+                c.name === containerName ? { ...c, status: 'error', error: 'Timeout waiting for container' } : c
               )
             )
           }
         } catch (err) {
-          if (attempts < maxAttempts) {
-            setTimeout(pollStatus, 2000)
-          }
+          if (attempts < maxAttempts) setTimeout(pollStatus, 2000)
         }
       }
 
@@ -315,37 +333,91 @@ export default function LocalServicesWizard() {
     }
   }
 
-  const saveConfiguration = async (): Promise<boolean> => {
+  const saveLlmConfig = async (): Promise<boolean> => {
     setIsSubmitting(true)
-    setMessage({ type: 'info', text: 'Saving local service configuration...' })
+    try {
+      const data = methods.getValues()
+      const url = data.llm.mode === 'container' ? 'http://ollama:11434' : data.llm.url
+      const model = data.llm.model || 'llama3.2'
 
+      // Save as a ServiceConfig using credential keys so the capability resolver picks them up
+      try {
+        await svcConfigsApi.createServiceConfig({
+          id: 'ollama',
+          template_id: 'ollama',
+          name: 'Ollama',
+          config: { base_url: url, model },
+        })
+      } catch {
+        // Config already exists — update it
+        await svcConfigsApi.updateServiceConfig('ollama', { config: { base_url: url, model } })
+      }
+
+      // Mark ollama as installed so it appears in the wiring board and capability selector
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes('ollama')) {
+        await settingsApi.update({ installed_services: [...currentInstalled, 'ollama'] })
+      }
+
+      setMessage({ type: 'success', text: 'LLM configuration saved.' })
+      return true
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save LLM configuration') })
+      return false
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const saveTranscriptionConfig = async (): Promise<boolean> => {
+    setIsSubmitting(true)
     try {
       const data = methods.getValues()
 
-      const updates: Record<string, any> = {
-        service_preferences: {
-          llm: {
-            provider: 'local',
-            url: data.llm.mode === 'container' ? 'http://localhost:11434' : data.llm.url,
-            model: data.llm.model || 'llama3.2',
-          },
-          transcription: {
-            provider: 'local',
-            url:
-              data.transcription.mode === 'parakeet'
-                ? 'http://localhost:9000'
-                : data.transcription.url,
-            type: data.transcription.mode,
-          },
-        },
+      // Map wizard mode to provider template ID and server_url credential value
+      let providerId: string
+      let serverUrl: string | null = null
+
+      if (data.transcription.mode === 'parakeet') {
+        providerId = 'parakeet'
+        // Parakeet uses its default URL from the provider registry; no explicit URL needed
+      } else if (data.transcription.mode === 'faster-whisper') {
+        // faster-whisper serves an OpenAI-compatible whisper API — map to whisper-local provider
+        providerId = 'whisper-local'
+        serverUrl = 'http://faster-whisper:8000'
+      } else {
+        // Manual whisper URL
+        providerId = 'whisper-local'
+        serverUrl = data.transcription.url
       }
 
-      await settingsApi.update(updates)
-      updateServiceStatus('apiKeys', true) // Mark as configured (using local instead)
-      setMessage({ type: 'success', text: 'Configuration saved!' })
+      // Save as a ServiceConfig using credential keys so the capability resolver picks them up
+      const configValues = serverUrl ? { server_url: serverUrl } : {}
+      try {
+        await svcConfigsApi.createServiceConfig({
+          id: providerId,
+          template_id: providerId,
+          name: providerId === 'parakeet' ? 'Parakeet' : 'Whisper (local)',
+          config: configValues,
+        })
+      } catch {
+        // Config already exists — update it
+        await svcConfigsApi.updateServiceConfig(providerId, { config: configValues })
+      }
+
+      // Mark provider as installed so it appears in the wiring board and capability selector
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes(providerId)) {
+        await settingsApi.update({ installed_services: [...currentInstalled, providerId] })
+      }
+
+      updateServiceStatus('apiKeys', true)
+      setMessage({ type: 'success', text: 'Transcription configuration saved.' })
       return true
     } catch (error) {
-      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save configuration') })
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to save transcription configuration') })
       return false
     } finally {
       setIsSubmitting(false)
@@ -368,25 +440,25 @@ export default function LocalServicesWizard() {
         setMessage({ type: 'error', text: 'Please enter the Ollama URL' })
         return
       }
+      const saved = await saveLlmConfig()
+      if (!saved) return
       wizard.next()
     } else if (wizard.currentStep.id === 'transcription') {
       const data = methods.getValues()
       if (data.transcription.mode === 'parakeet' && parakeetStatus.status !== 'running') {
-        setMessage({
-          type: 'error',
-          text: 'Please start Parakeet or switch to Whisper URL configuration',
-        })
+        setMessage({ type: 'error', text: 'Please start Parakeet or switch to another option' })
+        return
+      }
+      if (data.transcription.mode === 'faster-whisper' && fasterWhisperStatus.status !== 'running') {
+        setMessage({ type: 'error', text: 'Please start Faster Whisper or switch to another option' })
         return
       }
       if (data.transcription.mode === 'whisper' && !data.transcription.url) {
         setMessage({ type: 'error', text: 'Please enter the Whisper API URL' })
         return
       }
-
-      // Save configuration before proceeding
-      const saved = await saveConfiguration()
+      const saved = await saveTranscriptionConfig()
       if (!saved) return
-
       wizard.next()
     } else if (wizard.currentStep.id === 'start_services') {
       if (!allCoreContainersRunning) {
@@ -430,8 +502,12 @@ export default function LocalServicesWizard() {
             ollamaStatus={ollamaStatus}
             availableModels={availableModels}
             loadingModels={loadingModels}
+            pullModelName={pullModelName}
+            pullingModel={pullingModel}
             onStartOllama={() => startContainer('ollama', setOllamaStatus)}
             onRefreshModels={fetchOllamaModels}
+            onPullModel={pullOllamaModel}
+            onPullModelNameChange={setPullModelName}
           />
         )}
 
@@ -439,7 +515,9 @@ export default function LocalServicesWizard() {
         {wizard.currentStep.id === 'transcription' && (
           <TranscriptionStep
             parakeetStatus={parakeetStatus}
+            fasterWhisperStatus={fasterWhisperStatus}
             onStartParakeet={() => startContainer('parakeet', setParakeetStatus)}
+            onStartFasterWhisper={() => startContainer('faster-whisper', setFasterWhisperStatus)}
           />
         )}
 
@@ -448,7 +526,7 @@ export default function LocalServicesWizard() {
           <StartServicesStep
             containers={coreContainers}
             onStart={startCoreContainer}
-            onRefresh={checkCoreContainerStatuses}
+            onRefresh={() => deployTarget && checkCoreContainerStatuses(deployTarget)}
           />
         )}
 
@@ -469,16 +547,24 @@ interface LLMStepProps {
   ollamaStatus: ContainerInfo
   availableModels: string[]
   loadingModels: boolean
+  pullModelName: string
+  pullingModel: boolean
   onStartOllama: () => void
   onRefreshModels: () => void
+  onPullModel: (name: string) => void
+  onPullModelNameChange: (name: string) => void
 }
 
 function LLMStep({
   ollamaStatus,
   availableModels,
   loadingModels,
+  pullModelName,
+  pullingModel,
   onStartOllama,
   onRefreshModels,
+  onPullModel,
+  onPullModelNameChange,
 }: LLMStepProps) {
   const { register, watch, setValue } = useFormContext<FormData>()
   const mode = watch('llm.mode')
@@ -567,21 +653,66 @@ function LLMStep({
                   Refresh
                 </button>
               </div>
-              <select
-                id="local-services-llm-model"
-                {...register('llm.model')}
-                className="input"
-              >
-                <option value="">Select a model...</option>
-                {availableModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500">
-                Don&apos;t see your model? Pull it with: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">ollama pull model-name</code>
-              </p>
+              {loadingModels ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading models...
+                </div>
+              ) : availableModels.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-3">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">No models installed</p>
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Pull a model to get started:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      data-testid="local-services-pull-model-name"
+                      type="text"
+                      value={pullModelName}
+                      onChange={(e) => onPullModelNameChange(e.target.value)}
+                      placeholder="llama3.2"
+                      className="input flex-1 text-sm"
+                      disabled={pullingModel}
+                    />
+                    <button
+                      data-testid="local-services-pull-model-btn"
+                      type="button"
+                      onClick={() => onPullModel(pullModelName)}
+                      disabled={pullingModel || !pullModelName.trim()}
+                      className="btn-primary flex items-center gap-2 whitespace-nowrap"
+                    >
+                      {pullingModel ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" />Pulling...</>
+                      ) : (
+                        'Pull Model'
+                      )}
+                    </button>
+                  </div>
+                  {pullingModel && (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Downloading model — this may take a few minutes depending on size.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <select
+                  data-testid="local-services-llm-model"
+                  {...register('llm.model')}
+                  className="input"
+                >
+                  <option value="">Select a model...</option>
+                  {availableModels.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {availableModels.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  Don&apos;t see your model? Pull it with: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">ollama pull model-name</code>
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -630,15 +761,17 @@ function LLMStep({
 // Step 2: Transcription Configuration
 interface TranscriptionStepProps {
   parakeetStatus: ContainerInfo
+  fasterWhisperStatus: ContainerInfo
   onStartParakeet: () => void
+  onStartFasterWhisper: () => void
 }
 
-function TranscriptionStep({ parakeetStatus, onStartParakeet }: TranscriptionStepProps) {
+function TranscriptionStep({ parakeetStatus, fasterWhisperStatus, onStartParakeet, onStartFasterWhisper }: TranscriptionStepProps) {
   const { register, watch, setValue } = useFormContext<FormData>()
   const mode = watch('transcription.mode')
 
   return (
-    <div id="local-services-step-transcription" className="space-y-6">
+    <div data-testid="local-services-step-transcription" className="space-y-6">
       <div>
         <div className="flex items-center gap-3 mb-2">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
@@ -652,10 +785,10 @@ function TranscriptionStep({ parakeetStatus, onStartParakeet }: TranscriptionSte
       </div>
 
       {/* Mode Selection */}
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid md:grid-cols-3 gap-4">
         <button
           type="button"
-          id="local-services-transcription-parakeet"
+          data-testid="local-services-transcription-parakeet"
           onClick={() => setValue('transcription.mode', 'parakeet')}
           className={`p-4 rounded-lg border-2 text-left transition-all ${
             mode === 'parakeet'
@@ -674,7 +807,26 @@ function TranscriptionStep({ parakeetStatus, onStartParakeet }: TranscriptionSte
 
         <button
           type="button"
-          id="local-services-transcription-whisper"
+          data-testid="local-services-transcription-faster-whisper"
+          onClick={() => setValue('transcription.mode', 'faster-whisper')}
+          className={`p-4 rounded-lg border-2 text-left transition-all ${
+            mode === 'faster-whisper'
+              ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
+          }`}
+        >
+          <div className="flex items-center gap-3 mb-2">
+            <Cpu className={`w-5 h-5 ${mode === 'faster-whisper' ? 'text-primary-600' : 'text-gray-500'}`} />
+            <span className="font-medium text-gray-900 dark:text-white">Faster Whisper</span>
+          </div>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Spin up faster-whisper-server locally
+          </p>
+        </button>
+
+        <button
+          type="button"
+          data-testid="local-services-transcription-whisper"
           onClick={() => setValue('transcription.mode', 'whisper')}
           className={`p-4 rounded-lg border-2 text-left transition-all ${
             mode === 'whisper'
@@ -701,6 +853,15 @@ function TranscriptionStep({ parakeetStatus, onStartParakeet }: TranscriptionSte
         />
       )}
 
+      {/* Faster Whisper Mode */}
+      {mode === 'faster-whisper' && (
+        <ContainerStatusCard
+          container={fasterWhisperStatus}
+          onStart={onStartFasterWhisper}
+          description="faster-whisper-server with OpenAI-compatible API on port 10300"
+        />
+      )}
+
       {/* Whisper Mode */}
       {mode === 'whisper' && (
         <div>
@@ -708,14 +869,14 @@ function TranscriptionStep({ parakeetStatus, onStartParakeet }: TranscriptionSte
             Whisper API URL
           </label>
           <input
-            id="local-services-transcription-url"
+            data-testid="local-services-transcription-url"
             type="text"
             {...register('transcription.url')}
             placeholder="http://localhost:9000/v1/audio/transcriptions"
             className="input"
           />
           <p className="text-xs text-gray-500 mt-1">
-            OpenAI-compatible Whisper endpoint (e.g., faster-whisper-server)
+            OpenAI-compatible Whisper endpoint
           </p>
         </div>
       )}

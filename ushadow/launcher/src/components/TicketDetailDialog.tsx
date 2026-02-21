@@ -324,7 +324,6 @@ export function TicketDetailDialog({
       const { tauri } = await import('../hooks/useTauri')
 
       // Recreate the tmux window using attach command
-      // Pass the stored tmux_window_name to ensure we create/find the correct window
       await tauri.attachTmuxToWorktree(
         ticket.worktree_path,
         ticket.environment_name,
@@ -334,10 +333,13 @@ export function TicketDetailDialog({
       setSuccessMessage('Tmux window recreated successfully')
       setTimeout(() => setSuccessMessage(null), 3000)
 
-      // Now try to open the terminal
-      if (ticket.tmux_window_name) {
+      // Open terminal — derive canonical window name from branch_name
+      const windowName = ticket.branch_name
+        ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+        : ticket.tmux_window_name || ''
+      if (windowName) {
         await tauri.openTmuxInTerminal(
-          ticket.tmux_window_name,
+          windowName,
           ticket.worktree_path,
           ticket.environment_name
         )
@@ -731,8 +733,13 @@ export function TicketDetailDialog({
                       setOpeningTerminal(true)
                       try {
                         const { tauri } = await import('../hooks/useTauri')
+                        // Derive canonical window name from branch_name (ushadow- prefix matches .workmux.yaml).
+                        // Falls back to stored tmux_window_name for environments without a branch.
+                        const windowName = ticket.branch_name
+                          ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+                          : ticket.tmux_window_name || ''
                         await tauri.openTmuxInTerminal(
-                          ticket.tmux_window_name!,
+                          windowName,
                           ticket.worktree_path!,
                           ticket.environment_name || undefined
                         )

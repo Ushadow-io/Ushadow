@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from src.config.store import SettingsStore, get_settings_store
 from src.database import get_database
 from src.models.feed import SourceCreate
 from pydantic import BaseModel
@@ -28,10 +29,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/feed", tags=["feed"])
 
 
+def _get_settings() -> SettingsStore:
+    return get_settings_store()
+
+
 def get_feed_service(
     db: AsyncIOMotorDatabase = Depends(get_database),
+    settings: SettingsStore = Depends(_get_settings),
 ) -> FeedService:
-    return FeedService(db)
+    return FeedService(db, settings)
 
 
 # =========================================================================

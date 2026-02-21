@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::env;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Ticket {
     id: String,
     title: String,

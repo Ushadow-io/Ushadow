@@ -71,8 +71,8 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
 
   const handleOpenTerminal = async () => {
     if (envPath) {
-      const windowName = `ushadow-${envName}`
-      await tauri.openTmuxInTerminal(windowName, envPath)
+      // Pass empty window name — backend attaches to the session's current window
+      await tauri.openTmuxInTerminal('', envPath, envName)
     }
   }
 

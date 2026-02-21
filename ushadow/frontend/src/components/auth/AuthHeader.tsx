@@ -35,7 +35,7 @@ export default function AuthHeader({ subtitle }: AuthHeaderProps) {
           <img
             src="/logo.png"
             alt="uShadow Logo"
-            className="h-72 w-72 mx-auto object-contain drop-shadow-2xl"
+            className="h-40 w-40 sm:h-56 sm:w-56 md:h-72 md:w-72 mx-auto object-contain drop-shadow-2xl"
             data-testid="auth-logo"
             onError={(e) => {
               // Fallback to icon if logo doesn't load
@@ -53,7 +53,7 @@ export default function AuthHeader({ subtitle }: AuthHeaderProps) {
           </div>
         </div>
         <h2
-          className="text-6xl font-bold tracking-tight -mt-4 inline-block"
+          className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight -mt-4 inline-block"
           style={{
             background: 'linear-gradient(135deg, #4ade80 0%, #22c55e 35%, #a855f7 75%)',
             WebkitBackgroundClip: 'text',

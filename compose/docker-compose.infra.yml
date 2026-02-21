@@ -2,9 +2,21 @@
 # Persistent database layer that stays running across app restarts
 #
 # Usage:
-#   docker compose -f compose/docker-compose.infra.yml --profile core up -d   # Start core (mongo, redis)
+#   docker compose -f compose/docker-compose.infra.yml --profile infra up -d  # Start core (mongo, redis, keycloak)
+#   docker compose -f compose/docker-compose.infra.yml --profile llm up -d    # Start Ollama
 #   docker compose -f compose/docker-compose.infra.yml down                   # Stop (keeps data)
 #   docker compose -f compose/docker-compose.infra.yml down -v                # Stop and remove data
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  ollama:
+    display_name: "Ollama"
+    description: "Local LLM inference server with OpenAI-compatible API"
+    requires: []
+    provides: llm
+    tags: ["llm", "inference", "local"]
 
 name: infra
 
@@ -186,13 +198,14 @@ services:
       - KC_DB_USERNAME=${POSTGRES_USER:-ushadow}
       - KC_DB_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
 
-      # Hostname v2 configuration (Keycloak 21+)
-      # KC_HOSTNAME_URL sets both frontend URL and token issuer
-      - KC_HOSTNAME_URL=${KC_HOSTNAME_URL:-http://100.105.225.45:8081}
-      - KC_HOSTNAME_STRICT=false  # Allow backend to use internal URL (http://keycloak:8080)
-      - KC_HTTP_ENABLED=true      # Enable HTTP (required for non-HTTPS KC_HOSTNAME_URL)
+      # Hostname v2 configuration (Keycloak 26+)
+      # KC_HOSTNAME_STRICT=false allows the backend to call via internal http://keycloak:8080.
+      # KC_PROXY_HEADERS=xforwarded lets Keycloak use X-Forwarded-Host/Proto for the issuer,
+      # so the backend can spoof the public hostname on internal calls to match the token issuer.
+      - KC_HOSTNAME_STRICT=false
+      - KC_HTTP_ENABLED=true
       - KC_HEALTH_ENABLED=true
-      - KC_PROXY_HEADERS=xforwarded  # Trust X-Forwarded-* headers (for Tailscale/reverse proxy)
+      - KC_PROXY_HEADERS=xforwarded
 
       # Additional Keycloak config
       - KC_REALM=${KC_REALM:-ushadow}  # Default realm
@@ -214,6 +227,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["llm", "ollama"]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - ushadow-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 30s
 
   # tailscale:
@@ -256,4 +287,6 @@ volumes:
   neo4j_data:
     driver: local
   tailscale_state:
+    driver: local
+  ollama_models:
     driver: local

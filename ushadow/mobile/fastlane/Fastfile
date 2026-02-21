@@ -35,6 +35,18 @@ platform :ios do
     # (provisioning profile fetch, build number query, and upload)
     api_key = app_store_connect_api_key_from_env
 
+    # Step 0: Generate the Xcode project + workspace before anything reads from it.
+    # expo prebuild creates the .xcodeproj; pod install creates the .xcworkspace.
+    # get_build_number / increment_build_number all need ./ios/ushadow.xcodeproj to exist.
+    # Run outside Bundler's environment so pod install can find `pod`.
+    # bundle exec sets RUBYOPT=-r bundler/setup which causes every Ruby subprocess to load
+    # bundler, which blocks cocoapods (not in our Gemfile). env -u strips those vars.
+    # expo prebuild generates the Podfile; pod install creates the .xcworkspace.
+    UI.message("🔧 Running expo prebuild for production variant...")
+    sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
+    UI.message("📦 Running pod install...")
+    sh("cd ../ios && bundle exec pod install")
+
     # Step 1: Sync build number with App Store Connect
     # Takes the max of ASC's latest + current project build to handle builds
     # still processing in Apple's pipeline (which ASC may not reflect yet).
@@ -62,9 +74,9 @@ platform :ios do
 
     UI.success("Building version #{version} (#{build})")
 
-    # Step 2: Build the app
+    # Step 2: Build the app (prebuild already ran above)
     UI.message("🔨 Building iOS app...")
-    build_app
+    build_app(skip_prebuild: true)
 
     # Step 3: Upload to TestFlight
     ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
@@ -154,10 +166,13 @@ platform :ios do
     eas_config = JSON.parse(File.read("../eas.json"))
     team_id    = eas_config.dig('submit', 'production', 'ios', 'appleTeamId') || '6SJ7NH4HSZ'
 
-    # Regenerate the iOS project with production variant (bundle ID io.ushadow.mobile)
-    # This ensures the correct bundle ID is baked into the Xcode project before building.
-    UI.message("🔧 Running expo prebuild for production variant...")
-    sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
+    # Regenerate the iOS project + workspace unless the caller already ran prebuild.
+    unless options[:skip_prebuild]
+      UI.message("🔧 Running expo prebuild for production variant...")
+      sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
+      UI.message("📦 Running pod install...")
+      sh("cd ../ios && bundle exec pod install")
+    end
 
     # Download/refresh the App Store distribution provisioning profile.
     # sigh fetches it from Apple and installs it into ~/Library/MobileDevice/Provisioning Profiles/

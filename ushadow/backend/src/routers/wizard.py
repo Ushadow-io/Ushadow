@@ -63,11 +63,20 @@ class ServiceInfo(BaseModel):
     description: Optional[str] = None
 
 
+class ServiceProfile(BaseModel):
+    """A named set of default services selectable in the wizard."""
+    name: str
+    display_name: str
+    services: List[str]
+
+
 class QuickstartResponse(BaseModel):
     """Response for quickstart wizard - aggregated capability requirements."""
     required_capabilities: List[CapabilityRequirement]
     services: List[ServiceInfo]  # Full service info, not just names
     all_configured: bool
+    profiles: List[ServiceProfile] = []
+    active_profile: Optional[str] = None
 
 
 class HuggingFaceStatusResponse(BaseModel):
@@ -407,19 +416,56 @@ async def get_quickstart_config() -> QuickstartResponse:
                 description=service.description,
             ))
         else:
-            # Fallback if service not found in registry
             service_infos.append(ServiceInfo(
                 name=service_name,
                 display_name=service_name,
             ))
+
+    # Build profile list and detect active profile
+    raw_profiles = await settings.get("service_profiles") or {}
+    profiles = []
+    active_profile = None
+    for name, profile_data in raw_profiles.items():
+        profile_services = profile_data.get("services", []) if isinstance(profile_data, dict) else list(profile_data)
+        display_name = profile_data.get("display_name", name.title()) if isinstance(profile_data, dict) else name.title()
+        profiles.append(ServiceProfile(name=name, display_name=display_name, services=profile_services))
+        if sorted(profile_services) == sorted(default_services):
+            active_profile = name
 
     return QuickstartResponse(
         required_capabilities=[
             CapabilityRequirement(**cap) for cap in requirements["required_capabilities"]
         ],
         services=service_infos,
-        all_configured=requirements["all_configured"]
+        all_configured=requirements["all_configured"],
+        profiles=profiles,
+        active_profile=active_profile,
     )
+
+
+@router.post("/quickstart/profile")
+async def select_service_profile(body: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Switch to a named service profile.
+
+    Writes the profile's services as default_services in config.overrides.yaml.
+    The wizard reloads after this to show the new service list.
+    """
+    profile_name = body.get("profile")
+    if not profile_name:
+        raise HTTPException(status_code=400, detail="profile is required")
+
+    settings = get_settings()
+    raw_profiles = await settings.get("service_profiles") or {}
+
+    if profile_name not in raw_profiles:
+        raise HTTPException(status_code=404, detail=f"Profile '{profile_name}' not found")
+
+    profile_data = raw_profiles[profile_name]
+    services = profile_data.get("services", []) if isinstance(profile_data, dict) else list(profile_data)
+
+    await settings.set("default_services", services)
+    return {"profile": profile_name, "services": services}
 
 
 @router.post("/quickstart")

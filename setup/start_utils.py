@@ -200,6 +200,56 @@ def start_infrastructure(
         return False, f"Error starting infrastructure: {e}"
 
 
+def wait_for_keycloak_realm(
+    kc_port: int = 8081,
+    realm: str = "ushadow",
+    timeout: int = 120,
+    poll_interval: int = 3
+) -> Tuple[bool, int]:
+    """
+    Wait for the Keycloak realm to be fully imported and ready.
+
+    Polls the OIDC well-known endpoint, which only responds after the realm
+    import completes - more reliable than the /health/ready endpoint which
+    passes before the realm is imported.
+
+    Args:
+        kc_port: Keycloak public port (default: 8081)
+        realm: Realm name to check (default: ushadow)
+        timeout: Maximum seconds to wait (default: 120)
+        poll_interval: Seconds between checks (default: 3)
+
+    Returns:
+        Tuple of (ready: bool, elapsed_seconds: int)
+    """
+    url = f"http://localhost:{kc_port}/realms/{realm}/.well-known/openid-configuration"
+    elapsed = 0
+
+    while elapsed < timeout:
+        try:
+            result = subprocess.run(
+                ["curl", "-sf", url],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                return True, elapsed
+        except subprocess.TimeoutExpired:
+            pass
+        except FileNotFoundError:
+            try:
+                import urllib.request
+                urllib.request.urlopen(url, timeout=3)
+                return True, elapsed
+            except Exception:
+                pass
+
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+    return False, elapsed
+
+
 def wait_for_backend_health(
     port: int = 8000,
     timeout: int = 60,

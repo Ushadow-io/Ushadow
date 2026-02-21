@@ -207,90 +207,107 @@ async def register_mobile_client():
         logger.warning(f"[KC-STARTUP] ⚠️  Failed to register mobile client: {e}")
 
 
-async def register_current_environment():
+async def _do_register() -> bool:
     """
-    Register the current environment's redirect URIs with Keycloak.
-
-    This is called during backend startup to ensure the current worktree's
-    frontend URLs are whitelisted in Keycloak.
-
-    Skip if:
-    - Keycloak is not enabled in config
-    - KEYCLOAK_AUTO_REGISTER=false environment variable is set
-
-    Uses a lock to prevent concurrent registration which can cause
-    duplicate key errors in Keycloak's database.
+    Single registration attempt. Returns True on success, False otherwise.
     """
-    # Check if auto-registration is disabled
-    if os.getenv("KEYCLOAK_AUTO_REGISTER", "true").lower() == "false":
-        logger.info("[KC-STARTUP] Keycloak auto-registration disabled via KEYCLOAK_AUTO_REGISTER=false")
-        return
-
-    # Use lock to prevent concurrent registration (avoids duplicate key errors)
     async with _registration_lock:
         try:
-            # Get admin client
             admin_client = get_keycloak_admin()
 
-            # Get URIs to register
             redirect_uris = get_current_redirect_uris()
             post_logout_uris = get_current_post_logout_uris()
-            web_origins = get_web_origins()  # Get CORS origins from settings
+            web_origins = get_web_origins()
 
             logger.info("[KC-STARTUP] 🔐 Registering redirect URIs with Keycloak...")
             logger.info(f"[KC-STARTUP] Environment: PORT_OFFSET={os.getenv('PORT_OFFSET', '10')}")
-            logger.info(f"[KC-STARTUP] Redirect URIs to register ({len(redirect_uris)}):")
             for uri in redirect_uris:
-                logger.info(f"[KC-STARTUP]   - {uri}")
-            logger.info(f"[KC-STARTUP] Post-logout URIs to register ({len(post_logout_uris)}):")
-            for uri in post_logout_uris:
-                logger.info(f"[KC-STARTUP]   - {uri}")
+                logger.info(f"[KC-STARTUP]   redirect: {uri}")
 
-            # Register redirect URIs and webOrigins (CORS)
             success = await admin_client.update_client_redirect_uris(
                 client_id="ushadow-frontend",
                 redirect_uris=redirect_uris,
-                web_origins=web_origins,  # Pass CORS origins from settings
-                merge=True  # Merge with existing URIs for multi-environment support
+                web_origins=web_origins,
+                merge=True,
             )
 
             if not success:
-                logger.warning("[KC-STARTUP] ⚠️  Failed to register redirect URIs (Keycloak may not be ready yet)")
-                logger.warning("[KC-STARTUP] You may need to manually configure redirect URIs in Keycloak admin console")
-                return
+                return False
 
-            # Register post-logout redirect URIs
             logout_success = await admin_client.update_post_logout_redirect_uris(
                 client_id="ushadow-frontend",
                 post_logout_redirect_uris=post_logout_uris,
-                merge=True
+                merge=True,
             )
 
-            if logout_success:
-                logger.info("[KC-STARTUP] ✅ Redirect URIs registered successfully")
-            else:
+            if not logout_success:
                 logger.warning("[KC-STARTUP] ⚠️  Failed to register post-logout redirect URIs")
 
-            # Update realm CSP to allow embedding from any origin (Tauri, Tailscale, etc.)
             try:
-                logger.info("[KC-STARTUP] 🔒 Updating realm CSP to allow embedding...")
                 headers = {
                     "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http: https: tauri:; object-src 'none';",
                     "xContentTypeOptions": "nosniff",
                     "xRobotsTag": "none",
-                    "xFrameOptions": "",  # Remove X-Frame-Options (conflicts with CSP frame-ancestors)
+                    "xFrameOptions": "",
                     "xXSSProtection": "1; mode=block",
-                    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+                    "strictTransportSecurity": "max-age=31536000; includeSubDomains",
                 }
                 admin_client.update_realm_browser_security_headers(headers)
-                logger.info("[KC-STARTUP] ✅ Realm CSP updated successfully")
             except Exception as csp_error:
                 logger.warning(f"[KC-STARTUP] ⚠️  Failed to update realm CSP: {csp_error}")
-                logger.warning("[KC-STARTUP] You may need to manually configure CSP in Keycloak admin console")
 
-            # Register mobile client (separate from web client)
             await register_mobile_client()
+            return True
 
         except Exception as e:
-            logger.warning(f"[KC-STARTUP] ⚠️  Failed to auto-register Keycloak URIs: {e}")
-            logger.warning("[KC-STARTUP] This is non-critical - you can manually configure URIs in Keycloak admin console")
+            logger.warning(f"[KC-STARTUP] ⚠️  Registration attempt failed: {e}")
+            return False
+
+
+async def _register_with_retry():
+    """
+    Retry registration until Keycloak is ready.
+
+    On fresh installs Keycloak can take 30-60s to start and import its realm.
+    Because backend and Keycloak live in separate compose projects, depends_on
+    cannot enforce ordering, so we handle it here instead.
+
+    Tries every 10s for up to ~2 minutes, then logs the manual fallback URL.
+    """
+    max_attempts = 12
+    delay_seconds = 10
+
+    for attempt in range(1, max_attempts + 1):
+        logger.info(f"[KC-STARTUP] Registration attempt {attempt}/{max_attempts}...")
+        if await _do_register():
+            logger.info("[KC-STARTUP] ✅ Redirect URIs registered successfully")
+            return
+        if attempt < max_attempts:
+            logger.info(f"[KC-STARTUP] Keycloak not ready - retrying in {delay_seconds}s...")
+            await asyncio.sleep(delay_seconds)
+
+    port = 3000 + int(os.getenv("PORT_OFFSET", "10"))
+    admin_url = os.getenv("KC_HOSTNAME_URL", "http://localhost:8081")
+    logger.warning(
+        "[KC-STARTUP] ⚠️  All registration attempts failed. "
+        "Manually add http://localhost:%d/oauth/callback to the ushadow-frontend "
+        "client at %s/admin",
+        port,
+        admin_url,
+    )
+
+
+async def register_current_environment():
+    """
+    Register the current environment's redirect URIs with Keycloak.
+
+    Spawns a background task that retries until Keycloak is ready so the
+    backend startup is never blocked by Keycloak availability.
+
+    Skip if KEYCLOAK_AUTO_REGISTER=false.
+    """
+    if os.getenv("KEYCLOAK_AUTO_REGISTER", "true").lower() == "false":
+        logger.info("[KC-STARTUP] Keycloak auto-registration disabled via KEYCLOAK_AUTO_REGISTER=false")
+        return
+
+    asyncio.create_task(_register_with_retry())

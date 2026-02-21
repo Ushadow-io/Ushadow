@@ -520,14 +520,14 @@ async def refresh_access_token(request: TokenRefreshRequest):
         401: If refresh token is invalid or expired
         503: If Keycloak is unreachable
     """
-    from keycloak import KeycloakOpenID
+    import httpx
     from keycloak.exceptions import KeycloakError
-    from src.config.keycloak_settings import get_keycloak_connection, get_keycloak_config
+    from src.config.keycloak_settings import get_keycloak_config
     import jwt
     from urllib.parse import urlparse
 
     try:
-        # Decode refresh token WITHOUT validation to extract issuer
+        # Decode refresh token WITHOUT validation to extract issuer and client
         # This is safe - we're only reading metadata, not trusting the token yet
         decoded = jwt.decode(request.refresh_token, options={"verify_signature": False})
         issuer = decoded.get("iss")
@@ -538,37 +538,39 @@ async def refresh_access_token(request: TokenRefreshRequest):
                 detail="Refresh token missing issuer claim"
             )
 
-        # Extract server_url from issuer (removes /realms/xxx suffix)
-        # e.g., "https://orange.spangled-kettle.ts.net/realms/ushadow" -> "https://orange.spangled-kettle.ts.net"
-        if "/realms/" in issuer:
-            server_url = issuer.split("/realms/")[0]
-        else:
-            server_url = issuer
-
-        # CRITICAL: Translate public URLs to internal Docker network URLs
-        # When backend is inside Docker, external URLs (localhost/Tailscale) don't work
         kc_config = get_keycloak_config()
-        issuer_parsed = urlparse(server_url)
-        public_parsed = urlparse(kc_config["public_url"])
+        internal_url = kc_config["url"]  # http://keycloak:8080 (always reachable from backend)
 
-        if issuer_parsed.hostname == public_parsed.hostname and issuer_parsed.port == public_parsed.port:
-            # Issuer matches public URL -> use internal Docker network URL
-            server_url = kc_config["url"]
-            logger.info(f"[TOKEN-REFRESH] Translated public → internal: {server_url}")
-        else:
-            logger.info(f"[TOKEN-REFRESH] Using issuer URL: {server_url}")
+        # Use azp (authorized party) from the token as client_id — this handles both
+        # web (ushadow-frontend) and mobile (ushadow-mobile) tokens correctly.
+        client_id = decoded.get("azp") or kc_config["frontend_client_id"]
 
-        # Create KeycloakOpenID client with the SAME URL that issued the token
-        # IMPORTANT: Use application realm (ushadow), NOT admin realm (master)
-        keycloak_openid = KeycloakOpenID(
-            server_url=server_url,
-            realm_name=kc_config["realm"],  # Application realm where tokens are issued
-            client_id=kc_config["frontend_client_id"],  # Public client (no secret needed)
-            client_secret_key=None,  # Explicit: public client has no secret
+        # Call the internal URL but set X-Forwarded-Host/Proto to match the token's issuer.
+        # Keycloak (KC_PROXY_HEADERS=xforwarded) uses these headers to compute its issuer,
+        # which must match the iss claim in the refresh token or it rejects with invalid_grant.
+        issuer_parsed = urlparse(issuer.split("/realms/")[0] if "/realms/" in issuer else issuer)
+        token_url = f"{internal_url}/realms/{kc_config['realm']}/protocol/openid-connect/token"
+
+        logger.info(f"[TOKEN-REFRESH] Refreshing via {token_url} forwarding as {issuer_parsed.scheme}://{issuer_parsed.netloc} (client={client_id})")
+
+        response = httpx.post(
+            token_url,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": request.refresh_token,
+                "client_id": client_id,
+            },
+            headers={
+                "X-Forwarded-Host": issuer_parsed.netloc,
+                "X-Forwarded-Proto": issuer_parsed.scheme,
+            },
+            timeout=10.0,
         )
 
-        # Refresh token using the correct issuer URL
-        tokens = keycloak_openid.refresh_token(request.refresh_token)
+        if response.status_code != 200:
+            raise KeycloakError(f"{response.status_code}: {response.text!r}")
+
+        tokens = response.json()
 
         logger.info("[TOKEN-REFRESH] ✓ Successfully refreshed access token")
 

@@ -1,13 +1,16 @@
 [package]
 name = "ushadow-launcher"
-version = "0.8.1"
+version = "0.8.11"
 description = "Ushadow Desktop Launcher"
 authors = ["Ushadow"]
 license = "MIT"
 repository = ""
 edition = "2021"
 
-# Additional binaries
+[[bin]]
+name = "ushadow-launcher"
+path = "src/main.rs"
+
 [[bin]]
 name = "kanban-cli"
 path = "src/bin/kanban-cli.rs"

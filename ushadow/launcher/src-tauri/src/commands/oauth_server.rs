@@ -8,9 +8,8 @@
 /// 5. Shut down server
 
 use std::sync::{Arc, Mutex};
-use tauri::State;
 use tokio::sync::oneshot;
-use warp::{Filter, Reply};
+use warp::Filter;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]

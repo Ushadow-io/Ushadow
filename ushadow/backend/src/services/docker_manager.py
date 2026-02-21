@@ -61,6 +61,7 @@ def _extract_port_env_vars(ports: List[Dict[str, Any]]) -> Dict[str, int]:
     return result
 
 
+
 def check_port_in_use(port: int, host: str = "0.0.0.0", exclude_container: Optional[str] = None) -> Optional[str]:
     """
     Check if a port is in use on the host.
@@ -1205,17 +1206,34 @@ class DockerManager:
                 return False, "Infrastructure compose file not found"
 
             import os
+            import yaml as _yaml
+
             subprocess_env = os.environ.copy()
             subprocess_env["COMPOSE_IGNORE_ORPHANS"] = "true"
 
+            # Parse infra compose to look up per-service profiles.
+            # Some Docker Compose v2 versions require --profile to be explicitly
+            # passed even when a service is named directly on the command line,
+            # so we always add the profiles the service declares.
+            try:
+                with open(infra_compose_path) as _f:
+                    _infra_cfg = _yaml.safe_load(_f)
+                _infra_svc_cfg = _infra_cfg.get("services", {})
+            except Exception as _e:
+                logger.warning(f"Could not parse infra compose for profiles: {_e}")
+                _infra_svc_cfg = {}
+
             for service in infra_services:
                 logger.info(f"Starting infra service: {service}")
+                svc_profiles = _infra_svc_cfg.get(service, {}).get("profiles", [])
                 cmd = [
                     "docker", "compose",
                     "-f", str(infra_compose_path),
                     "-p", "infra",
-                    "up", "-d", service
                 ]
+                for profile in svc_profiles:
+                    cmd.extend(["--profile", profile])
+                cmd.extend(["up", "-d", service])
 
                 result = subprocess.run(
                     cmd,
@@ -1318,9 +1336,7 @@ class DockerManager:
 
             logger.info(f"━━━ Starting {service_name} with {len(container_env)} environment variables ━━━")
 
-            # Build docker compose command with explicit env var passing
-            # Using --env-file /dev/null to clear default .env loading
-            # All env vars come from subprocess_env for ${VAR} substitution
+            # Build docker compose command
             cmd = ["docker", "compose", "-f", str(compose_path)]
             if project_name:
                 cmd.extend(["-p", project_name])
@@ -1338,7 +1354,7 @@ class DockerManager:
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
-                timeout=180  # Increased to 3 minutes for services that need building
+                timeout=180
             )
 
             if result.returncode == 0:
@@ -1609,7 +1625,15 @@ class DockerManager:
 
             build_config = service_def.get('build')
             if not build_config:
-                return False, f"No build configuration found for {service_name}"
+                # Build config may live in the dev override (overrides/{name}-dev.yml)
+                compose_path = Path(compose_file)
+                dev_override = compose_path.parent / "overrides" / f"{compose_path.stem.replace('-compose', '')}-dev.yml"
+                if dev_override.exists():
+                    with open(dev_override) as f:
+                        override_data = yaml.safe_load(f)
+                    build_config = (override_data.get('services') or {}).get(service_name, {}).get('build')
+                if not build_config:
+                    return False, f"No build configuration found for {service_name} (checked base and {dev_override})"
 
             # Parse build config
             if isinstance(build_config, str):

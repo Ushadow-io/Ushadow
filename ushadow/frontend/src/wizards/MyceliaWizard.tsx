@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Database, CheckCircle, Loader2, AlertCircle } from 'lucide-react'
 
-import { servicesApi, settingsApi, EnvVarInfo, EnvVarConfig, EnvVarSuggestion } from '../services/api'
+import { servicesApi, deploymentsApi, settingsApi, EnvVarInfo, EnvVarConfig, EnvVarSuggestion } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
@@ -145,12 +145,39 @@ export default function MyceliaWizard() {
       }
       // If already using security.auth_secret_key, no need to copy
 
-      // 2. Start the Mycelia service (will use the AUTH_SECRET_KEY env var)
-      await servicesApi.startService('mycelia-backend')
-      setMessage({ type: 'success', text: 'Mycelia service started. Generating credentials...' })
+      // 2. Deploy backend + worker via the deployments API
+      const targetsRes = await deploymentsApi.listTargets()
+      const leader = targetsRes.data.find((t) => t.type === 'docker' && t.is_leader)
+      if (!leader) throw new Error('No local deployment target found.')
 
-      // 3. Wait a bit for service to be ready
-      await new Promise(resolve => setTimeout(resolve, 5000))
+      await Promise.all([
+        deploymentsApi.deploy('mycelia-backend', leader.identifier),
+        deploymentsApi.deploy('mycelia-python-worker', leader.identifier),
+      ])
+      setMessage({ type: 'success', text: 'Mycelia starting... waiting for backend to be ready.' })
+
+      // 3. Poll until backend is running (worker depends on it, so check backend first)
+      const POLL_INTERVAL = 3000
+      const TIMEOUT = 180_000
+      const deadline = Date.now() + TIMEOUT
+      let isRunning = false
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL))
+        try {
+          const deps = await deploymentsApi.listDeployments({ unode_hostname: leader.identifier })
+          const backend = deps.data.find((d) => d.service_id.includes('mycelia-backend'))
+          if (backend?.status === 'running') {
+            isRunning = true
+            break
+          }
+        } catch {
+          // ignore transient errors during startup
+        }
+      }
+      if (!isRunning) {
+        throw new Error('Mycelia backend did not start within 3 minutes. Please check the logs.')
+      }
+      setMessage({ type: 'success', text: 'Mycelia backend running. Generating credentials...' })
 
       // 4. Generate token (runs inside the now-running container)
       const response = await servicesApi.generateMyceliaToken()
@@ -189,7 +216,7 @@ export default function MyceliaWizard() {
       }
     } else if (wizard.currentStep.id === 'complete') {
       // Navigate to service configs page
-      navigate('/instances')
+      navigate('/instances', { state: { refresh: true } })
     }
   }
 
