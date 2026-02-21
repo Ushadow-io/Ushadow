@@ -105,7 +105,7 @@
         }
       },
       "deb": {
-        "depends": ["docker.io", "tailscale"]
+        "depends": ["docker.io | docker-ce", "tailscale"]
       }
     },
     "security": {

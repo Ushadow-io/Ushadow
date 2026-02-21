@@ -3,6 +3,7 @@ import {
   X,
   Save,
   GitBranch,
+  GitMerge,
   Terminal,
   Folder,
   Tag,
@@ -72,6 +73,7 @@ export function TicketDetailDialog({
   const [showRecreateDialog, setShowRecreateDialog] = useState(false)
   const [recreatingTmux, setRecreatingTmux] = useState(false)
   const [openingTerminal, setOpeningTerminal] = useState(false)
+  const [mergingWorktree, setMergingWorktree] = useState(false)
 
   // Load environments on mount
   useEffect(() => {
@@ -333,9 +335,9 @@ export function TicketDetailDialog({
       setSuccessMessage('Tmux window recreated successfully')
       setTimeout(() => setSuccessMessage(null), 3000)
 
-      // Open terminal — derive canonical window name from branch_name
-      const windowName = ticket.branch_name
-        ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+      // Open terminal — derive canonical window name from env_name (workmux uses dir basename)
+      const windowName = ticket.environment_name
+        ? `ushadow-${ticket.environment_name}`
         : ticket.tmux_window_name || ''
       if (windowName) {
         await tauri.openTmuxInTerminal(
@@ -367,6 +369,42 @@ export function TicketDetailDialog({
       onUpdated()
     } catch (clearErr) {
       setError(clearErr instanceof Error ? clearErr.message : 'Failed to clear assignment')
+    }
+  }
+
+  const handleMergeAndCleanup = async () => {
+    if (!ticket.environment_name || !projectRoot) {
+      setError('Missing environment name or project root for merge')
+      return
+    }
+    const confirmed = window.confirm(
+      `Merge & cleanup worktree "${ticket.environment_name}"?\n\nThis will rebase onto main, delete the worktree, and close the tmux session. This cannot be undone.`
+    )
+    if (!confirmed) return
+
+    setError(null)
+    setMergingWorktree(true)
+
+    try {
+      const { tauri } = await import('../hooks/useTauri')
+      await tauri.mergeWorktreeWithRebase(projectRoot, ticket.environment_name, true, false)
+
+      // Mark the ticket as done and clear assignment
+      await tauri.updateTicket(
+        ticket.id,
+        undefined, undefined, 'done', undefined, undefined, undefined, undefined,
+        '', '', '', '', ''
+      )
+
+      setSuccessMessage('Worktree merged and cleaned up')
+      onUpdated()
+      setTimeout(() => {
+        onClose()
+      }, 1500)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Merge failed')
+    } finally {
+      setMergingWorktree(false)
     }
   }
 
@@ -733,10 +771,10 @@ export function TicketDetailDialog({
                       setOpeningTerminal(true)
                       try {
                         const { tauri } = await import('../hooks/useTauri')
-                        // Derive canonical window name from branch_name (ushadow- prefix matches .workmux.yaml).
-                        // Falls back to stored tmux_window_name for environments without a branch.
-                        const windowName = ticket.branch_name
-                          ? `ushadow-${ticket.branch_name.replace(/\//g, '-')}`
+                        // Window name = ushadow-{env_name}: workmux uses the worktree directory
+                        // basename as its handle, not the branch name.
+                        const windowName = ticket.environment_name
+                          ? `ushadow-${ticket.environment_name}`
                           : ticket.tmux_window_name || ''
                         await tauri.openTmuxInTerminal(
                           windowName,
@@ -777,6 +815,22 @@ export function TicketDetailDialog({
                     <Code2 className="w-4.5 h-4.5" />
                     <span>Open VSCode</span>
                   </button>
+
+                  {/* Merge & Cleanup */}
+                  {ticket.worktree_path && ticket.environment_name && (
+                    <button
+                      onClick={handleMergeAndCleanup}
+                      disabled={mergingWorktree}
+                      className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-purple-600/10 border border-purple-500/20 text-purple-400 hover:bg-purple-600/20 hover:border-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                      data-testid="ticket-detail-merge-cleanup"
+                    >
+                      {mergingWorktree
+                        ? <Loader2 className="w-4.5 h-4.5 animate-spin" />
+                        : <GitMerge className="w-4.5 h-4.5" />
+                      }
+                      <span>{mergingWorktree ? 'Merging…' : 'Merge & Cleanup'}</span>
+                    </button>
+                  )}
 
                   {/* Clear Assignment */}
                   <button
