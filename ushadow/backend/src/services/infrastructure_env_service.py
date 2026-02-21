@@ -64,13 +64,7 @@ async def resolve_infrastructure_env_vars(
     from src.config.infrastructure_registry import get_infrastructure_registry
 
     def _entry(name: str, raw_value: str, source: str, locked: bool) -> Dict[str, Any]:
-        secret = _is_secret(name)
-        if secret and raw_value:
-            visible = min(3, len(raw_value))
-            display = "•" * min(len(raw_value) - visible, 17) + raw_value[-visible:]
-        else:
-            display = raw_value
-        return {"name": name, "value": display, "source": source, "locked": locked, "is_secret": secret}
+        return {"name": name, "value": raw_value, "source": source, "locked": locked, "is_secret": _is_secret(name)}
 
     # Track each var: name → {name, value, source, locked, is_secret}
     result: Dict[str, Dict[str, Any]] = {}

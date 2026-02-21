@@ -206,3 +206,12 @@ def get_k8s_namespace() -> str:
 def is_local_deployment(hostname: str) -> bool:
     """Check if hostname is local to this environment."""
     return get_environment_info().is_local_deployment(hostname)
+
+
+def is_kubernetes() -> bool:
+    """Return True when running inside a Kubernetes pod.
+
+    Uses the standard KUBERNETES_SERVICE_HOST env var that the kubelet
+    injects into every pod automatically.
+    """
+    return bool(os.getenv("KUBERNETES_SERVICE_HOST"))

@@ -213,7 +213,13 @@ class DeploymentManager:
 
         # Build subprocess environment for docker-compose config (needs all vars for ${VAR} substitution)
         import os
-        subprocess_env = os.environ.copy()
+        # Strip K8s-injected service discovery vars (e.g. MONGODB_PORT=tcp://10.x.x.x:27017).
+        # Kubernetes auto-injects these for every service in the namespace; Docker Compose
+        # misinterprets the tcp:// prefix as a port bind address and raises "invalid IP address".
+        subprocess_env = {
+            k: v for k, v in os.environ.items()
+            if not (isinstance(v, str) and (v.startswith("tcp://") or v.startswith("udp://")))
+        }
         subprocess_env.update(container_env)
 
         # Get compose file path (DiscoveredService has compose_file as direct attribute)
@@ -904,12 +910,54 @@ class DeploymentManager:
             logger.error(f"Failed to remove orphaned deployment {deployment_id}: {e}")
             return False
 
+    async def _remove_k8s_deployment(self, deployment: Deployment) -> bool:
+        """Remove a Kubernetes deployment via KubernetesDeployPlatform."""
+        from src.services.kubernetes import get_kubernetes_manager
+        from src.services.deployment_platforms import KubernetesDeployPlatform
+        from src.utils.environment import get_env_name
+
+        cluster_id = deployment.backend_metadata.get("cluster_id")
+        namespace = deployment.backend_metadata.get("namespace", "ushadow")
+
+        try:
+            k8s_mgr = await get_kubernetes_manager()
+            clusters = await k8s_mgr.list_clusters()
+            cluster = next((c for c in clusters if c.cluster_id == cluster_id), None)
+            if not cluster:
+                logger.error(f"K8s cluster {cluster_id} not found for deployment {deployment.id}")
+                return False
+
+            target = DeployTarget(
+                id=cluster.deployment_target_id,
+                type="k8s",
+                name=cluster.name,
+                identifier=cluster.cluster_id,
+                environment=get_env_name(),
+                status=cluster.status.value,
+                namespace=namespace,
+                infrastructure=None,
+                raw_metadata=cluster.model_dump(),
+            )
+
+            platform = KubernetesDeployPlatform(k8s_mgr)
+            return await platform.remove(target, deployment)
+
+        except RuntimeError:
+            pass  # KubernetesManager not initialized
+        except Exception as e:
+            logger.error(f"Failed to remove K8s deployment {deployment.id}: {e}")
+        return False
+
     async def remove_deployment(self, deployment_id: str) -> bool:
         """Remove a deployment (stop and delete)."""
         deployment = await self.get_deployment(deployment_id)
         if not deployment:
             # Unode may no longer be registered; try a direct label-based lookup
             return await self._remove_orphaned_container(deployment_id)
+
+        # K8s deployments: route directly to KubernetesDeployPlatform
+        if deployment.backend_type == "kubernetes":
+            return await self._remove_k8s_deployment(deployment)
 
         unode_dict = await self.unodes_collection.find_one({
             "hostname": deployment.unode_hostname
@@ -1110,7 +1158,46 @@ class DeploymentManager:
             logger.debug(f"[list_deployments] Platform returned {len(deployments)} deployments for unode {unode.hostname}")
             all_deployments.extend(deployments)
 
-        logger.debug(f"[list_deployments] Checked {unode_count} unodes, returning {len(all_deployments)} total deployments")
+        logger.debug(f"[list_deployments] Checked {unode_count} unodes, found {len(all_deployments)} deployments so far")
+
+        # Also query registered K8s clusters directly (stateless — K8s is source of truth)
+        if not unode_hostname:  # Skip K8s scan when filtering by specific unode hostname
+            try:
+                from src.services.kubernetes import get_kubernetes_manager
+                from src.services.deployment_platforms import KubernetesDeployPlatform
+                from src.utils.environment import get_env_name
+
+                k8s_mgr = await get_kubernetes_manager()
+                clusters = await k8s_mgr.list_clusters()
+                k8s_platform = KubernetesDeployPlatform(k8s_mgr)
+
+                for cluster in clusters:
+                    if cluster.status.value != "connected":
+                        logger.debug(f"[list_deployments] Skipping K8s cluster {cluster.name} — status={cluster.status.value}")
+                        continue
+
+                    target = DeployTarget(
+                        id=cluster.deployment_target_id,
+                        type="k8s",
+                        name=cluster.name,
+                        identifier=cluster.cluster_id,
+                        environment=get_env_name(),
+                        status=cluster.status.value,
+                        namespace=cluster.namespace,
+                        infrastructure=None,
+                        raw_metadata=cluster.model_dump(),
+                    )
+
+                    k8s_deps = await k8s_platform.list_deployments(target, service_id=service_id)
+                    logger.debug(f"[list_deployments] K8s cluster {cluster.name}: {len(k8s_deps)} deployments")
+                    all_deployments.extend(k8s_deps)
+
+            except RuntimeError:
+                pass  # KubernetesManager not initialized
+            except Exception as e:
+                logger.error(f"[list_deployments] Failed to query K8s clusters: {e}")
+
+        logger.debug(f"[list_deployments] Total deployments: {len(all_deployments)}")
         return all_deployments
 
     async def get_deployment_logs(

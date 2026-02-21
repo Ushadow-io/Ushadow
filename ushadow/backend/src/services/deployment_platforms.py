@@ -901,6 +901,89 @@ class KubernetesDeployPlatform(DeployPlatform):
             logger.error(f"Failed to remove K8s deployment: {e}")
             return False
 
+    async def list_deployments(
+        self,
+        target: DeployTarget,
+        service_id: Optional[str] = None,
+    ) -> List[Deployment]:
+        """
+        Query Kubernetes for all ushadow-managed deployments in the cluster namespace.
+
+        Uses the app.kubernetes.io/managed-by=ushadow label selector to find
+        deployments created by ushadow, then builds Deployment objects from K8s state.
+        """
+        cluster_id = target.identifier
+        namespace = target.namespace or "ushadow"
+        deployments = []
+
+        try:
+            core_api, apps_api = self.k8s_manager._k8s_client.get_kube_client(cluster_id)
+
+            label_selector = "app.kubernetes.io/managed-by=ushadow"
+            if service_id:
+                safe_id = service_id.replace(":", "-").replace("/", "-")
+                label_selector += f",app.kubernetes.io/instance={safe_id}"
+
+            k8s_deps = apps_api.list_namespaced_deployment(
+                namespace=namespace,
+                label_selector=label_selector,
+            )
+
+            for dep in k8s_deps.items:
+                labels = dep.metadata.labels or {}
+                dep_name = dep.metadata.name
+
+                dep_service_id = labels.get("app.kubernetes.io/instance", dep_name)
+                config_id = labels.get("ushadow.config_id") or dep_service_id
+
+                ready = dep.status.ready_replicas or 0
+                total = dep.status.replicas or 0
+                if total == 0:
+                    dep_status = DeploymentStatus.STOPPED
+                elif ready > 0:
+                    dep_status = DeploymentStatus.RUNNING
+                else:
+                    dep_status = DeploymentStatus.DEPLOYING
+
+                deployed_at = dep.metadata.creation_timestamp
+
+                exposed_port = None
+                try:
+                    svc = core_api.read_namespaced_service(name=dep_name, namespace=namespace)
+                    for port in (svc.spec.ports or []):
+                        exposed_port = port.node_port or port.port
+                        break
+                except Exception:
+                    pass
+
+                image = ""
+                if dep.spec and dep.spec.template.spec.containers:
+                    image = dep.spec.template.spec.containers[0].image or ""
+
+                deployments.append(Deployment(
+                    id=dep_name,
+                    service_id=dep_service_id,
+                    config_id=config_id,
+                    unode_hostname=target.name,
+                    status=dep_status,
+                    container_id=None,
+                    container_name=dep_name,
+                    deployed_at=deployed_at,
+                    exposed_port=exposed_port,
+                    deployed_config={"image": image, "namespace": namespace},
+                    backend_type="kubernetes",
+                    backend_metadata={
+                        "cluster_id": cluster_id,
+                        "namespace": namespace,
+                        "deployment_name": dep_name,
+                    },
+                ))
+
+        except Exception as e:
+            logger.error(f"Failed to list K8s deployments for cluster {cluster_id}: {e}")
+
+        return deployments
+
     async def get_logs(
         self,
         target: DeployTarget,
