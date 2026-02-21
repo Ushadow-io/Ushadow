@@ -142,9 +142,108 @@ jobs:
             exit 1
           fi
 
+      - name: Check Apple certificate secret
+        id: check_cert
+        run: |
+          # SIGNING DISABLED — re-enable by restoring the secret check below
+          echo "has_cert=false" >> $GITHUB_OUTPUT
+          # if [ -n "$APPLE_CERTIFICATE" ]; then
+          #   echo "has_cert=true" >> $GITHUB_OUTPUT
+          # else
+          #   echo "has_cert=false" >> $GITHUB_OUTPUT
+          # fi
+        # env:
+        #   APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+
+      - name: Import Apple signing certificate
+        if: steps.check_cert.outputs.has_cert == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Verify signing identity
+        if: steps.check_cert.outputs.has_cert == 'true'
+        run: |
+          echo "=== Available codesigning identities ==="
+          security find-identity -v -p codesigning
+          echo "=== Signing identity prefix ==="
+          echo "$APPLE_SIGNING_IDENTITY" | cut -c1-10
+          echo "=== Test codesign on /usr/bin/true ==="
+          cp /usr/bin/true /tmp/test_sign_binary
+          codesign --force -s "$APPLE_SIGNING_IDENTITY" --timestamp /tmp/test_sign_binary \
+            && echo "✓ test sign succeeded" \
+            || { echo "✗ test sign failed (exit $?)"; codesign --force -v -s "$APPLE_SIGNING_IDENTITY" /tmp/test_sign_binary; }
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
+      - name: Pre-build kanban-cli universal binary
+        working-directory: ${{ env.LAUNCHER_DIR }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          # tauri_build::build() (build.rs) requires bundled/**/* to match at
+          # least one file or it aborts compilation.  The real content is
+          # populated by `npm run prebundle` inside the next step's
+          # `npm run tauri:build:macos`; here we only need a placeholder so
+          # cargo doesn't bail before it even starts compiling kanban-cli.
+          mkdir -p src-tauri/bundled
+          touch src-tauri/bundled/.buildplaceholder
+
+          # Tauri v1 only lipo's the main binary; kanban-cli must be lipo'd
+          # manually so the bundler can find it at
+          # universal-apple-darwin/release/kanban-cli.
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --target aarch64-apple-darwin --bin kanban-cli
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --target x86_64-apple-darwin --bin kanban-cli
+          mkdir -p src-tauri/target/universal-apple-darwin/release
+          lipo -create \
+            src-tauri/target/aarch64-apple-darwin/release/kanban-cli \
+            src-tauri/target/x86_64-apple-darwin/release/kanban-cli \
+            -output src-tauri/target/universal-apple-darwin/release/kanban-cli
+
+          # codesign --deep (used by Tauri v1) requires every nested binary to
+          # already be signed before it can sign the parent .app bundle.
+          # Pre-sign kanban-cli here so codesign doesn't fail with
+          # "code object is not signed at all in subcomponent".
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            codesign --force -s "$APPLE_SIGNING_IDENTITY" --timestamp \
+              src-tauri/target/universal-apple-darwin/release/kanban-cli
+            echo "✓ kanban-cli pre-signed"
+          fi
+
       - name: Build Tauri app (Universal)
         working-directory: ${{ env.LAUNCHER_DIR }}
         run: npm run tauri:build:macos
+
+      - name: Notarize and staple DMG
+        if: steps.check_cert.outputs.has_cert == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "ℹ Notarization secrets not set — skipping"
+            exit 0
+          fi
+          DMG=$(find "${{ env.LAUNCHER_DIR }}/src-tauri/target/universal-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -1)
+          echo "Notarizing: $DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --output-format json \
+            --verbose 2>&1 | tee /tmp/notarize-result.json
+          STATUS=$(python3 -c "import json,sys; d=json.load(open('/tmp/notarize-result.json')); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization status: $STATUS"
+            exit 1
+          fi
+          echo "✓ Notarized — stapling ticket to DMG"
+          xcrun stapler staple "$DMG"
 
       - name: Find and upload artifacts
         uses: actions/upload-artifact@v4

@@ -1,0 +1,102 @@
+const IS_DEV = process.env.APP_VARIANT !== 'production';
+
+module.exports = {
+  expo: {
+    name: IS_DEV ? 'ushadow (dev)' : 'ushadow',
+    slug: 'ushadow-mobile',
+    scheme: IS_DEV ? 'ushadow-dev' : 'ushadow',
+    version: '1.0.0',
+    orientation: 'portrait',
+    icon: IS_DEV ? './assets/icon-dev.png' : './assets/icon.png',
+    userInterfaceStyle: 'automatic',
+    newArchEnabled: false,
+    splash: {
+      image: './assets/splash.png',
+      resizeMode: 'contain',
+      backgroundColor: '#1a1a2e',
+    },
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: IS_DEV ? 'io.ushadow.mobile.dev' : 'io.ushadow.mobile',
+      infoPlist: {
+        NSCameraUsageDescription:
+          'Ushadow needs camera access to scan QR codes for connecting to your leader node.',
+        NSPhotoLibraryUsageDescription:
+          'Ushadow may save images shared in conversations to your photo library.',
+        NSBluetoothAlwaysUsageDescription:
+          'Ushadow uses Bluetooth to connect to and stream audio from your OMI device.',
+        NSBluetoothPeripheralUsageDescription:
+          'Ushadow uses Bluetooth to connect to and stream audio from your OMI device.',
+        NSSpeechRecognitionUsageDescription:
+          'Ushadow uses speech recognition for voice input in chat.',
+        NSMicrophoneUsageDescription:
+          'Ushadow needs microphone access for voice input.',
+        UIBackgroundModes: ['audio', 'bluetooth-central', 'fetch', 'processing'],
+        BGTaskSchedulerPermittedIdentifiers: IS_DEV
+          ? ['io.ushadow.mobile.dev.refresh', 'io.ushadow.mobile.dev.processing']
+          : ['io.ushadow.mobile.refresh', 'io.ushadow.mobile.processing'],
+        ITSAppUsesNonExemptEncryption: false,
+        NSSupportsLiveActivities: true,
+      },
+      appleTeamId: '6SJ7NH4HSZ',
+      buildNumber: '8',
+    },
+    android: {
+      adaptiveIcon: {
+        foregroundImage: './assets/adaptive-icon.png',
+        backgroundColor: '#1a1a2e',
+      },
+      package: IS_DEV ? 'io.ushadow.mobile.dev' : 'io.ushadow.mobile',
+      permissions: [
+        'android.permission.BLUETOOTH',
+        'android.permission.BLUETOOTH_ADMIN',
+        'android.permission.BLUETOOTH_SCAN',
+        'android.permission.BLUETOOTH_CONNECT',
+        'android.permission.ACCESS_FINE_LOCATION',
+        'android.permission.RECORD_AUDIO',
+        'android.permission.CAMERA',
+        'android.permission.FOREGROUND_SERVICE',
+        'android.permission.WAKE_LOCK',
+      ],
+    },
+    web: {
+      favicon: './assets/favicon.ico',
+    },
+    plugins: [
+      './plugins/withAndroidManifestFix.js',
+      './plugins/withAndroidGradleFix.js',
+      './plugins/withNowPlayingModule.js',
+      '@bacons/apple-targets',
+      'expo-router',
+      '@react-native-voice/voice',
+      ['expo-camera', { cameraPermission: 'Allow Ushadow to scan QR codes for connecting to your leader node.' }],
+      [
+        'react-native-ble-plx',
+        {
+          isBackgroundEnabled: true,
+          modes: ['central'],
+          bluetoothAlwaysPermission:
+            'Ushadow uses Bluetooth to connect to and stream audio from your OMI device.',
+        },
+      ],
+      [
+        'expo-build-properties',
+        {
+          android: {
+            usesCleartextTraffic: true,
+            enableProguardInReleaseBuilds: false,
+            enableJetifier: true,
+            newArchEnabled: false,
+          },
+        },
+      ],
+    ],
+    extra: {
+      router: {},
+      eas: {
+        projectId: '8aeabf15-29ff-47df-ab11-7c8994d9c9d4',
+      },
+    },
+    owner: 'thestumonkey',
+  },
+};

@@ -25,3 +25,4 @@ export { SettingField, type SettingFieldProps, type SettingType, type SelectOpti
 export { SettingsSection, type SettingsSectionProps } from './SettingsSection'
 export { RequiredFieldsSection } from './RequiredFieldsSection'
 export { UnifiedServiceSettings } from './UnifiedServiceSettings'
+export { NetworkTab } from './NetworkTab'

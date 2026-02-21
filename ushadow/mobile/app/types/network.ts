@@ -41,12 +41,15 @@ export interface ServiceDeployment {
  */
 export interface LeaderInfo {
   hostname: string;
+  envname?: string;
+  display_name?: string;
   tailscale_ip: string;
   capabilities: LeaderCapabilities;
   api_port: number;
   // API URLs for specific services
   ushadow_api_url: string;
   chronicle_api_url?: string;
+  keycloak_url?: string;  // Keycloak authentication URL (e.g., "http://hostname:8081")
   // WebSocket streaming URLs
   ws_pcm_url: string;
   ws_omi_url: string;
@@ -74,6 +77,8 @@ export interface DiscoveredLeader {
 export interface UNode {
   id: string;
   hostname: string;
+  envname?: string;
+  display_name?: string;
   tailscale_ip: string;
   status: 'online' | 'offline' | 'unknown';
   role: 'leader' | 'worker';

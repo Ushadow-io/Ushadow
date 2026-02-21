@@ -38,7 +38,7 @@ import {
   updateUnodeUrls,
   parseStreamUrl,
 } from './_utils/unodeStorage';
-import { getAuthToken, saveAuthToken } from './_utils/authStorage';
+import { getAuthToken, saveAuthToken, clearAuthToken } from './_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from './services/chronicleApi';
@@ -339,6 +339,67 @@ export default function UNodeDetailsPage() {
     setShowScanner(true);
   };
 
+  // Reconnect to an existing unode (fetch fresh details with Keycloak auth)
+  const handleReconnect = async (unodeId: string) => {
+    try {
+      const node = unodes.find(n => n.id === unodeId);
+      if (!node) {
+        Alert.alert('Error', 'UNode not found');
+        return;
+      }
+
+      console.log('[UNodeDetails] Reconnecting to unode:', node.hostname);
+
+      // Fetch fresh unode details from API using Keycloak auth
+      const token = await getAuthToken();
+      if (!token) {
+        Alert.alert('Not Authenticated', 'Please login with Keycloak first');
+        router.replace('/');
+        return;
+      }
+
+      const baseApiUrl = node.apiUrl.replace(/\/api\/.*$/, '');
+      const infoUrl = `${baseApiUrl}/api/unodes/${node.hostname}/info`;
+
+      console.log('[UNodeDetails] Fetching fresh details from:', infoUrl);
+
+      const response = await fetch(infoUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch unode info: ${response.status}`);
+      }
+
+      const info = await response.json();
+      console.log('[UNodeDetails] Fresh unode info:', info);
+
+      // Update saved unode with fresh connection details
+      await saveUnode({
+        id: node.id,
+        name: node.name,
+        hostname: info.hostname || node.hostname,
+        apiUrl: baseApiUrl,
+        chronicleApiUrl: info.chronicle_api_url,
+        streamUrl: info.ws_pcm_url,
+        tailscaleIp: info.tailscale_ip || node.tailscaleIp,
+      });
+
+      console.log('[UNodeDetails] ✅ Reconnected successfully');
+      await getUnodes();
+
+      Alert.alert('Success', `Reconnected to ${node.name}`);
+    } catch (error) {
+      console.error('[UNodeDetails] Reconnect failed:', error);
+      Alert.alert(
+        'Reconnect Failed',
+        error instanceof Error ? error.message : 'Could not reconnect to unode'
+      );
+    }
+  };
+
   // Handle QR scan result for rescan
   const handleQRScan = async (data: UshadowConnectionData) => {
     console.log('[UNodeDetails] QR scan successful, data:', data);
@@ -358,40 +419,50 @@ export default function UNodeDetailsPage() {
 
     // Update the existing node with new connection info
     const existingNode = unodes.find(n => n.id === rescanNodeId);
-    await saveUnode({
+
+    // Ensure apiUrl is always the base URL (remove any /api/... path)
+    const baseApiUrl = result.leader.apiUrl.replace(/\/api\/.*$/, '');
+
+    const savedUnode = await saveUnode({
       id: rescanNodeId!, // Keep same ID
       name: existingNode?.name || result.leader.hostname.split('.')[0] || 'UNode',
-      apiUrl: result.leader.apiUrl,
+      hostname: result.leader.hostname, // Save actual hostname (e.g., "Orion")
+      apiUrl: baseApiUrl,
       chronicleApiUrl: result.leader.chronicleApiUrl,
       streamUrl: result.leader.streamUrl,
-      tailscaleIp: new URL(result.leader.apiUrl).hostname,
-      authToken: data.auth_token,
+      tailscaleIp: new URL(baseApiUrl).hostname,
+      // Don't save QR code token - user will login with Keycloak
+      authToken: undefined,
     });
 
-    // Reload unodes
-    await getUnodes();
+    // Set as active unode so home screen reads the correct server on next focus
+    await setActiveUnode(savedUnode.id);
+
     setRescanNodeId(null);
 
-    if (data.auth_token) {
-      // Save token globally so other pages can use it
-      await saveAuthToken(data.auth_token);
-    }
+    // Clear any existing auth token to force Keycloak login
+    await clearAuthToken();
+    console.log('[UNodeDetails] Cleared old token, navigate to home for Keycloak login');
 
-    // Navigate back to the main page so user can start streaming
+    // Navigate back to the main page - will prompt for Keycloak login
     router.replace('/');
   };
 
   // Handle UNode found from discovery (for adding new nodes)
-  const handleUnodeFound = async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string) => {
-    const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
+  const handleUnodeFound = async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
+    // Ensure apiUrl is always the base URL (remove any /api/... path)
+    const baseApiUrl = apiUrl.replace(/\/api\/.*$/, '');
+    const name = new URL(baseApiUrl).hostname.split('.')[0] || 'UNode';
 
     const savedNode = await saveUnode({
       name,
-      apiUrl,
+      hostname, // Save actual hostname (e.g., "Orion")
+      apiUrl: baseApiUrl,
       chronicleApiUrl,
       streamUrl,
-      tailscaleIp: new URL(apiUrl).hostname,
-      authToken: token,
+      tailscaleIp: new URL(baseApiUrl).hostname,
+      // Don't save QR code token - user will login with Keycloak
+      authToken: undefined,
     });
 
     // Reload unodes and select the new node
@@ -401,13 +472,8 @@ export default function UNodeDetailsPage() {
     await setActiveUnode(savedNode.id);
     setShowDiscoveryModal(false);
 
-    // Check status of the node
-    if (token) {
-      // Save token globally so other pages can use it
-      await saveAuthToken(token);
-      setAuthToken(token);
-      checkNodeStatus(savedNode, token);
-    }
+    // Don't save QR code token - user will login with Keycloak instead
+    console.log('[UNodeDetails] UNode added, user will login with Keycloak');
   };
 
   // Get selected node
@@ -471,8 +537,9 @@ export default function UNodeDetailsPage() {
     };
 
     // Determine overall status for collapsed view
-    const isConnected = status.ushadow === 'connected' && status.chronicle === 'connected';
-    const hasError = status.ushadow === 'error' || status.chronicle === 'error';
+    // Only ushadow connection is required (chronicle is optional)
+    const isConnected = status.ushadow === 'connected';
+    const hasError = status.ushadow === 'error'; // Only fail on ushadow error
     const isChecking = status.ushadow === 'checking' || status.chronicle === 'checking';
 
     return (
@@ -532,14 +599,25 @@ export default function UNodeDetailsPage() {
             <Ionicons name="trash-outline" size={18} color="#fff" />
             <Text style={styles.removeButtonText}>Remove</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.rescanButton}
-            onPress={() => handleRescanNode(selectedNode)}
-            testID="rescan-qr-button"
-          >
-            <Ionicons name="qr-code-outline" size={18} color="#fff" />
-            <Text style={styles.rescanButtonText}>Rescan</Text>
-          </TouchableOpacity>
+          {authToken ? (
+            <TouchableOpacity
+              style={styles.reconnectButton}
+              onPress={() => handleReconnect(selectedNode.id)}
+              testID="reconnect-button"
+            >
+              <Ionicons name="sync-outline" size={18} color="#fff" />
+              <Text style={styles.reconnectButtonText}>Reconnect</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.rescanButton}
+              onPress={() => handleRescanNode(selectedNode)}
+              testID="rescan-qr-button"
+            >
+              <Ionicons name="qr-code-outline" size={18} color="#fff" />
+              <Text style={styles.rescanButtonText}>Rescan QR</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Expanded Content - Advanced details */}
@@ -741,8 +819,9 @@ export default function UNodeDetailsPage() {
   // Render other node item
   const renderOtherNode = (node: UNode) => {
     const status = statuses[node.id];
-    const isConnected = status?.ushadow === 'connected' && status?.chronicle === 'connected';
-    const hasError = status?.ushadow === 'error' || status?.chronicle === 'error';
+    // Only ushadow connection is required (chronicle is optional)
+    const isConnected = status?.ushadow === 'connected';
+    const hasError = status?.ushadow === 'error'; // Only fail on ushadow error
 
     return (
       <TouchableOpacity
@@ -1230,6 +1309,20 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   rescanButtonText: {
+    fontSize: fontSize.base,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  reconnectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.success[500],
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    gap: spacing.xs,
+  },
+  reconnectButtonText: {
     fontSize: fontSize.base,
     color: '#fff',
     fontWeight: '600',

@@ -176,10 +176,14 @@ class DeploymentManager:
 
         compose_registry = get_compose_registry()
 
+        logger.info(f"[DEBUG resolve_service_for_deployment] Called with service_id={service_id}, config_id={config_id}")
+
         # Get service from compose registry
         service = compose_registry.get_service(service_id)
         if not service:
             raise ValueError(f"Service not found: {service_id}")
+
+        logger.info(f"[DEBUG resolve_service_for_deployment] Found service: service_id={service.service_id}, service_name={service.service_name}")
 
         # Use new Settings API to resolve environment variables
         from src.config import get_settings
@@ -241,6 +245,10 @@ class DeploymentManager:
         cmd = ["docker", "compose", "-f", str(compose_path)]
         if project_name:
             cmd.extend(["-p", project_name])
+        # Activate any profiles required by this service so profiled services
+        # are included in the resolved compose output
+        for profile in (service.profiles or []):
+            cmd.extend(["--profile", profile])
         cmd.append("config")
 
         logger.info(
@@ -350,12 +358,13 @@ class DeploymentManager:
             if isinstance(networks, list):
                 network = networks[0] if networks else None
             elif isinstance(networks, dict):
-                # Dict format: {"infra-network": null} - get first key
+                # Dict format: {"ushadow-network": null} - get first key
                 network = list(networks.keys())[0] if networks else None
             else:
                 network = None
 
             # Create ResolvedServiceDefinition
+            logger.info(f"[DEBUG resolve_service_for_deployment] Creating ResolvedServiceDefinition with service_id={service_id}, service_name={service.service_name}")
             resolved = ResolvedServiceDefinition(
                 service_id=service_id,
                 name=service.service_name,
@@ -493,6 +502,7 @@ class DeploymentManager:
         unode_hostname: str,
         config_id: str,
         namespace: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """
         Deploy a service to any deployment target (Docker unode or K8s cluster).
@@ -506,6 +516,8 @@ class DeploymentManager:
             config_id: ServiceConfig ID or Template ID (required) - references config to use
             namespace: Optional K8s namespace (only used for K8s deployments)
         """
+        logger.info(f"[DEBUG deploy_service] Called with service_id={service_id}, config_id={config_id}")
+
         # Resolve service with all variables substituted
         try:
             resolved_service = await self.resolve_service_for_deployment(
@@ -513,6 +525,7 @@ class DeploymentManager:
                 deploy_target=unode_hostname,
                 config_id=config_id
             )
+            logger.info(f"[DEBUG deploy_service] Resolved service has service_id={resolved_service.service_id}, name={resolved_service.name}")
         except ValueError as e:
             logger.error(f"Failed to resolve service {service_id}: {e}")
             raise ValueError(f"Service resolution failed: {e}")
@@ -601,6 +614,19 @@ class DeploymentManager:
             else:
                 logger.info(f"No port conflicts detected for {resolved_service.service_id}")
 
+        # Start required infra services before deploying (local Docker only)
+        if unode.type != UNodeType.KUBERNETES and _is_local_deployment(unode_hostname):
+            _compose_registry = get_compose_registry()
+            _discovered = _compose_registry.get_service(service_id)
+            _infra_svcs = _discovered.infra_services if _discovered else []
+            if _infra_svcs:
+                logger.info(f"Starting infra services for {service_id}: {_infra_svcs}")
+                from src.services.docker_manager import get_docker_manager
+                _docker_mgr = get_docker_manager()
+                _ok, _msg = await _docker_mgr._start_infra_services(_infra_svcs)
+                if not _ok:
+                    raise ValueError(f"Failed to start infrastructure services: {_msg}")
+
         # Deploy using the platform
         try:
             deployment = await platform.deploy(
@@ -608,7 +634,8 @@ class DeploymentManager:
                 resolved_service=resolved_service,
                 deployment_id=deployment_id,
                 namespace=namespace,
-                config_id=config_id  # Pass config_id to platform for Deployment model validation
+                config_id=config_id,  # Pass config_id to platform for Deployment model validation
+                force_rebuild=force_rebuild
             )
 
             # For Docker deployments, optionally update tailscale serve routes (non-blocking)
@@ -853,11 +880,36 @@ class DeploymentManager:
         logger.info(f"Deployment updated with {len(overrides_only)} overrides")
         return updated_deployment
 
+    async def _remove_orphaned_container(self, deployment_id: str) -> bool:
+        """
+        Remove a container by deployment_id label when the owning unode is no
+        longer registered.  Used as a fallback from remove_deployment().
+        """
+        try:
+            import docker
+            docker_client = docker.from_env()
+            containers = docker_client.containers.list(
+                all=True,
+                filters={"label": [f"ushadow.deployment_id={deployment_id}"]}
+            )
+            if not containers:
+                return False
+            for container in containers:
+                if container.status in ("running", "restarting"):
+                    container.stop(timeout=10)
+                container.remove(force=True)
+                logger.info(f"Removed orphaned container {container.name} (deployment {deployment_id})")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove orphaned deployment {deployment_id}: {e}")
+            return False
+
     async def remove_deployment(self, deployment_id: str) -> bool:
         """Remove a deployment (stop and delete)."""
         deployment = await self.get_deployment(deployment_id)
         if not deployment:
-            return False
+            # Unode may no longer be registered; try a direct label-based lookup
+            return await self._remove_orphaned_container(deployment_id)
 
         unode_dict = await self.unodes_collection.find_one({
             "hostname": deployment.unode_hostname
@@ -898,13 +950,13 @@ class DeploymentManager:
                 # Get container
                 container = docker_client.containers.get(deployment.container_id or deployment.container_name)
 
-                # Stop if running
-                if container.status == "running":
+                # Stop if running or restarting
+                if container.status in ("running", "restarting"):
                     container.stop(timeout=10)
                     logger.info(f"Stopped local container {deployment.container_name}")
 
                 # Remove container
-                container.remove()
+                container.remove(force=True)
                 logger.info(f"Removed local container {deployment.container_name}")
 
             except Exception as e:
@@ -1020,17 +1072,17 @@ class DeploymentManager:
         if unode_hostname:
             query["hostname"] = unode_hostname
 
-        logger.info(f"[list_deployments] Querying unodes with: {query}")
+        logger.debug(f"[list_deployments] Querying unodes with: {query}")
         cursor = self.unodes_collection.find(query)
         unode_count = 0
         async for unode_dict in cursor:
             unode_count += 1
             unode = UNode(**unode_dict)
-            logger.info(f"[list_deployments] Found unode: hostname={unode.hostname}, status={unode.status.value}")
+            logger.debug(f"[list_deployments] Found unode: hostname={unode.hostname}, status={unode.status.value}")
 
             # Skip if not online
             if unode.status.value != "online":
-                logger.info(f"[list_deployments] Skipping unode {unode.hostname} - not online")
+                logger.debug(f"[list_deployments] Skipping unode {unode.hostname} - not online")
                 continue
 
             # Create deployment target
@@ -1055,10 +1107,10 @@ class DeploymentManager:
             # Query platform for deployments
             platform = get_deploy_platform(target)
             deployments = await platform.list_deployments(target, service_id=service_id)
-            logger.info(f"[list_deployments] Platform returned {len(deployments)} deployments for unode {unode.hostname}")
+            logger.debug(f"[list_deployments] Platform returned {len(deployments)} deployments for unode {unode.hostname}")
             all_deployments.extend(deployments)
 
-        logger.info(f"[list_deployments] Checked {unode_count} unodes, returning {len(all_deployments)} total deployments")
+        logger.debug(f"[list_deployments] Checked {unode_count} unodes, returning {len(all_deployments)} total deployments")
         return all_deployments
 
     async def get_deployment_logs(

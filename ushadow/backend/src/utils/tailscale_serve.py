@@ -302,6 +302,93 @@ def get_serve_status() -> Optional[str]:
     return None
 
 
+# =============================================================================
+# Funnel Routes (Public Internet Access)
+# =============================================================================
+
+def add_funnel_route(path: str, target: str) -> bool:
+    """Add a route to tailscale funnel (public internet access).
+
+    Uses the modern Tailscale Funnel CLI syntax which automatically:
+    1. Enables Funnel on the hostname (if not already enabled)
+    2. Adds/updates the specified route
+
+    Note: Enabling Funnel makes ALL routes on the hostname publicly accessible,
+    not just the route being added. This is a Tailscale Funnel behavior.
+
+    Args:
+        path: URL path (e.g., "/share", "/api", or "/" for root)
+        target: Backend target (e.g., "http://share-dmz:8000")
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Modern Tailscale Funnel syntax: use --bg for background mode
+    # Do NOT use --https=443 as it tries to create a new listener
+    if path == "/":
+        # Root route - no --set-path
+        cmd = f"tailscale funnel --bg {target}"
+    else:
+        cmd = f"tailscale funnel --bg --set-path {path} {target}"
+
+    exit_code, stdout, stderr = exec_tailscale_command(cmd)
+
+    if exit_code == 0:
+        logger.info(f"Added tailscale funnel route: {path} -> {target}")
+        return True
+    else:
+        logger.error(f"Failed to add funnel route {path}: {stderr}")
+        return False
+
+
+def remove_funnel_route(path: str) -> bool:
+    """Remove a route from tailscale funnel.
+
+    This removes the route entirely. It will no longer be accessible
+    (neither publicly via funnel nor privately via serve).
+
+    Note: Funnel remains enabled on the hostname for other routes.
+    To completely disable funnel for all routes, use: tailscale funnel reset
+
+    Args:
+        path: URL path to remove (e.g., "/share")
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Use funnel command to remove the route
+    if path == "/":
+        cmd = "tailscale funnel off"
+    else:
+        cmd = f"tailscale funnel --set-path {path} off"
+
+    exit_code, stdout, stderr = exec_tailscale_command(cmd)
+
+    if exit_code == 0:
+        logger.info(f"Removed tailscale funnel route: {path}")
+        return True
+    else:
+        logger.error(f"Failed to remove funnel route {path}: {stderr}")
+        return False
+
+
+def get_funnel_status() -> Optional[str]:
+    """Get current tailscale funnel status.
+
+    Returns:
+        Status string or None if error
+    """
+    exit_code, stdout, stderr = exec_tailscale_command("tailscale funnel status")
+
+    if exit_code == 0:
+        return stdout
+    return None
+
+
+# =============================================================================
+# Base Routes Configuration
+# =============================================================================
+
 def configure_base_routes(
     backend_container: str = None,
     frontend_container: str = None,
@@ -313,9 +400,10 @@ def configure_base_routes(
     Sets up:
     - /api/* -> backend/api (path preserved)
     - /auth/* -> backend/auth (path preserved)
-    - /ws_pcm -> chronicle-backend/ws_pcm (websocket - direct to Chronicle)
-    - /ws_omi -> chronicle-backend/ws_omi (websocket - direct to Chronicle)
     - /* -> frontend
+
+    Note: Audio WebSockets use /ws/audio/relay (part of /api/* routing)
+    The relay handles forwarding to Chronicle/Mycelia internally
 
     Note: Tailscale serve strips the path prefix, so we include it in the
     target URL to preserve the full path at the service.
@@ -361,22 +449,12 @@ def configure_base_routes(
         if not add_serve_route(route, target):
             success = False
 
-    # Configure Chronicle WebSocket routes - these go directly to Chronicle for low latency
-    # (REST APIs use /api/services/chronicle-backend/proxy/* through ushadow backend)
-    chronicle_container = f"{env_name}-chronicle-backend"
-    chronicle_port = 8000  # Chronicle's internal port
-    chronicle_base = f"http://{chronicle_container}:{chronicle_port}"
+    # NOTE: Audio WebSockets are handled by the audio relay at /ws/audio/relay
+    # The relay forwards to Chronicle/Mycelia/other services via internal Docker networking
+    # No direct Chronicle WebSocket routing needed at Layer 1
 
-    websocket_routes = ["/ws_pcm", "/ws_omi"]
-    for route in websocket_routes:
-        target = f"{chronicle_base}{route}"
-        if not add_serve_route(route, target):
-            success = False
-
-    # NOTE: Chronicle REST APIs are now accessed via generic proxy pattern:
-    # /api/services/chronicle-backend/proxy/* instead of direct /chronicle routing
-    # This provides unified auth and centralized routing through ushadow backend
-    # WebSockets go directly to Chronicle for low latency
+    # NOTE: Chronicle REST APIs are accessed via generic proxy pattern:
+    # /api/services/chronicle-backend/proxy/* - unified auth through ushadow backend
 
     # Frontend catches everything else
     if not add_serve_route("/", frontend_target):

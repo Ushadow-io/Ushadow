@@ -41,15 +41,11 @@ def _get_config_dir() -> Path:
     if config_dir:
         return Path(config_dir)
 
-    # Default: look for config dir relative to this file
+    # Default: walk up from this file looking for a config/ dir that contains service_configs.yaml
     current = Path(__file__).resolve()
     for parent in current.parents:
         candidate = parent / "config"
         if candidate.exists() and (candidate / "service_configs.yaml").exists():
-            return candidate
-        # Also check parent (for repo root)
-        candidate = parent.parent / "config"
-        if candidate.exists():
             return candidate
 
     # Fallback
@@ -280,6 +276,7 @@ class ServiceConfigManager:
                 name=config.name,
                 provides=provides,
                 description=config.description,
+                config=dict(config.config) if config.config else None,
             ))
             config_template_ids.add(config.template_id)
 
@@ -380,6 +377,7 @@ class ServiceConfigManager:
             name=data.name,
             description=data.description,
             config=ConfigValues(values=data.config),
+            deployment_labels=data.deployment_labels,
             created_at=now,
             updated_at=now,
         )
@@ -415,7 +413,10 @@ class ServiceConfigManager:
             elif config_id in self._omegaconf_configs:
                 # Config cleared, remove raw config too
                 del self._omegaconf_configs[config_id]
-
+        if data.deployment_labels is not None:
+            config.deployment_labels = data.deployment_labels
+        if data.route is not None:
+            config.route = data.route
         config.updated_at = datetime.now(timezone.utc)
 
         self._save_service_configs()

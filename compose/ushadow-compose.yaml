@@ -18,7 +18,7 @@ x-ushadow:
 services:
   ushadow-backend:
     # Use pre-built image (built from source via build-ushadow-images.sh)
-    image: ghcr.io/ushadow-io/ushadow/backend:latest
+    image: anubis:32000/ushadow-backend:latest
     # Or build from source (uncomment and comment image above)
     # build:
     #   context: ../ushadow/backend
@@ -27,43 +27,41 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Server configuration
-      - HOST=0.0.0.0
-      - PORT=8000
-      - REDIS_URL=${REDIS_URL:-redis://redis.root.svc.cluster.local:6379/0}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb.root.svc.cluster.local:27017/ushadow}
+      # ── Infrastructure URLs ───────────────────────────────────────────────
+      - REDIS_URL=${REDIS_URL}
 
-      # Config directory (mounted from ConfigMap in K8s)
-      - CONFIG_DIR=/config
+      # ── MongoDB Credentials ───────────────────────────────────────────────
+      - MONGODB_HOST=${MONGODB_HOST}
+      - MONGODB_PORT=${MONGODB_PORT}
+      - MONGODB_USER=${MONGODB_USER}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD}
+      - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE}
 
-      # CORS for frontend access
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://ushadow-frontend.ushadow.svc.cluster.local}
-
-      # Security
+      # ── Security ──────────────────────────────────────────────────────────
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 
+      # ── Keycloak URLs (both change per environment) ───────────────────────
+      # Internal URL: backend→Keycloak admin API (K8s FQDN)
+      - KC_URL=${KC_URL}
+      # Public URL: browser OAuth redirects and token issuer
+      - KC_HOSTNAME_URL=${KC_HOSTNAME_URL}
+      # ── Keycloak Credentials ──────────────────────────────────────────────
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD}
+
+      # ── K8s-specific ──────────────────────────────────────────────────────
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://ushadow-frontend.ushadow.svc.cluster.local}
+      - KUBECONFIG_DIR=/app/data/kubeconfigs
+
     volumes:
-      # Config directory - named volume creates PVC in K8s (read-write!)
-      # Docker Compose: Named volume "ushadow-config"
-      # K8s: PVC named "ushadow-config" mounted at /config
-      # Contains: config.yml, capabilities.yaml, wiring.yaml, kubeconfigs/, etc.
-      - ushadow-config:/config
-
-      # Compose templates (for service definitions)
-      # Named volume - creates PVC in K8s for persistent, read-write storage
-      # Initialize PVC with compose files on first deploy
-      - ushadow-compose:/compose
-
-      # Persistent data
+      # Persistent data (kubeconfigs stored here)
       - ushadow-data:/app/data
 
     # NOTE: In K8s, we DON'T mount docker.sock or use docker-in-docker
     # Service management is handled via kubectl to the K8s API
 
     networks:
-      - infra-network
+      - ushadow-network
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -76,7 +74,7 @@ services:
 
   ushadow-frontend:
     # Use pre-built image (built from source via build-ushadow-images.sh)
-    image: ghcr.io/ushadow-io/ushadow/frontend:latest
+    image: anubis:32000/ushadow-frontend:latest
     # Or build from source (uncomment and comment image above)
     # build:
     #   context: ../ushadow/frontend
@@ -85,12 +83,11 @@ services:
     ports:
       - "3000:80"
     environment:
-      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://ushadow-backend.ushadow.svc.cluster.local:8000}
       - VITE_ENV_NAME=${VITE_ENV_NAME:-k8s}
       # BACKEND_HOST for nginx proxy (K8s service name)
       - BACKEND_HOST=${BACKEND_HOST:-ushadow-backend}
     networks:
-      - infra-network
+      - ushadow-network
     depends_on:
       - ushadow-backend
     restart: unless-stopped
@@ -107,5 +104,8 @@ volumes:
 
 networks:
   infra-network:
-    name: infra-network
+    name: ushadow-network
+    external: true
+  ushadow-network:
+    name: ushadow-network
     external: true

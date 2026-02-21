@@ -7,6 +7,11 @@
 # Access:
 #   - Web UI: http://localhost:${MYCELIA_FRONTEND_PORT:-8080}
 #   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-8888}
+#
+# Image Strategy:
+#   - Submodule checked out: Builds from local source (./mycelia)
+#   - Submodule missing: Pulls pre-built images from ghcr.io/ushadow-io/mycelia/*
+#   - Uses pull_policy: build to prefer local builds when context exists
 
 # =============================================================================
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
@@ -47,18 +52,18 @@ x-ushadow:
 
 services:
   mycelia-frontend:
+    image: ghcr.io/ushadow-io/mycelia/frontend:latest
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./frontend/Dockerfile.${MYCELIA_FRONTEND_MODE:-dev}
-    image: mycelia-frontend:latest
+    pull_policy: missing
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-frontend
     ports:
       - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
-    volumes:
-      - ${PROJECT_ROOT:-..}/mycelia/frontend:/app
-      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/app/myceliasdk
     environment:
-      - MYCELIA_FRONTEND_MODE=dev  
+      - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:8888}
+      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
+      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
     networks:
       - ushadow-network
     healthcheck:
@@ -70,14 +75,15 @@ services:
     restart: unless-stopped
 
   mycelia-backend:
+    image: ghcr.io/ushadow-io/mycelia/backend:latest
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./backend/Dockerfile
-    image: mycelia-backend:latest
+    pull_policy: missing
+    command: deno run -A server.ts serve
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
     ports:
       - "${MYCELIA_BACKEND_PORT:-8888}:8888"
-    command: deno task dev
     environment:
       # Application URLs
       - MYCELIA_URL=${MYCELIA_URL:-http://localhost:8888}
@@ -89,9 +95,17 @@ services:
       - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
 
-      # Database Configuration - uses shared mongo from infra
+      # MongoDB Configuration (component-based)
+      - MONGODB_HOST=${MONGODB_HOST:-mongo}
+      - MONGODB_PORT=${MONGODB_PORT:-27017}
+      - MONGODB_USER=${MONGODB_USER:-}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-mycelia}
+      - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
+      # Database name (Mycelia uses DATABASE_NAME)
       - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
-      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia?directConnection=true}
+      # Constructed URI - set MONGO_URL directly or it will be built from components
+      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia}
 
       # Redis Configuration - uses shared redis from infra
       - REDIS_HOST=redis
@@ -122,9 +136,6 @@ services:
       - LOG_LEVEL=${MYCELIA_LOG_LEVEL:-INFO}
       - NODE_ENV=${NODE_ENV:-production}
       - JOB_TRIGGERS_FAST=${JOB_TRIGGERS_FAST:-true}
-    volumes:
-      - ${PROJECT_ROOT:-..}/mycelia/backend:/app
-      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/myceliasdk
     networks:
       - ushadow-network
     healthcheck:
@@ -144,16 +155,16 @@ services:
     restart: unless-stopped
 
   mycelia-python-worker:
+    image: ghcr.io/ushadow-io/mycelia/python-worker:latest
     build:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./python/Dockerfile
-    image: mycelia-python:latest
+    pull_policy: missing
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-python-worker
     environment:
       - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:8888}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
     volumes:
-      - ${PROJECT_ROOT:-..}/mycelia/python:/app
       - mycelia_worker_data:/root/.cache
     networks:
       - ushadow-network

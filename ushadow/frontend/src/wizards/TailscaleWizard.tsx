@@ -14,9 +14,10 @@ import {
   AlertTriangle,
   Trash2,
 } from 'lucide-react'
-import { tailscaleApi, TailscaleConfig, ContainerStatus, AuthUrlResponse, TailnetSettings } from '../services/api'
+import { tailscaleApi, settingsApi, TailscaleConfig, ContainerStatus, AuthUrlResponse, TailnetSettings } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
+import { useSettings } from '../contexts/SettingsContext'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
@@ -51,6 +52,7 @@ const OS_INSTALL_INFO = {
 export default function TailscaleWizard() {
   const navigate = useNavigate()
   const { updateServiceStatus, markPhaseComplete } = useWizard()
+  const { refreshSettings } = useSettings()
   const { isEnabled } = useFeatureFlags()
 
   // Check if Caddy routing is enabled via feature flag
@@ -98,6 +100,13 @@ export default function TailscaleWizard() {
     loading: boolean
   }>({ updated: false, loading: false })
 
+  // Keycloak registration status
+  const [keycloakStatus, setKeycloakStatus] = useState<{
+    registered: boolean
+    message?: string
+    checked: boolean
+  }>({ registered: false, checked: false })
+
   // Configured routes (returned from configure-serve)
   const [configuredRoutes, setConfiguredRoutes] = useState<string>('')
 
@@ -125,14 +134,60 @@ export default function TailscaleWizard() {
   }, [wizard.currentStep.id])
 
   // ============================================================================
-  // Provision Step: Check Tailnet Settings
+  // Provision Step: Check Tailnet Settings & Register with Keycloak
   // ============================================================================
 
   useEffect(() => {
     if (wizard.currentStep.id === 'provision' && containerStatus?.authenticated) {
       checkTailnetSettings()
+      registerWithKeycloak()
     }
   }, [wizard.currentStep.id, containerStatus?.authenticated])
+
+  const registerWithKeycloak = async () => {
+    // Register Keycloak callback URLs as soon as we land on provision page
+    try {
+      let hostname = config.hostname
+      if (!hostname) {
+        // Try to get hostname from container status
+        const statusResponse = await tailscaleApi.getContainerStatus()
+        if (statusResponse.data.hostname) {
+          hostname = statusResponse.data.hostname
+          setConfig(prev => ({ ...prev, hostname }))
+        } else {
+          // No hostname yet, skip Keycloak registration
+          return
+        }
+      }
+
+      // Call configure-serve to register with Keycloak and configure routes
+      // This is idempotent and safe to call multiple times
+      const finalConfig = { ...config, hostname }
+      const serveResponse = await tailscaleApi.configureServe(finalConfig)
+
+      // Capture Keycloak registration status
+      setKeycloakStatus({
+        registered: serveResponse.data.keycloak_registered ?? false,
+        message: serveResponse.data.keycloak_message,
+        checked: true
+      })
+
+      // Save configured routes for display
+      if (serveResponse.data.routes) {
+        setConfiguredRoutes(serveResponse.data.routes)
+      }
+
+      console.log('Keycloak registration completed:', serveResponse.data)
+    } catch (err) {
+      // Non-critical error - just log it
+      console.log('Keycloak registration failed (non-critical):', err)
+      setKeycloakStatus({
+        registered: false,
+        message: 'Failed to connect to backend',
+        checked: true
+      })
+    }
+  }
 
   const checkTailnetSettings = async () => {
     try {
@@ -145,12 +200,12 @@ export default function TailscaleWizard() {
   }
 
   // ============================================================================
-  // Complete Step: Update CORS origins
+  // Complete Step: Update CORS origins and Keycloak settings
   // ============================================================================
 
   useEffect(() => {
     if (wizard.currentStep.id === 'complete' && config.hostname && !corsStatus.updated && !corsStatus.loading) {
-      updateCorsOrigins()
+      updateCorsOriginsAndSettings()
     }
   }, [wizard.currentStep.id, config.hostname])
 
@@ -172,23 +227,35 @@ export default function TailscaleWizard() {
     }
   }
 
-  const updateCorsOrigins = async () => {
+  const updateCorsOriginsAndSettings = async () => {
     if (!config.hostname) return
 
     setCorsStatus({ updated: false, loading: true })
     try {
-      // Call dedicated CORS update endpoint (doesn't touch Caddy routes)
+      // Update CORS origins to allow Tailscale hostname
+      console.log('[TailscaleWizard] Updating CORS origins for:', config.hostname)
       const response = await tailscaleApi.updateCorsOrigins(config.hostname)
+      console.log('[TailscaleWizard] CORS update response:', response.data)
+
+      // Note: Keycloak URL is now determined dynamically based on origin
+      // (see auth/config.ts getKeycloakUrl()) so no settings update needed
+
+      // Success - update UI state
       setCorsStatus({
         updated: true,
-        origin: response.data.origin,
+        origin: response.data?.origin || `https://${config.hostname}`,
         loading: false
       })
+      console.log('[TailscaleWizard] CORS update complete')
     } catch (err) {
-      console.error('Failed to update CORS:', err)
+      console.error('[TailscaleWizard] Failed to update CORS and settings:', err)
+      console.error('[TailscaleWizard] Error details:', {
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined
+      })
       setCorsStatus({
         updated: false,
-        error: 'Failed to update CORS origins',
+        error: err instanceof Error ? err.message : 'Failed to update CORS origins and settings',
         loading: false
       })
     }
@@ -588,6 +655,13 @@ export default function TailscaleWizard() {
       if (serveResponse.data.routes) {
         setConfiguredRoutes(serveResponse.data.routes)
       }
+
+      // Capture Keycloak registration status
+      setKeycloakStatus({
+        registered: serveResponse.data.keycloak_registered ?? false,
+        message: serveResponse.data.keycloak_message,
+        checked: true
+      })
 
       // Step 2: Provision the certificate (HTTPS is now enabled)
       setMessage({
@@ -1194,17 +1268,71 @@ export default function TailscaleWizard() {
           )}
 
           {certificateProvisioned ? (
-            <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg flex items-start gap-3">
-              <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm text-green-800 dark:text-green-200 font-semibold">
-                  HTTPS Access Configured!
-                </p>
-                <p className="text-sm text-green-700 dark:text-green-300 mt-1">
-                  Certificates provisioned and routing configured for {config.hostname}
-                </p>
+            <>
+              <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg flex items-start gap-3">
+                <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-green-800 dark:text-green-200 font-semibold">
+                    HTTPS Access Configured!
+                  </p>
+                  <p className="text-sm text-green-700 dark:text-green-300 mt-1">
+                    Certificates provisioned and routing configured for {config.hostname}
+                  </p>
+                </div>
               </div>
-            </div>
+
+              {/* Keycloak Registration Status */}
+              {keycloakStatus.checked ? (
+                <div
+                  className={`p-4 rounded-lg flex items-start gap-3 ${
+                    keycloakStatus.registered
+                      ? 'bg-green-50 dark:bg-green-900/20'
+                      : 'bg-yellow-50 dark:bg-yellow-900/20'
+                  }`}
+                  data-testid="keycloak-status"
+                >
+                  {keycloakStatus.registered ? (
+                    <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <p
+                      className={`text-sm font-semibold ${
+                        keycloakStatus.registered
+                          ? 'text-green-800 dark:text-green-200'
+                          : 'text-yellow-800 dark:text-yellow-200'
+                      }`}
+                    >
+                      {keycloakStatus.registered ? 'Keycloak OAuth Configured' : 'Keycloak Configuration Skipped'}
+                    </p>
+                    <p
+                      className={`text-sm mt-1 ${
+                        keycloakStatus.registered
+                          ? 'text-green-700 dark:text-green-300'
+                          : 'text-yellow-700 dark:text-yellow-300'
+                      }`}
+                    >
+                      {keycloakStatus.message || (keycloakStatus.registered
+                        ? 'OAuth login enabled for Tailscale domain'
+                        : 'OAuth login may require backend restart or manual Keycloak configuration')}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 bg-gray-50 dark:bg-gray-900/20 rounded-lg flex items-start gap-3" data-testid="keycloak-loading">
+                  <Loader2 className="w-5 h-5 text-gray-600 dark:text-gray-400 flex-shrink-0 mt-0.5 animate-spin" />
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                      Checking Keycloak Configuration...
+                    </p>
+                    <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
+                      Registering OAuth callback URLs for Tailscale domain
+                    </p>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <button
               id="provision-https-button"
@@ -1219,8 +1347,13 @@ export default function TailscaleWizard() {
 
           <div className="p-4 bg-primary-50 dark:bg-primary-900/20 rounded-lg">
             <p className="text-sm text-primary-800 dark:text-primary-200">
-              This will automatically provision SSL certificates and configure routing via Tailscale Serve.
+              This will automatically:
             </p>
+            <ul className="text-sm text-primary-800 dark:text-primary-200 mt-2 space-y-1 ml-4 list-disc">
+              <li>Provision SSL certificates from Let's Encrypt</li>
+              <li>Configure routing via Tailscale Serve</li>
+              <li>Register OAuth callback URLs with Keycloak (if enabled)</li>
+            </ul>
           </div>
         </div>
       )}

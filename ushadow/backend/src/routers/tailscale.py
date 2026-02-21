@@ -23,6 +23,7 @@ from src.models.user import User
 from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
+from src.services.keycloak_startup import register_current_environment
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -31,7 +32,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tailscale", tags=["tailscale"])
 
 # Docker client for container management (legacy - being phased out)
-docker_client = docker.from_env()
+# Only initialize if Docker socket is available (not in K8s)
+try:
+    docker_client = docker.from_env()
+except (docker.errors.DockerException, FileNotFoundError):
+    logger.warning("Docker socket not available (running in K8s?) - some Tailscale features may be limited")
+    docker_client = None
 
 def get_environment_name() -> str:
     """Get the current environment name from COMPOSE_PROJECT_NAME or default to 'ushadow'"""
@@ -84,6 +90,7 @@ class DeploymentMode(BaseModel):
 class TailscaleConfig(BaseModel):
     """Complete Tailscale configuration"""
     hostname: str = Field(..., description="Tailscale hostname (e.g., machine-name.tail12345.ts.net)")
+    ip_address: Optional[str] = Field(None, description="Tailscale IP address (e.g., 100.105.225.45)")
     deployment_mode: DeploymentMode
     https_enabled: bool = True
     use_caddy_proxy: bool = Field(..., description="True for multi-env, False for single-env")
@@ -409,6 +416,7 @@ async def generate_serve_config(config: TailscaleConfig) -> Dict[str, str]:
         f"tailscale serve https / http://localhost:{frontend_port}",
         f"tailscale serve https /api http://localhost:{backend_port}",
         f"tailscale serve https /auth http://localhost:{backend_port}",
+        f"tailscale serve https /keycloak http://localhost:8081",
         "",
         "# To view current configuration:",
         "tailscale serve status",
@@ -698,26 +706,63 @@ async def get_mobile_connection_qr(
         config = get_settings()
         api_port = config.get_sync("network.backend_public_port") or 8000
 
-        # Build full API URL for leader info endpoint
-        api_url = f"https://{status.hostname}/api/unodes/leader/info"
+        # Get unode manager to fetch unode hostname and envname
+        from src.services.unode_manager import get_unode_manager
+        from src.models.unode import UNodeRole
+
+        unode_manager = await get_unode_manager()
+        leader_unode = await unode_manager.get_unode_by_role(UNodeRole.LEADER)
+
+        if not leader_unode:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not find leader unode. Please ensure unode is registered."
+            )
+
+        # Build full API URL for unode info endpoint
+        # Use unode hostname, not Tailscale hostname
+        api_url = f"https://{status.hostname}/api/unodes/{leader_unode.hostname}/info"
+
+        # Auto-register mobile redirect URIs in Keycloak
+        from src.services.keycloak_admin import get_keycloak_admin
+
+        try:
+            keycloak_admin = get_keycloak_admin()
+            mobile_uris = [
+                "ushadow://*",  # Production mobile app
+                "exp://localhost:8081/--/oauth/callback",  # Expo Go development
+                "exp://*",  # Expo Go wildcard
+            ]
+            await keycloak_admin.update_client_redirect_uris(
+                client_id="ushadow-frontend",
+                redirect_uris=mobile_uris,
+                merge=True
+            )
+            logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Keycloak")
+        except Exception as e:
+            logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
+            # Non-fatal - continue with QR generation
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match
+        from src.utils.auth_helpers import get_user_id, get_user_email
+
         auth_token = generate_jwt_for_service(
-            user_id=str(current_user.id),
-            user_email=current_user.email,
+            user_id=get_user_id(current_user),
+            user_email=get_user_email(current_user),
             audiences=["ushadow", "chronicle"]
         )
 
-        # Minimal connection data for QR code
+        # Connection data for QR code (v4 includes envname)
         connection_data = {
             "type": "ushadow-connect",
-            "v": 3,  # Version 3 includes auth token
-            "hostname": status.hostname,
-            "ip": status.ip_address,
+            "v": 4,  # Version 4 includes envname
+            "hostname": leader_unode.hostname,  # UNode hostname (e.g., "orion")
+            "ip": status.ip_address,            # Tailscale IP
             "port": api_port,
             "api_url": api_url,
             "auth_token": auth_token,
+            "envname": leader_unode.envname,    # Environment name (e.g., "orange")
         }
 
         # Generate QR code
@@ -989,23 +1034,15 @@ async def start_tailscale_container(
             # Container doesn't exist - create it using Docker SDK
             logger.info(f"Creating Tailscale container '{container_name}' for environment '{env_name}'...")
 
-            # Ensure infra network exists
+            # Ensure ushadow-network exists
             try:
-                infra_network = _get_docker_client().networks.get("infra-network")
+                ushadow_network = _get_docker_client().networks.get("ushadow-network")
+                logger.info(f"Found ushadow-network")
             except docker.errors.NotFound:
                 raise HTTPException(
                     status_code=400,
-                    detail="infra-network not found. Please start infrastructure first."
+                    detail="ushadow-network not found. Please start infrastructure first."
                 )
-
-            # Get environment's compose network if it exists
-            env_network_name = f"{env_name}_default"
-            env_network = None
-            try:
-                env_network = _get_docker_client().networks.get(env_network_name)
-                logger.info(f"Connecting to environment network: {env_network_name}")
-            except docker.errors.NotFound:
-                logger.debug(f"Environment network '{env_network_name}' not found - using infra-network only")
 
             # Create volume if it doesn't exist (per-environment)
             try:
@@ -1044,18 +1081,10 @@ async def start_tailscale_container(
                     f"{PROJECT_ROOT}/config": {"bind": "/config", "mode": "ro"},
                 },
                 cap_add=["NET_ADMIN", "NET_RAW"],
-                network="infra-network",
+                network="ushadow-network",  # All app containers and infrastructure on this network
                 restart_policy={"Name": "unless-stopped"},
                 command="sh -c 'tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & sleep infinity'"
             )
-
-            # Connect to environment's compose network for routing to backend/frontend
-            if env_network:
-                try:
-                    env_network.connect(container)
-                    logger.info(f"Connected Tailscale container to environment network '{env_network_name}'")
-                except Exception as e:
-                    logger.warning(f"Failed to connect to environment network: {e}")
 
             logger.info(f"Tailscale container '{container_name}' created with hostname '{ts_hostname}': {container.id}")
 
@@ -1352,9 +1381,20 @@ async def configure_tailscale_serve(
     Sets up base routes: /api/* and /auth/* to backend, /* to frontend,
     and WebSocket routes /ws_pcm and /ws_omi direct to Chronicle.
     Also saves the Tailscale configuration to disk.
+
+    Additionally registers the Tailscale hostname with Keycloak to enable
+    OAuth callbacks from the Tailscale domain.
     """
     try:
         manager = get_tailscale_manager()
+
+        # Get container status to capture IP address
+        container_status = manager.get_container_status()
+        if container_status.ip_address:
+            config.ip_address = container_status.ip_address
+            logger.info(f"Captured Tailscale IP: {container_status.ip_address}")
+        else:
+            logger.warning("Could not capture Tailscale IP address")
 
         # Save configuration to disk first
         config_data = config.model_dump()
@@ -1372,18 +1412,35 @@ async def configure_tailscale_serve(
         # Get the current serve status to return actual routes
         status = manager.get_serve_status() or ""
 
+        # Register Tailscale hostname with Keycloak for OAuth callbacks
+        # Reuse the same registration logic that runs on backend startup
+        keycloak_success = False
+        keycloak_message = "Keycloak registration skipped"
+        try:
+            await register_current_environment()
+            keycloak_success = True
+            keycloak_message = f"OAuth callbacks registered for {config.hostname}"
+            logger.info(f"[TAILSCALE] ✓ Registered Keycloak URIs for {config.hostname}")
+        except Exception as e:
+            logger.warning(f"[TAILSCALE] Failed to register Keycloak URIs: {e}")
+            keycloak_message = f"Failed to register OAuth callback URLs: {str(e)}"
+
         if success:
             return {
                 "status": "configured",
                 "message": "Tailscale serve configured successfully with base routes",
                 "routes": status,
-                "hostname": config.hostname
+                "hostname": config.hostname,
+                "keycloak_registered": keycloak_success,
+                "keycloak_message": keycloak_message
             }
         else:
             return {
                 "status": "partial",
                 "message": "Some routes may have failed to configure",
-                "routes": status
+                "routes": status,
+                "keycloak_registered": keycloak_success,
+                "keycloak_message": keycloak_message
             }
 
     except Exception as e:
@@ -1520,3 +1577,96 @@ async def get_serve_status(
             "routes": None,
             "error": str(e)
         }
+
+
+# ============================================================================
+# Tailscale Funnel Management
+# ============================================================================
+
+@router.get("/funnel/status")
+async def get_funnel_status(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get Tailscale Funnel status.
+
+    Funnel exposes services to the public internet (anyone can access without Tailscale).
+    Use this for sharing with people who don't have Tailscale installed.
+
+    Returns:
+        Funnel status with enabled state and public URL
+    """
+    try:
+        manager = get_tailscale_manager()
+        return manager.get_funnel_status()
+    except Exception as e:
+        logger.error(f"Error getting funnel status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/funnel/enable")
+async def enable_funnel(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Enable Tailscale Funnel for public internet access.
+
+    This makes your ushadow instance accessible to anyone on the internet
+    via HTTPS (not just Tailnet members). Use with caution and ensure
+    proper authentication is configured.
+
+    Requires:
+        - Tailscale Serve already configured
+        - Tailscale container running and authenticated
+
+    Returns:
+        Success status and public URL
+    """
+    try:
+        manager = get_tailscale_manager()
+        success, result = manager.enable_funnel()
+
+        if success:
+            return {
+                "status": "enabled",
+                "public_url": result,
+                "message": "Funnel enabled successfully. Your instance is now publicly accessible."
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error enabling funnel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/funnel/disable")
+async def disable_funnel(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Disable Tailscale Funnel.
+
+    This restricts access back to Tailnet-only (not publicly accessible).
+
+    Returns:
+        Success status
+    """
+    try:
+        manager = get_tailscale_manager()
+        success, error = manager.disable_funnel()
+
+        if success:
+            return {
+                "status": "disabled",
+                "message": "Funnel disabled successfully. Access restricted to Tailnet only."
+            }
+        else:
+            raise HTTPException(status_code=400, detail=error)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error disabling funnel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+

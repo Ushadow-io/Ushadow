@@ -21,8 +21,20 @@ export type { UseStreaming } from './useStreaming';
 export { useTailscaleDiscovery } from './useTailscaleDiscovery';
 
 // Bluetooth and connection hooks
-export { useBluetoothManager } from './useBluetoothManager';
+// NOTE: useBluetoothManager is deprecated - use useBluetooth from contexts instead
+// export { useBluetoothManager } from './useBluetoothManager';
 export { useConnectionLog } from './useConnectionLog';
+export { useSessionTracking } from './useSessionTracking';
+
+// App lifecycle hooks
+export { useAppLifecycle } from './useAppLifecycle';
+export type { UseAppLifecycle } from './useAppLifecycle';
+
+export { useLiveActivity } from './useLiveActivity';
+export type { UseLiveActivity } from './useLiveActivity';
+
+export { useConnectionHealth } from './useConnectionHealth';
+export type { UseConnectionHealth } from './useConnectionHealth';
 
 // OMI Device hooks (from chronicle)
 export { useDeviceConnection } from './useDeviceConnection';

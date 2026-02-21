@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from src.models.kubernetes import (
     KubernetesCluster,
     KubernetesClusterCreate,
+    KubernetesClusterUpdate,
     KubernetesDeploymentSpec,
     KubernetesNode,
 )
@@ -125,6 +126,33 @@ async def remove_cluster(
     return {"success": True, "message": f"Cluster {cluster_id} removed"}
 
 
+@router.patch("/{cluster_id}", response_model=KubernetesCluster)
+async def update_cluster(
+    cluster_id: str,
+    update: KubernetesClusterUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update cluster configuration settings."""
+    k8s_manager = await get_kubernetes_manager()
+
+    # Build update dict with only provided fields
+    updates = {k: v for k, v in update.model_dump().items() if v is not None}
+
+    if not updates:
+        # No fields to update
+        cluster = await k8s_manager.get_cluster(cluster_id)
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        return cluster
+
+    updated_cluster = await k8s_manager.update_cluster(cluster_id, updates)
+
+    if not updated_cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    return updated_cluster
+
+
 @router.get("/services/available")
 async def get_available_services(
     current_user: User = Depends(get_current_user)
@@ -210,6 +238,14 @@ async def scan_cluster_for_infra(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
+    # Don't allow scanning the target namespace - it contains deployed services, not infrastructure
+    if request.namespace == cluster.namespace:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot scan target namespace '{cluster.namespace}' for infrastructure. "
+                   f"This namespace contains deployed services. Scan a different namespace where infrastructure services are located."
+        )
+
     results = await k8s_manager.scan_cluster_for_infra_services(
         cluster_id,
         request.namespace
@@ -226,6 +262,41 @@ async def scan_cluster_for_infra(
         "cluster_id": cluster_id,
         "namespace": request.namespace,
         "infra_services": results
+    }
+
+
+@router.delete("/{cluster_id}/scan-infra/{namespace}")
+async def delete_infra_scan(
+    cluster_id: str,
+    namespace: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete an infrastructure scan for a specific namespace.
+
+    Useful for removing stale or incorrect scan data.
+    """
+    k8s_manager = await get_kubernetes_manager()
+
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    # Check if scan exists
+    if not cluster.infra_scans or namespace not in cluster.infra_scans:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No infrastructure scan found for namespace '{namespace}'"
+        )
+
+    # Remove the scan
+    await k8s_manager.delete_cluster_infra_scan(cluster_id, namespace)
+
+    return {
+        "cluster_id": cluster_id,
+        "namespace": namespace,
+        "message": f"Infrastructure scan for namespace '{namespace}' deleted successfully"
     }
 
 
@@ -316,8 +387,33 @@ async def deploy_service_to_cluster(
     # TODO: Track deployment status in Deployment record, not ServiceConfig
     # ServiceConfig no longer tracks deployment state (removed in architecture refactor)
 
-    # Add node selector if node_name specified
+    # Auto-populate k8s_spec with cluster ingress defaults
     k8s_spec = request.k8s_spec or KubernetesDeploymentSpec()
+
+    # Auto-configure ingress if cluster has ingress configured
+    if cluster.ingress_domain:
+        if k8s_spec.ingress is None:
+            # No ingress config from frontend - apply cluster defaults
+            if cluster.ingress_enabled_by_default:
+                # Auto-generate hostname
+                service_name = resolved_service.name.lower().replace(" ", "-").replace("_", "-")
+                hostname = f"{service_name}.{cluster.ingress_domain}"
+
+                k8s_spec.ingress = {
+                    "enabled": True,
+                    "host": hostname,
+                    "path": "/",
+                    "ingressClassName": cluster.ingress_class
+                }
+                logger.info(f"✓ Auto-configured ingress: {hostname}")
+        elif k8s_spec.ingress.get("enabled") and not k8s_spec.ingress.get("host"):
+            # Frontend enabled ingress but no hostname - auto-generate
+            service_name = resolved_service.name.lower().replace(" ", "-").replace("_", "-")
+            k8s_spec.ingress["host"] = f"{service_name}.{cluster.ingress_domain}"
+            k8s_spec.ingress["ingressClassName"] = cluster.ingress_class
+            logger.info(f"✓ Auto-generated ingress hostname: {k8s_spec.ingress['host']}")
+
+    # Add node selector if node_name specified
     if request.node_name:
         # Add node selector to ensure pod runs on specific node
         if not k8s_spec.labels:
@@ -450,4 +546,258 @@ async def get_pod_events(
         }
     except Exception as e:
         logger.error(f"Failed to get pod events: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DNS Management Endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/{cluster_id}/dns/status")
+async def get_dns_status(
+    cluster_id: str,
+    domain: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get DNS configuration status for a cluster.
+    
+    Returns CoreDNS IP, Ingress IP, cert-manager status, and current DNS mappings.
+    """
+    from src.models.kubernetes_dns import DNSConfig, DNSStatus
+    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    
+    k8s_manager = await get_kubernetes_manager()
+    
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    
+    # Create DNS manager
+    dns_manager = KubernetesDNSManager(
+        kubectl_runner=lambda cmd: k8s_manager.run_kubectl_command(cluster_id, cmd)
+    )
+    
+    # Build config if domain provided
+    config = None
+    if domain:
+        config = DNSConfig(
+            cluster_id=cluster_id,
+            domain=domain
+        )
+    
+    try:
+        status = await dns_manager.get_dns_status(cluster_id, config)
+        return status
+    except Exception as e:
+        logger.error(f"Failed to get DNS status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{cluster_id}/dns/setup")
+async def setup_dns(
+    cluster_id: str,
+    request: 'DNSSetupRequest',
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Setup DNS system on a cluster.
+    
+    This will:
+    1. Install cert-manager (optional)
+    2. Create Let's Encrypt ClusterIssuer
+    3. Create DNS ConfigMap
+    4. Patch CoreDNS configuration
+    5. Patch CoreDNS deployment
+    
+    After setup, you can add services with DNS names.
+    """
+    from src.models.kubernetes_dns import DNSConfig, DNSSetupRequest
+    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    
+    k8s_manager = await get_kubernetes_manager()
+    
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    
+    # Create DNS manager
+    dns_manager = KubernetesDNSManager(
+        kubectl_runner=lambda cmd: k8s_manager.run_kubectl_command(cluster_id, cmd)
+    )
+    
+    # Build config
+    config = DNSConfig(
+        cluster_id=cluster_id,
+        domain=request.domain,
+        acme_email=request.acme_email
+    )
+    
+    try:
+        success, error = await dns_manager.setup_dns_system(
+            cluster_id,
+            config,
+            install_cert_manager=request.install_cert_manager
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=error)
+        
+        return {
+            "success": True,
+            "message": f"DNS system setup complete for domain: {request.domain}",
+            "domain": request.domain,
+            "cert_manager_installed": request.install_cert_manager
+        }
+    except Exception as e:
+        logger.error(f"Failed to setup DNS: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{cluster_id}/dns/services")
+async def add_service_dns(
+    cluster_id: str,
+    domain: str,
+    request: 'AddServiceDNSRequest',
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Add DNS entry for a service.
+    
+    This will:
+    1. Add DNS mapping to CoreDNS
+    2. Create Ingress resource
+    3. Setup TLS certificate (if enabled)
+    
+    The service will be accessible via:
+    - FQDN: servicename.domain
+    - Short names: shortname1, shortname2, etc.
+    """
+    from src.models.kubernetes_dns import DNSConfig, DNSServiceMapping, AddServiceDNSRequest
+    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    
+    k8s_manager = await get_kubernetes_manager()
+    
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    
+    # Create DNS manager
+    dns_manager = KubernetesDNSManager(
+        kubectl_runner=lambda cmd: k8s_manager.run_kubectl_command(cluster_id, cmd)
+    )
+    
+    # Build config
+    config = DNSConfig(cluster_id=cluster_id, domain=domain)
+    
+    # Build mapping
+    mapping = DNSServiceMapping(
+        service_name=request.service_name,
+        namespace=request.namespace,
+        shortnames=request.shortnames,
+        use_ingress=request.use_ingress,
+        enable_tls=request.enable_tls,
+        service_port=request.service_port
+    )
+    
+    try:
+        success, error = await dns_manager.add_service_dns(cluster_id, config, mapping)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=error)
+        
+        fqdn = f"{request.shortnames[0]}.{domain}"
+        return {
+            "success": True,
+            "message": f"DNS added for service: {request.service_name}",
+            "service_name": request.service_name,
+            "fqdn": fqdn,
+            "shortnames": request.shortnames,
+            "tls_enabled": request.enable_tls
+        }
+    except Exception as e:
+        logger.error(f"Failed to add service DNS: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{cluster_id}/dns/services/{service_name}")
+async def remove_service_dns(
+    cluster_id: str,
+    service_name: str,
+    domain: str,
+    namespace: str = "default",
+    current_user: User = Depends(get_current_user)
+):
+    """Remove DNS entry and Ingress for a service."""
+    from src.models.kubernetes_dns import DNSConfig
+    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    
+    k8s_manager = await get_kubernetes_manager()
+    
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    
+    # Create DNS manager
+    dns_manager = KubernetesDNSManager(
+        kubectl_runner=lambda cmd: k8s_manager.run_kubectl_command(cluster_id, cmd)
+    )
+    
+    # Build config
+    config = DNSConfig(cluster_id=cluster_id, domain=domain)
+    
+    try:
+        success, error = await dns_manager.remove_service_dns(
+            cluster_id, config, service_name, namespace
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=error)
+        
+        return {
+            "success": True,
+            "message": f"DNS removed for service: {service_name}"
+        }
+    except Exception as e:
+        logger.error(f"Failed to remove service DNS: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{cluster_id}/dns/certificates")
+async def list_certificates(
+    cluster_id: str,
+    namespace: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    List TLS certificates managed by cert-manager.
+    
+    Shows certificate status, expiration, and renewal time.
+    """
+    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    
+    k8s_manager = await get_kubernetes_manager()
+    
+    # Verify cluster exists
+    cluster = await k8s_manager.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    
+    # Create DNS manager
+    dns_manager = KubernetesDNSManager(
+        kubectl_runner=lambda cmd: k8s_manager.run_kubectl_command(cluster_id, cmd)
+    )
+    
+    try:
+        certificates = await dns_manager.list_certificates(cluster_id, namespace)
+        return {
+            "certificates": certificates,
+            "total": len(certificates)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list certificates: {e}")
         raise HTTPException(status_code=500, detail=str(e))

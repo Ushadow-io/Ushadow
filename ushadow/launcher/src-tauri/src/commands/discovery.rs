@@ -9,6 +9,7 @@ use super::worktree::{list_worktrees, get_colors_for_name};
 /// Infrastructure service patterns
 const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("mongo", "MongoDB"),
+    ("postgres", "PostgreSQL"),
     ("redis", "Redis"),
     ("neo4j", "Neo4j"),
     ("qdrant", "Qdrant"),
@@ -169,7 +170,18 @@ pub async fn discover_environments_with_config(
 
                 // Check infrastructure services
                 for (pattern, display_name) in INFRA_PATTERNS {
-                    if name == *pattern || name.ends_with(&format!("-{}", pattern)) || name.ends_with(&format!("-{}-1", pattern)) {
+                    // Match various container name patterns:
+                    // - exact: "postgres"
+                    // - hyphen suffix: "infra-postgres", "infra-postgres-1"
+                    // - underscore suffix: "hash_postgres", "d5904eb91d56_postgres"
+                    // - contains: any container with the service name in it
+                    let is_match = name == *pattern
+                        || name.ends_with(&format!("-{}", pattern))
+                        || name.ends_with(&format!("-{}-1", pattern))
+                        || name.ends_with(&format!("_{}", pattern))
+                        || name.contains(&format!("_{}", pattern));
+
+                    if is_match {
                         if !found_infra.contains(*pattern) {
                             found_infra.insert(pattern.to_string());
                             infrastructure.push(InfraService {
@@ -178,6 +190,11 @@ pub async fn discover_environments_with_config(
                                 running: is_running,
                                 ports: ports.clone(),
                             });
+                        } else if is_running {
+                            // Update existing entry to running if we find a running instance
+                            if let Some(service) = infrastructure.iter_mut().find(|s| s.name == *pattern) {
+                                service.running = true;
+                            }
                         }
                     }
                 }

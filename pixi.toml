@@ -1,13 +1,66 @@
 [workspace]
 authors = ["Stu Alexander <thestumonkey@gmail.com>"]
 channels = ["conda-forge"]
-name = "purple"
+name = "ushadow"
 platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
+# Install ushadow backend in editable mode (includes dev dependencies like pytest)
+install-ushadow = "cd ushadow/backend && uv pip install -e '.[dev]' --python $CONDA_PREFIX/bin/python"
+
+# Install robot test dependencies
+install-robot = "uv pip install -r robot_tests/requirements.txt --python $CONDA_PREFIX/bin/python"
+
+# Install RF Browser Playwright browsers (run once after install-robot)
+install-rfbrowser = { cmd = "rfbrowser init", depends-on = ["install-robot"] }
+
+# Install all dependencies
+install = { depends-on = ["install-ushadow", "install-robot"] }
+
+# Run ush CLI tool
+ush = { cmd = "python ush", depends-on = ["install-ushadow"] }
+
+# Run pytest (all backend tests)
+test = { cmd = "cd ushadow/backend && pytest", depends-on = ["install-ushadow"] }
+
+# Run integration tests only
+test-integration = { cmd = "cd ushadow/backend && pytest tests/integration/ -v", depends-on = ["install-ushadow"] }
+
+# Run tests without secrets (fast, for CI)
+test-no-secrets = { cmd = "cd ushadow/backend && pytest -m 'integration and no_secrets' -v", depends-on = ["install-ushadow"] }
+
+# Run Robot Framework tests
+test-robot = { cmd = "cd robot_tests && robot api/", depends-on = ["install-robot"] }
+
+# Run Robot Framework service config tests
+test-robot-services = { cmd = "cd robot_tests && robot api/service_configs_deployment.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework conversation tests
+test-robot-conversations = { cmd = "cd robot_tests && robot api/conversations.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework memory tests
+test-robot-memories = { cmd = "cd robot_tests && robot api/memories.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework Keycloak auth tests
+test-robot-keycloak = { cmd = "cd robot_tests && robot api/keycloak_auth.robot", depends-on = ["install-robot"] }
+
+# Run Robot Framework browser-based OAuth tests (requires rfbrowser init first)
+test-robot-browser = { cmd = "cd robot_tests && robot browser/", depends-on = ["install-robot"] }
+
+# Dev mode: browser stays open on failure, Playwright Inspector pauses for DOM inspection
+test-robot-browser-dev = { cmd = "cd robot_tests && robot -v DEV_MODE:true browser/", depends-on = ["install-robot"] }
 
 [dependencies]
 python = "3.12.*"
 nodejs = ">=25.2.1,<25.3"
 rust = ">=1.92.0,<1.93"
+
+# Python packages for ush CLI tool
+rich = ">=13.0.0"
+httpx = ">=0.27.0"
+prompt_toolkit = ">=3.0.0"
+pyyaml = ">=6.0.0"
+
+# uv for fast Python package management
+uv = ">=0.5.0"

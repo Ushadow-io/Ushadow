@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { memoriesApi, type MemorySource } from '../services/api'
 import { useMemoriesStore } from '../stores/memoriesStore'
 import { useAuth } from '../contexts/AuthContext'
+import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 import type { Memory } from '../types/memory'
 
 // Fallback user ID when not authenticated
@@ -17,8 +18,26 @@ const FALLBACK_USER_ID = 'ushadow'
 
 export function useMemories(source: MemorySource = 'openmemory') {
   // Get user from auth context - use email as OpenMemory user_id
-  const { user } = useAuth()
+  const { user: legacyUser, isLoading: legacyLoading } = useAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, isLoading: kcLoading } = useKeycloakAuth()
+
+  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
+  const isLoadingUser = legacyLoading || kcLoading
+
+  // Diagnostic logging for user email resolution
+  if (!isLoadingUser && !user) {
+    console.warn('[useMemories] No user object available from either auth context, falling back to:', FALLBACK_USER_ID)
+    console.warn('[useMemories] Auth state:', {
+      keycloakAuth: { isAuthenticated: kcAuthenticated, hasUser: !!kcUser },
+      legacyAuth: { hasUser: !!legacyUser }
+    })
+  } else if (!isLoadingUser && !user.email) {
+    console.warn('[useMemories] User object exists but email is missing:', { user, userId: FALLBACK_USER_ID })
+  } else if (!isLoadingUser) {
+    console.log('[useMemories] Using user email as ID:', user.email, 'from', kcAuthenticated ? 'Keycloak' : 'legacy auth')
+  }
   const queryClient = useQueryClient()
   const {
     searchQuery,
@@ -41,6 +60,7 @@ export function useMemories(source: MemorySource = 'openmemory') {
     queryKey: queryKeys.memories,
     queryFn: () => memoriesApi.fetchMemories(userId, searchQuery, currentPage, pageSize, filters, source),
     staleTime: 30000, // 30 seconds
+    enabled: !isLoadingUser && userId !== FALLBACK_USER_ID, // Wait for auth to finish loading and have actual user
   })
 
   // Health check
@@ -120,7 +140,11 @@ export function useMemories(source: MemorySource = 'openmemory') {
  * Hook for fetching a single memory
  */
 export function useMemory(memoryId: string) {
-  const { user } = useAuth()
+  const { user: legacyUser } = useAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser } = useKeycloakAuth()
+
+  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
 
   return useQuery({
@@ -134,7 +158,11 @@ export function useMemory(memoryId: string) {
  * Hook for fetching related memories
  */
 export function useRelatedMemories(memoryId: string) {
-  const { user } = useAuth()
+  const { user: legacyUser } = useAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser } = useKeycloakAuth()
+
+  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
 
   return useQuery({

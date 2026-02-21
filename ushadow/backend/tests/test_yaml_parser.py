@@ -219,7 +219,7 @@ services:
       - mem0
 
 networks:
-  infra-network:
+  ushadow-network:
     external: true
 
 volumes:
@@ -255,7 +255,7 @@ volumes:
             assert mem0_ui.depends_on == ["mem0"]
 
             # Check networks and volumes
-            assert "infra-network" in result.networks
+            assert "ushadow-network" in result.networks
             assert "mem0_data" in result.volumes
 
         finally:

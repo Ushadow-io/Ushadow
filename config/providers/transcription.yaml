@@ -92,7 +92,10 @@ providers:
         value: ""
       server_url:
         env_var: WHISPER_SERVER_URL
-        value: "http://whisper:9000"
+        settings_path: transcription.whisper_server_url
+        default: "http://whisper:9000"
+        label: "Whisper Server URL"
+        type: url
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         settings_path: transcription.language
@@ -135,7 +138,10 @@ providers:
         value: ""
       server_url:
         env_var: PARAKEET_SERVER_URL
-        value: "http://parakeet:8001"
+        settings_path: transcription.parakeet_server_url
+        default: "http://parakeet:8001"
+        label: "Parakeet Server URL"
+        type: url
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         default: "en"

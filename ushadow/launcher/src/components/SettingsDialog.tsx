@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { X, Settings, Eye, EyeOff, Save } from 'lucide-react'
+import { X, Settings, Save, FolderGit2, Terminal, Trello } from 'lucide-react'
 import { tauri, type LauncherSettings } from '../hooks/useTauri'
+import { useAppStore } from '../store/appStore'
 
 interface SettingsDialogProps {
   isOpen: boolean
@@ -8,12 +9,18 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+  const { multiProjectMode, setMultiProjectMode, kanbanEnabled, setKanbanEnabled } = useAppStore()
   const [settings, setSettings] = useState<LauncherSettings>({
     default_admin_email: null,
     default_admin_password: null,
     default_admin_name: null,
+    coding_agent: {
+      agent_type: 'claude',
+      command: 'claude',
+      args: ['--dangerously-skip-permissions'],
+      auto_start: true,
+    },
   })
-  const [showPassword, setShowPassword] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -56,7 +63,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     }
   }
 
-  const isValid = settings.default_admin_email && settings.default_admin_password
+  const isValid = settings.coding_agent.command.trim().length > 0
 
   return (
     <div
@@ -85,66 +92,156 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           </div>
         ) : (
           <>
-            {/* Description */}
-            <p className="text-sm text-text-secondary mb-6">
-              Configure default admin credentials that will be used for all new environments.
-              These credentials are stored locally and used to auto-create users.
-            </p>
-
-            {/* Admin Name */}
-            <div className="mb-4">
-              <label className="block text-sm text-text-secondary mb-2">
-                Admin Name <span className="text-text-muted">(optional)</span>
-              </label>
-              <input
-                type="text"
-                value={settings.default_admin_name || ''}
-                onChange={(e) => setSettings({ ...settings, default_admin_name: e.target.value || null })}
-                className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-                placeholder="Administrator"
-                data-testid="settings-admin-name"
-              />
-            </div>
-
-            {/* Admin Email */}
-            <div className="mb-4">
-              <label className="block text-sm text-text-secondary mb-2">
-                Admin Email
-              </label>
-              <input
-                type="email"
-                value={settings.default_admin_email || ''}
-                onChange={(e) => setSettings({ ...settings, default_admin_email: e.target.value || null })}
-                className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-                placeholder="admin@example.com"
-                autoFocus
-                data-testid="settings-admin-email"
-              />
-            </div>
-
-            {/* Admin Password */}
+            {/* Coding Agent Section */}
             <div className="mb-6">
-              <label className="block text-sm text-text-secondary mb-2">
-                Admin Password
-              </label>
-              <div className="relative">
+              <div className="flex items-center gap-2 mb-3">
+                <Terminal className="w-4 h-4 text-primary-400" />
+                <h3 className="text-sm font-medium">Coding Agent</h3>
+              </div>
+              <p className="text-xs text-text-muted mb-4">
+                Configure which coding agent CLI to use when working on tickets
+              </p>
+
+              {/* Agent Type */}
+              <div className="mb-3">
+                <label className="block text-xs text-text-secondary mb-1">
+                  Agent Type
+                </label>
                 <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={settings.default_admin_password || ''}
-                  onChange={(e) => setSettings({ ...settings, default_admin_password: e.target.value || null })}
-                  className="w-full bg-surface-700 rounded-lg px-3 py-2 pr-10 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
-                  placeholder="••••••••"
-                  data-testid="settings-admin-password"
+                  type="text"
+                  value={settings.coding_agent.agent_type}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    coding_agent: { ...settings.coding_agent, agent_type: e.target.value }
+                  })}
+                  className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
+                  placeholder="claude"
+                  data-testid="settings-agent-type"
                 />
+              </div>
+
+              {/* Command */}
+              <div className="mb-3">
+                <label className="block text-xs text-text-secondary mb-1">
+                  Command
+                </label>
+                <input
+                  type="text"
+                  value={settings.coding_agent.command}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    coding_agent: { ...settings.coding_agent, command: e.target.value }
+                  })}
+                  className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
+                  placeholder="claude"
+                  data-testid="settings-agent-command"
+                />
+              </div>
+
+              {/* Arguments */}
+              <div className="mb-3">
+                <label className="block text-xs text-text-secondary mb-1">
+                  Arguments (comma-separated)
+                </label>
+                <input
+                  type="text"
+                  value={settings.coding_agent.args.join(', ')}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    coding_agent: {
+                      ...settings.coding_agent,
+                      args: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
+                    }
+                  })}
+                  className="w-full bg-surface-700 rounded-lg px-3 py-2 outline-none text-sm focus:ring-2 focus:ring-primary-500/50"
+                  placeholder="--dangerously-skip-permissions"
+                  data-testid="settings-agent-args"
+                />
+              </div>
+
+              {/* Auto-start Toggle */}
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-text-secondary">
+                  Auto-start agent when ticket is assigned
+                </label>
                 <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
-                  data-testid="toggle-password-visibility"
+                  onClick={() => setSettings({
+                    ...settings,
+                    coding_agent: { ...settings.coding_agent, auto_start: !settings.coding_agent.auto_start }
+                  })}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    settings.coding_agent.auto_start ? 'bg-primary-500' : 'bg-surface-600'
+                  }`}
+                  data-testid="toggle-auto-start"
                 >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  <div
+                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      settings.coding_agent.auto_start ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
                 </button>
               </div>
+            </div>
+
+            {/* Divider */}
+            <div className="my-6 border-t border-surface-700" />
+
+            {/* Multi-Project Mode Toggle */}
+            <div className="mb-6">
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <FolderGit2 className="w-4 h-4 text-primary-400" />
+                  <label className="text-sm font-medium">Multi-Project Mode</label>
+                  <span className="text-xs bg-primary-500/20 text-primary-400 px-2 py-0.5 rounded">
+                    Experimental
+                  </span>
+                </div>
+                <button
+                  onClick={() => setMultiProjectMode(!multiProjectMode)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    multiProjectMode ? 'bg-primary-500' : 'bg-surface-600'
+                  }`}
+                  data-testid="toggle-multi-project-mode"
+                >
+                  <div
+                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      multiProjectMode ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-xs text-text-muted">
+                Manage multiple codebases beyond ushadow. Each project can have its own configuration and worktrees.
+              </p>
+            </div>
+
+            {/* Kanban Board Toggle */}
+            <div className="mb-6">
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Trello className="w-4 h-4 text-primary-400" />
+                  <label className="text-sm font-medium">Kanban Board</label>
+                  <span className="text-xs bg-primary-500/20 text-primary-400 px-2 py-0.5 rounded">
+                    Experimental
+                  </span>
+                </div>
+                <button
+                  onClick={() => setKanbanEnabled(!kanbanEnabled)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    kanbanEnabled ? 'bg-primary-500' : 'bg-surface-600'
+                  }`}
+                  data-testid="toggle-kanban-enabled"
+                >
+                  <div
+                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      kanbanEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-xs text-text-muted">
+                Enable ticket tracking with a Kanban board. Create tickets, link them to worktrees, and manage development workflows.
+              </p>
             </div>
 
             {/* Success Message */}
@@ -184,7 +281,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
             {/* Helper text */}
             <p className="text-xs text-text-muted mt-4">
-              💡 These credentials will be used to automatically create an admin user when you create a new environment.
+              💡 The coding agent will be automatically started in the tmux window when you assign a ticket to an environment.
             </p>
           </>
         )}

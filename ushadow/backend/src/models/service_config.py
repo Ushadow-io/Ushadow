@@ -78,6 +78,10 @@ class Template(BaseModel):
     # Installation status (whether user has added from registry)
     installed: bool = Field(default=False, description="Whether user has added this from the registry")
 
+    # Setup status
+    needs_setup: bool = Field(default=False, description="Whether required env vars are missing")
+    wizard: Optional[str] = Field(None, description="Setup wizard ID if available (e.g., 'mycelia')")
+
 
 class ConfigValues(BaseModel):
     """Configuration values for an instance."""
@@ -131,6 +135,18 @@ class ServiceConfig(BaseModel):
     # Configuration mappings (@settings.path or literals)
     config: ConfigValues = Field(default_factory=ConfigValues, description="Config values")
 
+    # Deployment constraints (label-based targeting)
+    deployment_labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Required unode labels for deployment (e.g., {'zone': 'public', 'region': 'us-west'})"
+    )
+
+    # Funnel route configuration (for public unodes)
+    route: Optional[str] = Field(
+        None,
+        description="Tailscale Funnel route path (e.g., '/share') for public access on funnel-enabled unodes"
+    )
+
     # Timestamps (for config tracking)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -177,6 +193,10 @@ class ServiceConfigCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     config: Dict[str, Any] = Field(default_factory=dict, description="Config values")
+    deployment_labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Required unode labels for deployment"
+    )
 
 
 class ServiceConfigUpdate(BaseModel):
@@ -184,6 +204,14 @@ class ServiceConfigUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
+    deployment_labels: Optional[Dict[str, str]] = Field(
+        None,
+        description="Required unode labels for deployment"
+    )
+    route: Optional[str] = Field(
+        None,
+        description="Tailscale Funnel route path for public access"
+    )
 
 
 class WiringCreate(BaseModel):
@@ -201,3 +229,4 @@ class ServiceConfigSummary(BaseModel):
     name: str
     provides: Optional[str] = None
     description: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None

@@ -27,6 +27,8 @@ post_create:
 
 # Commands to run before merging (aborts merge if any fail)
 pre_merge:
+  # Update ticket status to done when merging
+  - "kanban-cli move-to-done \"$WM_WORKTREE_PATH\" || true"
   # Ensure tests pass before merging
   # - "make test"  # Uncomment when test suite is ready
 
@@ -53,8 +55,6 @@ panes:
   # Main pane - ready for commands or agent interaction
   - command: "echo '🚀 Ushadow Environment: $(basename $(pwd))' && echo '' && echo 'Quick commands:' && echo '  ./dev.sh    - Start in dev mode' && echo '  ./go.sh     - Start in prod mode' && echo '  make test   - Run tests' && echo '  code .      - Open in VSCode' && echo '' && $SHELL"
     focus: true
-    split: horizontal
-    size: 75%
 
 # Agent status icons (shown in tmux status bar)
 status_icons:

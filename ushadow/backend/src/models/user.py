@@ -75,6 +75,12 @@ class User(BeanieBaseUser, Document):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # Keycloak integration field
+    keycloak_id: Optional[str] = Field(
+        default=None,
+        description="Keycloak user UUID (sub claim) for federated users"
+    )
+
     class Settings:
         name = "users"  # MongoDB collection name
         email_collation = {"locale": "en", "strength": 2}  # Case-insensitive email

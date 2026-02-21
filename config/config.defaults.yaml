@@ -17,6 +17,19 @@ auth:
   admin_email: admin@example.com
   admin_name: admin
 
+# Keycloak OAuth Configuration
+# Uses KC_* environment variables (Keycloak's native format)
+keycloak:
+  url: ${oc.env:KC_URL,http://keycloak:8080}                    # Internal URL (backend→Keycloak admin API)
+  public_url: ${oc.env:KC_HOSTNAME_URL,http://localhost:8081}   # Browser/web URL (OAuth redirects, token issuer)
+  mobile_url: ${oc.env:KC_MOBILE_URL,''}                         # Mobile URL override; auto-derived from Tailscale IP if empty
+  realm: ${oc.env:KC_REALM,ushadow}
+  backend_client_id: ${oc.env:KC_BACKEND_CLIENT_ID,ushadow-backend}
+  frontend_client_id: ${oc.env:KC_FRONTEND_CLIENT_ID,ushadow-frontend}
+  admin_user: ${oc.env:KC_BOOTSTRAP_ADMIN_USERNAME,admin}
+  admin_password: ${oc.env:KC_BOOTSTRAP_ADMIN_PASSWORD,admin}
+  cli_client_id: ${oc.env:KEYCLOAK_CLI_CLIENT_ID,ushadow-cli}  # CLI tools (ush) with direct grant
+
 # Speech Detection Settings
 speech_detection:
   min_words: 5
@@ -68,6 +81,14 @@ service_preferences:
     enable_graph: false
     neo4j_password: null
 
+# Server Runtime
+server:
+  config_dir: ${oc.env:CONFIG_DIR,/config}
+
+# Tailscale
+tailscale:
+  container_name: ${oc.env:TAILSCALE_CONTAINER,tailscale}
+
 # Network Configuration
 network:
   host_ip: localhost
@@ -77,13 +98,13 @@ network:
 # Security Configuration
 security:
   # Merges CORS_ORIGINS env var with defaults (deduplicates)
-  cors_origins: ${merge_csv:${oc.env:CORS_ORIGINS,},http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000}
+  cors_origins: ${merge_csv:${oc.env:CORS_ORIGINS},http://localhost:5173,http://localhost:3000,http://localhost:1421,http://127.0.0.1:5173,http://127.0.0.1:3000}
 
 # Infrastructure Services
 infrastructure:
-  mongodb_uri: mongodb://mongo:27017
-  mongodb_database: ushadow  # Default database name (NOT a URI!)
-  redis_url: redis://redis:6379/0
+  mongodb_uri: ${oc.env:MONGODB_URI,mongodb://mongo:27017}
+  mongodb_database: ${oc.env:MONGODB_DATABASE,ushadow}  # Default database name (NOT a URI!)
+  redis_url: ${oc.env:REDIS_URL,redis://redis:6379/0}
   
   qdrant_base_url: qdrant
   qdrant_port: '6333'
@@ -94,6 +115,9 @@ infrastructure:
 
   ollama_base_url: http://ollama:11434
   openai_base_url: https://api.openai.com/v1
+  # DEPRECATED: This default is for local dev only. The backend should dynamically
+  # set this to the internal proxy URL when starting Chronicle.
+  # TODO: Remove this once backend sets MEMORY_SERVER_URL dynamically
   memory_server_url: http://mem0:8765
 
 # Miscellaneous Settings
@@ -121,4 +145,30 @@ selected_providers:
 # (adds/removes) are tracked in config.overrides.yaml → installed_services.
 default_services:
   - chronicle-backend
+  - chronicle-workers
   - mem0
+
+# Service Profiles
+# Named sets of default services selectable via: ./dev.sh <profile>
+# The chosen profile's services are written to config.overrides.yaml as
+# default_services, overriding the list above.
+service_profiles:
+  default:
+    display_name: "Chronicle + Memory"
+    services:
+      - chronicle-backend
+      - chronicle-workers
+      - mem0
+  mycelia:
+    display_name: "Mycelia + Memory"
+    services:
+      - mycelia-backend
+      - mycelia-frontend
+      - mycelia-python-worker
+      - mem0
+
+# Feed Configuration
+# Sources are managed here (config.overrides.yaml for user additions).
+# YouTube API key is stored in secrets.yaml under api_keys.youtube_api_key.
+feed:
+  sources: []

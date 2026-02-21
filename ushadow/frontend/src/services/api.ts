@@ -62,8 +62,20 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(getStorageKey('token'))
-  if (token) {
+  // Check for Keycloak token first (in localStorage)
+  const kcToken = localStorage.getItem('kc_access_token')
+
+  // Check for native login token (in localStorage - persists)
+  const nativeToken = localStorage.getItem('ushadow_access_token')
+
+  // Fallback to legacy JWT token (in localStorage)
+  const legacyToken = localStorage.getItem(getStorageKey('token'))
+
+  // Priority: Keycloak > Native > Legacy (all in localStorage now)
+  const token = kcToken || nativeToken || legacyToken
+
+  // Only set header if we have a valid token (not null, undefined, or the string "null")
+  if (token && token !== 'null' && token !== 'undefined') {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
@@ -88,6 +100,11 @@ api.interceptors.response.use(
         // Token expired or invalid on core ushadow endpoints, redirect to login
         console.warn('🔐 API: 401 Unauthorized on ushadow endpoint - clearing token and redirecting to login')
         localStorage.removeItem(getStorageKey('token'))
+        localStorage.removeItem('ushadow_access_token')
+        localStorage.removeItem('ushadow_user')
+        localStorage.removeItem('kc_access_token')
+        localStorage.removeItem('kc_refresh_token')
+        localStorage.removeItem('kc_id_token')
         window.location.href = '/login'
       }
     } else if (error.code === 'ECONNABORTED') {
@@ -124,6 +141,32 @@ export const chronicleApi = {
   getStatus: () => api.get('/api/chronicle/status'),
   getConversations: () => api.get('/api/chronicle/conversations'),
   getConversation: (id: string) => api.get(`/api/chronicle/conversations/${id}`),
+}
+
+// Mycelia integration endpoints
+// Mycelia service name constant - ensures consistency
+const MYCELIA_SERVICE = 'mycelia-backend'
+
+export const myceliaApi = {
+  // Connection info for service discovery
+  getConnectionInfo: () => api.get(`/api/services/${MYCELIA_SERVICE}/connection-info`),
+
+  getStatus: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/health`),
+
+  // Conversations
+  getConversations: (params?: { limit?: number; skip?: number; start?: string; end?: string }) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations`, { params }),
+  getConversation: (id: string) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/${id}`),
+  getConversationStats: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/stats`),
+
+  // Audio Timeline Data
+  getAudioItems: (params: { start: string; end: string; resolution?: string }) =>
+    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/audio/items`, { params }),
+
+  // Generic Resource Access (for MCP-style resources)
+  callResource: (resourceName: string, body: any) =>
+    api.post(`/api/services/${MYCELIA_SERVICE}/proxy/api/resource/${resourceName}`, body),
 }
 
 // MCP integration endpoints
@@ -382,10 +425,18 @@ export interface ServiceInfo {
 }
 
 /** Quickstart wizard response - aggregated capability requirements */
+export interface ServiceProfile {
+  name: string
+  display_name: string
+  services: string[]
+}
+
 export interface QuickstartConfig {
   required_capabilities: CapabilityRequirement[]
   services: ServiceInfo[]  // Full service info, not just names
   all_configured: boolean
+  profiles: ServiceProfile[]
+  active_profile: string | null
 }
 
 export interface PortMapping {
@@ -423,6 +474,10 @@ export const quickstartApi = {
   /** Save quickstart config - save key values (settings_path -> value) */
   saveConfig: (keyValues: Record<string, string>) =>
     api.post<{ success: boolean; saved: number; message: string }>('/api/wizard/quickstart', keyValues),
+
+  /** Switch to a named service profile (updates default_services in overrides) */
+  selectProfile: (profile: string) =>
+    api.post<{ profile: string; services: string[] }>('/api/wizard/quickstart/profile', { profile }),
 }
 
 // Docker daemon status (minimal - only checks if Docker is available)
@@ -502,6 +557,16 @@ export const clusterApi = {
     registry: string
     image: string
   }>('/api/unodes/versions'),
+  // Create public unode
+  createPublicUNode: (data: { tailscale_auth_key: string; hostname?: string; labels?: Record<string, string> }) =>
+    api.post<{
+      success: boolean
+      message: string
+      hostname: string
+      join_token?: string
+      public_url?: string
+      compose_project?: string
+    }>('/api/unodes/create-public', data),
   // Leader info for mobile app / cluster display
   getLeaderInfo: () => api.get<{
     hostname: string
@@ -558,6 +623,43 @@ export interface KubernetesCluster {
   labels: Record<string, string>
   infra_scans?: Record<string, any>
   deployment_target_id?: string  // Unified deployment target ID: {name}.k8s.{environment}
+
+  // Ingress configuration
+  ingress_domain?: string
+  ingress_class?: string
+  ingress_enabled_by_default?: boolean
+  tailscale_magicdns_enabled?: boolean
+}
+
+// DNS Management types
+export interface DNSMapping {
+  ip: string
+  fqdn: string
+  shortnames: string[]
+  has_tls: boolean
+  cert_ready: boolean
+}
+
+export interface DNSStatus {
+  configured: boolean
+  domain?: string
+  coredns_ip?: string
+  ingress_ip?: string
+  cert_manager_installed: boolean
+  mappings: DNSMapping[]
+  total_services: number
+}
+
+export interface CertificateStatus {
+  name: string
+  namespace: string
+  ready: boolean
+  secret_name: string
+  issuer_name: string
+  dns_names: string[]
+  not_before?: string
+  not_after?: string
+  renewal_time?: string
 }
 
 export const kubernetesApi = {
@@ -569,6 +671,17 @@ export const kubernetesApi = {
     api.get<KubernetesCluster>(`/api/kubernetes/${clusterId}`),
   removeCluster: (clusterId: string) =>
     api.delete(`/api/kubernetes/${clusterId}`),
+  updateCluster: (clusterId: string, updates: {
+    name?: string
+    namespace?: string
+    infra_namespace?: string
+    labels?: Record<string, string>
+    ingress_domain?: string
+    ingress_class?: string
+    ingress_enabled_by_default?: boolean
+    tailscale_magicdns_enabled?: boolean
+  }) =>
+    api.patch<KubernetesCluster>(`/api/kubernetes/${clusterId}`, updates),
 
   // Service management
   getAvailableServices: () =>
@@ -581,6 +694,10 @@ export const kubernetesApi = {
     api.post<{ cluster_id: string; namespace: string; infra_services: Record<string, any> }>(
       `/api/kubernetes/${clusterId}/scan-infra`,
       { namespace }
+    ),
+  deleteInfraScan: (clusterId: string, namespace: string) =>
+    api.delete<{ cluster_id: string; namespace: string; message: string }>(
+      `/api/kubernetes/${clusterId}/scan-infra/${namespace}`
     ),
   createEnvmap: (clusterId: string, data: { service_name: string; namespace?: string; env_vars: Record<string, string> }) =>
     api.post<{ success: boolean; configmap: string | null; secret: string | null; namespace: string }>(
@@ -605,6 +722,28 @@ export const kubernetesApi = {
   getPodEvents: (clusterId: string, podName: string, namespace: string = 'ushadow') =>
     api.get<{ pod_name: string; namespace: string; events: Array<{ type: string; reason: string; message: string; count: number; first_timestamp: string | null; last_timestamp: string | null }> }>(
       `/api/kubernetes/${clusterId}/pods/${podName}/events?namespace=${namespace}`
+    ),
+
+  // DNS Management
+  getDnsStatus: (clusterId: string, domain?: string) =>
+    api.get<DNSStatus>(`/api/kubernetes/${clusterId}/dns/status${domain ? `?domain=${domain}` : ''}`),
+  setupDns: (clusterId: string, data: { domain: string; acme_email?: string; install_cert_manager?: boolean }) =>
+    api.post<{ success: boolean; message: string; domain: string; cert_manager_installed: boolean }>(
+      `/api/kubernetes/${clusterId}/dns/setup`,
+      data
+    ),
+  addServiceDns: (clusterId: string, domain: string, data: { service_name: string; namespace?: string; shortnames: string[]; use_ingress?: boolean; enable_tls?: boolean; service_port?: number }) =>
+    api.post<{ success: boolean; message: string; service_name: string; fqdn: string; shortnames: string[]; tls_enabled: boolean }>(
+      `/api/kubernetes/${clusterId}/dns/services?domain=${domain}`,
+      data
+    ),
+  removeServiceDns: (clusterId: string, serviceName: string, domain: string, namespace: string = 'default') =>
+    api.delete<{ success: boolean; message: string }>(
+      `/api/kubernetes/${clusterId}/dns/services/${serviceName}?domain=${domain}&namespace=${namespace}`
+    ),
+  listCertificates: (clusterId: string, namespace?: string) =>
+    api.get<{ certificates: CertificateStatus[]; total: number }>(
+      `/api/kubernetes/${clusterId}/dns/certificates${namespace ? `?namespace=${namespace}` : ''}`
     ),
 }
 
@@ -647,6 +786,8 @@ export interface Deployment {
   deployed_config?: Record<string, any>
   access_url?: string
   exposed_port?: number
+  public_url?: string  // Public URL via Tailscale Funnel
+  metadata?: Record<string, any>  // Deployment metadata
 }
 
 export interface DeployTarget {
@@ -687,8 +828,11 @@ export const deploymentsApi = {
   deleteService: (serviceId: string) => api.delete(`/api/deployments/services/${serviceId}`),
 
   // Deployments
-  deploy: (serviceId: string, unodeHostname: string, configId?: string) =>
-    api.post<Deployment>('/api/deployments/deploy', { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId }),
+  deploy: (serviceId: string, unodeHostname: string, configId?: string, forceRebuild?: boolean) =>
+    api.post<Deployment>('/api/deployments/deploy',
+      { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId, force_rebuild: forceRebuild },
+      { timeout: 600000 }  // 10 minutes for builds
+    ),
   listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
@@ -703,6 +847,19 @@ export const deploymentsApi = {
   // Exposed URLs for service discovery
   getExposedUrls: (params?: { type?: string; name?: string }) =>
     api.get<ExposedUrl[]>('/api/deployments/exposed-urls', { params }),
+
+  // Funnel route management (public access)
+  configureFunnelRoute: (deploymentId: string, route: string, saveToConfig?: boolean) =>
+    api.patch<FunnelRouteResponse>(`/api/deployments/${deploymentId}/funnel`, {
+      route,
+      save_to_config: saveToConfig ?? false,
+    }),
+  removeFunnelRoute: (deploymentId: string, saveToConfig?: boolean) =>
+    api.delete<FunnelRouteResponse>(`/api/deployments/${deploymentId}/funnel`, {
+      params: { save_to_config: saveToConfig ?? false },
+    }),
+  getFunnelConfiguration: (deploymentId: string) =>
+    api.get<FunnelConfiguration>(`/api/deployments/${deploymentId}/funnel`),
 }
 
 // Exposed URL types (for service discovery)
@@ -714,6 +871,27 @@ export interface ExposedUrl {
   name: string  // e.g., "audio_intake"
   metadata: Record<string, any>
   status: string  // e.g., "running"
+}
+
+// Funnel route management types
+export interface FunnelRouteResponse {
+  success: boolean
+  deployment_id: string
+  route?: string
+  route_removed?: string
+  public_url?: string
+  previous_route?: string
+  saved_to_config: boolean
+  note?: string
+}
+
+export interface FunnelConfiguration {
+  deployment_id: string
+  service: string
+  unode: string
+  funnel_enabled: boolean
+  route?: string
+  public_url?: string
 }
 
 // Tailscale Setup Wizard types
@@ -1242,6 +1420,7 @@ export interface ServiceConfigSummary {
   provides?: string
   deployment_target?: string
   access_url?: string
+  config?: Record<string, any>
 }
 
 /** Wiring connection between instances */
@@ -1821,6 +2000,39 @@ export const audioApi = {
     api.get('/api/providers/audio_consumer/available'),
 }
 
+// =============================================================================
+// Unified Memories API - Cross-source memory retrieval
+// =============================================================================
+
+export interface ConversationMemory {
+  id: string
+  content: string
+  created_at: string
+  metadata: Record<string, any>
+  source: 'openmemory' | 'mycelia' | 'chronicle'
+  score?: number
+}
+
+export interface ConversationMemoriesResponse {
+  conversation_id: string
+  conversation_source: 'chronicle' | 'mycelia'
+  memories: ConversationMemory[]
+  count: number
+  sources_queried: string[]
+}
+
+export const unifiedMemoriesApi = {
+  /** Get all memories for a conversation across all sources (OpenMemory + native backend) */
+  getConversationMemories: (conversationId: string, source: 'chronicle' | 'mycelia') =>
+    api.get<ConversationMemoriesResponse>(`/api/memories/by-conversation/${conversationId}`, {
+      params: { conversation_source: source }
+    }),
+
+  /** Get a single memory by ID from any memory source */
+  getMemoryById: (memoryId: string) =>
+    api.get<ConversationMemory>(`/api/memories/${memoryId}`),
+}
+
 export const githubImportApi = {
   /** Scan a GitHub repository for docker-compose files */
   scan: (github_url: string, branch?: string, compose_path?: string) =>
@@ -1888,5 +2100,44 @@ export const githubImportApi = {
       branch,
       tag,
       compose_path
+    }),
+}
+
+// Dashboard API types
+export enum ActivityType {
+  CONVERSATION = 'conversation',
+  MEMORY = 'memory',
+}
+
+export interface ActivityEvent {
+  id: string
+  type: ActivityType
+  title: string
+  description?: string
+  timestamp: string
+  metadata: Record<string, any>
+  source?: string
+}
+
+export interface DashboardStats {
+  conversation_count: number
+  memory_count: number
+}
+
+export interface DashboardData {
+  stats: DashboardStats
+  recent_conversations: ActivityEvent[]
+  recent_memories: ActivityEvent[]
+  last_updated: string
+}
+
+// Dashboard API endpoints
+export const dashboardApi = {
+  getDashboardData: (conversationLimit: number = 10, memoryLimit: number = 10) =>
+    api.get<DashboardData>('/api/dashboard', {
+      params: {
+        conversation_limit: conversationLimit,
+        memory_limit: memoryLimit,
+      },
     }),
 }

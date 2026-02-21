@@ -1,0 +1,13 @@
+# Fastlane Appfile
+# Values sourced from eas.json to stay in sync
+
+require 'json'
+
+# Read credentials directly from eas.json
+eas_config = JSON.parse(File.read(File.join(File.dirname(__FILE__), '..', 'eas.json')))
+eas_submit  = eas_config.dig('submit', 'production', 'ios') || {}
+
+app_identifier("io.ushadow.mobile")
+apple_id(ENV['FASTLANE_APPLE_ID'] || eas_submit['appleId'] || '')
+team_id(eas_submit['appleTeamId'] || '6SJ7NH4HSZ')
+itc_team_id(eas_submit['appleTeamId'] || '6SJ7NH4HSZ')

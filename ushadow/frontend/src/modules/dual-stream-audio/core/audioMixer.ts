@@ -21,12 +21,14 @@ export class AudioStreamMixer {
   private streams: Map<string, MixerStream>
   private merger: ChannelMergerNode | null
   private destination: MediaStreamAudioDestinationNode | null
+  private mixedAnalyser: AnalyserNode | null
 
   constructor(sampleRate: number = 16000) {
     this.audioContext = new AudioContext({ sampleRate })
     this.streams = new Map()
     this.merger = null
     this.destination = null
+    this.mixedAnalyser = null
   }
 
   /**
@@ -41,11 +43,15 @@ export class AudioStreamMixer {
     // Create merger node (supports up to 6 inputs by default)
     this.merger = this.audioContext.createChannelMerger(2)
 
+    // Create analyser for mixed output (for visualization)
+    this.mixedAnalyser = createAnalyser(this.audioContext, 256)
+
     // Create destination for mixed output
     this.destination = this.audioContext.createMediaStreamDestination()
 
-    // Connect merger to destination
-    this.merger.connect(this.destination)
+    // Connect: merger → mixedAnalyser → destination
+    this.merger.connect(this.mixedAnalyser)
+    this.mixedAnalyser.connect(this.destination)
   }
 
   /**
@@ -165,6 +171,13 @@ export class AudioStreamMixer {
   }
 
   /**
+   * Get analyser for the mixed output (for visualization)
+   */
+  getMixedAnalyser(): AnalyserNode | null {
+    return this.mixedAnalyser
+  }
+
+  /**
    * Get the mixed output stream
    */
   getMixedStream(): MediaStream | null {
@@ -222,15 +235,17 @@ export class AudioStreamMixer {
       this.removeStream(streamId)
     }
 
-    // Disconnect merger and destination
+    // Disconnect merger, analyser, and destination
     try {
       this.merger?.disconnect()
+      this.mixedAnalyser?.disconnect()
       this.destination?.disconnect()
     } catch (error) {
       console.warn('Error disconnecting mixer nodes:', error)
     }
 
     this.merger = null
+    this.mixedAnalyser = null
     this.destination = null
 
     // Close audio context

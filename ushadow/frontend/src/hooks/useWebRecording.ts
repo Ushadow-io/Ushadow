@@ -301,8 +301,12 @@ export const useWebRecording = (): WebRecordingReturn => {
         connectionAttempts: prev.connectionAttempts + 1
       }))
 
-      // Chronicle uses unified auth with ushadow - same token works for both
-      const token = localStorage.getItem(getStorageKey('token'))
+      // Get auth token - prefer Keycloak token, fallback to legacy token
+      // This matches the pattern used in api.ts request interceptor
+      const kcToken = localStorage.getItem('kc_access_token')
+      const legacyToken = localStorage.getItem(getStorageKey('token'))
+      const token = kcToken || legacyToken
+
       if (!token) {
         throw new Error('No authentication token found - please log in to ushadow')
       }
@@ -311,25 +315,101 @@ export const useWebRecording = (): WebRecordingReturn => {
         // ===== DUAL-STREAM MODE =====
         console.log('Starting dual-stream recording')
 
-        // Get Chronicle direct URL for WebSocket
-        const backendUrl = await getChronicleDirectUrl()
+        let displayStream: MediaStream | null = null
+        try {
+          // IMPORTANT: Request display media FIRST while still in user gesture context
+          // getDisplayMedia() must be called synchronously from a user gesture
+          // Doing ANY await before this call will cause the browser to block the picker
+          setLegacyStep('display')
+          console.log('🖥️  Step 1: Requesting display media (MUST be first for user gesture)')
+          displayStream = await navigator.mediaDevices.getDisplayMedia({
+            audio: {
+              sampleRate: 16000,
+              channelCount: 1,
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false
+            },
+            video: true // Required for picker - will be stopped immediately
+          })
 
-        // Create and connect adapter
-        const adapter = new ChronicleWebSocketAdapter({
-          backendUrl,
-          token,
-          deviceName: 'ushadow-dual-stream',
-          mode: 'dual-stream'
-        })
+          // IMPORTANT: Don't stop/remove video tracks - this can end the audio track too!
+          // Instead, keep the video track running but we won't use it
+          // The browser requires video to be requested for getDisplayMedia to work properly
+          const videoTracks = displayStream.getVideoTracks()
+          console.log('🎬 Keeping', videoTracks.length, 'video tracks running (required for audio)')
 
-        await adapter.connect()
-        adapterRef.current = adapter
+          // Verify we got audio
+          const audioTracks = displayStream.getAudioTracks()
+          console.log('🔊 Display stream audio tracks:', audioTracks.length)
+          if (audioTracks.length > 0) {
+            console.log('🔊 Audio track details:', {
+              label: audioTracks[0].label,
+              enabled: audioTracks[0].enabled,
+              muted: audioTracks[0].muted,
+              readyState: audioTracks[0].readyState,
+              settings: audioTracks[0].getSettings()
+            })
+          }
 
-        // Send audio-start
-        await adapter.sendAudioStart('dual-stream')
+          if (audioTracks.length === 0) {
+            displayStream.getTracks().forEach(t => t.stop())
+            throw new Error('No audio track found. When selecting a tab/window, make sure to CHECK the "Share tab audio" or "Share system audio" checkbox at the bottom of the picker!')
+          }
 
-        // Start dual-stream recording
-        await dualStream.startRecording('dual-stream')
+          // Now that we have display permission, do other async operations
+          // Use selected destinations from state (like streaming mode)
+          const destinations: ExposedUrl[] = availableDestinations.filter(d =>
+            selectedDestinationIds.includes(d.instance_id)
+          )
+
+          if (destinations.length === 0) {
+            displayStream.getTracks().forEach(t => t.stop())
+            throw new Error('No audio destinations selected. Please select at least one destination to record.')
+          }
+
+          console.log('Using selected audio destinations:', destinations.map(d => d.instance_name))
+
+          // Build relay WebSocket URL (use relay instead of direct connection)
+          const relayDestinations = destinations.map(dest => ({
+            name: dest.instance_name,
+            url: getAudioPath(dest.url)
+          }))
+
+          const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+          const relayBaseUrl = BACKEND_URL ? BACKEND_URL.replace(/^https?:/, wsProtocol) : `${wsProtocol}//${window.location.host}`
+          const destinationsParam = encodeURIComponent(JSON.stringify(relayDestinations))
+          const tokenParam = encodeURIComponent(token)
+          const backendUrl = `${relayBaseUrl}/ws/audio/relay?destinations=${destinationsParam}&token=${tokenParam}`
+
+          console.log('Dual-stream connecting via relay:', backendUrl.replace(token, 'REDACTED'))
+
+          // Create and connect adapter (will use relay instead of direct connection)
+          const adapter = new ChronicleWebSocketAdapter({
+            backendUrl,
+            token,
+            deviceName: 'ushadow-dual-stream',
+            mode: 'dual-stream'
+          })
+
+          await adapter.connect()
+          adapterRef.current = adapter
+
+          // Send audio-start
+          await adapter.sendAudioStart('dual-stream')
+
+          // Start dual-stream recording (will request microphone internally)
+          console.log('🎙️  Step 3: Starting dual-stream recording (will request microphone)...')
+          await dualStream.startRecording('dual-stream', displayStream)
+          console.log('✅ Dual-stream recording started successfully')
+        } catch (error) {
+          // Cleanup display stream if it was captured
+          if (displayStream) {
+            console.error('❌ Dual-stream setup failed, cleaning up display stream:', error)
+            displayStream.getTracks().forEach(t => t.stop())
+          }
+          throw error // Re-throw to be caught by outer try-catch
+        }
 
         // Start duration timer
         durationIntervalRef.current = setInterval(() => {
@@ -526,6 +606,9 @@ export const useWebRecording = (): WebRecordingReturn => {
         // Cleanup dual-stream
         adapterRef.current?.close()
         adapterRef.current = null
+        // Set error state for dual-stream
+        setLegacyStep('error')
+        setLegacyError(error instanceof Error ? error.message : 'Dual-stream recording failed')
       } else {
         setLegacyStep('error')
         setLegacyError(error instanceof Error ? error.message : 'Recording failed')
@@ -639,9 +722,9 @@ export const useWebRecording = (): WebRecordingReturn => {
   const recordingDuration = isDualStream ? (dualStream.isRecording ? legacyDuration : 0) : legacyDuration
   const error = isDualStream ? (dualStream.error?.message || null) : legacyError
 
-  // Get analyser - for dual-stream, try to get from mixer
+  // Get analyser - for dual-stream, get the mixed output analyser
   const analyser = isDualStream
-    ? dualStream.getAnalyser('microphone')
+    ? dualStream.getAnalyser('mixed')
     : legacyAnalyser
 
   return {

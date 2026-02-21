@@ -1,6 +1,6 @@
 import React from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { useAuth } from '../../contexts/AuthContext'
+import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -8,7 +8,8 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
-  const { user, token, isLoading, isAdmin, setupRequired } = useAuth()
+  // ONLY use Keycloak auth (legacy auth disabled)
+  const { isAuthenticated, isLoading } = useKeycloakAuth()
   const location = useLocation()
 
   if (isLoading) {
@@ -19,17 +20,20 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     )
   }
 
-  // Redirect to registration if required
-  if (setupRequired === true) {
-    return <Navigate to="/register" replace />
-  }
+  console.log('[ProtectedRoute] Keycloak auth check:', {
+    pathname: location.pathname,
+    isAuthenticated,
+    willRedirect: !isAuthenticated
+  })
 
-  if (!token || !user) {
+  if (!isAuthenticated) {
+    console.log('[ProtectedRoute] Not authenticated, redirecting to login from:', location.pathname)
     // Preserve the intended destination so login can redirect back
     return <Navigate to="/login" state={{ from: location.pathname }} replace />
   }
 
-  if (adminOnly && !isAdmin) {
+  // TODO: Implement Keycloak role-based admin check if needed
+  if (adminOnly) {
     return (
       <div className="min-h-screen bg-neutral-50 dark:bg-neutral-900 flex items-center justify-center">
         <div className="card p-8 text-center animate-fade-in">
@@ -37,7 +41,7 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
             Access Denied
           </h1>
           <p className="text-neutral-600 dark:text-neutral-400">
-            You don't have permission to access this page.
+            Admin-only feature (Keycloak role check not yet implemented)
           </p>
         </div>
       </div>

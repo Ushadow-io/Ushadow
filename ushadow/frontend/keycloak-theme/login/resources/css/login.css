@@ -1,0 +1,719 @@
+/**
+ * Ushadow Keycloak Login Theme
+ * Matches the frontend login design exactly
+ */
+
+/* ============================================
+   GLOBAL STYLES & PAGE BACKGROUND
+   ============================================ */
+
+body,
+html {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow-x: hidden !important;
+}
+
+body,
+html,
+.login-pf-page {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
+  background-color: #18181b !important;  /* Dark purple-black like reference */
+  color: #ffffff !important;
+}
+
+/* Make the page wrapper full height */
+.login-pf-page {
+  min-height: 100vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  padding-top: 4rem !important;
+  position: relative !important;
+}
+
+.login-pf,
+.login-pf-page .login-pf {
+  width: 100% !important;
+  max-width: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 2rem 1rem !important;
+}
+
+/* Purple glow top-right */
+body::before {
+  content: '' !important;
+  position: fixed !important;
+  top: -200px !important;
+  right: -200px !important;
+  width: 600px !important;
+  height: 600px !important;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, transparent 70%) !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
+}
+
+/* Green glow bottom-left */
+body::after {
+  content: '' !important;
+  position: fixed !important;
+  bottom: -200px !important;
+  left: -200px !important;
+  width: 600px !important;
+  height: 600px !important;
+  background: radial-gradient(circle, rgba(74, 222, 128, 0.12) 0%, transparent 70%) !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
+}
+
+/* ============================================
+   LOGO & HEADER
+   ============================================ */
+
+#kc-header-wrapper {
+  width: 100% !important;
+  text-align: center !important;
+  margin: 0 auto 1rem auto !important;
+  position: relative !important;
+  z-index: 10 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+}
+
+/* Logo image - large 3D U */
+#kc-header-wrapper::before {
+  content: '';
+  display: block;
+  width: 120px !important;
+  height: 120px !important;
+  margin: 0 auto 0.75rem;
+  background: url('../img/logo.png') center no-repeat;
+  background-size: contain;
+  filter: drop-shadow(0 8px 24px rgba(74, 222, 128, 0.2)) drop-shadow(0 8px 24px rgba(168, 85, 247, 0.2));
+}
+
+/* Ushadow brand text - GRADIENT green to purple */
+#kc-header,
+#kc-header-wrapper h1 {
+  font-size: 2.25rem !important;
+  font-weight: 600 !important;
+  background: linear-gradient(90deg, #4ade80 0%, #a855f7 100%) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+  margin: 0 auto 0.25rem auto !important;
+  letter-spacing: -0.03em !important;
+  display: inline-block !important;
+  text-align: center !important;
+  width: auto !important;
+}
+
+/* "AI Orchestration Platform" subtitle */
+#kc-header::after {
+  content: 'AI Orchestration Platform';
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: #a1a1aa;
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
+  background: none !important;
+  -webkit-text-fill-color: #a1a1aa !important;
+  letter-spacing: normal !important;
+}
+
+/* ============================================
+   LOGIN CARD
+   ============================================ */
+
+#kc-content-wrapper,
+#kc-content {
+  position: relative !important;
+  z-index: 10 !important;
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+}
+
+#kc-form,
+.login-pf form {
+  width: 100% !important;
+  max-width: 420px !important;
+}
+
+.card-pf {
+  background-color: rgba(26, 26, 31, 0.8) !important;  /* Semi-transparent dark */
+  backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(63, 63, 70, 0.5) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  padding: 2.5rem !important;
+  width: 100% !important;
+  max-width: 420px !important;
+  margin: 0 auto !important;
+}
+
+/* ============================================
+   PAGE TITLE - "Sign in to your account"
+   ============================================ */
+
+#kc-page-title,
+.instruction {
+  font-size: 0.9375rem !important;
+  font-weight: 400 !important;
+  color: #a1a1aa !important;
+  margin-bottom: 1.75rem !important;
+  text-align: center !important;
+}
+
+/* ============================================
+   FORM ELEMENTS
+   ============================================ */
+
+.form-group,
+.pf-c-form__group {
+  margin-bottom: 1.25rem !important;
+  display: block !important;  /* Override grid layout */
+  grid-template-columns: none !important;  /* Remove two-column layout */
+}
+
+/* Force single-column layout for registration form */
+.pf-c-form__group-label,
+.pf-c-form__group-control {
+  grid-column: auto !important;
+  max-width: 100% !important;
+}
+
+label,
+.pf-c-form__label {
+  display: block !important;
+  font-size: 0.875rem !important;
+  font-weight: 400 !important;
+  color: #d4d4d8 !important;  /* Lighter gray for labels */
+  margin-bottom: 0.5rem !important;
+  width: 100% !important;
+}
+
+/* Label text wrapper - keep inline with asterisk */
+.pf-c-form__label-text {
+  display: inline !important;
+}
+
+/* Required field indicator - inline with label */
+.pf-c-form__label-required {
+  display: inline !important;
+  color: #f87171 !important;  /* Red asterisk */
+  margin-left: 0.25rem !important;
+}
+
+/* "Required fields" text */
+.subtitle,
+#kc-content-wrapper > p {
+  font-size: 0.75rem !important;
+  color: #71717a !important;
+  margin-bottom: 1rem !important;
+}
+
+/* Input fields - ROUNDED like reference */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input.pf-c-form-control {
+  width: 100% !important;
+  padding: 0.75rem 1rem !important;
+  font-size: 0.9375rem !important;
+  border: 1px solid rgba(63, 63, 70, 0.6) !important;  /* Subtle border */
+  border-radius: 10px !important;  /* Nicely rounded like reference */
+  background-color: rgba(24, 24, 27, 0.8) !important;  /* Darker, more opaque */
+  background-image: none !important;  /* Remove any gradient overlays */
+  color: #ffffff !important;
+  transition: all 0.2s ease-in-out !important;
+  box-sizing: border-box !important;
+}
+
+/* Aggressive override for password field specifically */
+input[type="password"] {
+  background-color: rgba(24, 24, 27, 0.8) !important;
+  background-image: none !important;
+  background: rgba(24, 24, 27, 0.8) !important;
+}
+
+/* Remove white outline/border from password field wrapper */
+.pf-c-input-group,
+.pf-c-form-control__utilities,
+div[class*="input-group"] {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Password field parent containers */
+.pf-c-input-group::before,
+.pf-c-input-group::after {
+  display: none !important;
+}
+
+/* Make sure password input doesn't have extra borders from wrapper */
+.pf-c-input-group input[type="password"] {
+  border: 1px solid rgba(63, 63, 70, 0.6) !important;
+  box-shadow: none !important;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input.pf-c-form-control:focus {
+  outline: none !important;
+  border-color: rgba(74, 222, 128, 0.5) !important;
+  background-color: rgba(24, 24, 27, 0.8) !important;
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.2) !important;
+}
+
+input::placeholder {
+  color: #71717a !important;
+}
+
+/* Password visibility toggle - no white background */
+.pf-c-button.pf-m-control,
+button[type="button"].pf-c-button {
+  background-color: transparent !important;
+  border: none !important;
+  color: #a1a1aa !important;
+  padding: 0.5rem !important;
+}
+
+.pf-c-button.pf-m-control:hover {
+  background-color: transparent !important;
+  color: #d4d4d8 !important;
+}
+
+/* Remove any default input borders/underlines */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px rgba(24, 24, 27, 0.6) inset !important;
+  -webkit-text-fill-color: #ffffff !important;
+  border-radius: 10px !important;
+}
+
+/* ============================================
+   CHECKBOX & LINKS
+   ============================================ */
+
+#kc-form-options {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin: 1rem 0 1.5rem 0 !important;
+}
+
+.checkbox,
+.pf-c-check {
+  display: flex !important;
+  align-items: center !important;
+}
+
+input[type="checkbox"] {
+  width: auto !important;
+  height: 1rem !important;
+  margin-right: 0.5rem !important;
+  accent-color: #4ade80 !important;
+  cursor: pointer !important;
+  border-radius: 4px !important;
+}
+
+.checkbox label,
+.pf-c-check__label {
+  margin-bottom: 0 !important;
+  font-size: 0.875rem !important;
+  color: #d4d4d8 !important;
+  cursor: pointer !important;
+}
+
+/* Links - blue like reference */
+a {
+  color: #60a5fa !important;
+  text-decoration: none !important;
+  font-size: 0.875rem !important;
+  transition: color 0.2s ease !important;
+}
+
+a:hover {
+  color: #93c5fd !important;
+  text-decoration: underline !important;
+}
+
+/* ============================================
+   BUTTONS
+   ============================================ */
+
+/* Primary button - GREEN like reference */
+.btn-primary,
+button[type="submit"],
+input[type="submit"],
+.pf-c-button.pf-m-primary {
+  width: 100% !important;
+  padding: 0.75rem 1.5rem !important;
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+  color: #09090b !important;  /* Very dark text on green */
+  background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%) !important;
+  background-image: linear-gradient(135deg, #4ade80 0%, #22c55e 100%) !important;
+  border: none !important;
+  border-radius: 10px !important;  /* Match input rounding */
+  cursor: pointer !important;
+  transition: all 0.2s ease-in-out !important;
+  box-shadow: 0 0 24px rgba(74, 222, 128, 0.25) !important;
+  text-transform: none !important;
+}
+
+.btn-primary:hover,
+button[type="submit"]:hover,
+.pf-c-button.pf-m-primary:hover {
+  background: linear-gradient(135deg, #86efac 0%, #4ade80 100%) !important;
+  background-image: linear-gradient(135deg, #86efac 0%, #4ade80 100%) !important;
+  box-shadow: 0 0 32px rgba(74, 222, 128, 0.35) !important;
+  transform: translateY(-1px) !important;
+}
+
+.btn-primary:active,
+button[type="submit"]:active {
+  transform: translateY(0) !important;
+}
+
+/* ============================================
+   REGISTRATION LINK
+   ============================================ */
+
+#kc-registration {
+  text-align: center !important;
+  margin-top: 1.5rem !important;
+  padding-top: 1.5rem !important;
+  border-top: 1px solid rgba(63, 63, 70, 0.4) !important;
+}
+
+#kc-registration span {
+  color: #71717a !important;
+  font-size: 0.875rem !important;
+}
+
+#kc-registration a {
+  color: #4ade80 !important;
+  font-weight: 500 !important;
+  margin-left: 0.25rem !important;
+}
+
+#kc-registration a:hover {
+  color: #86efac !important;
+}
+
+/* ============================================
+   ALERTS & MESSAGES
+   ============================================ */
+
+.alert {
+  padding: 0.875rem 1rem !important;
+  border-radius: 10px !important;
+  margin-bottom: 1.25rem !important;
+  font-size: 0.875rem !important;
+  border: 1px solid transparent !important;
+}
+
+.alert-error,
+.pf-c-alert.pf-m-danger {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  color: #fca5a5 !important;
+}
+
+.alert-success,
+.pf-c-alert.pf-m-success {
+  background-color: rgba(74, 222, 128, 0.1) !important;
+  border-color: rgba(74, 222, 128, 0.3) !important;
+  color: #86efac !important;
+}
+
+.alert-warning,
+.pf-c-alert.pf-m-warning {
+  background-color: rgba(251, 191, 36, 0.1) !important;
+  border-color: rgba(251, 191, 36, 0.3) !important;
+  color: #fcd34d !important;
+}
+
+.alert-info,
+.pf-c-alert.pf-m-info {
+  background-color: rgba(96, 165, 250, 0.1) !important;
+  border-color: rgba(96, 165, 250, 0.3) !important;
+  color: #93c5fd !important;
+}
+
+/* ============================================
+   SOCIAL LOGIN (if enabled)
+   ============================================ */
+
+.kc-social-links {
+  margin-top: 1.5rem !important;
+  border-top: 1px solid rgba(63, 63, 70, 0.4) !important;
+  padding-top: 1.5rem !important;
+}
+
+.kc-social-link {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0.75rem 1rem !important;
+  margin-bottom: 0.75rem !important;
+  background-color: rgba(24, 24, 27, 0.6) !important;
+  border: 1px solid rgba(63, 63, 70, 0.5) !important;
+  border-radius: 10px !important;
+  color: #d4d4d8 !important;
+  text-decoration: none !important;
+  transition: all 0.2s ease-in-out !important;
+  font-size: 0.9375rem !important;
+}
+
+.kc-social-link:hover {
+  background-color: rgba(39, 39, 42, 0.8) !important;
+  border-color: rgba(82, 82, 91, 0.6) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ============================================
+   FOOTER TEXT
+   ============================================ */
+
+#kc-info,
+#kc-info-wrapper {
+  text-align: center !important;
+  color: #71717a !important;
+  font-size: 0.75rem !important;
+  margin-top: 1rem !important;
+}
+
+/* ============================================
+   RESPONSIVE - MOBILE & KEYBOARD AWARE
+   ============================================ */
+
+/* Mobile portrait - general adjustments */
+@media (max-width: 768px) {
+  /* Use dynamic viewport height for better keyboard handling */
+  html,
+  body {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+  }
+
+  .login-pf-page {
+    min-height: 100dvh !important;
+    padding: 1.5rem 1rem !important;
+    justify-content: flex-start !important;
+  }
+
+  /* Smaller logo on mobile */
+  #kc-header-wrapper::before {
+    width: 80px !important;
+    height: 80px !important;
+    margin-bottom: 0.5rem !important;
+  }
+
+  /* Smaller title */
+  #kc-header,
+  #kc-header-wrapper h1 {
+    font-size: 1.75rem !important;
+  }
+
+  /* Smaller subtitle */
+  #kc-header::after {
+    font-size: 0.8rem !important;
+  }
+
+  /* Compact card with less padding */
+  .card-pf {
+    padding: 1.5rem !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Reduce spacing between form elements */
+  .form-group,
+  .pf-c-form__group {
+    margin-bottom: 1rem !important;
+  }
+
+  /* Slightly smaller inputs */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input.pf-c-form-control {
+    padding: 0.65rem 0.875rem !important;
+    font-size: 16px !important; /* Prevents iOS zoom on focus */
+  }
+
+  /* Compact button */
+  .btn-primary,
+  button[type="submit"],
+  input[type="submit"],
+  .pf-c-button.pf-m-primary {
+    padding: 0.65rem 1.25rem !important;
+    font-size: 0.9375rem !important;
+  }
+
+  /* Smaller page title */
+  #kc-page-title,
+  .instruction {
+    font-size: 0.875rem !important;
+    margin-bottom: 1.25rem !important;
+  }
+
+  /* Compact form options */
+  #kc-form-options {
+    margin: 0.75rem 0 1rem 0 !important;
+  }
+
+  /* Reduce glow effects on mobile (performance) */
+  body::before,
+  body::after {
+    display: none !important;
+  }
+}
+
+/* Small mobile devices - ultra compact */
+@media (max-width: 480px) {
+  .login-pf-page {
+    padding: 1rem 0.75rem !important;
+  }
+
+  /* Extra small logo */
+  #kc-header-wrapper::before {
+    width: 64px !important;
+    height: 64px !important;
+  }
+
+  #kc-header,
+  #kc-header-wrapper h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .card-pf {
+    padding: 1.25rem !important;
+    border-radius: 12px !important;
+  }
+}
+
+/* Landscape mobile - keyboard takes up most of screen */
+@media (max-width: 768px) and (max-height: 500px) {
+  /* Critical: Minimal padding when in landscape with keyboard */
+  .login-pf-page {
+    padding: 0.5rem !important;
+    min-height: auto !important;
+  }
+
+  /* Hide logo in landscape to save space */
+  #kc-header-wrapper::before {
+    display: none !important;
+  }
+
+  /* Minimal header */
+  #kc-header,
+  #kc-header-wrapper h1 {
+    font-size: 1.25rem !important;
+    margin-bottom: 0 !important;
+  }
+
+  /* Hide subtitle in landscape */
+  #kc-header::after {
+    display: none !important;
+  }
+
+  /* Minimal card padding */
+  .card-pf {
+    padding: 1rem !important;
+  }
+
+  /* Compact form elements */
+  .form-group,
+  .pf-c-form__group {
+    margin-bottom: 0.75rem !important;
+  }
+
+  label,
+  .pf-c-form__label {
+    margin-bottom: 0.25rem !important;
+  }
+
+  /* Minimal input padding */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input.pf-c-form-control {
+    padding: 0.5rem 0.75rem !important;
+  }
+
+  /* Compact button */
+  .btn-primary,
+  button[type="submit"],
+  input[type="submit"],
+  .pf-c-button.pf-m-primary {
+    padding: 0.5rem 1rem !important;
+  }
+
+  /* Hide registration link in landscape to save space */
+  #kc-registration {
+    display: none !important;
+  }
+
+  /* Minimal form options */
+  #kc-form-options {
+    margin: 0.5rem 0 0.75rem 0 !important;
+  }
+}
+
+/* Touch-specific improvements */
+@media (hover: none) and (pointer: coarse) {
+  /* Larger touch targets */
+  input[type="checkbox"] {
+    width: 1.125rem !important;
+    height: 1.125rem !important;
+  }
+
+  /* Easier to tap links */
+  a {
+    padding: 0.25rem 0 !important;
+    display: inline-block !important;
+  }
+
+  /* Better button touch target */
+  .btn-primary,
+  button[type="submit"],
+  input[type="submit"] {
+    min-height: 44px !important; /* Apple's recommended touch target */
+  }
+}
+
+/* ============================================
+   UTILITY OVERRIDES
+   ============================================ */
+
+/* Remove any PatternFly default styles that conflict */
+.pf-c-form-control {
+  background-image: none !important;
+}
+
+.pf-c-button {
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+
+/* Ensure z-index stacking works */
+#kc-container {
+  position: relative;
+  z-index: 1;
+}

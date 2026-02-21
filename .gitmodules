@@ -1,0 +1,12 @@
+[submodule "chronicle"]
+	path = chronicle
+	url = https://github.com/Ushadow-io/chronicle.git
+	update = checkout
+
+[submodule "mycelia"]
+	path = mycelia
+	url = https://github.com/mycelia-tech/mycelia.git
+	update = checkout
+[submodule "openmemory"]
+	path = openmemory
+	url = https://github.com/Ushadow-io/mem0.git

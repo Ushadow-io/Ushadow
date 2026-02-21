@@ -46,6 +46,11 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
   const [error, setError] = useState<string | null>(null)
   const [deploymentResult, setDeploymentResult] = useState<string | null>(null)
 
+  // Ingress configuration
+  const [ingressEnabled, setIngressEnabled] = useState(false)
+  const [ingressHostname, setIngressHostname] = useState('')
+  const [customHostname, setCustomHostname] = useState(false)
+
   useEffect(() => {
     if (isOpen) {
       // If service is preselected, load env vars directly
@@ -61,6 +66,26 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       }
     }
   }, [isOpen, preselectedServiceId])
+
+  // Auto-configure ingress based on cluster settings
+  useEffect(() => {
+    if (selectedService && selectedCluster) {
+      const hasIngressConfig = selectedCluster.ingress_domain && selectedCluster.ingress_domain.length > 0
+      const shouldEnable = hasIngressConfig && (selectedCluster.ingress_enabled_by_default || false)
+
+      setIngressEnabled(shouldEnable)
+
+      // Auto-generate hostname
+      if (hasIngressConfig) {
+        const serviceName = selectedService.service_name
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, '-')
+        const autoHostname = `${serviceName}.${selectedCluster.ingress_domain}`
+        setIngressHostname(autoHostname)
+        setCustomHostname(false)
+      }
+    }
+  }, [selectedService, selectedCluster])
 
   const loadServices = async () => {
     try {
@@ -265,7 +290,15 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
         {
           service_id: selectedService.service_id,
           namespace: namespace,
-          config_id: instanceId
+          config_id: instanceId,
+          k8s_spec: ingressEnabled ? {
+            ingress: {
+              enabled: true,
+              host: ingressHostname,
+              path: "/",
+              ingressClassName: selectedCluster.ingress_class || "nginx"
+            }
+          } : undefined
         }
       )
 
@@ -415,6 +448,63 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
           Kubernetes namespace where the service will be deployed
         </p>
       </div>
+
+      {/* Ingress Configuration */}
+      {selectedCluster?.ingress_domain && (
+        <div className="space-y-3 p-4 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50">
+          <div className="flex items-center justify-between">
+            <label className="flex items-center space-x-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={ingressEnabled}
+                onChange={(e) => setIngressEnabled(e.target.checked)}
+                className="rounded"
+                data-testid="deploy-ingress-checkbox"
+              />
+              <span className="text-neutral-700 dark:text-neutral-300">Enable Ingress (External Access)</span>
+            </label>
+          </div>
+
+          {ingressEnabled && (
+            <div className="space-y-2 ml-6">
+              <div className="flex items-center space-x-2">
+                <label className="text-sm text-neutral-600 dark:text-neutral-400">Hostname:</label>
+                {!customHostname ? (
+                  <div className="flex items-center space-x-2">
+                    <code className="px-2 py-1 bg-primary-100 dark:bg-primary-900/30 rounded text-sm font-mono text-primary-700 dark:text-primary-300">
+                      {ingressHostname}
+                    </code>
+                    <button
+                      onClick={() => setCustomHostname(true)}
+                      className="text-xs text-primary-600 hover:underline"
+                      data-testid="deploy-ingress-customize-btn"
+                    >
+                      Customize
+                    </button>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={ingressHostname}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      if (/^[a-z0-9.-]*$/.test(value)) {
+                        setIngressHostname(value)
+                      }
+                    }}
+                    placeholder={`service.${selectedCluster.ingress_domain}`}
+                    className="flex-1 px-3 py-1 text-sm rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 font-mono"
+                    data-testid="deploy-ingress-hostname-input"
+                  />
+                )}
+              </div>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Accessible at: http://{ingressHostname}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Environment Variables */}
       <div className="space-y-2">

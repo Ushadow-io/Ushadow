@@ -22,6 +22,7 @@ dependencies = [
     "pymongo>=4.9.0,<4.10",  # Motor 3.6.0 requires pymongo<4.10
     "motor>=3.6.0",
     "redis>=5.2.0",
+    "neo4j>=5.26.0",  # Neo4j driver with bearer_auth support
 
     # Authentication & Security
     "fastapi-users[beanie]>=14.0.1",
@@ -31,6 +32,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "bcrypt>=4.2.1",
     "pyjwt>=2.10.1",
+    "python-keycloak>=4.5.1",
 
     # CORS & Middleware
     "fastapi-cors>=0.0.6",
@@ -173,6 +175,9 @@ env = [
     # Use /tmp for config to avoid read-only /config mount
     "CONFIG_DIR=/tmp/pytest_config",
     "PROJECT_ROOT=/tmp",
+    "KUBECONFIG_DIR=/tmp/pytest_kubeconfigs",
+    # Auth secret key for testing
+    "AUTH_SECRET_KEY=test-secret-key-for-testing-only-not-secure-32-chars-min",
     # Infrastructure: Use localhost (tests run on host, not in Docker)
     # directConnection=true needed for MongoDB replica set
     "MONGODB_URI=mongodb://localhost:27017/?directConnection=true",

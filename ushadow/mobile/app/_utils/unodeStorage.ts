@@ -13,6 +13,7 @@ const ACTIVE_UNODE_KEY = '@ushadow_active_unode';
 export interface UNode {
   id: string;
   name: string;
+  hostname?: string;  // Actual unode hostname (e.g., "Orion", "blue")
   apiUrl: string;
   chronicleApiUrl?: string;  // Chronicle/OMI backend API URL (different port)
   streamUrl: string;

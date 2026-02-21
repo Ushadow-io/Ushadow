@@ -122,20 +122,24 @@ export function PrerequisitesPanel({
                   {prereqsInCategory.map(prereq => {
                     const status = getPrereqStatus(prereq.id)
                     const showStart = prereq.has_service && status.installed === true && status.running === false
+                    const isTailscale = prereq.id === 'tailscale'
+                    const tailscaleInstalled = isTailscale && status.installed
+
                     return (
-                      <PrereqItem
-                        key={prereq.id}
-                        label={prereq.display_name}
-                        installed={status.installed}
-                        running={status.running}
-                        optional={prereq.optional}
-                        showInstall={!status.installed}
-                        showStart={showStart}
-                        onInstall={() => onInstall(prereq.id)}
-                        onStart={prereq.id === 'docker' ? onStartDocker : undefined}
-                        isInstalling={isInstalling}
-                        installing={installingItem === prereq.id}
-                      />
+                      <div key={prereq.id}>
+                        <PrereqItem
+                          label={prereq.display_name}
+                          installed={status.installed}
+                          running={status.running}
+                          optional={prereq.optional}
+                          showInstall={!status.installed}
+                          showStart={showStart}
+                          onInstall={() => onInstall(prereq.id)}
+                          onStart={prereq.id === 'docker' ? onStartDocker : undefined}
+                          isInstalling={isInstalling}
+                          installing={installingItem === prereq.id}
+                        />
+                      </div>
                     )
                   })}
                 </div>

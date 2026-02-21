@@ -1,0 +1,267 @@
+"""
+Keycloak Admin Router
+
+Admin endpoints for managing Keycloak configuration.
+"""
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+import logging
+
+from src.services.keycloak_admin import get_keycloak_admin
+from src.config.keycloak_settings import get_keycloak_config
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+class KeycloakConfigResponse(BaseModel):
+    """Public Keycloak configuration for clients"""
+    public_url: str
+    realm: str
+    frontend_client_id: str
+    backend_client_id: str
+
+
+@router.get("/config", response_model=KeycloakConfigResponse)
+async def get_keycloak_public_config():
+    """
+    Get public Keycloak configuration for clients.
+
+    This endpoint returns non-sensitive configuration that clients
+    (like the ush CLI tool) need to authenticate with Keycloak.
+
+    Returns:
+        Public Keycloak configuration (no secrets)
+    """
+    config = get_keycloak_config()
+
+    # No redundant defaults - get_keycloak_config() already provides them
+    return KeycloakConfigResponse(
+        public_url=config["public_url"],  # Dynamic from Tailscale or config
+        realm=config["realm"],
+        frontend_client_id=config["frontend_client_id"],
+        backend_client_id=config["backend_client_id"],
+    )
+
+
+class ClientUpdateResponse(BaseModel):
+    """Response for client update operations"""
+    success: bool
+    message: str
+    client_id: str
+
+
+@router.post("/clients/{client_id}/enable-pkce", response_model=ClientUpdateResponse)
+async def enable_pkce_for_client(client_id: str):
+    """
+    Enable PKCE (Proof Key for Code Exchange) for a Keycloak client.
+
+    This updates the client configuration to require PKCE with S256 code challenge method.
+    PKCE is required for secure authentication in public clients (like SPAs).
+
+    Args:
+        client_id: The Keycloak client ID (e.g., "ushadow-frontend")
+
+    Returns:
+        Success status and message
+    """
+    admin_client = get_keycloak_admin()
+
+    try:
+        # Get current client configuration
+        client = await admin_client.get_client_by_client_id(client_id)
+        if not client:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Client '{client_id}' not found in Keycloak"
+            )
+
+        client_uuid = client["id"]
+        logger.info(f"[KC-ADMIN] Enabling PKCE for client: {client_id} ({client_uuid})")
+
+        # Update client attributes to require PKCE
+        import httpx
+        from src.config.keycloak_settings import get_keycloak_config
+
+        token = await admin_client._get_admin_token()
+        config = get_keycloak_config()
+        keycloak_url = config["url"]
+        realm = config["realm"]
+
+        # Get full client config first
+        async with httpx.AsyncClient() as http_client:
+            get_response = await http_client.get(
+                f"{keycloak_url}/admin/realms/{realm}/clients/{client_uuid}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0
+            )
+
+            if get_response.status_code != 200:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get client config: {get_response.text}"
+                )
+
+            full_client_config = get_response.json()
+
+            # Update attributes
+            if "attributes" not in full_client_config:
+                full_client_config["attributes"] = {}
+
+            full_client_config["attributes"]["pkce.code.challenge.method"] = "S256"
+
+            # Update client
+            update_response = await http_client.put(
+                f"{keycloak_url}/admin/realms/{realm}/clients/{client_uuid}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                },
+                json=full_client_config,
+                timeout=10.0
+            )
+
+            if update_response.status_code != 204:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to update client: {update_response.text}"
+                )
+
+        logger.info(f"[KC-ADMIN] ✓ PKCE enabled for client: {client_id}")
+
+        return ClientUpdateResponse(
+            success=True,
+            message=f"PKCE (S256) enabled for client '{client_id}'",
+            client_id=client_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KC-ADMIN] Failed to enable PKCE: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to enable PKCE: {str(e)}"
+        )
+
+
+@router.get("/clients/{client_id}/config")
+async def get_client_config(client_id: str):
+    """
+    Get Keycloak client configuration.
+
+    Args:
+        client_id: The Keycloak client ID
+
+    Returns:
+        Client configuration including attributes
+    """
+    admin_client = get_keycloak_admin()
+
+    client = await admin_client.get_client_by_client_id(client_id)
+    if not client:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Client '{client_id}' not found"
+        )
+
+    return {
+        "client_id": client.get("clientId"),
+        "id": client.get("id"),
+        "enabled": client.get("enabled"),
+        "publicClient": client.get("publicClient"),
+        "standardFlowEnabled": client.get("standardFlowEnabled"),
+        "directAccessGrantsEnabled": client.get("directAccessGrantsEnabled"),
+        "attributes": client.get("attributes", {}),
+        "redirectUris": client.get("redirectUris", []),
+    }
+
+
+@router.post("/clients/{client_id}/enable-direct-grant", response_model=ClientUpdateResponse)
+async def enable_direct_grant_for_client(client_id: str):
+    """
+    Enable Direct Access Grants (Resource Owner Password Credentials) for a Keycloak client.
+
+    This allows CLI tools and other non-browser clients to authenticate using username/password.
+
+    Args:
+        client_id: The Keycloak client ID (e.g., "ushadow-frontend")
+
+    Returns:
+        Success status and message
+    """
+    admin_client = get_keycloak_admin()
+
+    try:
+        # Get current client configuration
+        client = await admin_client.get_client_by_client_id(client_id)
+        if not client:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Client '{client_id}' not found in Keycloak"
+            )
+
+        client_uuid = client["id"]
+        logger.info(f"[KC-ADMIN] Enabling direct access grants for client: {client_id} ({client_uuid})")
+
+        # Update client to enable direct access grants
+        import httpx
+
+        token = await admin_client._get_admin_token()
+        config = get_keycloak_config()
+        keycloak_url = config["url"]
+        realm = config["realm"]
+
+        # Get full client config first
+        async with httpx.AsyncClient() as http_client:
+            get_response = await http_client.get(
+                f"{keycloak_url}/admin/realms/{realm}/clients/{client_uuid}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0
+            )
+
+            if get_response.status_code != 200:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get client config: {get_response.text}"
+                )
+
+            full_client_config = get_response.json()
+
+            # Enable direct access grants
+            full_client_config["directAccessGrantsEnabled"] = True
+
+            # Update client
+            update_response = await http_client.put(
+                f"{keycloak_url}/admin/realms/{realm}/clients/{client_uuid}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                },
+                json=full_client_config,
+                timeout=10.0
+            )
+
+            if update_response.status_code != 204:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to update client: {update_response.text}"
+                )
+
+        logger.info(f"[KC-ADMIN] ✓ Direct access grants enabled for client: {client_id}")
+
+        return ClientUpdateResponse(
+            success=True,
+            message=f"Direct access grants enabled for client '{client_id}'",
+            client_id=client_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KC-ADMIN] Failed to enable direct access grants: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to enable direct access grants: {str(e)}"
+        )

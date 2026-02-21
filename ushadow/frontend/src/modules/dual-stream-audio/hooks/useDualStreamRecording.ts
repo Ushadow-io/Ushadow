@@ -97,9 +97,14 @@ export function useDualStreamRecording(
 
   /**
    * Start recording
+   *
+   * @param recordingMode - The recording mode ('microphone-only' or 'dual-stream')
+   * @param preCaptur edDisplayStream - Optional pre-captured display stream (for dual-stream mode)
+   *                                      This is important for browser security: getDisplayMedia()
+   *                                      must be called from a user gesture, so we capture it early
    */
   const startRecording = useCallback(
-    async (recordingMode: RecordingMode) => {
+    async (recordingMode: RecordingMode, preCapturedDisplayStream?: MediaStream) => {
       try {
         // Check browser compatibility
         const capabilities = getBrowserCapabilities()
@@ -136,10 +141,29 @@ export function useDualStreamRecording(
         // Step 2: Capture display media (if dual-stream mode)
         let displayStream: MediaStream | null = null
         if (recordingMode === 'dual-stream') {
-          setState('requesting-display')
-          console.log('🖥️  Step 2: Capturing display media...')
+          if (preCapturedDisplayStream) {
+            // Use pre-captured stream (already requested in user gesture context)
+            console.log('🖥️  Step 2: Using pre-captured display stream')
+            displayStream = preCapturedDisplayStream
 
-          displayStream = await captureDisplayMedia(config.displayConstraints?.audio)
+            // Log stream details
+            const audioTracks = displayStream.getAudioTracks()
+            const videoTracks = displayStream.getVideoTracks()
+            console.log('📊 Pre-captured stream status:', {
+              audioTracks: audioTracks.length,
+              videoTracks: videoTracks.length,
+              audioEnabled: audioTracks[0]?.enabled,
+              audioMuted: audioTracks[0]?.muted,
+              audioReadyState: audioTracks[0]?.readyState,
+              audioLabel: audioTracks[0]?.label
+            })
+          } else {
+            // Fallback: capture display media now (may fail if not in user gesture context)
+            setState('requesting-display')
+            console.log('🖥️  Step 2: Capturing display media...')
+            displayStream = await captureDisplayMedia(config.displayConstraints?.audio)
+          }
+
           displayStreamRef.current = displayStream
 
           // Monitor display stream for ended event
@@ -160,18 +184,33 @@ export function useDualStreamRecording(
 
         // Add streams to mixer
         const micStreamId = mixer.addStream(micStream, 'microphone', 1.0)
+        console.log('✅ Added microphone stream to mixer:', micStreamId)
 
         const streamIds: string[] = [micStreamId]
         const streamTypes: Array<'microphone' | 'display'> = ['microphone']
 
         if (displayStream) {
+          console.log('➕ Adding display stream to mixer...')
+          const displayAudioTracks = displayStream.getAudioTracks()
+          console.log('📊 Display stream before adding to mixer:', {
+            audioTracks: displayAudioTracks.length,
+            audioEnabled: displayAudioTracks[0]?.enabled,
+            audioMuted: displayAudioTracks[0]?.muted,
+            audioReadyState: displayAudioTracks[0]?.readyState
+          })
+
           const displayStreamId = mixer.addStream(displayStream, 'display', 1.0)
+          console.log('✅ Added display stream to mixer:', displayStreamId)
           streamIds.push(displayStreamId)
           streamTypes.push('display')
+        } else {
+          console.warn('⚠️  No display stream to add to mixer')
         }
 
         // Update active streams
-        setActiveStreams(mixer.getActiveStreams())
+        const activeStreams = mixer.getActiveStreams()
+        console.log('📊 Active streams in mixer:', activeStreams)
+        setActiveStreams(activeStreams)
 
         // Get mixed output stream
         const mixedStream = mixer.getMixedStream()
@@ -283,11 +322,14 @@ export function useDualStreamRecording(
   }, [])
 
   /**
-   * Get analyser for a stream type
+   * Get analyser for a stream type (or 'mixed' for the mixed output)
    */
   const getAnalyser = useCallback(
-    (streamType: 'microphone' | 'display'): AnalyserNode | null => {
+    (streamType: 'microphone' | 'display' | 'mixed'): AnalyserNode | null => {
       if (!mixerRef.current) return null
+      if (streamType === 'mixed') {
+        return mixerRef.current.getMixedAnalyser()
+      }
       return mixerRef.current.getAnalyserByType(streamType)
     },
     []

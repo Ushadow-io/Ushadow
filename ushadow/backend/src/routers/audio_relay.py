@@ -2,8 +2,8 @@
 Audio Relay Router - WebSocket relay to multiple destinations
 
 Accepts Wyoming protocol audio from mobile app and forwards to:
-- Chronicle (/chronicle/ws_pcm)
-- Mycelia (/mycelia/ws_pcm)
+- Chronicle (/ws?codec=pcm)
+- Mycelia (/ws?codec=pcm)
 - Any other configured endpoints
 
 Mobile connects once to /ws/audio/relay, server handles fanout.
@@ -38,17 +38,18 @@ class AudioRelayConnection:
         try:
             import websockets
 
-            # Add token to URL
-            url_with_token = f"{self.url}?token={self.token}"
+            # Add token to URL (use & if URL already has query params)
+            separator = "&" if "?" in self.url else "?"
+            url_with_token = f"{self.url}{separator}token={self.token}"
 
             # Detect endpoint type for logging
-            # Note: /ws/audio is unified endpoint that accepts both PCM and Opus
-            if "/ws_omi" in self.url:
+            # Note: /ws endpoint accepts codec via query parameter
+            if "codec=opus" in self.url:
                 endpoint_type = "Opus"
-            elif "/ws_pcm" in self.url:
+            elif "codec=pcm" in self.url:
                 endpoint_type = "PCM"
-            elif "/ws/audio" in self.url:
-                endpoint_type = "Unified (PCM/Opus)"
+            elif "/ws" in self.url:
+                endpoint_type = "Unified (codec via query param)"
             else:
                 endpoint_type = "Unknown"
             logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [{endpoint_type}]")
@@ -191,11 +192,11 @@ async def audio_relay_websocket(
     Audio relay WebSocket endpoint.
 
     Query parameters:
-    - destinations: JSON array of {"name": "chronicle", "url": "ws://host/chronicle/ws_pcm"}
+    - destinations: JSON array of {"name": "chronicle", "url": "ws://host/ws?codec=pcm"}
     - token: JWT token for authenticating to destinations
 
     Example:
-    ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://localhost:5001/chronicle/ws_pcm"},{"name":"mycelia","url":"ws://localhost:5173/ws_pcm"}]&token=YOUR_JWT
+    ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://host/ws?codec=pcm"},{"name":"mycelia","url":"ws://host/ws?codec=pcm"}]&token=YOUR_JWT
     """
     await websocket.accept()
     logger.info("[AudioRelay] Client connected")
@@ -204,6 +205,7 @@ async def audio_relay_websocket(
     try:
         destinations_param = websocket.query_params.get("destinations")
         token = websocket.query_params.get("token")
+        codec = websocket.query_params.get("codec", "pcm")  # Default to PCM if not specified
 
         if not destinations_param or not token:
             await websocket.close(code=1008, reason="Missing destinations or token parameter")
@@ -214,16 +216,28 @@ async def audio_relay_websocket(
             await websocket.close(code=1008, reason="destinations must be a non-empty array")
             return
 
+        # Add codec parameter to destination URLs if not already present
+        for dest in destinations:
+            if "codec=" not in dest['url']:
+                separator = "&" if "?" in dest['url'] else "?"
+                dest['url'] = f"{dest['url']}{separator}codec={codec}"
+
         logger.info(f"[AudioRelay] Destinations: {[d['name'] for d in destinations]}")
+        logger.info(f"[AudioRelay] Using codec: {codec}")
+
         # Log exact URLs received from client for debugging
         for dest in destinations:
-            # Note: /ws/audio is unified endpoint that accepts both PCM and Opus
+            # Detect endpoint type (check for old formats first, then new)
             if "/ws_omi" in dest['url']:
-                endpoint_type = "Opus"
+                endpoint_type = "Opus (LEGACY - use /ws?codec=opus)"
             elif "/ws_pcm" in dest['url']:
+                endpoint_type = "PCM (LEGACY - use /ws?codec=pcm)"
+            elif "codec=opus" in dest['url']:
+                endpoint_type = "Opus"
+            elif "codec=pcm" in dest['url']:
                 endpoint_type = "PCM"
-            elif "/ws/audio" in dest['url']:
-                endpoint_type = "Unified (PCM/Opus)"
+            elif "/ws" in dest['url']:
+                endpoint_type = "Unified (missing codec parameter)"
             else:
                 endpoint_type = "Unknown"
             logger.info(f"[AudioRelay] Client requested: {dest['name']} -> {dest['url']} [{endpoint_type}]")
@@ -235,8 +249,16 @@ async def audio_relay_websocket(
         await websocket.close(code=1011, reason=f"Error parsing parameters: {e}")
         return
 
+    # Bridge Keycloak token to service token so Chronicle/Mycelia can validate it
+    # (Chronicle and Mycelia use AUTH_SECRET_KEY HMAC tokens, not Keycloak JWT)
+    from src.services.token_bridge import bridge_to_service_token
+    service_token = await bridge_to_service_token(token, audiences=["ushadow", "chronicle"])
+    if not service_token:
+        await websocket.close(code=1008, reason="Token bridging failed: invalid or expired token")
+        return
+
     # Create relay session
-    session = AudioRelaySession(destinations, token)
+    session = AudioRelaySession(destinations, service_token)
 
     try:
         # Connect to all destinations
@@ -263,6 +285,17 @@ async def audio_relay_websocket(
                 message = await websocket.receive()
             except WebSocketDisconnect:
                 logger.info("[AudioRelay] Client disconnected")
+                break
+            except RuntimeError as e:
+                # Handle "Cannot call receive once a disconnect message has been received"
+                if "disconnect" in str(e).lower():
+                    logger.info("[AudioRelay] Client disconnected (disconnect message received)")
+                    break
+                raise
+
+            # Check for disconnect message type
+            if message.get("type") == "websocket.disconnect":
+                logger.info("[AudioRelay] Client disconnected (disconnect message)")
                 break
 
             # Relay text messages (Wyoming protocol headers)
@@ -306,5 +339,5 @@ async def relay_status():
             "destinations": "JSON array of destination configs",
             "token": "JWT token for destination authentication"
         },
-        "example_url": 'ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://host/chronicle/ws_pcm"}]&token=JWT'
+        "example_url": 'ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://host/ws?codec=pcm"}]&token=JWT'
     }

@@ -4,7 +4,7 @@
  * API client for fetching conversations and memories from the Chronicle backend.
  */
 
-import { getAuthToken, getApiUrl } from '../_utils/authStorage';
+import { getAuthToken, getApiUrl, getDefaultServerUrl } from '../_utils/authStorage';
 import { getActiveUnode } from '../_utils/unodeStorage';
 
 // Types matching Chronicle backend responses
@@ -256,10 +256,22 @@ export async function deleteMemory(memoryId: string): Promise<void> {
 }
 
 /**
+ * Extract base URL from a URL that might contain an API path.
+ * Examples:
+ * - "https://example.com/api/unodes/Orion/info" -> "https://example.com"
+ * - "https://example.com" -> "https://example.com"
+ */
+function extractBaseUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/$/, '');
+  // Remove any /api/... path to get the base URL
+  return trimmed.replace(/\/api\/.*$/, '');
+}
+
+/**
  * Verify authentication against a specific UNode API.
  * Makes a lightweight request to check if the token is still valid.
  *
- * @param apiUrl The UNode's API URL
+ * @param apiUrl The UNode's API URL (can be base URL or full endpoint path)
  * @param token The auth token to verify
  * @returns Object with auth status and optional error message
  */
@@ -268,8 +280,11 @@ export async function verifyUnodeAuth(
   token: string
 ): Promise<{ valid: boolean; error?: string; ushadowOk?: boolean; chronicleOk?: boolean }> {
   try {
+    // Extract base URL in case apiUrl contains an API path
+    const baseUrl = extractBaseUrl(apiUrl);
+
     // Check ushadow auth at /api/auth/me
-    const ushadowUrl = `${apiUrl}/api/auth/me`;
+    const ushadowUrl = `${baseUrl}/api/auth/me`;
     console.log(`[ChronicleAPI] Verifying ushadow auth at: ${ushadowUrl}`);
 
     const ushadowResponse = await fetch(ushadowUrl, {
@@ -281,7 +296,7 @@ export async function verifyUnodeAuth(
     console.log(`[ChronicleAPI] Ushadow auth: ${ushadowResponse.status}`);
 
     // Check chronicle auth using generic proxy pattern
-    const chronicleUrl = `${apiUrl}/api/services/chronicle-backend/proxy/users/me`;
+    const chronicleUrl = `${baseUrl}/api/services/chronicle-backend/proxy/users/me`;
     console.log(`[ChronicleAPI] Verifying chronicle auth at: ${chronicleUrl}`);
 
     const chronicleResponse = await fetch(chronicleUrl, {
@@ -292,19 +307,25 @@ export async function verifyUnodeAuth(
     const chronicleOk = chronicleResponse.ok;
     console.log(`[ChronicleAPI] Chronicle auth: ${chronicleResponse.status}`);
 
-    // Both must be OK for full auth
-    if (ushadowOk && chronicleOk) {
-      console.log('[ChronicleAPI] Auth verified successfully (both services)');
-      return { valid: true, ushadowOk: true, chronicleOk: true };
+    // Only ushadow auth is required for overall success
+    // Chronicle is optional since multiple audio sources are available
+    if (ushadowOk) {
+      if (chronicleOk) {
+        console.log('[ChronicleAPI] Auth verified successfully (both services)');
+        return { valid: true, ushadowOk: true, chronicleOk: true };
+      } else {
+        console.log('[ChronicleAPI] Auth verified (ushadow only, chronicle unavailable)');
+        return { valid: true, ushadowOk: true, chronicleOk: false };
+      }
     }
 
-    // Build error message based on what failed
+    // Build error message - only fail if ushadow failed
     const errors: string[] = [];
     if (!ushadowOk) {
       errors.push(`ushadow: ${ushadowResponse.status}`);
     }
     if (!chronicleOk) {
-      errors.push(`chronicle: ${chronicleResponse.status}`);
+      errors.push(`chronicle: ${chronicleResponse.status} (optional)`);
     }
 
     console.log(`[ChronicleAPI] Auth failed: ${errors.join(', ')}`);

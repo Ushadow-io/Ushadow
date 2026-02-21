@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Depends
@@ -34,6 +34,7 @@ class UNodeRegistrationRequest(BaseModel):
     """Request to register a u-node."""
     token: str
     hostname: str
+    envname: Optional[str] = None
     tailscale_ip: str
     platform: str = "unknown"
     manager_version: str = "0.1.0"
@@ -122,6 +123,7 @@ async def register_unode(request: UNodeRegistrationRequest):
 
     unode_create = UNodeCreate(
         hostname=request.hostname,
+        envname=request.envname,
         tailscale_ip=request.tailscale_ip,
         platform=platform,
         manager_version=request.manager_version,
@@ -174,6 +176,10 @@ async def list_unodes(
     """
     unode_manager = await get_unode_manager()
     unodes = await unode_manager.list_unodes(status=status, role=role)
+
+    # Debug: log labels for each unode
+    for unode in unodes:
+        logger.info(f"UNode {unode.hostname}: labels={unode.labels}")
 
     return UNodeListResponse(unodes=unodes, total=len(unodes))
 
@@ -375,6 +381,8 @@ class LeaderInfoResponse(BaseModel):
     """
     # Leader info
     hostname: str
+    envname: Optional[str] = None
+    display_name: Optional[str] = None
     tailscale_ip: str
     tailscale_hostname: Optional[str] = None  # Full Tailscale DNS name
     capabilities: UNodeCapabilities
@@ -383,6 +391,7 @@ class LeaderInfoResponse(BaseModel):
     # API URLs for specific services
     ushadow_api_url: str  # Main ushadow backend API
     chronicle_api_url: Optional[str] = None  # Chronicle/OMI backend API (if running)
+    keycloak_url: Optional[str] = None  # Keycloak authentication URL
 
     # Streaming URLs (only available when Chronicle service is running)
     ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
@@ -509,18 +518,87 @@ async def get_leader_info():
                 ws_omi_url=service_ws_omi_url,
             ))
 
+    # Build Keycloak URL for mobile devices (exposed on port 8081)
+    # Use HOST's Tailscale IP (leader's IP, not container's IP)
+    keycloak_url = f"http://{leader.tailscale_ip}:8081"
+
     return LeaderInfoResponse(
         hostname=leader.hostname,
+        envname=leader.envname,
+        display_name=leader.display_name,
         tailscale_ip=leader.tailscale_ip,
         tailscale_hostname=tailscale_hostname,
         capabilities=leader.capabilities,
         api_port=api_port,
         ushadow_api_url=ushadow_api_url,
         chronicle_api_url=chronicle_api_url,
+        keycloak_url=keycloak_url,
         ws_pcm_url=ws_pcm_url,
         ws_omi_url=ws_omi_url,
         unodes=unodes,
         services=services,
+    )
+
+
+class UNodeInfoResponse(BaseModel):
+    """Public unode information including Keycloak configuration."""
+    hostname: str
+    envname: Optional[str]
+    role: UNodeRole
+    status: UNodeStatus
+    tailscale_ip: str
+    api_url: str
+    keycloak_config: Optional[dict] = None
+
+
+@router.get("/{hostname}/info", response_model=UNodeInfoResponse)
+async def get_unode_info(hostname: str):
+    """
+    Get public information about a specific u-node.
+
+    This endpoint does NOT require authentication and is used by:
+    - Mobile apps after scanning QR code
+    - External tools that need to discover Keycloak config
+
+    Returns unode details including Keycloak configuration.
+    """
+    unode_manager = await get_unode_manager()
+    unode = await unode_manager.get_unode(hostname)
+
+    if not unode:
+        raise HTTPException(status_code=404, detail="UNode not found")
+
+    # Build API URL for this unode
+    # Use Tailscale IP or public IP depending on context
+    port = os.getenv("BACKEND_PORT", "8000")
+    api_url = f"http://{unode.tailscale_ip}:{port}"
+
+    # Get Keycloak configuration
+    from src.config.keycloak_settings import get_keycloak_config
+
+    kc_config = get_keycloak_config()
+
+    # Mobile URL: explicit override > auto-derived from Tailscale IP + KC port
+    kc_port = os.getenv("KC_PORT", "8081")
+    mobile_url = kc_config.get("mobile_url") or f"http://{unode.tailscale_ip}:{kc_port}"
+
+    keycloak_config = {
+        "enabled": True,  # If this endpoint is reached, Keycloak is configured
+        "public_url": kc_config.get("public_url"),
+        "mobile_url": mobile_url,
+        "realm": kc_config.get("realm"),
+        "frontend_client_id": kc_config.get("frontend_client_id"),
+        "mobile_client_id": "ushadow-mobile",  # Dedicated mobile client
+    }
+
+    return UNodeInfoResponse(
+        hostname=unode.hostname,
+        envname=unode.envname,
+        role=unode.role,
+        status=unode.status,
+        tailscale_ip=unode.tailscale_ip,
+        api_url=api_url,
+        keycloak_config=keycloak_config,
     )
 
 
@@ -530,7 +608,7 @@ async def get_unode(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get details of a specific u-node.
+    Get details of a specific u-node (authenticated).
     """
     unode_manager = await get_unode_manager()
     unode = await unode_manager.get_unode(hostname)
@@ -551,8 +629,9 @@ async def create_join_token(
     Returns the token and a one-liner join command.
     """
     unode_manager = await get_unode_manager()
+    from src.utils.auth_helpers import get_user_id
     response = await unode_manager.create_join_token(
-        user_id=current_user.id,
+        user_id=get_user_id(current_user),
         request=request
     )
 
@@ -733,3 +812,249 @@ async def upgrade_all_unodes(
             results["failed"].append({"hostname": unode.hostname, "error": message})
 
     return results
+
+
+# Create Public UNode
+class CreatePublicUNodeRequest(BaseModel):
+    """Request to create a virtual public unode."""
+    tailscale_auth_key: str
+    hostname: Optional[str] = None  # Defaults to ushadow-{env}-public
+    labels: Dict[str, str] = {"zone": "public", "funnel": "enabled"}
+
+
+class CreatePublicUNodeResponse(BaseModel):
+    """Response from creating a public unode."""
+    success: bool
+    message: str
+    hostname: str
+    join_token: Optional[str] = None
+    public_url: Optional[str] = None
+    compose_project: Optional[str] = None
+
+
+class UpdateUNodeLabelsRequest(BaseModel):
+    """Request to update unode labels."""
+    labels: Dict[str, str]
+
+
+@router.patch("/{hostname}/labels", response_model=UNode)
+async def update_unode_labels(
+    hostname: str,
+    request: UpdateUNodeLabelsRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Update labels for a specific unode."""
+    unode_manager = await get_unode_manager()
+
+    # Get the unode
+    unodes = await unode_manager.list_unodes()
+    unode = next((n for n in unodes if n.hostname == hostname), None)
+
+    if not unode:
+        raise HTTPException(status_code=404, detail=f"UNode {hostname} not found")
+
+    # Update labels in database
+    result = await unode_manager.unodes_collection.find_one_and_update(
+        {"hostname": hostname},
+        {"$set": {"labels": request.labels}},
+        return_document=True
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Failed to update unode {hostname}")
+
+    return UNode(**result)
+
+
+@router.post("/create-public", response_model=CreatePublicUNodeResponse)
+async def create_public_unode(
+    request: CreatePublicUNodeRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Create a virtual public unode on the same physical machine as the leader.
+
+    This creates a separate Docker compose stack with its own Tailscale instance
+    (with Funnel enabled) that can host public-facing services.
+
+    Steps:
+    1. Create join token
+    2. Generate compose configuration
+    3. Start public unode services
+    4. Enable Tailscale Funnel
+    5. Return status
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    # Get environment name from settings
+    from src.config import get_settings
+    settings = get_settings()
+    env_name = settings.get_sync("network.env_name", "orange")
+
+    # Generate hostname if not provided
+    hostname = request.hostname or f"ushadow-{env_name}-public"
+    compose_project = f"ushadow-{env_name}"
+
+    try:
+        # Step 1: Create join token
+        unode_manager = await get_unode_manager()
+
+        # Handle both dict (Keycloak) and User object
+        user_email = current_user.get('email') if isinstance(current_user, dict) else current_user.email
+
+        token_data = await unode_manager.create_join_token(
+            user_id=user_email,
+            request=JoinTokenCreate(role=UNodeRole.WORKER, max_uses=1, expires_in_hours=24)
+        )
+        join_token = token_data.token
+
+        logger.info(f"Created join token for public unode: {hostname}")
+
+        # Step 2: Get leader backend URL (Docker service name on shared network)
+        leader_url = f"http://ushadow-{env_name}-backend:8000"
+        logger.info(f"Using leader URL: {leader_url}")
+
+        # Step 3: Write .env file for public unode
+        # Write directly to /config which IS mounted from host
+        env_filename = "env.public-unode"  # No leading dot to avoid being hidden
+        env_file_container = Path("/config") / env_filename
+
+        # Host paths for docker compose command
+        project_root_host = os.environ.get("PROJECT_ROOT", "/Users/stu/repos/worktrees/ushadow/orange")
+        env_file_host = Path(project_root_host) / "config" / env_filename
+        compose_file_host = Path(project_root_host) / "compose" / "public-unode-compose.yaml"
+
+        logger.info(f"Writing .env to container: {env_file_container}")
+        logger.info(f"Maps to host: {env_file_host}")
+
+        env_content = f"""# Public UNode Environment Configuration
+ENV_NAME={env_name}
+COMPOSE_PROJECT_NAME={compose_project}
+PUBLIC_UNODE_HOSTNAME={hostname}
+TAILSCALE_PUBLIC_HOSTNAME={hostname}
+PUBLIC_UNODE_JOIN_TOKEN={join_token}
+TAILSCALE_PUBLIC_AUTH_KEY={request.tailscale_auth_key}
+LEADER_URL={leader_url}
+"""
+
+        # Write to mounted config directory (syncs to host automatically)
+        with open(env_file_container, 'w') as f:
+            f.write(env_content)
+
+        logger.info(f"Created env file at {env_file_container} (host: {env_file_host})")
+
+        # Step 4: Start public unode services
+        # Check compose file exists in container
+        compose_file_container = Path("/compose") / "public-unode-compose.yaml"
+        if not compose_file_container.exists():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Compose file not found: {compose_file_container}"
+            )
+
+        # Verify file exists in container (it's on a mounted volume)
+        if not env_file_container.exists():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Env file not found in container: {env_file_container}"
+            )
+
+        # Parse env file and pass vars directly (docker compose via socket can't read host files)
+        env_vars = {}
+        with open(env_file_container, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env_vars[key] = value
+
+        # Run docker compose with env vars directly (no --env-file needed)
+        cmd = [
+            "docker", "compose",
+            "-f", "/compose/public-unode-compose.yaml",  # Use container path for compose file
+            "-p", compose_project,  # Project name
+            "up", "-d"
+        ]
+        logger.info(f"Running: {' '.join(cmd)} with {len(env_vars)} env vars")
+
+        result = subprocess.run(
+            cmd,
+            cwd="/app",
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, **env_vars}  # Merge with current env
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Failed to start public unode: {result.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to start services: {result.stderr}"
+            )
+
+        logger.info(f"Started public unode services: {result.stdout}")
+
+        # Step 5: Register the public unode
+        # Wait briefly for manager to start
+        import asyncio
+        await asyncio.sleep(5)
+
+        # Get Tailscale IP from the manager container
+        try:
+            ts_ip_result = subprocess.run(
+                ["docker", "exec", f"{compose_project}-public-manager", "hostname", "-I"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # Get first IP (usually the Tailscale IP comes later, but we'll try)
+            tailscale_ip = ts_ip_result.stdout.strip().split()[0] if ts_ip_result.stdout else "100.0.0.1"
+        except:
+            tailscale_ip = "100.0.0.1"  # Placeholder
+
+        # Register the unode with labels
+        from src.models.unode import UNodePlatform
+        unode_create = UNodeCreate(
+            hostname=hostname,
+            envname=env_name,
+            tailscale_ip=tailscale_ip,
+            platform=UNodePlatform.LINUX,
+            manager_version="0.1.0",
+            labels=request.labels  # Include the public/funnel labels
+        )
+
+        success, unode, error = await unode_manager.register_unode(
+            join_token,
+            unode_create
+        )
+
+        if not success:
+            logger.warning(f"Failed to register public unode: {error}")
+            # Continue anyway - it may register on next heartbeat
+
+        # Step 6: The actual Funnel enabling happens via the Tailscale container
+
+        return CreatePublicUNodeResponse(
+            success=True,
+            message=f"Public unode '{hostname}' created and {'registered' if success else 'starting'}.",
+            hostname=hostname,
+            join_token=join_token[:20] + "...",  # Show partial token
+            public_url=f"https://{hostname}.ts.net (pending Tailscale connection)",
+            compose_project=compose_project
+        )
+
+    except subprocess.TimeoutExpired:
+        logger.error("Docker compose command timed out")
+        raise HTTPException(
+            status_code=500,
+            detail="Service startup timed out. Check Docker daemon."
+        )
+    except Exception as e:
+        logger.error(f"Failed to create public unode: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create public unode: {str(e)}"
+        )

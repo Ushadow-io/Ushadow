@@ -22,8 +22,9 @@ import {
   ConnectionLogViewer,
   LoginScreen,
   UnifiedStreamingPage,
+  BackgroundTaskDebugPanel,
 } from '../components';
-import { useConnectionLog } from '../hooks';
+import { useConnectionLog, useSessionTracking } from '../hooks';
 import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../theme';
 import {
   getAuthToken,
@@ -32,8 +33,12 @@ import {
   isAuthenticated,
   saveAuthToken,
   saveApiUrl,
+  getApiUrl,
+  getIdToken,
 } from '../_utils/authStorage';
+import { getActiveUnode } from '../_utils/unodeStorage';
 import { ConnectionState, createInitialConnectionState } from '../types/connectionLog';
+import { logoutFromKeycloak } from '../services/keycloakAuth';
 
 export default function HomeScreen() {
   // Auth state
@@ -41,17 +46,23 @@ export default function HomeScreen() {
   const [authInfo, setAuthInfo] = useState<{ email: string; userId: string } | null>(null);
   const [showLoginScreen, setShowLoginScreen] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [currentHostname, setCurrentHostname] = useState<string | undefined>(undefined);
+  const [currentApiUrl, setCurrentApiUrl] = useState<string | undefined>(undefined);
 
   // UI state
   const [showLogViewer, setShowLogViewer] = useState(false);
+  const [autoStartKeycloak, setAutoStartKeycloak] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     createInitialConnectionState()
   );
 
   // Connection logging hook
-  const { entries: logEntries, logEvent, clearLogs } = useConnectionLog();
+  const { entries: logEntries, connectionState: logConnectionState, logEvent, clearLogs, clearLogsByType } = useConnectionLog();
 
-  // Load auth state on mount
+  // Session tracking hook
+  const { sessions, startSession, updateSessionStatus, endSession, clearAllSessions } = useSessionTracking();
+
+  // Load auth state and unode info on mount
   useEffect(() => {
     const loadAuthState = async () => {
       try {
@@ -62,6 +73,30 @@ export default function HomeScreen() {
           setAuthToken(token);
           setAuthInfo(info);
           logEvent('server', 'connected', 'Authenticated session restored', info?.email);
+        }
+
+        // Load current unode hostname and API URL for Keycloak config
+        const activeUnode = await getActiveUnode();
+        const apiUrl = await getApiUrl();
+
+        console.log('[Home] Debug - activeUnode:', activeUnode);
+        console.log('[Home] Debug - apiUrl:', apiUrl);
+
+        if (activeUnode) {
+          // Use stored hostname (e.g., "Orion"), fallback to name if not set
+          const hostname = activeUnode.hostname || activeUnode.name;
+
+          setCurrentHostname(hostname);
+          // Always prefer the active unode's URL — getApiUrl() returns the last
+          // successful login URL which may point to a different (old) server.
+          setCurrentApiUrl(activeUnode.apiUrl);
+          console.log('[Home] Loaded active unode hostname:', hostname);
+          console.log('[Home] Loaded API URL:', activeUnode.apiUrl);
+        } else if (apiUrl) {
+          setCurrentApiUrl(apiUrl);
+          console.log('[Home] Loaded API URL (no active unode):', apiUrl);
+        } else {
+          console.log('[Home] No active unode or API URL found');
         }
       } catch (error) {
         console.error('[Home] Failed to load auth state:', error);
@@ -77,6 +112,8 @@ export default function HomeScreen() {
     useCallback(() => {
       const refreshAuthState = async () => {
         const authenticated = await isAuthenticated();
+        const activeUnode = await getActiveUnode();
+
         if (authenticated) {
           const token = await getAuthToken();
           const info = await getAuthInfo();
@@ -85,14 +122,34 @@ export default function HomeScreen() {
             setAuthToken(token);
             setAuthInfo(info);
           }
-        } else if (authToken) {
-          // Token was cleared or expired
-          setAuthToken(null);
-          setAuthInfo(null);
+        } else {
+          // Not authenticated
+          if (authToken) {
+            // Token was cleared or expired
+            setAuthToken(null);
+            setAuthInfo(null);
+          }
+
+          // Auto-show login if there's a recently saved unode (within last 5 seconds)
+          // This indicates a fresh QR scan, not just an old saved connection
+          if (activeUnode && !showLoginScreen && activeUnode.lastConnectedAt) {
+            const lastConnected = new Date(activeUnode.lastConnectedAt).getTime();
+            const now = Date.now();
+            const fiveSecondsAgo = now - 5000;
+
+            if (lastConnected > fiveSecondsAgo) {
+              console.log('[Home] Recently scanned QR code - showing login screen');
+              // Populate connection info from the freshly scanned unode
+              setCurrentApiUrl(activeUnode.apiUrl);
+              setCurrentHostname(activeUnode.hostname || activeUnode.name);
+              setAutoStartKeycloak(true);
+              setShowLoginScreen(true);
+            }
+          }
         }
       };
       refreshAuthState();
-    }, [authToken])
+    }, [authToken, showLoginScreen])
   );
 
   const handleLoginSuccess = useCallback(
@@ -103,6 +160,7 @@ export default function HomeScreen() {
       const info = await getAuthInfo();
       setAuthInfo(info);
       setShowLoginScreen(false);
+      setAutoStartKeycloak(false);
       setConnectionState((prev) => ({ ...prev, server: 'connected' }));
       logEvent('server', 'connected', 'Login successful', info?.email);
     },
@@ -110,12 +168,24 @@ export default function HomeScreen() {
   );
 
   const handleLogout = useCallback(async () => {
+    // Logout from Keycloak session first (if available)
+    if (currentApiUrl) {
+      try {
+        const idToken = await getIdToken();
+        console.log('[Home] Logging out with ID token:', idToken ? 'present' : 'missing');
+        await logoutFromKeycloak(currentApiUrl, idToken || undefined, currentHostname);
+      } catch (error) {
+        console.warn('[Home] Keycloak logout failed, continuing with local logout:', error);
+      }
+    }
+
+    // Clear local auth state
     await clearAuthToken();
     setAuthToken(null);
     setAuthInfo(null);
     setConnectionState((prev) => ({ ...prev, server: 'disconnected' }));
     logEvent('server', 'disconnected', 'Logged out');
-  }, [logEvent]);
+  }, [logEvent, currentApiUrl, currentHostname]);
 
   return (
     <SafeAreaView style={styles.container} testID="home-screen">
@@ -185,16 +255,33 @@ export default function HomeScreen() {
       <View style={styles.streamingContainer}>
         <UnifiedStreamingPage
           authToken={authToken}
-          onAuthRequired={() => setShowLoginScreen(true)}
+          onAuthRequired={(opts) => {
+            if (opts?.apiUrl) setCurrentApiUrl(opts.apiUrl);
+            if (opts?.hostname) setCurrentHostname(opts.hostname);
+            setShowLoginScreen(true);
+          }}
+          onWebSocketLog={(status, message, details) => logEvent('websocket', status, message, details)}
+          onBluetoothLog={(status, message, details) => logEvent('bluetooth', status, message, details)}
+          onSessionStart={startSession}
+          onSessionUpdate={updateSessionStatus}
+          onSessionEnd={endSession}
           testID="unified-streaming"
         />
+      </View>
+
+      {/* Background Task Debug Panel */}
+      <View style={styles.debugPanel}>
+        <BackgroundTaskDebugPanel testID="background-task-debug" />
       </View>
 
       {/* Login Screen Modal */}
       <LoginScreen
         visible={showLoginScreen}
-        onClose={() => setShowLoginScreen(false)}
+        onClose={() => { setShowLoginScreen(false); setAutoStartKeycloak(false); }}
         onLoginSuccess={handleLoginSuccess}
+        initialApiUrl={currentApiUrl}
+        hostname={currentHostname}
+        autoStartKeycloak={autoStartKeycloak}
       />
 
       {/* Connection Log Viewer Modal */}
@@ -202,8 +289,11 @@ export default function HomeScreen() {
         visible={showLogViewer}
         onClose={() => setShowLogViewer(false)}
         entries={logEntries}
-        connectionState={connectionState}
+        connectionState={logConnectionState}
+        sessions={sessions}
         onClearLogs={clearLogs}
+        onClearLogsByType={clearLogsByType}
+        onClearSessions={clearAllSessions}
       />
     </SafeAreaView>
   );
@@ -311,5 +401,9 @@ const styles = StyleSheet.create({
   streamingContainer: {
     flex: 1,
     paddingHorizontal: spacing.lg,
+  },
+  debugPanel: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
   },
 });

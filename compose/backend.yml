@@ -3,38 +3,47 @@
 services:
   backend:
     build:
-      context: ../ushadow/backend
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: ushadow/backend/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-backend
     env_file:
       - ../.env          # Environment configuration
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
-      # Server configuration
-      - HOST=0.0.0.0
-      - PORT=8000  # Internal port - always 8000
-      - BACKEND_PORT=${BACKEND_PORT:-8000}  # External port - uses offset from .env
+      # ── Host-specific (must be set at compose level) ──────────────────────
+      - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
+      - HOST_HOSTNAME=${HOST_HOSTNAME:-${HOSTNAME}}
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
+      - ENV_NAME=${ENV_NAME:-}
+      - BACKEND_PORT=${BACKEND_PORT:-8000}
+
+      # ── Infrastructure URLs ───────────────────────────────────────────────
       - REDIS_URL=redis://redis:6379/${REDIS_DATABASE:-0}
       # Tailscale IP for node registration (set via .env or detected)
+
+      # ── Tailscale ─────────────────────────────────────────────────────────
       - TAILSCALE_IP=${TAILSCALE_IP:-}
       # Tailscale container name for peer discovery (docker exec)
       - TAILSCALE_CONTAINER=tailscale
       # Host project root for docker compose volume mounts (required for service management)
       - PROJECT_ROOT=${PROJECT_ROOT:-${PWD}}
-      # Compose project name for per-environment Tailscale containers
-      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-ushadow}
-      # Config directory location
-      - CONFIG_DIR=/config
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:${WEBUI_PORT}}
-      # Rich console width for logging (prevents log wrapping)
-      - COLUMNS=200
+
+      # ── Keycloak (KC_ vars loaded via env_file above, no translation needed) ──
+      # KC_URL, KC_HOSTNAME_URL, KC_MOBILE_URL, KC_REALM, KC_FRONTEND_CLIENT_ID,
+      # KC_BACKEND_CLIENT_ID, KC_CLIENT_SECRET, KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD
+      # See config/config.defaults.yaml → keycloak.* for how they map to OmegaConf keys
+      - POSTGRES_USER=${POSTGRES_USER:-ushadow}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
+      - POSTGRES_DB=${POSTGRES_DB:-ushadow}
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config  # Mount config directory (read-write for feature flags)
       - ../compose:/compose  # Mount compose files for service management
       - ../mycelia:/mycelia  # Mount mycelia for building mycelia-backend service
+      - ../openmemory:/openmemory  # Mount openmemory for building openmemory services
       - /app/__pycache__
       - /app/.pytest_cache
       - /app/.venv  # Mask host .venv - container uses its own venv from image

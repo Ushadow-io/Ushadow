@@ -6,7 +6,7 @@
 
 export { default as ConnectionLogViewer } from './ConnectionLogViewer';
 export { default as LeaderDiscovery } from './LeaderDiscovery';
-export { default as LoginScreen } from './LoginScreen';
+export { default as LoginScreen } from './LoginScreenWithKeycloak';  // Use Keycloak-enabled version
 export { default as QRScanner } from './QRScanner';
 export { default as StreamUrlSettings } from './StreamUrlSettings';
 export { default as UNodeList } from './UNodeList';
@@ -15,6 +15,9 @@ export { default as UNodeList } from './UNodeList';
 export { OmiDeviceScanner } from './OmiDeviceScanner';
 export { OmiDeviceCard } from './OmiDeviceCard';
 export { OmiDeviceSection } from './OmiDeviceSection';
+
+// Debug Components
+export { BackgroundTaskDebugPanel } from './BackgroundTaskDebugPanel';
 
 // Streaming Components (unified)
 export {

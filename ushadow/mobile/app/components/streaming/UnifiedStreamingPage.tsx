@@ -33,6 +33,7 @@ import { LeaderDiscovery } from '../LeaderDiscovery';
 
 // Hooks
 import { useStreaming } from '../../hooks/useStreaming';
+import { useLiveActivity } from '../../hooks/useLiveActivity';
 import { useOmiConnection } from '../../contexts/OmiConnectionContext';
 import { useDeviceConnection } from '../../hooks/useDeviceConnection';
 import { useAudioListener } from '../../hooks/useAudioListener';
@@ -59,15 +60,29 @@ import { appendTokenToUrl, saveAuthToken } from '../../_utils/authStorage';
 import { verifyUnodeAuth } from '../../services/chronicleApi';
 import { AudioDestination } from '../../services/audioProviderApi';
 
+// Types
+import { SessionSource as SessionSourceType } from '../../types/streamingSession';
+import { RelayStatus } from '../../hooks/useAudioStreamer';
+
 interface UnifiedStreamingPageProps {
   authToken: string | null;
-  onAuthRequired?: () => void;
+  onAuthRequired?: (opts?: { apiUrl?: string; hostname?: string }) => void;
+  onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onBluetoothLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  onSessionStart?: (source: SessionSourceType, codec: 'pcm' | 'opus') => Promise<string>;
+  onSessionUpdate?: (sessionId: string, relayStatus: RelayStatus) => void;
+  onSessionEnd?: (sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout') => void;
   testID?: string;
 }
 
 export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   authToken,
   onAuthRequired,
+  onWebSocketLog,
+  onBluetoothLog,
+  onSessionStart,
+  onSessionUpdate,
+  onSessionEnd,
   testID = 'unified-streaming',
 }) => {
   // Source state
@@ -95,13 +110,19 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   const streamingStartTime = useRef<Date | null>(null);
   const [startTime, setStartTime] = useState<Date | undefined>(undefined);
 
+  // Session tracking
+  const currentSessionIdRef = useRef<string | null>(null);
+
   // OMI connection context
   const omiConnection = useOmiConnection();
 
   // Phone microphone streaming hook
   const phoneStreaming = useStreaming();
 
-  // OMI device connection
+  // Live Activity for OMI streaming (phone mic manages its own via useStreaming)
+  const omiLiveActivity = useLiveActivity();
+
+  // OMI device connection with bluetooth logging
   const {
     connectedDeviceId,
     isConnecting: isOmiConnecting,
@@ -110,7 +131,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     batteryLevel,
     getBatteryLevel,
     currentCodec, // BROKEN: codec detection unreliable, so we hardcode Opus for all OMI devices
-  } = useDeviceConnection(omiConnection);
+  } = useDeviceConnection(omiConnection, {
+    onLog: onBluetoothLog,
+  });
 
   // Derive OMI connection status for SourceSelector
   const omiConnectionStatus: 'disconnected' | 'connecting' | 'connected' =
@@ -131,7 +154,14 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   } = useAudioListener(omiConnection, isOmiConnected);
 
   // WebSocket streamer for OMI
-  const omiStreamer = useAudioStreamer();
+  const omiStreamer = useAudioStreamer({
+    onLog: onWebSocketLog,
+    onRelayStatus: (status) => {
+      if (currentSessionIdRef.current && onSessionUpdate) {
+        onSessionUpdate(currentSessionIdRef.current, status);
+      }
+    },
+  });
 
   // Combined state
   const isStreaming = selectedSource.type === 'microphone'
@@ -149,6 +179,30 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       isListeningAudio,
     });
   }, [selectedSource.type, isStreaming, phoneStreaming.isStreaming, phoneStreaming.isRecording, omiStreamer.isStreaming, isListeningAudio]);
+
+  // Monitor for permanent connection failures (when reconnection attempts exhausted)
+  useEffect(() => {
+    const currentError = selectedSource.type === 'microphone' ? phoneStreaming.error : omiStreamer.error;
+    const currentRetrying = selectedSource.type === 'microphone' ? phoneStreaming.isRetrying : omiStreamer.isRetrying;
+    const wasStreaming = selectedSource.type === 'microphone' ? phoneStreaming.isStreaming : omiStreamer.isStreaming;
+
+    // If there's an error, not retrying anymore, and we have an active session, it means connection failed permanently
+    if (currentError && !currentRetrying && !wasStreaming && currentSessionIdRef.current && onSessionEnd) {
+      console.log('[UnifiedStreaming] Connection failed permanently, ending session');
+      const endReason = currentError.toLowerCase().includes('timeout') ? 'timeout' : 'connection_lost';
+      onSessionEnd(currentSessionIdRef.current, currentError, endReason);
+      currentSessionIdRef.current = null;
+    }
+  }, [
+    selectedSource.type,
+    phoneStreaming.error,
+    phoneStreaming.isRetrying,
+    phoneStreaming.isStreaming,
+    omiStreamer.error,
+    omiStreamer.isRetrying,
+    omiStreamer.isStreaming,
+    onSessionEnd,
+  ]);
 
   const isConnecting = selectedSource.type === 'microphone'
     ? phoneStreaming.isConnecting
@@ -256,6 +310,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (result.valid) {
         setAuthStatus('authenticated');
         setAuthError(null);
+
+        // Discover audio endpoints after successful authentication
+        console.log('[UnifiedStreaming] Auth verified, discovering audio endpoints...');
+        await discoverDestinations();
       } else {
         // Determine if expired or error based on message
         if (result.error?.includes('expired') || result.error?.includes('Session')) {
@@ -270,7 +328,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       setAuthStatus('error');
       setAuthError((err as Error).message || 'Verification failed');
     }
-  }, [authToken]);
+  }, [authToken, discoverDestinations]);
 
   // Verify auth when selected UNode changes
   useEffect(() => {
@@ -333,12 +391,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       console.log(`[UnifiedStreaming] Found ${destinations.length} destination(s) supporting ${audioFormat}:`,
         destinations.map(d => d.instance_name));
 
-      if (destinations.length === 0) {
-        Alert.alert(
-          'No Compatible Destinations',
-          `No running audio services found that support ${audioFormat} format. Please check service configuration.`
-        );
-      }
+      // Don't show alert here - user can see the count and try again if needed
+      // Alert only shown when trying to start a stream with no destinations selected
     } catch (err) {
       console.error('[UnifiedStreaming] Failed to discover destinations:', err);
       Alert.alert('Discovery Failed', err instanceof Error ? err.message : 'Failed to discover audio destinations');
@@ -348,10 +402,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
   }, [selectedUNode, authToken, selectedSource.type]);
 
-  // Discover destinations when UNode, auth, or source type changes
-  useEffect(() => {
-    discoverDestinations();
-  }, [discoverDestinations]);
+  // Note: Destination discovery is now manual - only happens when user explicitly requests it
+  // or when starting a stream. This prevents constant alerts when auth changes.
+  // Removed automatic discovery on UNode/auth/source changes.
 
   // Build stream URL using selected destinations
   const getStreamUrl = useCallback(async (): Promise<string | null> => {
@@ -371,11 +424,15 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
       const { buildRelayUrl } = await import('../../services/audioProviderApi');
 
+      // Determine audio source for codec parameter
+      // mic = pcm, omi = opus
+      const audioSource = selectedSource.type === 'microphone' ? 'mic' : 'omi';
+
       // Always use relay URL (even for single destination)
       // Mobile can't connect directly to internal Docker container names like "chronicle:5001"
       // The relay handles forwarding to internal services
-      const streamUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, selectedDestinations);
-      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s):', streamUrl);
+      const streamUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, selectedDestinations, audioSource);
+      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s) with codec:', audioSource === 'mic' ? 'pcm' : 'opus', streamUrl);
 
       return streamUrl;
     } catch (err) {
@@ -383,7 +440,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to build stream URL');
       return null;
     }
-  }, [selectedUNode, authToken, availableDestinations, selectedDestinationIds]);
+  }, [selectedUNode, authToken, availableDestinations, selectedDestinationIds, selectedSource.type]);
 
   // Handle source change
   const handleSourceChange = useCallback(async (source: StreamSource) => {
@@ -394,6 +451,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       } else {
         await stopAudioListener();
         omiStreamer.stopStreaming();
+        omiLiveActivity.stopActivity();
       }
     }
 
@@ -433,6 +491,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       canStream,
     });
 
+    // Discover destinations if not already done
+    if (availableDestinations.length === 0 && !isDiscoveringDestinations) {
+      console.log('[UnifiedStreaming] No destinations available, discovering now...');
+      await discoverDestinations();
+    }
+
     const streamUrl = await getStreamUrl();
     if (!streamUrl) {
       // Error alert already shown by getStreamUrl if needed
@@ -441,6 +505,19 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
 
     console.log('[UnifiedStreaming] Starting stream to:', streamUrl);
+
+    // Start session tracking
+    if (onSessionStart) {
+      const sessionSource: SessionSourceType = selectedSource.type === 'omi' && selectedSource.deviceId
+        ? { type: 'omi', deviceId: selectedSource.deviceId, deviceName: selectedSource.deviceName }
+        : { type: 'microphone' };
+
+      const codec = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
+      const sessionId = await onSessionStart(sessionSource, codec);
+      currentSessionIdRef.current = sessionId;
+      console.log('[UnifiedStreaming] Session started:', sessionId);
+    }
+
     try {
       if (selectedSource.type === 'microphone') {
         // Phone microphone uses PCM
@@ -465,10 +542,19 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
             await omiStreamer.sendAudio(audioBytes);
           }
         });
+
+        omiLiveActivity.startActivity(selectedSource.deviceName ?? 'OMI Device');
       }
     } catch (err) {
+      const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[UnifiedStreaming] Failed to start streaming:', err);
-      Alert.alert('Streaming Error', (err as Error).message || 'Failed to start streaming');
+      Alert.alert('Streaming Error', errorMessage);
+
+      // End session with error
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
+        currentSessionIdRef.current = null;
+      }
     }
   }, [
     selectedSource,
@@ -478,6 +564,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     connectOmiDevice,
     omiStreamer,
     startAudioListener,
+    onSessionStart,
+    onSessionEnd,
   ]);
 
   // Stop streaming
@@ -488,11 +576,25 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       } else {
         await stopAudioListener();
         omiStreamer.stopStreaming();
+        omiLiveActivity.stopActivity();
+      }
+
+      // End session (clean stop via user button)
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, undefined, 'manual_stop');
+        currentSessionIdRef.current = null;
       }
     } catch (err) {
+      const errorMessage = (err as Error).message || 'Failed to stop streaming';
       console.error('[UnifiedStreaming] Failed to stop streaming:', err);
+
+      // End session with error
+      if (currentSessionIdRef.current && onSessionEnd) {
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
+        currentSessionIdRef.current = null;
+      }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer]);
+  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, onSessionEnd]);
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {
@@ -530,10 +632,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   }, [selectedSource]);
 
   // Handle UNode found
-  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string) => {
+  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
     const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
     const savedUnode = await saveUnode({
       name,
+      hostname,
       apiUrl,
       chronicleApiUrl,
       streamUrl,
@@ -551,7 +654,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     setSelectedUnodeId(savedUnode.id);
     await setActiveUnodeStorage(savedUnode.id);
     setShowUnodeDiscovery(false);
-  }, []);
+
+    // If not authenticated, immediately prompt login with the new unode's connection details
+    if (!authToken && onAuthRequired) {
+      onAuthRequired({ apiUrl, hostname });
+    }
+  }, [authToken, onAuthRequired]);
 
   // Handle UNode removed
   const handleRemoveUnode = useCallback(async (unodeId: string) => {

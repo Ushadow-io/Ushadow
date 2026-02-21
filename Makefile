@@ -7,7 +7,8 @@
         go install status health dev prod \
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
-        release
+        ushadow-push ushadow-push-local chronicle-push mycelia-push openmemory-push \
+        release env-sync env-sync-apply env-info
 
 # Read .env for display purposes only (actual logic is in run.py)
 -include .env
@@ -44,6 +45,13 @@ help:
 	@echo "  make chronicle-down-local   - Stop local Chronicle"
 	@echo "  make chronicle-dev          - Build + run (full dev cycle)"
 	@echo ""
+	@echo "Build & Push:"
+	@echo "  make ushadow-push [TAG=latest]            - Build and push ushadow to ghcr.io"
+	@echo "  K8S_REGISTRY=host:port make ushadow-push-local - Build and push ushadow to local K8s registry"
+	@echo "  make chronicle-push [TAG=latest]          - Build and push Chronicle to ghcr.io"
+	@echo "  make mycelia-push [TAG=latest]            - Build and push Mycelia to ghcr.io"
+	@echo "  make openmemory-push [TAG=latest]         - Build and push OpenMemory to ghcr.io"
+	@echo ""
 	@echo "Service management:"
 	@echo "  make rebuild <service>  - Rebuild service from compose/<service>-compose.yml"
 	@echo "                            (e.g., make rebuild mycelia, make rebuild chronicle)"
@@ -71,11 +79,28 @@ help:
 	@echo "  make lint         - Run linters"
 	@echo "  make format       - Format code"
 	@echo ""
+	@echo "Environment commands:"
+	@echo "  make env-info     - Show current environment info"
+	@echo "  make env-sync     - Check for missing variables from .env.example"
+	@echo "  make env-sync-apply - Add missing variables to .env"
+	@echo ""
 	@echo "Cleanup commands:"
 	@echo "  make clean-logs   - Remove log files"
 	@echo "  make clean-cache  - Remove Python cache files"
 	@echo "  make reset        - Full reset (stop all, remove volumes, clean)"
 	@echo "  make reset-tailscale - Reset Tailscale (container, state, certs)"
+	@echo ""
+	@echo "Kubernetes DNS commands:"
+	@echo "  make k8s-add-service-dns SVC=<name> NS=<ns> NAMES=\"<aliases>\" - Add service to DNS"
+	@echo "  make k8s-add-service-dns-interactive - Add service (interactive)"
+	@echo "  make k8s-show-dns                    - Show current DNS mappings"
+	@echo "  make k8s-test-dns                    - Test DNS resolution"
+	@echo ""
+	@echo "Keycloak realm management:"
+	@echo "  make keycloak-delete-realm - Delete the ushadow realm"
+	@echo "  make keycloak-create-realm - Create realm from realm-export.json"
+	@echo "  make keycloak-reset-realm  - Delete and recreate realm"
+	@echo "  make keycloak-fresh-start  - Complete fresh setup (stop, clear DB, restart, import)"
 	@echo ""
 	@echo "Launcher release:"
 	@echo "  make release VERSION=x.y.z [PLATFORMS=all] [DRAFT=true]"
@@ -195,6 +220,53 @@ chronicle-dev: chronicle-build-local chronicle-up-local
 	@echo "🎉 Chronicle dev environment ready"
 
 # =============================================================================
+# Build & Push to GHCR
+# =============================================================================
+# Build and push multi-arch images to GitHub Container Registry
+# Requires: docker login ghcr.io -u USERNAME --password-stdin
+
+# ushadow - Build and push backend + frontend to ghcr.io
+ushadow-push:
+	@./scripts/build-push-images.sh ushadow $(TAG)
+
+# ushadow - Build and push to local K8s registry
+# Set K8S_REGISTRY environment variable to your registry (e.g., localhost:32000, registry.local:5000)
+ushadow-push-local:
+	@if [ -z "$(K8S_REGISTRY)" ]; then \
+		echo "❌ Error: K8S_REGISTRY not set"; \
+		echo ""; \
+		echo "Usage: K8S_REGISTRY=localhost:32000 make ushadow-push-local"; \
+		echo ""; \
+		echo "Example registries:"; \
+		echo "  - localhost:32000 (microk8s)"; \
+		echo "  - registry.local:5000 (custom registry)"; \
+		exit 1; \
+	fi
+	@echo "🏗️  Building for $(K8S_REGISTRY) (amd64)..."
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-backend:latest -f ushadow/backend/Dockerfile .
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/ushadow-frontend:latest ushadow/frontend/
+	@echo "📤 Pushing to $(K8S_REGISTRY)..."
+	@docker push $(K8S_REGISTRY)/ushadow-backend:latest
+	@docker push $(K8S_REGISTRY)/ushadow-frontend:latest
+	@echo "✅ Images pushed to $(K8S_REGISTRY)"
+	@echo ""
+	@echo "To update K8s deployments:"
+	@echo "  kubectl delete pod -n ushadow -l app.kubernetes.io/name=ushadow-backend"
+	@echo "  kubectl delete pod -n ushadow -l app.kubernetes.io/name=ushadow-frontend"
+
+# Chronicle - Build and push backend + webui
+chronicle-push:
+	@./scripts/build-push-images.sh chronicle $(TAG)
+
+# Mycelia - Build and push backend
+mycelia-push:
+	@./scripts/build-push-images.sh mycelia $(TAG)
+
+# OpenMemory - Build and push server
+openmemory-push:
+	@./scripts/build-push-images.sh openmemory $(TAG)
+
+# =============================================================================
 # Service Management (via ushadow API)
 # =============================================================================
 # These commands use the ushadow API to manage services, ensuring env vars
@@ -281,12 +353,9 @@ health:
 # Development commands
 install:
 	@echo "📦 Installing dependencies..."
-	@cd ushadow/backend && \
-		if [ ! -d .venv ]; then uv venv --python 3.12; fi && \
-		uv pip install -e ".[dev]" --python .venv/bin/python && \
-		uv pip install -r ../../robot_tests/requirements.txt --python .venv/bin/python
-	cd ushadow/frontend && npm install
-	@echo "✅ Dependencies installed"
+	@echo "⚠️  Use 'pixi run install' instead for shared pixi environment"
+	@echo "   Or run: pixi shell, then run make targets"
+	@exit 1
 
 # =============================================================================
 # Backend Tests (pytest) - Test Pyramid Base
@@ -295,22 +364,22 @@ install:
 # Fast unit tests only (no services needed) - should complete in seconds
 test:
 	@echo "🧪 Running unit tests..."
-	@cd ushadow/backend && .venv/bin/pytest -m "unit and not tdd" -q --tb=short
+	@cd ushadow/backend && pytest -m "unit and not tdd" -q --tb=short
 
 # Integration tests (need MongoDB, Redis running)
 test-integration:
 	@echo "🧪 Running integration tests..."
-	@cd ushadow/backend && .venv/bin/pytest -m "integration and not tdd" -v --tb=short
+	@cd ushadow/backend && pytest -m "integration and not tdd" -v --tb=short
 
 # TDD tests (expected to fail - for tracking progress)
 test-tdd:
 	@echo "🧪 Running TDD tests (expected failures)..."
-	@cd ushadow/backend && .venv/bin/pytest -m "tdd" -v
+	@cd ushadow/backend && pytest -m "tdd" -v
 
 # All backend tests (unit + integration, excludes TDD)
 test-all:
 	@echo "🧪 Running all backend tests..."
-	@cd ushadow/backend && .venv/bin/pytest -m "not tdd" -v --tb=short
+	@cd ushadow/backend && pytest -m "not tdd" -v --tb=short
 
 # =============================================================================
 # Robot Framework Tests (API/E2E) - Test Pyramid Top
@@ -319,43 +388,38 @@ test-all:
 # Quick smoke tests - health checks and critical paths (~30 seconds)
 test-robot-quick:
 	@echo "🤖 Running quick smoke tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --include quick \
-		      ../../robot_tests/api/api_health_check.robot \
-		      ../../robot_tests/api/service_config_scenarios.robot
+	@robot --outputdir robot_results \
+	      --include quick \
+	      robot_tests/api/api_health_check.robot \
+	      robot_tests/api/service_config_scenarios.robot
 
 # Critical path tests only - must-pass scenarios
 test-robot-critical:
 	@echo "🤖 Running critical path tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --include critical \
-		      ../../robot_tests/api/
+	@robot --outputdir robot_results \
+	      --include critical \
+	      robot_tests/api/
 
 # All API integration tests
 test-robot-api:
 	@echo "🤖 Running all API tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --exclude wip \
-		      ../../robot_tests/api/
+	@robot --outputdir robot_results \
+	      --exclude wip \
+	      robot_tests/api/
 
 # Feature-level tests (memory feedback, etc.)
 test-robot-features:
 	@echo "🤖 Running feature tests..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --exclude wip \
-		      ../../robot_tests/features/
+	@robot --outputdir robot_results \
+	      --exclude wip \
+	      robot_tests/features/
 
 # All Robot tests (full suite) - may take several minutes
 test-robot:
 	@echo "🤖 Running full Robot test suite..."
-	@cd ushadow/backend && source .venv/bin/activate && \
-		robot --outputdir ../../robot_results \
-		      --exclude wip \
-		      ../../robot_tests/
+	@robot --outputdir robot_results \
+	      --exclude wip \
+	      robot_tests/
 
 # View last test report in browser
 test-report:
@@ -412,6 +476,43 @@ network-create:
 network-remove:
 	docker network rm ushadow-network 2>/dev/null || true
 
+# =============================================================================
+# Kubernetes DNS Management
+# =============================================================================
+# Add services to Kubernetes CoreDNS for short-name access via Tailscale
+# Example: make k8s-add-service-dns SVC=mycelium NS=ushadow NAMES="mycelium fungi network"
+
+k8s-add-service-dns: ## Add DNS entry for a Kubernetes service (interactive)
+	@if [ -z "$(SVC)" ] || [ -z "$(NS)" ] || [ -z "$(NAMES)" ]; then \
+		echo "Usage: make k8s-add-service-dns SVC=<service> NS=<namespace> NAMES=\"<shortname1> [shortname2]...\""; \
+		echo ""; \
+		echo "Examples:"; \
+		echo "  make k8s-add-service-dns SVC=mycelium NS=ushadow NAMES=\"mycelium fungi\""; \
+		echo "  make k8s-add-service-dns SVC=neo4j NS=ushadow NAMES=\"neo4j graph\""; \
+		echo ""; \
+		echo "Or run interactively:"; \
+		echo "  make k8s-add-service-dns-interactive"; \
+		exit 1; \
+	fi
+	@./k8s/scripts/dns/add-service-dns.sh $(SVC) $(NS) $(NAMES)
+
+k8s-add-service-dns-interactive: ## Add DNS entry (prompts for input)
+	@echo "🌐 Add Kubernetes Service to DNS"
+	@echo ""
+	@read -p "Service name: " service; \
+	read -p "Namespace: " namespace; \
+	read -p "Short names (space-separated): " names; \
+	./k8s/scripts/dns/add-service-dns.sh $$service $$namespace $$names
+
+k8s-show-dns: ## Show current DNS mappings
+	@echo "📋 Current DNS Mappings:"
+	@echo ""
+	@kubectl get configmap chakra-dns-hosts -n kube-system -o jsonpath='{.data.chakra\.hosts}' 2>/dev/null || \
+		echo "❌ DNS ConfigMap not found. Run setup first."
+
+k8s-test-dns: ## Test DNS resolution for ushadow services
+	@./k8s/scripts/dns/test-ushadow-dns.sh
+
 # Show environment info
 env-info:
 	@echo "=== Environment Information ==="
@@ -420,6 +521,14 @@ env-info:
 	@echo "WEBUI_PORT: $${WEBUI_PORT:-3000}"
 	@echo "CHRONICLE_PORT: $${CHRONICLE_PORT:-8000}"
 	@echo "MONGODB_DATABASE: $${MONGODB_DATABASE:-ushadow}"
+
+# Sync .env with .env.example (show missing variables)
+env-sync:
+	@uv run scripts/sync-env.py
+
+# Sync .env with .env.example (apply missing variables)
+env-sync-apply:
+	@uv run scripts/sync-env.py --apply
 
 # Launcher release - triggers GitHub Actions workflow
 # Usage: make release VERSION=0.4.2 [PLATFORMS=macos] [DRAFT=true] [RELEASE_NAME="Bug Fixes"]
@@ -454,3 +563,78 @@ release:
 	@echo "✅ Release workflow triggered!"
 	@echo "   View progress: gh run list --workflow=launcher-release.yml"
 	@echo "   Or visit: https://github.com/$$(git config --get remote.origin.url | sed 's/.*github.com[:/]\(.*\)\.git/\1/')/actions"
+
+# Keycloak realm management
+keycloak-delete-realm:
+	@echo "🗑️  Deleting Keycloak realm 'ushadow'..."
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+		--server http://localhost:8080 \
+		--realm master \
+		--user admin \
+		--password admin > /dev/null 2>&1 || \
+		(echo "⚠️  Keycloak not running" && exit 1)
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh delete realms/ushadow 2>/dev/null || \
+		(echo "⚠️  Realm doesn't exist" && exit 1)
+	@echo "✅ Realm deleted"
+
+keycloak-create-realm:
+	@echo "📦 Creating Keycloak realm 'ushadow' from realm-export.json..."
+	@if [ ! -f config/keycloak/realm-export.json ]; then \
+		echo "❌ Error: config/keycloak/realm-export.json not found"; \
+		exit 1; \
+	fi
+	@docker cp config/keycloak/realm-export.json keycloak:/tmp/realm-import.json
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+		--server http://localhost:8080 \
+		--realm master \
+		--user admin \
+		--password admin
+	@docker exec keycloak /opt/keycloak/bin/kcadm.sh create realms \
+		-f /tmp/realm-import.json
+	@echo "✅ Realm created and configured"
+
+keycloak-reset-realm: keycloak-delete-realm keycloak-create-realm
+	@echo "✅ Realm reset complete"
+
+keycloak-fresh-start:
+	@echo "🔄 Starting fresh Keycloak setup..."
+	@echo "1. Stopping Keycloak..."
+	@docker stop keycloak 2>/dev/null || true
+	@docker rm keycloak 2>/dev/null || true
+	@echo "2. Clearing Keycloak database..."
+	@docker exec postgres psql -U ushadow -d ushadow -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
+		echo "⚠️  Database already clean or Postgres not running"
+	@echo "3. Starting Keycloak (realm will import automatically)..."
+	@docker-compose -f compose/docker-compose.infra.yml --profile infra up -d keycloak
+	@echo "4. Waiting for Keycloak health check..."
+	@for i in {1..60}; do \
+		printf "   Checking health (attempt $$i/60)...\r"; \
+		if curl -sf http://localhost:$${KEYCLOAK_MGMT_PORT:-9000}/health/ready > /dev/null 2>&1; then \
+			echo "\n   ✅ Keycloak is healthy                    "; \
+			break; \
+		fi; \
+		if [ $$i -eq 60 ]; then \
+			echo "\n   ⚠️  Keycloak health check timeout - check logs: docker logs keycloak"; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done
+	@echo "5. Waiting for realm import to complete..."
+	@for i in {1..30}; do \
+		printf "   Checking realm (attempt $$i/30)...\r"; \
+		if curl -sf http://localhost:$${KEYCLOAK_PORT:-8081}/realms/ushadow > /dev/null 2>&1; then \
+			echo "\n   ✅ Realm 'ushadow' is ready                    "; \
+			break; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "\n   ⚠️  Realm import timeout - check logs: docker logs keycloak"; \
+		fi; \
+		sleep 2; \
+	done
+	@echo "6. Restarting backend..."
+	@docker ps --format "{{.Names}}" | grep -E "^ushadow-.*-backend$$" | grep -v chronicle | grep -v mycelia | head -1 | xargs -r docker restart
+	@echo "✅ Backend restarted"
+	@echo "✅ Fresh Keycloak setup complete"
+	@echo "   Admin console: http://localhost:$${KEYCLOAK_PORT:-8081}"
+	@echo "   Username: admin"
+	@echo "   Password: admin"

@@ -1,7 +1,7 @@
 /**
  * Tab Layout for Ushadow Mobile
  *
- * Bottom tab navigation with Home, Conversations, and Memories tabs.
+ * Bottom tab navigation with Home, Chat, Feed, History, and Memories tabs.
  * Uses safe area insets to avoid being cut off by home indicator.
  */
 
@@ -65,6 +65,21 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="feeds"
+        options={{
+          title: 'Feed',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'newspaper' : 'newspaper-outline'}
+              size={size}
+              color={color}
+              testID="tab-icon-feeds"
+            />
+          ),
+          tabBarAccessibilityLabel: 'Feed Tab',
+        }}
+      />
+      <Tabs.Screen
         name="conversations"
         options={{
           title: 'History',
@@ -93,6 +108,11 @@ export default function TabLayout() {
           ),
           tabBarAccessibilityLabel: 'Memories Tab',
         }}
+      />
+      {/* Sessions page is accessible via Connection Logs modal (home screen header) */}
+      <Tabs.Screen
+        name="sessions"
+        options={{ href: null }}
       />
     </Tabs>
   );

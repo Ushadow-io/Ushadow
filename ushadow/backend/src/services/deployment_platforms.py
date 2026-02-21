@@ -80,6 +80,7 @@ class DeployPlatform(ABC):
         deployment_id: str,
         namespace: Optional[str] = None,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """
         Deploy a service to this target.
@@ -168,23 +169,73 @@ class DockerDeployPlatform(DeployPlatform):
         container_name: str,
         project_name: str,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """Deploy directly to local Docker (bypasses unode manager)."""
         try:
             docker_client = docker.from_env()
 
-            # Parse ports to Docker format
+            # Force rebuild if requested
+            if force_rebuild:
+                logger.info(f"Force rebuild requested for {resolved_service.image}")
+                compose_file = resolved_service.compose_file
+                service_name = resolved_service.compose_service_name
+
+                if compose_file and service_name:
+                    from src.services.docker_manager import get_docker_manager
+                    docker_mgr = get_docker_manager()
+
+                    logger.info(f"Building image from compose: {compose_file}, service: {service_name}")
+                    success, message = docker_mgr.build_image_from_compose(
+                        compose_file=compose_file,
+                        service_name=service_name,
+                        tag=resolved_service.image
+                    )
+
+                    if success:
+                        logger.info(f"✅ Force rebuild successful: {message}")
+                    else:
+                        raise ValueError(f"Force rebuild failed: {message}")
+                else:
+                    logger.warning(f"Cannot force rebuild - no compose file information available for {resolved_service.service_id}")
+
+
+            # ===== PORT CONFIGURATION =====
+            # Parse all port-related configuration in one place
+            logger.info(f"[PORT DEBUG] Starting port parsing for {resolved_service.service_id}")
+            logger.info(f"[PORT DEBUG] Input ports from resolved_service.ports: {resolved_service.ports}")
+
             port_bindings = {}
             exposed_ports = {}
+            exposed_port = None  # First host port for deployment tracking
+
             for port_str in resolved_service.ports:
+                logger.info(f"[PORT DEBUG] Processing port_str: {port_str}")
                 if ":" in port_str:
                     host_port, container_port = port_str.split(":")
                     port_key = f"{container_port}/tcp"
                     port_bindings[port_key] = int(host_port)
                     exposed_ports[port_key] = {}
+
+                    # Save first host port for deployment tracking
+                    if exposed_port is None:
+                        exposed_port = int(host_port)
+
+                    logger.info(f"[PORT DEBUG] Mapped: host={host_port} -> container={container_port} (key={port_key})")
                 else:
                     port_key = f"{port_str}/tcp"
                     exposed_ports[port_key] = {}
+
+                    # Save first port for deployment tracking
+                    if exposed_port is None:
+                        exposed_port = int(port_str)
+
+                    logger.info(f"[PORT DEBUG] Exposed only: {port_key}")
+
+            logger.info(f"[PORT DEBUG] Final port_bindings: {port_bindings}")
+            logger.info(f"[PORT DEBUG] Final exposed_ports: {exposed_ports}")
+            logger.info(f"[PORT DEBUG] Tracking exposed_port: {exposed_port}")
+            # ===== END PORT CONFIGURATION =====
 
             # Create container with ushadow labels for stateless tracking
             from datetime import datetime, timezone
@@ -196,6 +247,7 @@ class DockerDeployPlatform(DeployPlatform):
                 "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
                 "ushadow.backend_type": "docker",
                 "com.docker.compose.project": project_name,
+                "com.docker.compose.service": resolved_service.service_id,  # Required for docker_manager to find services
             }
 
             # Use ushadow-network to communicate with infrastructure (mongo, redis, qdrant)
@@ -214,50 +266,42 @@ class DockerDeployPlatform(DeployPlatform):
 
             logger.info(f"Creating container {container_name} from image {resolved_service.image}")
 
-            # Add service name as network alias so Docker DNS works
-            # This allows containers to reach each other by service name (e.g., "mycelia-python-worker")
-            # We use the low-level API to properly set network aliases
-            networking_config = docker_client.api.create_networking_config({
-                network: docker_client.api.create_endpoint_config(
-                    aliases=[resolved_service.service_id]
-                )
-            })
+            # Use high-level API which handles port format better
+            # High-level API expects ports dict like: {'8000/tcp': 8090} for host port mapping
+            logger.info(f"[PORT DEBUG] Creating container with high-level API")
+            logger.info(f"[PORT DEBUG] ports (high-level format): {port_bindings}")
 
-            # Build host config for ports and restart policy
-            host_config = docker_client.api.create_host_config(
-                port_bindings=port_bindings,
-                restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
-                binds=resolved_service.volumes if resolved_service.volumes else None,
-            )
-
-            # Create container using low-level API (properly supports networking_config)
-            container_data = docker_client.api.create_container(
+            container = docker_client.containers.create(
                 image=resolved_service.image,
                 name=container_name,
                 labels=labels,
                 environment=resolved_service.environment,
-                host_config=host_config,
                 command=resolved_service.command,
-                networking_config=networking_config,
+                ports=port_bindings,  # High-level API takes port_bindings directly as 'ports'
+                volumes={v.split(':')[0]: {'bind': v.split(':')[1], 'mode': v.split(':')[2] if len(v.split(':')) > 2 else 'rw'}
+                        for v in (resolved_service.volumes or [])},
+                restart_policy={"Name": resolved_service.restart_policy or "unless-stopped"},
                 detach=True,
             )
+            logger.info(f"[PORT DEBUG] Container created with ID: {container.id[:12]}")
 
-            # Get container object and start it
-            container = docker_client.containers.get(container_data['Id'])
+            # Connect to custom network with service name as alias BEFORE starting
+            # This allows containers to reach each other by service name (e.g., "mycelia-python-worker")
+            logger.info(f"[PORT DEBUG] Connecting container to network {network} with alias {resolved_service.service_id}")
+            network_obj = docker_client.networks.get(network)
+            network_obj.connect(container, aliases=[resolved_service.service_id])
+            logger.info(f"[PORT DEBUG] Connected to network {network}")
+
+            # Now start the container
+            logger.info(f"[PORT DEBUG] Starting container {container_name}...")
             container.start()
 
+            # Reload to get updated port info
+            container.reload()
+            logger.info(f"[PORT DEBUG] Container started. Ports mapping: {container.ports}")
             logger.info(f"Container {container_name} created and started: {container.id[:12]}")
 
-            # Extract exposed port
-            exposed_port = None
-            if resolved_service.ports:
-                first_port = resolved_service.ports[0]
-                if ":" in first_port:
-                    exposed_port = int(first_port.split(":")[0])
-                else:
-                    exposed_port = int(first_port)
-
-            # Build deployment object
+            # Build deployment object (exposed_port was extracted during port parsing above)
             hostname = target.identifier  # Use standardized field (hostname for Docker targets)
             deployment = Deployment(
                 id=deployment_id,
@@ -284,8 +328,66 @@ class DockerDeployPlatform(DeployPlatform):
             return deployment
 
         except docker.errors.ImageNotFound as e:
-            logger.error(f"Image not found: {resolved_service.image}")
-            raise ValueError(f"Docker image not found: {resolved_service.image}")
+            logger.warning(f"Image not found locally: {resolved_service.image}, attempting to pull...")
+
+            try:
+                # Attempt to pull the image
+                logger.info(f"Pulling image: {resolved_service.image}")
+                docker_client.images.pull(resolved_service.image)
+                logger.info(f"✅ Successfully pulled image: {resolved_service.image}")
+
+                # Retry deployment after successful pull
+                logger.info(f"Retrying deployment after image pull...")
+                return await self._deploy_local(
+                    target,
+                    resolved_service,
+                    deployment_id,
+                    container_name,
+                    project_name,
+                    config_id
+                )
+
+            except docker.errors.ImageNotFound as pull_error:
+                # Image not in registry - try to build using DockerManager
+                logger.warning(f"Image not found in registry, attempting to build: {resolved_service.image}")
+
+                compose_file = resolved_service.compose_file
+                service_name = resolved_service.compose_service_name
+
+                if compose_file and service_name:
+                    from src.services.docker_manager import get_docker_manager
+                    docker_mgr = get_docker_manager()
+
+                    success, message = docker_mgr.build_image_from_compose(
+                        compose_file=compose_file,
+                        service_name=service_name,
+                        tag=resolved_service.image
+                    )
+
+                    if success:
+                        logger.info(f"✅ {message}")
+                        # Retry deployment after successful build
+                        return await self._deploy_local(
+                            target, resolved_service, deployment_id,
+                            container_name, project_name, config_id
+                        )
+                    else:
+                        # Provide helpful fallback command
+                        user_compose_path = compose_file
+                        if compose_file.startswith("/compose/"):
+                            user_compose_path = f"compose/{compose_file[9:]}"
+                        raise ValueError(
+                            f"{message}. "
+                            f"Try manually: docker compose -f {user_compose_path} build {service_name}"
+                        )
+                else:
+                    raise ValueError(f"Docker image not found: {resolved_service.image}. No build context available.")
+            except docker.errors.APIError as pull_error:
+                logger.error(f"Failed to pull image: {pull_error}")
+                raise ValueError(f"Failed to pull Docker image {resolved_service.image}: {str(pull_error)}")
+            except Exception as pull_error:
+                logger.error(f"Error pulling image: {pull_error}")
+                raise ValueError(f"Failed to pull Docker image {resolved_service.image}: {str(pull_error)}")
         except docker.errors.APIError as e:
             logger.error(f"Docker API error: {e}")
             raise ValueError(f"Docker deployment failed: {str(e)}")
@@ -300,6 +402,7 @@ class DockerDeployPlatform(DeployPlatform):
         deployment_id: str,
         namespace: Optional[str] = None,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """Deploy to a Docker host via unode manager API or local Docker."""
         hostname = target.identifier  # Use standardized field (hostname for Docker targets)
@@ -321,7 +424,8 @@ class DockerDeployPlatform(DeployPlatform):
                 deployment_id,
                 container_name,
                 project_name,
-                config_id
+                config_id,
+                force_rebuild
             )
 
         # Build deploy payload for remote unode manager
@@ -333,6 +437,7 @@ class DockerDeployPlatform(DeployPlatform):
             "ushadow.unode_hostname": hostname,
             "ushadow.deployed_at": datetime.now(timezone.utc).isoformat(),
             "ushadow.backend_type": "docker",
+            "com.docker.compose.service": resolved_service.service_id,  # Required for docker_manager to find services
         }
 
         payload = {
@@ -510,20 +615,27 @@ class DockerDeployPlatform(DeployPlatform):
         deployments = []
 
         try:
-            if self._is_local_deployment(target.identifier):
-                # Query local Docker
-                docker_client = docker.from_env()
-                filters = {"label": [
-                    "ushadow.deployment_id",
-                    f"ushadow.unode_hostname={target.identifier}"
-                ]}
+            # Query local Docker for containers (works for both local and "remote" unodes on same host)
+            docker_client = docker.from_env()
+            filters = {"label": [
+                "ushadow.deployment_id",
+                f"ushadow.unode_hostname={target.identifier}"
+            ]}
 
-                if service_id:
-                    filters["label"].append(f"ushadow.service_id={service_id}")
+            if service_id:
+                filters["label"].append(f"ushadow.service_id={service_id}")
 
-                containers = docker_client.containers.list(all=True, filters=filters)
+            containers = docker_client.containers.list(all=True, filters=filters)
 
-                for container in containers:
+            if containers and not self._is_local_deployment(target.identifier):
+                logger.info(f"[list_deployments] Found {len(containers)} local containers for remote unode {target.identifier}")
+            elif not containers and not self._is_local_deployment(target.identifier):
+                # No local containers found for remote unode
+                logger.warning(f"No local containers found for {target.identifier}. Remote deployment listing not yet implemented.")
+                return deployments
+
+            # Process all found containers
+            for container in containers:
                     labels = container.labels
 
                     # Extract deployment info from labels
@@ -617,11 +729,6 @@ class DockerDeployPlatform(DeployPlatform):
 
                     deployments.append(deployment)
 
-            else:
-                # Query remote unode manager
-                # TODO: Implement remote query via unode manager API
-                logger.warning(f"Remote deployment listing not yet implemented for {target.identifier}")
-
         except Exception as e:
             logger.error(f"Failed to list deployments: {e}")
 
@@ -664,6 +771,7 @@ class KubernetesDeployPlatform(DeployPlatform):
         deployment_id: str,
         namespace: Optional[str] = None,
         config_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> Deployment:
         """Deploy to a Kubernetes cluster."""
         # Use standardized fields

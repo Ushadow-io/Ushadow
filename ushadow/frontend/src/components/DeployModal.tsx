@@ -56,6 +56,7 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
   const [loadingEnvVars, setLoadingEnvVars] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deploymentResult, setDeploymentResult] = useState<string | null>(null)
+  const [forceRebuild, setForceRebuild] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
@@ -377,7 +378,8 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
         deployResponse = await deploymentsApi.deploy(
           selectedService.service_id,
           selectedTarget.identifier,  // unode hostname
-          configId
+          configId,
+          forceRebuild
         )
       }
 
@@ -666,6 +668,28 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
         </div>
       )}
 
+      {/* Force Rebuild (Docker only) */}
+      {mode === 'deploy' && selectedTarget?.type !== 'k8s' && (
+        <div className="flex items-start gap-3 p-4 rounded-lg border border-neutral-200 dark:border-neutral-700">
+          <input
+            type="checkbox"
+            id="force-rebuild"
+            checked={forceRebuild}
+            onChange={(e) => setForceRebuild(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-600 text-primary-600 focus:ring-primary-500"
+            data-testid="force-rebuild-checkbox"
+          />
+          <label htmlFor="force-rebuild" className="flex-1 cursor-pointer">
+            <span className="block text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              Force rebuild Docker image
+            </span>
+            <span className="block text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+              Rebuild the image even if it already exists locally (useful after code changes)
+            </span>
+          </label>
+        </div>
+      )}
+
       {/* Environment Variables */}
       <div className="space-y-2">
         <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
@@ -733,8 +757,13 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
         {mode === 'create-config'
           ? 'Saving configuration mappings'
-          : 'Creating ConfigMap, Secret, Deployment, and Service'}
+          : 'Building image and creating deployment...'}
       </p>
+      {mode !== 'create-config' && (
+        <p className="text-xs text-neutral-500 dark:text-neutral-500 mt-2">
+          This may take several minutes if building Docker images
+        </p>
+      )}
     </div>
   )
 

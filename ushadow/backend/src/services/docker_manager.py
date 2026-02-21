@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import subprocess
+import yaml
 from pathlib import Path
 from enum import Enum
 from typing import Dict, List, Optional, Any
@@ -58,6 +59,7 @@ def _extract_port_env_vars(ports: List[Dict[str, Any]]) -> Dict[str, int]:
             result[env_var_name] = default_port
 
     return result
+
 
 
 def check_port_in_use(port: int, host: str = "0.0.0.0", exclude_container: Optional[str] = None) -> Optional[str]:
@@ -358,16 +360,26 @@ class DockerManager:
 
         Combines hardcoded CORE_SERVICES with services discovered from
         compose/*-compose.yaml files via ComposeServiceRegistry.
+
+        Cached after first access to avoid repeated compose registry lookups.
         """
+        # Return cached value if available
+        if hasattr(self, '_manageable_services_cache'):
+            return self._manageable_services_cache
+
         # Start with core services
         services = dict(self.CORE_SERVICES)
 
         # Load services from ComposeServiceRegistry (compose-first approach)
         try:
             compose_registry = get_compose_registry()
-            for service in compose_registry.get_services():
+            all_compose_services = list(compose_registry.get_services())
+            logger.info(f"[MANAGEABLE_SERVICES] Found {len(all_compose_services)} services from compose registry")
+            logger.info(f"[MANAGEABLE_SERVICES] Service names: {[s.service_name for s in all_compose_services]}")
+            for service in all_compose_services:
                 # Skip if already in core services
                 if service.service_name in services:
+                    logger.debug(f"[MANAGEABLE_SERVICES] Skipping {service.service_name} (already in core)")
                     continue
 
                 # Use service_name as the key
@@ -396,10 +408,18 @@ class DockerManager:
             logger.warning(f"Failed to load services from compose registry: {e}")
 
         logger.debug(f"Loaded {len(services)} manageable services")
+
+        # Cache the result to avoid repeated lookups
+        self._manageable_services_cache = services
         return services
 
     def reload_services(self) -> None:
-        """Force reload services from ComposeServiceRegistry."""
+        """Force reload services from ComposeServiceRegistry and clear cache."""
+        # Clear cache
+        if hasattr(self, '_manageable_services_cache'):
+            delattr(self, '_manageable_services_cache')
+
+        # Reload compose registry
         registry = get_compose_registry()
         registry.reload()
         logger.info("ComposeServiceRegistry reloaded")
@@ -1186,17 +1206,34 @@ class DockerManager:
                 return False, "Infrastructure compose file not found"
 
             import os
+            import yaml as _yaml
+
             subprocess_env = os.environ.copy()
             subprocess_env["COMPOSE_IGNORE_ORPHANS"] = "true"
 
+            # Parse infra compose to look up per-service profiles.
+            # Some Docker Compose v2 versions require --profile to be explicitly
+            # passed even when a service is named directly on the command line,
+            # so we always add the profiles the service declares.
+            try:
+                with open(infra_compose_path) as _f:
+                    _infra_cfg = _yaml.safe_load(_f)
+                _infra_svc_cfg = _infra_cfg.get("services", {})
+            except Exception as _e:
+                logger.warning(f"Could not parse infra compose for profiles: {_e}")
+                _infra_svc_cfg = {}
+
             for service in infra_services:
                 logger.info(f"Starting infra service: {service}")
+                svc_profiles = _infra_svc_cfg.get(service, {}).get("profiles", [])
                 cmd = [
                     "docker", "compose",
                     "-f", str(infra_compose_path),
                     "-p", "infra",
-                    "up", "-d", service
                 ]
+                for profile in svc_profiles:
+                    cmd.extend(["--profile", profile])
+                cmd.extend(["up", "-d", service])
 
                 result = subprocess.run(
                     cmd,
@@ -1287,6 +1324,7 @@ class DockerManager:
 
             # Get docker service name from the discovered service
             docker_service_name = discovered.service_name if discovered else service_name
+            logger.info(f"[DEBUG] Deploying service_name={service_name} -> docker_service_name={docker_service_name}, discovered={discovered.service_id if discovered else None}")
 
             # Build environment variables from service configuration
             # All env vars are passed via subprocess_env for compose ${VAR} substitution
@@ -1298,9 +1336,7 @@ class DockerManager:
 
             logger.info(f"━━━ Starting {service_name} with {len(container_env)} environment variables ━━━")
 
-            # Build docker compose command with explicit env var passing
-            # Using --env-file /dev/null to clear default .env loading
-            # All env vars come from subprocess_env for ${VAR} substitution
+            # Build docker compose command
             cmd = ["docker", "compose", "-f", str(compose_path)]
             if project_name:
                 cmd.extend(["-p", project_name])
@@ -1318,7 +1354,7 @@ class DockerManager:
                 cwd=str(compose_dir),
                 capture_output=True,
                 text=True,
-                timeout=180  # Increased to 3 minutes for services that need building
+                timeout=180
             )
 
             if result.returncode == 0:
@@ -1553,6 +1589,183 @@ class DockerManager:
 
         logger.info(f"Added dynamic service: {service_name}")
         return True, f"Service '{service_name}' registered successfully"
+
+    def build_image_from_compose(
+        self,
+        compose_file: str,
+        service_name: str,
+        tag: Optional[str] = None
+    ) -> tuple[bool, str]:
+        """
+        Build a Docker image from a compose file's build configuration.
+
+        Handles path translation between container and host paths when running
+        inside a container with Docker socket mounted.
+
+        Args:
+            compose_file: Path to compose file (container path like /compose/file.yml)
+            service_name: Service name in the compose file
+            tag: Optional tag for the built image (defaults to service_name:latest)
+
+        Returns:
+            Tuple of (success, message_or_error)
+        """
+        project_root = os.environ.get("PROJECT_ROOT", "")
+        if not project_root:
+            return False, "PROJECT_ROOT not set - cannot determine host paths for build"
+
+        try:
+            # Read compose file from container mount
+            with open(compose_file, 'r') as f:
+                compose_data = yaml.safe_load(f)
+
+            service_def = compose_data.get('services', {}).get(service_name, {})
+            if not service_def:
+                return False, f"Service '{service_name}' not found in {compose_file}"
+
+            build_config = service_def.get('build')
+            if not build_config:
+                # Build config may live in the dev override (overrides/{name}-dev.yml)
+                compose_path = Path(compose_file)
+                dev_override = compose_path.parent / "overrides" / f"{compose_path.stem.replace('-compose', '')}-dev.yml"
+                if dev_override.exists():
+                    with open(dev_override) as f:
+                        override_data = yaml.safe_load(f)
+                    build_config = (override_data.get('services') or {}).get(service_name, {}).get('build')
+                if not build_config:
+                    return False, f"No build configuration found for {service_name} (checked base and {dev_override})"
+
+            # Parse build config
+            if isinstance(build_config, str):
+                build_context = build_config
+                dockerfile = "Dockerfile"
+            elif isinstance(build_config, dict):
+                build_context = build_config.get('context', '.')
+                dockerfile = build_config.get('dockerfile', 'Dockerfile')
+            else:
+                return False, f"Invalid build configuration for {service_name}"
+
+            # Expand environment variables in build context (e.g., ${PROJECT_ROOT:-..})
+            def expand_env_vars(s: str) -> str:
+                """Expand ${VAR:-default} style environment variables.
+
+                Uses shell-like semantics: if var is unset OR empty, use default.
+                """
+                import re
+                pattern = r'\$\{([^}:]+)(?::-([^}]*))?\}'
+                def replace(match):
+                    var_name = match.group(1)
+                    default = match.group(2) or ''
+                    value = os.environ.get(var_name, '')
+                    # Shell semantics: use default if var is unset OR empty
+                    return value if value else default
+                return re.sub(pattern, replace, s)
+
+            logger.info(f"Build context before expansion: {build_context}")
+            logger.info(f"PROJECT_ROOT env: {project_root!r}")
+
+            build_context = expand_env_vars(build_context)
+            dockerfile = expand_env_vars(dockerfile)
+
+            logger.info(f"Build context after expansion: {build_context}")
+
+            # Convert compose file path to host path
+            if compose_file.startswith("/compose/"):
+                host_compose_file = f"{project_root}/compose/{compose_file[9:]}"
+            elif compose_file.startswith("/"):
+                host_compose_file = f"{project_root}{compose_file}"
+            else:
+                host_compose_file = f"{project_root}/{compose_file}"
+
+            logger.info(f"Host compose file: {host_compose_file}")
+
+            # Resolve build context path relative to compose file (on host)
+            host_compose_dir = os.path.dirname(host_compose_file)
+            logger.info(f"Host compose dir: {host_compose_dir}")
+
+            # If build_context is already absolute, use it directly
+            if os.path.isabs(build_context):
+                host_build_context = build_context
+            else:
+                host_build_context = os.path.normpath(os.path.join(host_compose_dir, build_context))
+
+            logger.info(f"Host build context (resolved): {host_build_context}")
+
+            # Note: Can't validate if path exists here because we're in container,
+            # but Docker daemon runs on host. Docker SDK will return proper error if path invalid.
+
+            # Determine image tag
+            image_tag = tag or f"{service_name}:latest"
+
+            logger.info(f"Building {image_tag} from context: {host_build_context!r}, dockerfile: {dockerfile!r}")
+            logger.info(f"[BUILD DEBUG] path type: {type(host_build_context)}, value: {host_build_context!r}, is_empty: {not host_build_context}")
+
+            # Validate build_context is not empty
+            if not host_build_context or host_build_context.strip() == '':
+                return False, f"Build context is empty after path resolution. Original: {build_context!r}"
+
+            # Build using docker compose CLI instead of SDK
+            # The SDK checks if path exists from container perspective, but we need host perspective
+            # docker compose properly handles build context resolution
+            logger.info(f"[BUILD] Using docker compose build: docker compose -f {compose_file} build {service_name}")
+
+            import subprocess
+            try:
+                # Run docker compose build - use container path for compose file
+                # Docker compose reads from mounted /compose directory
+                # PROJECT_ROOT env var ensures build contexts resolve to host paths
+                cmd = ["docker", "compose", "-f", compose_file, "build", service_name]
+                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ with PROJECT_ROOT={project_root}")
+
+                # Use environment with PROJECT_ROOT set to host path
+                env = os.environ.copy()
+                env['PROJECT_ROOT'] = project_root
+
+                result = subprocess.run(
+                    cmd,
+                    cwd="/",  # Use root of container filesystem
+                    env=env,  # Use environment with PROJECT_ROOT set to host path
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minute timeout for builds
+                )
+
+                # Log build output
+                if result.stdout:
+                    logger.info(f"Build stdout:\n{result.stdout}")
+                if result.stderr:
+                    logger.info(f"Build stderr:\n{result.stderr}")
+
+                if result.returncode != 0:
+                    return False, f"Docker compose build failed (exit {result.returncode}): {result.stderr}"
+
+            except subprocess.TimeoutExpired:
+                return False, "Build timed out after 10 minutes"
+            except Exception as e:
+                logger.error(f"Build subprocess error: {e}", exc_info=True)
+                return False, f"Build subprocess failed: {str(e)}"
+
+            logger.info(f"Successfully built image: {image_tag}")
+            return True, f"Successfully built {image_tag}"
+
+        except FileNotFoundError:
+            return False, f"Compose file not found: {compose_file}"
+        except docker.errors.BuildError as e:
+            return False, f"Docker build failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Build error: {e}", exc_info=True)
+            return False, f"Build failed: {str(e)}"
+
+    def image_exists(self, image: str) -> bool:
+        """Check if a Docker image exists locally."""
+        try:
+            self._client.images.get(image)
+            return True
+        except docker.errors.ImageNotFound:
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking image {image}: {e}")
+            return False
 
 
 # Global instance

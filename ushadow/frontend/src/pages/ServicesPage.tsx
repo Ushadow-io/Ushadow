@@ -693,6 +693,9 @@ export default function ServicesPage() {
           <div className="flex items-center space-x-2">
             <Server className="h-8 w-8 text-neutral-600 dark:text-neutral-400" />
             <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">Services</h1>
+            <span className="px-2 py-1 text-xs font-semibold bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded">
+              LEGACY
+            </span>
           </div>
           <p className="mt-2 text-neutral-600 dark:text-neutral-400">
             Configure providers and compose services
@@ -727,6 +730,29 @@ export default function ServicesPage() {
           >
             <RefreshCw className="h-4 w-4" />
           </button>
+        </div>
+      </div>
+
+      {/* Legacy Notice Banner */}
+      <div className="card p-4 border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-100 mb-1">
+              Legacy Services Page
+            </h3>
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              This is the legacy service management interface. For advanced features like service wiring,
+              custom configurations, and deployment management, please use the{' '}
+              <button
+                onClick={() => navigate('/service-configs')}
+                className="underline hover:text-amber-900 dark:hover:text-amber-100 font-medium"
+              >
+                new Service Configs page
+              </button>
+              .
+            </p>
+          </div>
         </div>
       </div>
 

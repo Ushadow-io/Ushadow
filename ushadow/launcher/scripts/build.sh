@@ -15,6 +15,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Ensure bundled resources exist
+if [ ! -d "$LAUNCHER_DIR/src-tauri/bundled" ]; then
+    echo -e "${YELLOW}📦 Bundled resources not found, running bundle-resources.sh...${NC}"
+    cd "$LAUNCHER_DIR"
+    bash bundle-resources.sh
+    echo ""
+fi
+
 show_usage() {
     echo "Usage: $0 <platform> [--debug]"
     echo ""

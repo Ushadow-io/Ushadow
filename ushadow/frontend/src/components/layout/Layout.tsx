@@ -3,12 +3,12 @@ import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
+import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
 import { useChronicle } from '../../contexts/ChronicleContext'
 import { useMobileQrCode } from '../../hooks/useQrCode'
-import { svcConfigsApi } from '../../services/api'
 import FeatureFlagsDrawer from './FeatureFlagsDrawer'
 import { StatusBadge, type BadgeVariant } from '../StatusBadge'
 import Modal from '../Modal'
@@ -28,7 +28,12 @@ interface NavigationItem {
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, logout, isAdmin } = useAuth()
+  const { user: legacyUser, logout: legacyLogout, isAdmin: legacyIsAdmin } = useAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, logout: kcLogout } = useKeycloakAuth()
+
+  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  const user = kcAuthenticated && kcUser ? kcUser : legacyUser
+  const isAdmin = kcAuthenticated && kcUser ? kcUser.is_superuser : legacyIsAdmin
   const { isDark, toggleTheme } = useTheme()
   const { isEnabled, flags } = useFeatureFlags()
   const { getSetupLabel, isFirstTimeUser } = useWizard()
@@ -37,10 +42,21 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [featureFlagsDrawerOpen, setFeatureFlagsDrawerOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
-  const [isDesktopMicWired, setIsDesktopMicWired] = useState(false)
 
   // QR code hook
   const { qrData, loading: loadingQrCode, showModal: showQrModal, fetchQrCode, closeModal } = useMobileQrCode()
+
+  // Unified logout handler that works for both auth methods
+  const handleLogout = () => {
+    if (kcAuthenticated) {
+      // User is authenticated via Keycloak - use Keycloak logout
+      kcLogout()
+    } else {
+      // User is authenticated via legacy JWT - clear localStorage only
+      legacyLogout()
+      navigate('/login')
+    }
+  }
 
   // Get dynamic wizard label (includes path, label, level, and icon)
   const wizardLabel = getSetupLabel()
@@ -50,6 +66,20 @@ export default function Layout() {
   // Redirect first-time users to wizard ONLY if they just came from login/register
   // This prevents redirect loops when accessing the app directly
   useEffect(() => {
+    console.log('[LAYOUT] Wizard check:', {
+      kcAuthenticated,
+      pathname: location.pathname,
+      locationState: location.state,
+      isFirstTime: isFirstTimeUser(),
+    })
+
+    // Skip wizard redirect for Keycloak users - they're already authenticated via SSO
+    // and don't need the setup wizard
+    if (kcAuthenticated) {
+      console.log('[LAYOUT] ✅ Skipping wizard redirect - Keycloak user')
+      return
+    }
+
     // Check sessionStorage for registration hard-reload case (cleared after reading)
     const sessionFromAuth = sessionStorage.getItem('fromAuth') === 'true'
     if (sessionFromAuth) {
@@ -61,10 +91,13 @@ export default function Layout() {
                      sessionFromAuth
 
     if (isFirstTimeUser() && fromAuth && !location.pathname.startsWith('/wizard')) {
+      console.log('[LAYOUT] 🔄 Redirecting first-time user to wizard')
       const { path } = getSetupLabel()
       navigate(path, { replace: true })
+    } else {
+      console.log('[LAYOUT] ✅ No wizard redirect needed')
     }
-  }, [location, isFirstTimeUser, getSetupLabel, navigate])
+  }, [location, isFirstTimeUser, getSetupLabel, navigate, kcAuthenticated])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -77,45 +110,25 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Check if desktop-mic (or any audio_input provider) is wired
-  useEffect(() => {
-    const checkAudioWiring = async () => {
-      try {
-        const wiringRes = await svcConfigsApi.getWiring()
-        // Check if any audio_input provider is wired
-        const hasAudioWiring = wiringRes.data.some(
-          (w: any) => w.source_capability === 'audio_input' ||
-                      w.source_config_id?.includes('desktop-mic') ||
-                      w.source_config_id?.includes('mobile-app')
-        )
-        setIsDesktopMicWired(hasAudioWiring)
-      } catch (err) {
-        // Silently fail - user might not be logged in yet
-      }
-    }
-    checkAudioWiring()
-    // Re-check periodically (every 30 seconds)
-    const interval = setInterval(checkAudioWiring, 30000)
-    return () => clearInterval(interval)
-  }, [])
-
   // Define navigation items with optional feature flag requirements
   const allNavigationItems: NavigationItem[] = [
     // Separator after wizard section
     { path: '/', label: 'Dashboard', icon: LayoutDashboard, separator: true },
     { path: '/chat', label: 'Chat', icon: Sparkles },
     { path: '/recording', label: 'Recording', icon: Radio },
-    { path: '/chronicle', label: 'Chronicle', icon: MessageSquare },
+    { path: '/chronicle', label: 'Chronicle', icon: MessageSquare, featureFlag: 'chronicle' },
+    { path: '/conversations', label: 'Conversations', icon: Archive },
     { path: '/speaker-recognition', label: 'Speaker ID', icon: Users, badgeVariant: 'not-implemented', featureFlag: 'speaker_recognition' },
     { path: '/mcp', label: 'MCP Hub', icon: Plug, featureFlag: 'mcp_hub' },
     { path: '/agent-zero', label: 'Agent Zero', icon: Bot, featureFlag: 'agent_zero' },
     { path: '/n8n', label: 'n8n Workflows', icon: Workflow, featureFlag: 'n8n_workflows' },
-    { path: '/services', label: 'Services', icon: Server },
-    { path: '/instances', label: 'Services', icon: Layers, badgeVariant: 'beta', featureFlag: 'instances_management' },
+    { path: '/services', label: 'Services', icon: Server, badgeVariant: 'deprecated', featureFlag: 'legacy_services_page' },
+    { path: '/instances', label: 'Services', icon: Layers, featureFlag: 'instances_management' },
     ...(isEnabled('memories_page') ? [
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
     { path: '/timeline', label: 'Timeline', icon: Calendar, featureFlag: 'timeline' },
+    { path: '/feed', label: 'Feed', icon: Radio, featureFlag: 'social_feed' },
     { path: '/cluster', label: 'Cluster', icon: Network, badgeVariant: 'beta' },
     { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },
     { path: '/settings', label: 'Settings', icon: Settings },
@@ -412,7 +425,7 @@ export default function Layout() {
                             className="text-sm font-medium truncate"
                             style={{ color: isDark ? 'var(--text-primary)' : '#171717' }}
                           >
-                            {user?.name || 'User'}
+                            {user?.display_name || 'User'}
                           </p>
                           <p
                             className="text-xs truncate"
@@ -456,7 +469,7 @@ export default function Layout() {
                       <button
                         onClick={() => {
                           setUserMenuOpen(false)
-                          logout()
+                          handleLogout()
                         }}
                         className="w-full flex items-center space-x-3 px-4 py-2 text-sm transition-colors"
                         style={{ color: 'var(--error-400)' }}

@@ -1,9 +1,9 @@
-import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle } from 'lucide-react'
+import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle, Globe, Wifi } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { settingsApi } from '../services/api'
 import { JsonTreeViewer } from '../components/JsonTreeViewer'
 import { StatusBadge } from '../components/StatusBadge'
-import { RequiredFieldsSection, UnifiedServiceSettings } from '../components/settings'
+import { RequiredFieldsSection, UnifiedServiceSettings, NetworkTab } from '../components/settings'
 import { WizardFormProvider } from '../contexts/WizardFormContext'
 
 interface ApiKey {
@@ -100,6 +100,7 @@ export default function SettingsPage() {
     { id: 'api-keys', label: 'API Keys', icon: Key },
     { id: 'providers', label: 'Providers', icon: Server },
     { id: 'service-config', label: 'Service Config', icon: Database },
+    { id: 'network', label: 'Network', icon: Globe },
   ]
 
   // Extract API keys with values
@@ -417,6 +418,13 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Network Tab */}
+      {activeTab === 'network' && (
+        <div className="space-y-4" data-testid="network-tab">
+          <NetworkTab />
         </div>
       )}
 

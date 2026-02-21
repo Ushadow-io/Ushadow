@@ -400,7 +400,11 @@ export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promis
  */
 export async function getChronicleAudioUrl(conversationId: string, cropped: boolean = true): Promise<string> {
   const proxyUrl = await getChronicleProxyUrl()
-  const token = localStorage.getItem(getStorageKey('token')) || ''
+
+  // Get auth token - prefer Keycloak token, fallback to legacy token
+  const kcToken = localStorage.getItem('kc_access_token')
+  const legacyToken = localStorage.getItem(getStorageKey('token'))
+  const token = kcToken || legacyToken || ''
 
   if (!token) {
     console.warn('[ChronicleAPI] No auth token found for audio URL')
@@ -411,6 +415,15 @@ export async function getChronicleAudioUrl(conversationId: string, cropped: bool
   const url = `${proxyUrl}/api/audio/get_audio/${conversationId}?cropped=${cropped}&token=${encodeURIComponent(token)}`
   console.log('[ChronicleAPI] Generated audio URL:', url.substring(0, 100) + '...')
   return url
+}
+
+/**
+ * Get memories associated with a conversation
+ */
+export async function getConversationMemories(conversationId: string) {
+  const proxyUrl = await getChronicleProxyUrl()
+  const response = await api.get(`${proxyUrl}/api/conversations/${conversationId}/memories`)
+  return response.data
 }
 
 // =============================================================================

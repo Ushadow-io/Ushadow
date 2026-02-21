@@ -1,44 +1,43 @@
 {
   "cli": {
-    "version": ">= 13.2.0"
+    "version": ">= 13.2.0",
+    "appVersionSource": "remote"
   },
   "build": {
-    "local": {
-      "android": {
-        "buildType": "apk",
-        "gradleCommand": ":app:assembleRelease"
-      },
-      "ios": {
-        "buildConfiguration": "Release",
-        "simulator": true
-      }
-    },
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      },
       "ios": {
         "simulator": true
       }
     },
     "preview": {
       "distribution": "internal",
-      "android": {
-        "buildType": "apk"
+      "ios": {
+        "simulator": false
       }
     },
     "production": {
-      "android": {
-        "buildType": "apk"
+      "distribution": "store",
+      "env": {
+        "APP_VARIANT": "production"
       },
       "ios": {
+        "simulator": false,
         "autoIncrement": true
+      },
+      "android": {
+        "buildType": "app-bundle"
       }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "thestumonkey@gmail.com",
+        "ascAppId": "6757369623",
+        "appleTeamId": "6SJ7NH4HSZ"
+      }
+    }
   }
 }

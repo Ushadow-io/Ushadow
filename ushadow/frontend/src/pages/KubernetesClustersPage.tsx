@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket } from 'lucide-react'
+import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket, Globe, Copy, Check } from 'lucide-react'
 import { kubernetesApi, KubernetesCluster, DeployTarget, deploymentsApi } from '../services/api'
 import Modal from '../components/Modal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DeployModal from '../components/DeployModal'
+import DNSManagementPanel from '../components/kubernetes/DNSManagementPanel'
 
 interface InfraService {
   found: boolean
@@ -18,6 +19,48 @@ interface InfraScanResults {
   cluster_id: string
   namespace: string
   infra_services: Record<string, InfraService>
+}
+
+// Helper component for displaying copyable commands
+function KubeconfigCommand({ label, command, platform }: { label: string; command: string; platform: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
+  return (
+    <div className="flex items-start gap-2 p-2 bg-white dark:bg-neutral-800 rounded border border-blue-100 dark:border-blue-800">
+      <div className="flex-1 min-w-0">
+        {label && (
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-medium text-neutral-900 dark:text-neutral-100">{label}</span>
+            {platform && <span className="text-neutral-500 dark:text-neutral-400">({platform})</span>}
+          </div>
+        )}
+        <code className="block text-xs text-neutral-700 dark:text-neutral-300 font-mono break-all">
+          {command}
+        </code>
+      </div>
+      <button
+        onClick={handleCopy}
+        className="flex-shrink-0 p-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded transition-colors"
+        title="Copy command"
+      >
+        {copied ? (
+          <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+        ) : (
+          <Copy className="h-4 w-4 text-neutral-600 dark:text-neutral-400" />
+        )}
+      </button>
+    </div>
+  )
 }
 
 export default function KubernetesClustersPage() {
@@ -37,11 +80,20 @@ export default function KubernetesClustersPage() {
   const [showDeployModal, setShowDeployModal] = useState(false)
   const [selectedClusterForDeploy, setSelectedClusterForDeploy] = useState<KubernetesCluster | null>(null)
 
+  // DNS Management
+  const [showDnsModal, setShowDnsModal] = useState(false)
+  const [selectedClusterForDns, setSelectedClusterForDns] = useState<KubernetesCluster | null>(null)
+
   // Form state
   const [clusterName, setClusterName] = useState('')
   const [kubeconfig, setKubeconfig] = useState('')
   const [namespace, setNamespace] = useState('default')
   const [error, setError] = useState<string | null>(null)
+
+  // Ingress configuration editing
+  const [editingCluster, setEditingCluster] = useState<string | null>(null)
+  const [ingressDomain, setIngressDomain] = useState('')
+  const [ingressEnabledByDefault, setIngressEnabledByDefault] = useState(false)
 
   useEffect(() => {
     loadClusters()
@@ -146,6 +198,29 @@ export default function KubernetesClustersPage() {
       alert(`Failed to scan infrastructure: ${err.response?.data?.detail || err.message}`)
     } finally {
       setScanningClusterId(null)
+    }
+  }
+
+  const handleDeleteInfraScan = async (clusterId: string, namespace: string) => {
+    if (!confirm(`Delete infrastructure scan for namespace "${namespace}"?`)) {
+      return
+    }
+
+    try {
+      await kubernetesApi.deleteInfraScan(clusterId, namespace)
+
+      // Remove from local state
+      setScanResults(prev => {
+        const updated = { ...prev }
+        delete updated[`${clusterId}-${namespace}`]
+        return updated
+      })
+
+      // Refresh clusters to update infra_scans
+      await loadClusters()
+    } catch (err: any) {
+      console.error('Error deleting infrastructure scan:', err)
+      alert(`Failed to delete scan: ${err.response?.data?.detail || err.message}`)
     }
   }
 
@@ -407,13 +482,23 @@ export default function KubernetesClustersPage() {
                                 {foundInfra} in <code className="px-1 py-0.5 bg-success-100 dark:bg-success-900/40 rounded text-xs">{namespace}</code>
                               </span>
                             </div>
-                            <button
-                              onClick={() => setShowScanResults(key)}
-                              className="text-xs text-success-600 dark:text-success-400 hover:underline"
-                              data-testid={`view-scan-results-${key}`}
-                            >
-                              View
-                            </button>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={() => setShowScanResults(key)}
+                                className="text-xs text-success-600 dark:text-success-400 hover:underline"
+                                data-testid={`view-scan-results-${key}`}
+                              >
+                                View
+                              </button>
+                              <button
+                                onClick={() => handleDeleteInfraScan(cluster.cluster_id, namespace)}
+                                className="p-1 text-neutral-500 hover:text-error-600 dark:text-neutral-400 dark:hover:text-error-400"
+                                title={`Delete scan for ${namespace}`}
+                                data-testid={`delete-scan-${key}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )
@@ -434,6 +519,107 @@ export default function KubernetesClustersPage() {
                     ))}
                   </div>
                 )}
+
+                {/* Ingress Configuration */}
+                <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                      Ingress Configuration
+                    </h4>
+                    {editingCluster !== cluster.cluster_id && (
+                      <button
+                        onClick={() => {
+                          setEditingCluster(cluster.cluster_id)
+                          setIngressDomain(cluster.ingress_domain || '')
+                          setIngressEnabledByDefault(cluster.ingress_enabled_by_default || false)
+                        }}
+                        className="text-xs text-primary-600 hover:underline"
+                        data-testid={`edit-ingress-${cluster.cluster_id}`}
+                      >
+                        Configure
+                      </button>
+                    )}
+                  </div>
+
+                  {editingCluster === cluster.cluster_id ? (
+                    <div className="space-y-3 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded">
+                      <div>
+                        <label className="block text-xs text-neutral-600 dark:text-neutral-400 mb-1">
+                          Ingress Domain (e.g., "shadow" for *.shadow)
+                        </label>
+                        <input
+                          type="text"
+                          value={ingressDomain}
+                          onChange={(e) => {
+                            const value = e.target.value.toLowerCase()
+                            if (/^[a-z0-9.-]*$/.test(value)) {
+                              setIngressDomain(value)
+                            }
+                          }}
+                          placeholder="shadow"
+                          className="w-full px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
+                          data-testid={`ingress-domain-input-${cluster.cluster_id}`}
+                        />
+                      </div>
+
+                      <label className="flex items-center space-x-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={ingressEnabledByDefault}
+                          onChange={(e) => setIngressEnabledByDefault(e.target.checked)}
+                          className="rounded"
+                          data-testid={`ingress-default-checkbox-${cluster.cluster_id}`}
+                        />
+                        <span className="text-neutral-700 dark:text-neutral-300">Enable ingress by default for new deployments</span>
+                      </label>
+
+                      <div className="flex justify-end space-x-2">
+                        <button
+                          onClick={() => setEditingCluster(null)}
+                          className="px-3 py-1 text-sm text-neutral-600 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await kubernetesApi.updateCluster(cluster.cluster_id, {
+                                ingress_domain: ingressDomain || undefined,
+                                ingress_enabled_by_default: ingressEnabledByDefault,
+                                tailscale_magicdns_enabled: !!ingressDomain
+                              })
+                              setEditingCluster(null)
+                              await loadClusters()
+                            } catch (err: any) {
+                              alert(`Failed to update cluster: ${err.message}`)
+                            }
+                          }}
+                          className="btn-primary px-3 py-1 text-sm"
+                          data-testid={`save-ingress-${cluster.cluster_id}`}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm">
+                      {cluster.ingress_domain ? (
+                        <div className="space-y-1">
+                          <div className="text-neutral-600 dark:text-neutral-400">
+                            Domain: <code className="px-1 bg-neutral-100 dark:bg-neutral-700 rounded">.{cluster.ingress_domain}</code>
+                          </div>
+                          <div className="text-neutral-600 dark:text-neutral-400">
+                            Auto-enable: {cluster.ingress_enabled_by_default ? '✓ Yes' : '✗ No'}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-neutral-500 dark:text-neutral-400 text-xs">
+                          Not configured
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {/* Actions */}
                 <div className="flex justify-between items-center pt-4 border-t border-neutral-200 dark:border-neutral-700 gap-2">
@@ -465,6 +651,19 @@ export default function KubernetesClustersPage() {
                     >
                       <Rocket className="h-4 w-4" />
                       <span>Deploy</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setSelectedClusterForDns(cluster)
+                        setShowDnsModal(true)
+                      }}
+                      disabled={cluster.status !== 'connected'}
+                      className="btn-secondary flex items-center space-x-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      data-testid={`manage-dns-${cluster.cluster_id}`}
+                    >
+                      <Globe className="h-4 w-4" />
+                      <span>DNS</span>
                     </button>
                   </div>
 
@@ -554,36 +753,54 @@ export default function KubernetesClustersPage() {
       {showScanResults && renderInfraScanResults(showScanResults)}
 
       {/* Deploy to K8s Modal */}
-      {showDeployModal && selectedClusterForDeploy && (
-        <DeployModal
-          isOpen={showDeployModal}
-          onClose={() => {
-            setShowDeployModal(false)
-            setSelectedClusterForDeploy(null)
-          }}
-          target={{
-            id: selectedClusterForDeploy.deployment_target_id,
-            type: 'k8s',
-            name: selectedClusterForDeploy.name,
-            identifier: selectedClusterForDeploy.cluster_id,
-            environment: selectedClusterForDeploy.environment || 'unknown',
-            status: selectedClusterForDeploy.status || 'unknown',
-            namespace: selectedClusterForDeploy.namespace,
-            infrastructure: Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))
-              ? scanResults[Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))!].infra_services
-              : undefined,
-            provider: selectedClusterForDeploy.labels?.provider,
-            region: selectedClusterForDeploy.labels?.region,
-            is_leader: undefined,
-            raw_metadata: selectedClusterForDeploy
-          }}
-          infraServices={
-            Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))
-              ? scanResults[Object.keys(scanResults).find(key => key.startsWith(selectedClusterForDeploy.cluster_id))!].infra_services
-              : undefined
+      {showDeployModal && selectedClusterForDeploy && (() => {
+        // Get infrastructure services - exclude target namespace as it contains deployed services
+        let infraServices: any = undefined
+        if (selectedClusterForDeploy.infra_scans) {
+          const targetNs = selectedClusterForDeploy.namespace || 'ushadow'
+
+          // Filter out the target namespace from infra scans
+          const infraScanKeys = Object.keys(selectedClusterForDeploy.infra_scans).filter(
+            ns => ns !== targetNs
+          )
+
+          console.log(`🔍 [K8sPage] Target namespace: ${targetNs}, available infra scans:`, infraScanKeys)
+
+          // Use first available infrastructure scan (not the target namespace)
+          if (infraScanKeys.length > 0) {
+            const infraNs = infraScanKeys[0]
+            infraServices = selectedClusterForDeploy.infra_scans[infraNs]
+            console.log(`🔍 [K8sPage] Using infrastructure from '${infraNs}':`, infraServices?.mongo)
+          } else {
+            console.log(`⚠️ [K8sPage] No infrastructure scans available (target namespace excluded)`)
           }
-        />
-      )}
+        }
+
+        return (
+          <DeployModal
+            isOpen={showDeployModal}
+            onClose={() => {
+              setShowDeployModal(false)
+              setSelectedClusterForDeploy(null)
+            }}
+            target={{
+              id: selectedClusterForDeploy.deployment_target_id,
+              type: 'k8s',
+              name: selectedClusterForDeploy.name,
+              identifier: selectedClusterForDeploy.cluster_id,
+              environment: selectedClusterForDeploy.environment || 'unknown',
+              status: selectedClusterForDeploy.status || 'unknown',
+              namespace: selectedClusterForDeploy.namespace,
+              infrastructure: infraServices,
+              provider: selectedClusterForDeploy.labels?.provider,
+              region: selectedClusterForDeploy.labels?.region,
+              is_leader: undefined,
+              raw_metadata: selectedClusterForDeploy
+            }}
+            infraServices={infraServices}
+          />
+        )
+      })()}
 
       {/* Add Cluster Modal */}
       {showAddModal && createPortal(
@@ -647,6 +864,24 @@ export default function KubernetesClustersPage() {
                 />
                 <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                   Recommended: <code className="px-1 py-0.5 bg-neutral-100 dark:bg-neutral-700 rounded">ushadow</code>
+                </p>
+              </div>
+
+              {/* Quick Commands Section */}
+              <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                <h3 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-3 flex items-center">
+                  <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Copy kubeconfig to clipboard
+                </h3>
+                <KubeconfigCommand
+                  label="kubectl"
+                  command="kubectl config view --minify --flatten --raw | pbcopy"
+                  platform=""
+                />
+                <p className="text-xs text-blue-700 dark:text-blue-300 mt-3">
+                  💡 Run this command in your terminal, then click "Paste from Clipboard" below
                 </p>
               </div>
 
@@ -747,6 +982,25 @@ export default function KubernetesClustersPage() {
           </div>
         </div>,
         document.body
+      )}
+
+      {/* DNS Management Modal */}
+      {showDnsModal && selectedClusterForDns && (
+        <Modal
+          isOpen={showDnsModal}
+          onClose={() => {
+            setShowDnsModal(false)
+            setSelectedClusterForDns(null)
+          }}
+          title={`DNS Management - ${selectedClusterForDns.name}`}
+          maxWidth="2xl"
+          testId="dns-management-modal"
+        >
+          <DNSManagementPanel
+            clusterId={selectedClusterForDns.cluster_id}
+            clusterName={selectedClusterForDns.name}
+          />
+        </Modal>
       )}
     </div>
   )

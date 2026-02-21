@@ -1,6 +1,8 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { OmiConnection } from 'friend-lite-react-native';
+import { Audio } from 'expo-av';
+import { useLiveActivity } from './useLiveActivity';
 
 // Type definitions for audio streaming services
 interface AudioStreamer {
@@ -26,6 +28,7 @@ interface PhoneAudioRecorder {
 interface ConnectionEventHandlers {
   onWebSocketDisconnect?: (sessionId: string, conversationId: string | null) => void;
   onWebSocketReconnect?: () => void;
+  onWebSocketLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
 }
 
 // Optional offline mode integration interface
@@ -87,6 +90,9 @@ export const useAudioManager = ({
   const [isOfflineBuffering, setIsOfflineBuffering] = useState<boolean>(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+
+  // Live Activity for showing streaming status on lock screen / Dynamic Island
+  const liveActivity = useLiveActivity();
 
   // Track previous WebSocket state to detect transitions
   const previousWsReadyStateRef = useRef<number | undefined>(undefined);
@@ -153,6 +159,7 @@ export const useAudioManager = ({
       sessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
 
+      connectionHandlers?.onWebSocketLog?.('disconnected', 'Audio streaming disconnected, entering offline mode', `Session: ${sessionId}`);
       offlineMode.enterOfflineMode(sessionId, conversationIdRef.current);
       setIsOfflineBuffering(true);
 
@@ -162,6 +169,7 @@ export const useAudioManager = ({
     // Detect reconnect transition
     if (!wasConnected && isConnected && offlineMode?.isOffline) {
       console.log('[useAudioManager] WebSocket reconnected, exiting offline mode');
+      connectionHandlers?.onWebSocketLog?.('connected', 'Audio streaming reconnected, exiting offline mode');
       await offlineMode.exitOfflineMode();
       setIsOfflineBuffering(false);
 
@@ -208,16 +216,35 @@ export const useAudioManager = ({
       sessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
 
+      // Configure iOS audio session for background streaming
+      // This keeps the audio pipeline active when screen locks
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false, // OMI does the recording
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true, // ⭐ Critical for background audio
+          interruptionModeIOS: 2, // DoNotMix
+          shouldDuckAndroid: false,
+        });
+        console.log('[useAudioManager] ✅ Audio session configured for background OMI streaming');
+      } catch (audioModeError) {
+        console.warn('[useAudioManager] ⚠️ Failed to set audio mode:', audioModeError);
+        // Continue anyway - streaming might still work
+      }
+
       const finalWebSocketUrl = buildWebSocketUrl(webSocketUrl);
 
-      // Start custom WebSocket streaming first
-      await audioStreamer.startStreaming(finalWebSocketUrl);
+      // Start custom WebSocket streaming first (OMI uses Opus codec)
+      await audioStreamer.startStreaming(finalWebSocketUrl, 'streaming', 'opus');
 
       // Initialize previous state
       previousWsReadyStateRef.current = audioStreamer.getWebSocketReadyState();
 
       // Then start OMI audio listener with offline-aware handler
       await startAudioListener(handleAudioData);
+
+      // Start Live Activity for lock screen / Dynamic Island
+      await liveActivity.startActivity(connectedDeviceId || 'OMI Device');
 
       console.log('[useAudioManager] OMI audio streaming started successfully', { sessionId });
     } catch (error) {
@@ -237,6 +264,7 @@ export const useAudioManager = ({
     buildWebSocketUrl,
     handleAudioData,
     generateSessionId,
+    liveActivity,
   ]);
 
   /**
@@ -254,13 +282,28 @@ export const useAudioManager = ({
     await stopAudioListener();
     audioStreamer.stopStreaming();
 
+    // Stop Live Activity
+    await liveActivity.stopActivity();
+
+    // Deactivate audio session to allow iOS to suspend app if needed
+    // (unless other audio is active)
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        staysActiveInBackground: false,
+      });
+      console.log('[useAudioManager] Audio session deactivated');
+    } catch (audioModeError) {
+      console.warn('[useAudioManager] Failed to deactivate audio session:', audioModeError);
+    }
+
     // Clear session tracking
     sessionIdRef.current = null;
     conversationIdRef.current = null;
     setCurrentSessionId(null);
     setCurrentConversationId(null);
     previousWsReadyStateRef.current = undefined;
-  }, [stopAudioListener, audioStreamer, offlineMode]);
+  }, [stopAudioListener, audioStreamer, offlineMode, lockScreenControls]);
 
   /**
    * Start phone microphone audio streaming
@@ -278,8 +321,8 @@ export const useAudioManager = ({
         endpoint: '/ws_pcm',
       });
 
-      // Start WebSocket streaming first
-      await audioStreamer.startStreaming(finalWebSocketUrl);
+      // Start WebSocket streaming first (Phone microphone uses PCM codec)
+      await audioStreamer.startStreaming(finalWebSocketUrl, 'streaming', 'pcm');
 
       // Start phone audio recording
       await phoneAudioRecorder.startRecording(async (pcmBuffer: Uint8Array) => {
@@ -288,6 +331,9 @@ export const useAudioManager = ({
           await audioStreamer.sendAudio(pcmBuffer);
         }
       });
+
+      // Start Live Activity for lock screen / Dynamic Island
+      await liveActivity.startActivity('Phone Microphone');
 
       setIsPhoneAudioMode(true);
       console.log('[useAudioManager] Phone audio streaming started successfully');
@@ -304,6 +350,8 @@ export const useAudioManager = ({
     audioStreamer,
     phoneAudioRecorder,
     buildWebSocketUrl,
+    liveActivity,
+    userId,
   ]);
 
   /**
@@ -313,8 +361,12 @@ export const useAudioManager = ({
     console.log('[useAudioManager] Stopping phone audio streaming');
     await phoneAudioRecorder.stopRecording();
     audioStreamer.stopStreaming();
+
+    // Stop Live Activity
+    await liveActivity.stopActivity();
+
     setIsPhoneAudioMode(false);
-  }, [phoneAudioRecorder, audioStreamer]);
+  }, [phoneAudioRecorder, audioStreamer, lockScreenControls]);
 
   /**
    * Toggle phone audio on/off

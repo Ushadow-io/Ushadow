@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ushadow-ingress
+  namespace: ushadow
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - ushadow.chakra
+    secretName: ushadow-tls
+  rules:
+  - host: ushadow.chakra
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: ushadow-backend
+            port:
+              number: 8000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ushadow-frontend
+            port:
+              number: 80

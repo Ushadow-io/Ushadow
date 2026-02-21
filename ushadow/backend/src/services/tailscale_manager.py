@@ -9,9 +9,8 @@ This service consolidates all Tailscale operations:
 
 Architecture:
 - Layer 1 (Tailscale Serve): External HTTPS → Internal containers
-  - /api/* → backend (REST APIs)
+  - /api/* → backend (REST APIs, includes /ws/audio/relay for WebSockets)
   - /auth/* → backend (authentication)
-  - /ws_pcm, /ws_omi → chronicle (WebSockets, direct for low latency)
   - /* → frontend (SPA catch-all)
 
 - Layer 2 (Generic Proxy): Backend routes REST to services via /api/services/{name}/proxy/*
@@ -188,22 +187,57 @@ class TailscaleManager:
 
             except docker.errors.NotFound:
                 # Container doesn't exist - create it
-                # TODO: Get image, network, ports from settings/config
-                # For now, use defaults
+                # Match configuration from compose/tailscale-compose.yml
+
+                # First, ensure networks exist
+                try:
+                    ushadow_net = self.docker_client.networks.get("ushadow-network")
+                    logger.info("Found ushadow-network")
+                except docker.errors.NotFound:
+                    logger.error("ushadow-network not found! Container will use default network.")
+                    ushadow_net = None
+
+                try:
+                    infra_net = self.docker_client.networks.get("infra-network")
+                    logger.info("Found infra-network")
+                except docker.errors.NotFound:
+                    logger.warning("infra-network not found")
+                    infra_net = None
+
+                # Create networking_config for multiple networks
+                from docker.types import EndpointConfig, NetworkingConfig
+
+                networking_config = NetworkingConfig(
+                    endpoints_config={
+                        "ushadow-network": EndpointConfig() if ushadow_net else None,
+                        "infra-network": EndpointConfig() if infra_net else None,
+                    }
+                )
+
                 container = self.docker_client.containers.run(
                     image="tailscale/tailscale:latest",
                     name=container_name,
+                    hostname=container_name,
                     detach=True,
-                    network_mode="host",
                     environment={
                         "TS_STATE_DIR": "/var/lib/tailscale",
-                        "TS_SOCKET": "/var/run/tailscale/tailscaled.sock",
+                        "TS_USERSPACE": "true",
+                        "TS_ACCEPT_DNS": "true",
+                        "TS_EXTRA_ARGS": "--advertise-tags=tag:container",
                     },
                     volumes={
                         volume_name: {"bind": "/var/lib/tailscale", "mode": "rw"}
                     },
                     cap_add=["NET_ADMIN", "NET_RAW"],
+                    networking_config=networking_config,
+                    command=[
+                        "sh", "-c",
+                        f"tailscaled --tun=userspace-networking --statedir=/var/lib/tailscale & "
+                        f"sleep 2 && tailscale up --hostname={self.env_name} && sleep infinity"
+                    ],
                 )
+
+                logger.info(f"Created {container_name} on ushadow-network and infra-network")
 
                 return {
                     "status": "created",
@@ -446,6 +480,38 @@ class TailscaleManager:
 
         return status
 
+    def get_peer_ip_by_hostname(self, hostname: str) -> Optional[str]:
+        """Get a peer's Tailscale IP address by hostname.
+
+        Args:
+            hostname: Tailscale hostname of the peer (case-insensitive)
+
+        Returns:
+            IPv4 address or None if not found
+        """
+        try:
+            exit_code, stdout, stderr = self.exec_command("tailscale status --json", timeout=5)
+
+            if exit_code == 0 and stdout.strip():
+                data = json.loads(stdout)
+                peers = data.get("Peer", {})
+
+                # Search peers (case-insensitive)
+                for peer_data in peers.values():
+                    peer_hostname = peer_data.get("HostName", "")
+                    if peer_hostname.lower() == hostname.lower():
+                        # Extract IPv4
+                        for ip in peer_data.get("TailscaleIPs", []):
+                            if "." in ip:  # IPv4
+                                logger.info(f"Found peer '{hostname}' with IP {ip}")
+                                return ip
+
+                logger.debug(f"Peer '{hostname}' not found in Tailscale peers")
+        except Exception as e:
+            logger.debug(f"Failed to query Tailscale peers: {e}")
+
+        return None
+
     def get_tailnet_suffix(self) -> Optional[str]:
         """Get the tailnet suffix from hostname.
 
@@ -634,7 +700,6 @@ class TailscaleManager:
     def configure_base_routes(self,
                              backend_container: Optional[str] = None,
                              frontend_container: Optional[str] = None,
-                             chronicle_container: Optional[str] = None,
                              backend_port: int = 8000,
                              frontend_port: Optional[int] = None) -> bool:
         """Configure base infrastructure routes (Layer 1).
@@ -642,14 +707,15 @@ class TailscaleManager:
         Sets up:
         - /api/* → backend (REST APIs through generic proxy)
         - /auth/* → backend (authentication)
-        - /ws_pcm → chronicle (WebSocket, direct for low latency)
-        - /ws_omi → chronicle (WebSocket, direct for low latency)
+        - /keycloak/* → keycloak (OIDC authentication)
         - /* → frontend (SPA catch-all)
+
+        Note: Chronicle and other deployed services are accessed via their own ports,
+        not through Tailscale routing.
 
         Args:
             backend_container: Backend container name (default: {env}-backend)
             frontend_container: Frontend container name (default: {env}-webui)
-            chronicle_container: Chronicle container name (default: {env}-chronicle-backend)
             backend_port: Backend internal port (default: 8000)
             frontend_port: Frontend internal port (auto-detect if None)
 
@@ -661,8 +727,6 @@ class TailscaleManager:
             backend_container = f"{self.env_name}-backend"
         if not frontend_container:
             frontend_container = f"{self.env_name}-webui"
-        if not chronicle_container:
-            chronicle_container = f"{self.env_name}-chronicle-backend"
 
         # Auto-detect frontend port based on dev/prod mode
         if frontend_port is None:
@@ -671,7 +735,6 @@ class TailscaleManager:
 
         backend_base = f"http://{backend_container}:{backend_port}"
         frontend_target = f"http://{frontend_container}:{frontend_port}"
-        chronicle_base = f"http://{chronicle_container}:{backend_port}"
 
         success = True
 
@@ -683,12 +746,13 @@ class TailscaleManager:
             if not self.add_serve_route(route, target):
                 success = False
 
-        # WebSocket routes - direct to Chronicle for low latency (legacy/mobile)
-        ws_routes = ["/ws_pcm", "/ws_omi"]
-        for route in ws_routes:
-            target = f"{chronicle_base}{route}"
-            if not self.add_serve_route(route, target):
-                success = False
+        # Keycloak authentication service
+        keycloak_target = "http://keycloak:8080"
+        if not self.add_serve_route("/keycloak", keycloak_target):
+            success = False
+
+        # Chronicle WebSocket routes removed - Chronicle is now a deployed service
+        # accessed via its own port (e.g., http://localhost:8090)
 
         # Frontend catches everything else
         if not self.add_serve_route("/", frontend_target):
@@ -1003,6 +1067,183 @@ class TailscaleManager:
         except Exception as e:
             logger.error(f"Error getting tailnet settings: {e}")
             return None
+
+    # ========================================================================
+    # Tailscale Funnel Management
+    # ========================================================================
+
+    def get_funnel_status(self) -> Dict[str, Any]:
+        """Get Tailscale Funnel status.
+
+        Returns:
+            Dict with funnel status information:
+            - enabled: Whether funnel is currently enabled
+            - port: Port being funneled (usually 443)
+            - public_url: Public URL if funnel is enabled
+            - error: Error message if status check failed
+        """
+        try:
+            exit_code, stdout, stderr = self.exec_command("tailscale funnel status", timeout=5)
+
+            # Check if funnel is enabled by parsing output
+            # New format: "# Funnel on:\n#     - https://hostname.ts.net"
+            # or "https://hostname.ts.net (Funnel on)"
+            output = stdout + stderr
+            is_enabled = "funnel on" in output.lower()
+
+            result = {
+                "enabled": is_enabled,
+                "port": 443 if is_enabled else None,
+                "public_url": None,
+            }
+
+            # Extract public URL if enabled
+            if is_enabled:
+                # Look for "# Funnel on:" section or "(Funnel on)" line
+                for line in output.split('\n'):
+                    line = line.strip()
+                    # Check for URL in comment or regular line
+                    if 'https://' in line:
+                        # Extract URL (might have (Funnel on) suffix)
+                        import re
+                        match = re.search(r'https://[^\s)]+', line)
+                        if match:
+                            result["public_url"] = match.group(0)
+                            break
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting funnel status: {e}")
+            return {
+                "enabled": False,
+                "port": None,
+                "public_url": None,
+                "error": str(e)
+            }
+
+    def enable_funnel(self, port: int = 443) -> Tuple[bool, Optional[str]]:
+        """Enable Tailscale Funnel for public internet access.
+
+        Funnel exposes your Tailscale service to the public internet,
+        allowing users without Tailscale to access it via HTTPS.
+
+        Note: Funnel shares routes with Serve. This reconfigures all existing
+        serve routes to use funnel instead (making them publicly accessible).
+
+        Args:
+            port: Port to funnel (default: 443 for HTTPS)
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            # Get current serve status to preserve routes
+            serve_status = self.get_serve_status()
+            if not serve_status or not serve_status.strip():
+                return False, "Tailscale Serve must be configured before enabling Funnel"
+
+            # Reconfigure routes with funnel (maintains all existing routes)
+            # This is needed because the new CLI merges serve/funnel route tables
+            success = self.configure_layer1_routes_with_funnel()
+
+            if not success:
+                return False, "Failed to reconfigure routes for funnel"
+
+            logger.info(f"Tailscale Funnel enabled on port {port}")
+
+            # Get funnel status to extract public URL
+            status = self.get_funnel_status()
+            return True, status.get("public_url")
+
+        except Exception as e:
+            logger.error(f"Error enabling Funnel: {e}")
+            return False, str(e)
+
+    def configure_layer1_routes_with_funnel(
+        self,
+        backend_container: Optional[str] = None,
+        frontend_container: Optional[str] = None,
+        backend_port: int = 8000,
+        frontend_port: Optional[int] = None,
+    ) -> bool:
+        """Configure Layer 1 routes using funnel (public internet access).
+
+        Same as configure_layer1_routes but uses 'tailscale funnel' instead
+        of 'tailscale serve', making routes publicly accessible.
+
+        Args:
+            backend_container: Backend container name
+            frontend_container: Frontend container name
+            backend_port: Backend internal port (default: 8000)
+            frontend_port: Frontend internal port (auto-detect if None)
+
+        Returns:
+            True if all routes configured successfully
+        """
+        # Use defaults if not provided
+        if not backend_container:
+            backend_container = f"{self.env_name}-backend"
+        if not frontend_container:
+            frontend_container = f"{self.env_name}-webui"
+
+        # Auto-detect frontend port
+        if frontend_port is None:
+            dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
+            frontend_port = 5173 if dev_mode else 80
+
+        backend_base = f"http://{backend_container}:{backend_port}"
+        frontend_target = f"http://{frontend_container}:{frontend_port}"
+
+        success = True
+
+        # Backend API routes - use funnel command
+        backend_routes = ["/api", "/auth", "/ws"]
+        for route in backend_routes:
+            target = f"{backend_base}{route}"
+            exit_code, _, stderr = self.exec_command(
+                f"tailscale funnel --bg --set-path {route} {target}",
+                timeout=10
+            )
+            if exit_code != 0:
+                logger.error(f"Failed to add funnel route {route}: {stderr}")
+                success = False
+
+        # Frontend root route
+        exit_code, _, stderr = self.exec_command(
+            f"tailscale funnel --bg --set-path / {frontend_target}",
+            timeout=10
+        )
+        if exit_code != 0:
+            logger.error(f"Failed to add funnel route /: {stderr}")
+            success = False
+
+        return success
+
+    def disable_funnel(self, port: int = 443) -> Tuple[bool, Optional[str]]:
+        """Disable Tailscale Funnel.
+
+        Args:
+            port: Port to disable funnel for (default: 443)
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            cmd = f"tailscale funnel --https={port} off"
+            exit_code, stdout, stderr = self.exec_command(cmd, timeout=10)
+
+            if exit_code == 0:
+                logger.info(f"Tailscale Funnel disabled on port {port}")
+                return True, None
+            else:
+                error_msg = stderr or stdout or "Unknown error"
+                logger.error(f"Failed to disable Funnel: {error_msg}")
+                return False, error_msg
+
+        except Exception as e:
+            logger.error(f"Error disabling Funnel: {e}")
+            return False, str(e)
 
 
 # ============================================================================

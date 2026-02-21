@@ -1,0 +1,49 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: ushadow
+
+build:
+  artifacts:
+    - image: registry.temp.skaffold/ushadow-backend
+      context: .  # Project root for access to config/ and compose/
+      docker:
+        dockerfile: ushadow/backend/Dockerfile
+    - image: registry.temp.skaffold/ushadow-frontend
+      context: ushadow/frontend
+      docker:
+        dockerfile: Dockerfile
+  tagPolicy:
+    dateTime:
+      format: "2006-01-02_15-04-05"
+      timezone: "UTC"
+  local:
+    push: true
+    useBuildkit: true
+    useDockerCLI: true
+
+deploy:
+  kubectl:
+    hooks:
+      after:
+        - host:
+            command: ["bash", "k8s/scripts/seed-pvcs.sh", "ushadow"]
+            dir: .
+            os: [linux, darwin]
+
+manifests:
+  kustomize:
+    paths:
+      - k8s
+
+portForward:
+  - resourceType: service
+    resourceName: ushadow-backend
+    namespace: ushadow
+    port: 8000
+    localPort: 8000
+  - resourceType: service
+    resourceName: ushadow-frontend
+    namespace: ushadow
+    port: 80
+    localPort: 3000

@@ -1,0 +1,43 @@
+# Launcher Configuration Template
+# Copy this to your project root as .launcher-config.yaml
+
+project:
+  name: myproject              # Internal project name (lowercase, no spaces)
+  display_name: My Project     # Human-readable name shown in UI
+
+prerequisites:
+  required:
+    - docker
+    - git
+  optional:
+    - python
+    - uv
+
+setup:
+  command: ./setup.sh          # Command to run when setting up the project
+  env_vars:
+    - PROJECT_ROOT
+    - WORKTREE_PATH
+
+infrastructure:
+  compose_file: docker-compose.yml  # Path to compose file for shared infrastructure
+  project_name: myproject-infra     # Docker compose project name
+  profile: default                  # Optional: compose profile to use
+
+containers:
+  naming_pattern: "{env_name}-{service}"  # How containers are named
+  primary_service: backend              # Main service to health-check
+  health_endpoint: /health              # Health check endpoint
+  tailscale_project_prefix: myproject   # Optional: Tailscale prefix
+
+ports:
+  allocation_strategy: offset     # or: fixed
+  base_port: 8000                # Starting port for services
+  offset:
+    min: 0
+    max: 100
+    step: 10
+
+worktrees:
+  default_parent: ../worktrees/{project_name}  # Where worktrees are created
+  branch_prefix: env/                          # Optional prefix for environment branches

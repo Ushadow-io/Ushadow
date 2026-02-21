@@ -64,10 +64,18 @@ export interface Discovery {
 }
 
 // Launcher settings
+export interface CodingAgentConfig {
+  agent_type: string
+  command: string
+  args: string[]
+  auto_start: boolean
+}
+
 export interface LauncherSettings {
   default_admin_email: string | null
   default_admin_password: string | null
   default_admin_name: string | null
+  coding_agent: CodingAgentConfig
 }
 
 // Prerequisites configuration types
@@ -169,14 +177,23 @@ export const tauri = {
   // Utilities
   openBrowser: (url: string) => invoke<void>('open_browser', { url }),
 
+  // OAuth server
+  startOAuthServer: () => invoke<[number, string]>('start_oauth_server'),
+  waitForOAuthCallback: (port: number) => invoke<{success: boolean, code?: string, state?: string, error?: string}>('wait_for_oauth_callback', { port }),
+
+  // HTTP client (bypasses CORS restrictions)
+  httpRequest: (url: string, method: string, headers?: Record<string, string>, body?: string) =>
+    invoke<{status: number, body: string, headers: Record<string, string>}>('http_request', { url, method, headers, body }),
+
   // Worktree management
   listWorktrees: (mainRepo: string) => invoke<WorktreeInfo[]>('list_worktrees', { mainRepo }),
   listGitBranches: (mainRepo: string) => invoke<string[]>('list_git_branches', { mainRepo }),
   checkWorktreeExists: (mainRepo: string, branch: string) => invoke<WorktreeInfo | null>('check_worktree_exists', { mainRepo, branch }),
-  createWorktree: (mainRepo: string, worktreesDir: string, name: string, baseBranch?: string) =>
-    invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, baseBranch }),
-  createWorktreeWithWorkmux: (mainRepo: string, name: string, baseBranch?: string, background?: boolean) =>
-    invoke<WorktreeInfo>('create_worktree_with_workmux', { mainRepo, name, baseBranch, background }),
+  checkEnvironmentConflict: (mainRepo: string, envName: string) => invoke<EnvironmentConflict | null>('check_environment_conflict', { mainRepo, envName }),
+  createWorktree: (mainRepo: string, worktreesDir: string, name: string, branchName?: string, baseBranch?: string) =>
+    invoke<WorktreeInfo>('create_worktree', { mainRepo, worktreesDir, name, branchName, baseBranch }),
+  createWorktreeWithWorkmux: (mainRepo: string, name: string, branchName?: string, baseBranch?: string, background?: boolean, customWindowName?: string) =>
+    invoke<WorktreeInfo>('create_worktree_with_workmux', { mainRepo, name, branchName, baseBranch, background, customWindowName }),
   mergeWorktreeWithRebase: (mainRepo: string, name: string, useRebase: boolean, keepWorktree: boolean) =>
     invoke<string>('merge_worktree_with_rebase', { mainRepo, name, useRebase, keepWorktree }),
   listTmuxSessions: () => invoke<string[]>('list_tmux_sessions'),
@@ -184,7 +201,7 @@ export const tauri = {
   getEnvironmentTmuxStatus: (envName: string) => invoke<TmuxStatus>('get_environment_tmux_status', { envName }),
   getTmuxInfo: () => invoke<string>('get_tmux_info'),
   ensureTmuxRunning: () => invoke<string>('ensure_tmux_running'),
-  attachTmuxToWorktree: (worktreePath: string, envName: string) => invoke<string>('attach_tmux_to_worktree', { worktreePath, envName }),
+  attachTmuxToWorktree: (worktreePath: string, envName: string, windowNameOverride?: string) => invoke<string>('attach_tmux_to_worktree', { worktreePath, envName, windowNameOverride }),
   openInVscode: (path: string, envName?: string) => invoke<void>('open_in_vscode', { path, envName }),
   openInVscodeWithTmux: (path: string, envName: string) => invoke<void>('open_in_vscode_with_tmux', { path, envName }),
   removeWorktree: (mainRepo: string, name: string) => invoke<void>('remove_worktree', { mainRepo, name }),
@@ -194,7 +211,7 @@ export const tauri = {
   getTmuxSessions: () => invoke<TmuxSessionInfo[]>('get_tmux_sessions'),
   killTmuxWindow: (windowName: string) => invoke<string>('kill_tmux_window', { windowName }),
   killTmuxServer: () => invoke<string>('kill_tmux_server'),
-  openTmuxInTerminal: (windowName: string, worktreePath: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath }),
+  openTmuxInTerminal: (windowName: string, worktreePath: string, environmentName?: string) => invoke<string>('open_tmux_in_terminal', { windowName, worktreePath, environmentName }),
   captureTmuxPane: (windowName: string) => invoke<string>('capture_tmux_pane', { windowName }),
   getClaudeStatus: (windowName: string) => invoke<ClaudeStatus>('get_claude_status', { windowName }),
 
@@ -203,6 +220,118 @@ export const tauri = {
   saveLauncherSettings: (settings: LauncherSettings) => invoke<void>('save_launcher_settings', { settings }),
   writeCredentialsToWorktree: (worktreePath: string, adminEmail: string, adminPassword: string, adminName?: string) =>
     invoke<void>('write_credentials_to_worktree', { worktreePath, adminEmail, adminPassword, adminName }),
+
+  // Configuration management
+  loadProjectConfig: (projectRoot: string) => invoke<LauncherConfig>('load_project_config', { projectRoot }),
+  getCurrentConfig: () => invoke<LauncherConfig | null>('get_current_config'),
+  checkLauncherConfigExists: (projectRoot: string) => invoke<boolean>('check_launcher_config_exists', { projectRoot }),
+  validateConfigFile: (projectRoot: string) => invoke<string>('validate_config_file', { projectRoot }),
+
+  // Environment scanning
+  scanEnvFile: (projectRoot: string) => invoke<DetectedPort[]>('scan_env_file', { projectRoot }),
+  scanAllEnvVars: (projectRoot: string) => invoke<DetectedEnvVar[]>('scan_all_env_vars', { projectRoot }),
+
+  // Infrastructure discovery
+  getInfraServicesFromCompose: () => invoke<InfraService[]>('get_infra_services_from_compose'),
+
+  // Kanban ticket/epic management (local storage)
+  getTickets: (projectId?: string) => invoke<Ticket[]>('get_tickets', { projectId }),
+  getEpics: (projectId?: string) => invoke<Epic[]>('get_epics', { projectId }),
+  createTicket: (
+    title: string,
+    description: string | null,
+    priority: string,
+    epicId: string | null,
+    tags: string[],
+    environmentName: string | null,
+    projectId: string | null
+  ) => invoke<Ticket>('create_ticket', { title, description, priority, epicId, tags, environmentName, projectId }),
+  updateTicket: (
+    id: string,
+    title?: string,
+    description?: string,
+    status?: string,
+    priority?: string,
+    epicId?: string,
+    tags?: string[],
+    order?: number,
+    worktreePath?: string,
+    branchName?: string,
+    tmuxWindowName?: string,
+    tmuxSessionName?: string,
+    environmentName?: string
+  ) => invoke<Ticket>('update_ticket', { id, title, description, status, priority, epicId, tags, order, worktreePath, branchName, tmuxWindowName, tmuxSessionName, environmentName }),
+  deleteTicket: (id: string) => invoke<void>('delete_ticket', { id }),
+  createEpic: (
+    title: string,
+    description: string | null,
+    color: string,
+    baseBranch: string,
+    branchName: string | null,
+    projectId: string | null
+  ) => invoke<Epic>('create_epic', { title, description, color, baseBranch, branchName, projectId }),
+  updateEpic: (
+    id: string,
+    title?: string,
+    description?: string,
+    color?: string,
+    branchName?: string
+  ) => invoke<Epic>('update_epic', { id, title, description, color, branchName }),
+  deleteEpic: (id: string) => invoke<void>('delete_epic', { id }),
+
+  // Kanban ticket-worktree integration
+  createTicketWorktree: (request: {
+    ticket_id: string
+    ticket_title: string
+    project_root: string
+    environment_name: string
+    branch_name?: string
+    base_branch?: string
+    epic_branch?: string
+  }) => invoke<{
+    worktree_path: string
+    branch_name: string
+    tmux_window_name: string
+    tmux_session_name: string
+  }>('create_ticket_worktree', { request }),
+  attachTicketToWorktree: (ticketId: string, worktreePath: string, branchName: string) =>
+    invoke<{
+      worktree_path: string
+      branch_name: string
+      tmux_window_name: string
+      tmux_session_name: string
+    }>('attach_ticket_to_worktree', { ticketId, worktreePath, branchName }),
+  startCodingAgentForTicket: (
+    ticketId: string,
+    tmuxWindowName: string,
+    tmuxSessionName: string,
+    worktreePath: string
+  ) => invoke<void>('start_coding_agent_for_ticket', { ticketId, tmuxWindowName, tmuxSessionName, worktreePath }),
+}
+
+// DetectedPort type (from env_scanner.rs)
+export interface DetectedPort {
+  name: string
+  default_value: string | null
+  base_port: number | null
+  is_database: boolean
+}
+
+// DetectedEnvVar type (from env_scanner.rs)
+export interface DetectedEnvVar {
+  name: string
+  default_value: string | null
+  is_port: boolean
+  is_database_port: boolean
+  should_append_env_name: boolean
+}
+
+// ComposeServiceDefinition type (from docker-compose parsing)
+export interface ComposeServiceDefinition {
+  id: string              // Service name from compose (e.g., "postgres", "redis")
+  display_name: string    // Human-readable name (e.g., "PostgreSQL", "Redis")
+  default_port: number | null // Primary exposed port
+  profiles: string[]      // Profiles this service belongs to
 }
 
 // WorktreeInfo type
@@ -241,6 +370,91 @@ export interface ClaudeStatus {
   is_running: boolean
   current_task: string | null
   last_output: string | null
+}
+
+// Environment conflict types
+export interface EnvironmentConflict {
+  name: string
+  current_branch: string
+  path: string
+  is_running: boolean
+}
+
+// LauncherConfig type (matches Rust struct)
+export interface LauncherConfig {
+  project: {
+    name: string
+    display_name: string
+  }
+  prerequisites: {
+    required: string[]
+    optional: string[]
+  }
+  setup: {
+    command: string
+    env_vars: string[]
+  }
+  infrastructure: {
+    compose_file: string
+    project_name: string
+    profile?: string
+  }
+  containers: {
+    naming_pattern: string
+    primary_service: string
+    health_endpoint: string
+    tailscale_project_prefix?: string
+  }
+  ports: {
+    allocation_strategy: string
+    base_port: number
+    offset: {
+      min: number
+      max: number
+      step: number
+    }
+  }
+  worktrees: {
+    default_parent: string
+    branch_prefix: string
+  }
+}
+
+// Kanban types (local storage)
+export type TicketStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'archived'
+export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent'
+
+export interface Epic {
+  id: string
+  title: string
+  description?: string
+  color: string
+  branch_name?: string
+  base_branch: string
+  project_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Ticket {
+  id: string
+  title: string
+  description?: string
+  status: TicketStatus
+  priority: TicketPriority
+  epic_id?: string
+  tags: string[]
+  color?: string
+  tmux_window_name?: string
+  tmux_session_name?: string
+  branch_name?: string
+  worktree_path?: string
+  environment_name?: string
+  project_id?: string
+  assigned_to?: string
+  order: number
+  created_at: string
+  updated_at: string
 }
 
 export default tauri

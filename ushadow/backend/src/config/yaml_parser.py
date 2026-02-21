@@ -139,6 +139,8 @@ class ComposeService:
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
     wizard: Optional[str] = None  # Setup wizard ID
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # URLs this service exposes (audio intake, http api, etc.)
+    tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
+    environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all envs)
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -293,6 +295,8 @@ class ComposeParser(BaseYAMLParser):
         description = service_meta.get("description")
         wizard = service_meta.get("wizard")  # Setup wizard ID
         exposes = service_meta.get("exposes", [])  # URLs this service exposes
+        tags = service_meta.get("tags", [])  # Service tags (e.g., ["audio", "gpu"])
+        environments = service_meta.get("environments", [])  # Environments where visible (empty = all)
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
@@ -319,6 +323,8 @@ class ComposeParser(BaseYAMLParser):
             route_path=route_path,
             wizard=wizard,
             exposes=exposes,
+            tags=tags,
+            environments=environments,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:
@@ -399,16 +405,30 @@ class ComposeParser(BaseYAMLParser):
             match = self.ENV_VAR_PATTERN.search(value)
             if match:
                 var_name, default = match.groups()
-                # ${VAR} (no :-) → required (default is None)
-                # ${VAR:-} → required (empty default isn't useful)
-                # ${VAR:-value} → optional with explicit default
-                has_default = default is not None and default != ""
-                return ComposeEnvVar(
-                    name=key,
-                    has_default=has_default,
-                    default_value=default if has_default else None,
-                    is_required=not has_default,
-                )
+
+                # If the ENTIRE value is just ${VAR:-default}, extract the default
+                # Otherwise (template string like "jdbc://host/${VAR:-default}"), keep full value
+                if match.group(0) == value:
+                    # Simple variable reference: ${VAR} or ${VAR:-default}
+                    # ${VAR} (no :-) → required (default is None)
+                    # ${VAR:-} → required (empty default isn't useful)
+                    # ${VAR:-value} → optional with explicit default
+                    has_default = default is not None and default != ""
+                    return ComposeEnvVar(
+                        name=key,
+                        has_default=has_default,
+                        default_value=default if has_default else None,
+                        is_required=not has_default,
+                    )
+                else:
+                    # Template string containing variable references
+                    # Keep the full template as the default value
+                    return ComposeEnvVar(
+                        name=key,
+                        has_default=True,
+                        default_value=value,
+                        is_required=False,
+                    )
 
             # Plain value - has a hardcoded default
             return ComposeEnvVar(

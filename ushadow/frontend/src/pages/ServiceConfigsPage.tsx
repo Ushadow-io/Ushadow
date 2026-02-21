@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus,
   RefreshCw,
@@ -53,6 +53,8 @@ import {
   DeploymentsTab,
   type TabType,
 } from '../components/services'
+import { PortConflictDialog } from '../components/services/PortConflictDialog'
+import type { PortConflict } from '../hooks/useServiceStart'
 
 /**
  * Extract error message from FastAPI response.
@@ -77,6 +79,7 @@ function getErrorMessage(error: any, fallback: string): string {
 
 export default function ServiceConfigsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { isEnabled } = useFeatureFlags()
 
   // Feature flag: hide service configs (custom instances)
@@ -143,6 +146,9 @@ export default function ServiceConfigsPage() {
   const [loadingProviderCard, setLoadingProviderCard] = useState(false)
   const [savingProviderCard, setSavingProviderCard] = useState(false)
 
+  // Track toggling deployments (for spinner state)
+  const [togglingDeployments, setTogglingDeployments] = useState<Set<string>>(new Set())
+
   // Unified deploy modal state
   const [deployModalState, setDeployModalState] = useState<{
     isOpen: boolean
@@ -162,6 +168,21 @@ export default function ServiceConfigsPage() {
   const [editingDeployment, setEditingDeployment] = useState<any | null>(null)
   const [deploymentEnvVars, setDeploymentEnvVars] = useState<EnvVarInfo[]>([])
   const [deploymentEnvConfigs, setDeploymentEnvConfigs] = useState<Record<string, EnvVarConfig>>({})
+  const [customEnvVars, setCustomEnvVars] = useState<Record<string, string>>({})
+
+  // Port conflict state for deployment restarts
+  const [restartPortConflict, setRestartPortConflict] = useState<{
+    isOpen: boolean
+    deploymentId: string | null
+    serviceName: string | null
+    conflicts: PortConflict[]
+  }>({
+    isOpen: false,
+    deploymentId: null,
+    serviceName: null,
+    conflicts: []
+  })
+  const [resolvingPortConflict, setResolvingPortConflict] = useState(false)
 
   // ESC key to close modals
   const closeAllModals = useCallback(() => {
@@ -179,6 +200,14 @@ export default function ServiceConfigsPage() {
     window.addEventListener('keydown', handleEsc)
     return () => window.removeEventListener('keydown', handleEsc)
   }, [closeAllModals])
+
+  // Refresh when navigated here with { state: { refresh: true } } (e.g. from a wizard)
+  useEffect(() => {
+    if (location.state?.refresh) {
+      refreshData()
+      navigate(location.pathname, { replace: true, state: {} })
+    }
+  }, [location.state])
 
   // Log data for debugging
   useEffect(() => {
@@ -431,6 +460,7 @@ export default function ServiceConfigsPage() {
     // Try to find instance first, otherwise treat as template ID
     const consumerInstance = instances.find(inst => inst.id === consumerId)
     const templateId = consumerInstance?.template_id || consumerId
+    console.log('[DEBUG handleDeployConsumer]', { consumerId, consumerInstance: consumerInstance?.id, templateId, configId: target.configId })
 
     // Load ALL available targets (both Docker and K8s) for unified selection
     setLoadingTargets(true)
@@ -497,6 +527,7 @@ export default function ServiceConfigsPage() {
       const envData = envResponse.data
 
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+        .sort((a, b) => a.name.localeCompare(b.name))
       setEnvVars(allEnvVars)
 
       // Load wiring connections for this service to get provider-supplied values
@@ -770,7 +801,7 @@ export default function ServiceConfigsPage() {
       const response = await svcConfigsApi.getTemplateEnvConfig(providerId)
       const data = response.data
 
-      setProviderCardEnvVars(data)
+      setProviderCardEnvVars(data.sort((a, b) => a.name.localeCompare(b.name)))
 
       // Initialize configs from backend response
       const initial: Record<string, EnvVarConfig> = {}
@@ -779,7 +810,7 @@ export default function ServiceConfigsPage() {
           name: ev.name,
           source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
           setting_path: ev.setting_path,
-          value: ev.value,
+          value: ev.value ?? ev.resolved_value ?? null,
         }
       }
       setProviderCardEnvConfigs(initial)
@@ -811,6 +842,13 @@ export default function ServiceConfigsPage() {
       // Save settings if any
       if (Object.keys(settingsUpdates).length > 0) {
         await settingsApi.update(settingsUpdates)
+      }
+
+      // Mark provider as installed so it appears in wiring board and instance list
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes(providerId)) {
+        await settingsApi.update({ installed_services: [...currentInstalled, providerId] })
       }
 
       // Refresh data
@@ -1071,6 +1109,13 @@ export default function ServiceConfigsPage() {
             await settingsApi.update(updates)
           }
 
+          // Mark provider as installed so it appears in wiring board and instance list
+          const currentConfig = await settingsApi.getConfig()
+          const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+          if (!currentInstalled.includes(editingProvider.id)) {
+            await settingsApi.update({ installed_services: [...currentInstalled, editingProvider.id] })
+          }
+
           setMessage({ type: 'success', text: `${editingProvider.name} settings updated` })
         }
 
@@ -1133,14 +1178,19 @@ export default function ServiceConfigsPage() {
     const filtered = filterCurrentEnvOnly
       ? deployments.filter((d) => {
           // Match deployments from the current environment only
-          // Check if the deployment's hostname matches this environment's compose project or env name
-          const matches = d.unode_hostname && (
-            d.unode_hostname === currentEnv ||
-            d.unode_hostname === currentComposeProject ||
-            d.unode_hostname.startsWith(`${currentComposeProject}.`)
+          // Check if the deployment's hostname or container name contains the env name
+          const hostname = d.unode_hostname?.toLowerCase() || ''
+          const containerName = d.container_name?.toLowerCase() || ''
+          const matches = (
+            hostname === currentEnv ||
+            hostname === currentComposeProject ||
+            hostname.startsWith(`${currentComposeProject}.`) ||
+            hostname.includes(currentEnv) ||
+            containerName.includes(currentComposeProject) ||
+            containerName.includes(currentEnv)
           )
           if (!matches && d.unode_hostname) {
-            console.log(`  ⏭️ Filtered out deployment ${d.id}: hostname=${d.unode_hostname}`)
+            console.log(`  ⏭️ Filtered out deployment ${d.id}: hostname=${d.unode_hostname}, container=${d.container_name}`)
           }
           return matches
         })
@@ -1161,25 +1211,143 @@ export default function ServiceConfigsPage() {
 
   // Deployment action handlers
   const handleStopDeployment = async (deploymentId: string) => {
+    // Add to toggling set
+    setTogglingDeployments(prev => new Set(prev).add(deploymentId))
+
     try {
       await deploymentActions.stopDeployment(deploymentId)
-      refreshData()
+      await refreshData()
       setMessage({ type: 'success', text: 'Deployment stopped' })
     } catch (error: any) {
       console.error('Failed to stop deployment:', error)
       setMessage({ type: 'error', text: 'Failed to stop deployment' })
+    } finally {
+      // Remove from toggling set
+      setTogglingDeployments(prev => {
+        const next = new Set(prev)
+        next.delete(deploymentId)
+        return next
+      })
     }
   }
 
   const handleRestartDeployment = async (deploymentId: string) => {
+    // Add to toggling set
+    setTogglingDeployments(prev => new Set(prev).add(deploymentId))
+
     try {
       await deploymentActions.restartDeployment(deploymentId)
-      refreshData()
+      await refreshData()
       setMessage({ type: 'success', text: 'Deployment restarted' })
     } catch (error: any) {
       console.error('Failed to restart deployment:', error)
-      setMessage({ type: 'error', text: 'Failed to restart deployment' })
+
+      // Check if this is a port conflict error (status 409)
+      if (error.response?.status === 409 && error.response?.data?.detail) {
+        const detail = error.response.data.detail
+        if (typeof detail === 'object' && detail.error === 'port_conflict') {
+          // Find the deployment to get its name
+          const deployment = deployments.find(d => d.id === deploymentId)
+          const template = templates.find(t => t.id === deployment?.service_id)
+          const serviceName = template?.name || deployment?.service_id || 'Unknown'
+
+          // Extract what's using the port from the error message
+          let usedBy = 'Another container'
+          if (detail.message && detail.message.includes('(')) {
+            const match = detail.message.match(/\((.*?)\)/)
+            if (match) usedBy = match[1]
+          }
+
+          // Show port conflict dialog (envVar=null means can't auto-resolve)
+          setRestartPortConflict({
+            isOpen: true,
+            deploymentId,
+            serviceName,
+            conflicts: [{
+              port: detail.port,
+              envVar: null, // null = cannot auto-resolve, requires manual edit
+              usedBy,
+              suggestedPort: detail.port + 1
+            }]
+          })
+          return
+        }
+      }
+
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to restart deployment') })
+    } finally {
+      // Remove from toggling set
+      setTogglingDeployments(prev => {
+        const next = new Set(prev)
+        next.delete(deploymentId)
+        return next
+      })
     }
+  }
+
+  const handleResolveRestartPortConflict = async (envVar: string, newPort: number) => {
+    const { deploymentId } = restartPortConflict
+    if (!deploymentId) return
+
+    setResolvingPortConflict(true)
+
+    try {
+      // For deployments, we need to update the port mapping and redeploy
+      // This is a simplified version - ideally we'd use the deployment edit flow
+      const deployment = deployments.find(d => d.id === deploymentId)
+      if (!deployment) {
+        throw new Error('Deployment not found')
+      }
+
+      // Get current deployment config
+      const currentPorts = deployment.deployed_config?.ports || []
+
+      // Update the port mapping (replace old port with new port)
+      const oldPort = restartPortConflict.conflicts[0]?.port
+      const updatedPorts = currentPorts.map((portStr: string) => {
+        if (portStr.includes(`:${oldPort}`) || portStr === String(oldPort)) {
+          // Replace the host port
+          if (portStr.includes(':')) {
+            const [_, containerPort] = portStr.split(':')
+            return `${newPort}:${containerPort}`
+          }
+          return String(newPort)
+        }
+        return portStr
+      })
+
+      // Build updated environment (merge current with any existing configs)
+      const updatedEnv = deployment.deployed_config?.environment || {}
+
+      // Update the deployment via API
+      await deploymentsApi.updateDeployment(deploymentId, updatedEnv)
+
+      // Close the dialog
+      setRestartPortConflict({
+        isOpen: false,
+        deploymentId: null,
+        serviceName: null,
+        conflicts: []
+      })
+
+      // Refresh data to show updated deployment
+      refreshData()
+      setMessage({ type: 'success', text: `Port updated to ${newPort} and deployment restarted` })
+    } catch (error: any) {
+      console.error('Failed to resolve port conflict:', error)
+      setMessage({ type: 'error', text: getErrorMessage(error, 'Failed to resolve port conflict') })
+    } finally {
+      setResolvingPortConflict(false)
+    }
+  }
+
+  const handleDismissRestartPortConflict = () => {
+    setRestartPortConflict({
+      isOpen: false,
+      deploymentId: null,
+      serviceName: null,
+      conflicts: []
+    })
   }
 
   const handleRemoveDeployment = async (deploymentId: string, serviceName: string) => {
@@ -1205,10 +1373,20 @@ export default function ServiceConfigsPage() {
       // Load environment variable configuration for this service
       // Pass deployment target to get properly resolved values
       const deployTarget = deployment.unode_hostname || deployment.backend_metadata?.cluster_id
-      const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget)
-      const envData = envResponse.data
 
-      const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+      let allEnvVars: any[] = []
+      try {
+        const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget)
+        const envData = envResponse.data
+        allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
+      } catch (error: any) {
+        // If service doesn't have env config (404), that's okay - just means no env vars to edit
+        if (error.response?.status !== 404) {
+          throw error
+        }
+        console.log('Service has no environment variables configured')
+      }
+
       setDeploymentEnvVars(allEnvVars)
 
       // Initialize env configs from deployment's current config
@@ -1325,6 +1503,12 @@ export default function ServiceConfigsPage() {
   }
 
   const handleStartService = async (serviceId: string) => {
+    // If the service needs setup and has a wizard, redirect to it instead of deploying
+    const template = templates.find((t) => t.id === serviceId)
+    if (template?.needs_setup && template?.wizard) {
+      navigate(`/wizard/${template.wizard}`)
+      return
+    }
     await handleDeployConsumer(serviceId, { type: 'local' })
   }
 
@@ -1337,6 +1521,11 @@ export default function ServiceConfigsPage() {
   }
 
   const handleDeployService = (serviceId: string, target: DeployTarget) => {
+    const template = templates.find((t) => t.id === serviceId)
+    if (template?.needs_setup && template?.wizard) {
+      navigate(`/wizard/${template.wizard}`)
+      return
+    }
     handleDeployConsumer(serviceId, target)
   }
 
@@ -1396,6 +1585,8 @@ export default function ServiceConfigsPage() {
           providerTemplates={providerTemplates}
           serviceStatuses={serviceStatuses}
           deployments={filteredDeployments}
+          togglingDeployments={togglingDeployments}
+          splitServicesEnabled={isEnabled('split_services')}
           onAddConfig={showServiceConfigs ? handleAddConfig : () => {}}
           onWiringChange={handleWiringChange}
           onWiringClear={handleWiringClear}
@@ -1445,6 +1636,7 @@ export default function ServiceConfigsPage() {
         <DeploymentsTab
           deployments={filteredDeployments}
           templates={templates}
+          targets={availableTargets}
           filterCurrentEnvOnly={filterCurrentEnvOnly}
           onFilterChange={setFilterCurrentEnvOnly}
           onStopDeployment={handleStopDeployment}
@@ -1565,6 +1757,7 @@ export default function ServiceConfigsPage() {
           setEditingDeployment(null)
           setDeploymentEnvVars([])
           setDeploymentEnvConfigs({})
+          setCustomEnvVars({})
         }}
         title="Edit Deployment"
         titleIcon={<Settings className="h-5 w-5 text-primary-600" />}
@@ -1628,9 +1821,61 @@ export default function ServiceConfigsPage() {
                   })}
                 </div>
               </div>
-            ) : (
-              <p className="text-sm text-neutral-500">No environment variables to configure</p>
-            )}
+            ) : null}
+
+            {/* Custom Environment Variables */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Additional Environment Variables
+                </label>
+                <button
+                  onClick={() => {
+                    const varName = prompt('Environment variable name (e.g., MYCELIA_FRONTEND_PORT):')
+                    if (varName && varName.trim()) {
+                      setCustomEnvVars(prev => ({ ...prev, [varName.trim()]: '' }))
+                    }
+                  }}
+                  className="text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                >
+                  + Add Variable
+                </button>
+              </div>
+              {Object.keys(customEnvVars).length > 0 && (
+                <div className="space-y-2 rounded-lg border border-neutral-200 dark:border-neutral-700 p-3">
+                  {Object.entries(customEnvVars).map(([name, value]) => (
+                    <div key={name} className="flex items-center gap-2">
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-neutral-600 dark:text-neutral-400 mb-1">
+                          {name}
+                        </label>
+                        <input
+                          type="text"
+                          value={value}
+                          onChange={(e) => setCustomEnvVars(prev => ({ ...prev, [name]: e.target.value }))}
+                          className="input text-sm"
+                          placeholder="Value"
+                        />
+                      </div>
+                      <button
+                        onClick={() => {
+                          const newVars = { ...customEnvVars }
+                          delete newVars[name]
+                          setCustomEnvVars(newVars)
+                        }}
+                        className="text-error-600 hover:text-error-700 dark:text-error-400 dark:hover:text-error-300 mt-5"
+                        title="Remove"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-neutral-500">
+                Add custom environment variables like MYCELIA_FRONTEND_PORT to override service ports
+              </p>
+            </div>
 
             {/* Action buttons */}
             <div className="flex justify-end gap-2 pt-4">
@@ -1639,6 +1884,7 @@ export default function ServiceConfigsPage() {
                   setEditingDeployment(null)
                   setDeploymentEnvVars([])
                   setDeploymentEnvConfigs({})
+                  setCustomEnvVars({})
                 }}
                 className="btn-ghost"
               >
@@ -1658,6 +1904,13 @@ export default function ServiceConfigsPage() {
                       }
                     })
 
+                    // Add custom env vars
+                    Object.entries(customEnvVars).forEach(([name, value]) => {
+                      if (value) {
+                        envVars[name] = value
+                      }
+                    })
+
                     // Update deployment with new env vars
                     await deploymentsApi.updateDeployment(editingDeployment.id, envVars)
 
@@ -1665,6 +1918,7 @@ export default function ServiceConfigsPage() {
                     setEditingDeployment(null)
                     setDeploymentEnvVars([])
                     setDeploymentEnvConfigs({})
+                    setCustomEnvVars({})
 
                     // Refresh deployments list
                     await refreshDeployments()
@@ -1860,6 +2114,16 @@ export default function ServiceConfigsPage() {
           </div>
         )}
       </Modal>
+
+      {/* Port Conflict Dialog for Deployment Restarts */}
+      <PortConflictDialog
+        isOpen={restartPortConflict.isOpen}
+        serviceName={restartPortConflict.serviceName || 'Deployment'}
+        conflicts={restartPortConflict.conflicts}
+        onResolve={handleResolveRestartPortConflict}
+        onDismiss={handleDismissRestartPortConflict}
+        isResolving={resolvingPortConflict}
+      />
 
     </div>
   )
