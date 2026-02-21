@@ -5,7 +5,7 @@ import os
 import re
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from src.models.kubernetes import KubernetesDeploymentSpec
 from src.utils.logging import get_logger
@@ -52,6 +52,7 @@ class KubernetesManifestBuilder:
         environment = service_def.get("environment", {})
         ports = service_def.get("ports", [])
         volumes = service_def.get("volumes", [])
+        command = service_def.get("command")
 
         image = self._resolve_image_variables(image, environment)
 
@@ -99,6 +100,7 @@ class KubernetesManifestBuilder:
         manifests["deployment"] = self._deployment(
             name, namespace, image, spec, safe_service_id, labels,
             container_ports, config_data, secret_data, k8s_volumes, volume_mounts,
+            command=command,
         )
         manifests["service"] = self._service(name, namespace, labels, spec, container_ports)
 
@@ -321,6 +323,7 @@ class KubernetesManifestBuilder:
         secret_data: Dict,
         k8s_volumes: List[Dict],
         volume_mounts: List[Dict],
+        command: Optional[Union[str, List[str]]] = None,
     ) -> Dict:
         container: Dict[str, Any] = {
             "name": name,
@@ -331,6 +334,13 @@ class KubernetesManifestBuilder:
                 for p in container_ports
             ],
         }
+
+        if command is not None:
+            if isinstance(command, str):
+                import shlex
+                container["command"] = shlex.split(command)
+            else:
+                container["command"] = list(command)
 
         if config_data or secret_data:
             container["envFrom"] = [

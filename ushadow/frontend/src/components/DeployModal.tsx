@@ -9,7 +9,7 @@ import { kubernetesApi, servicesApi, svcConfigsApi, deploymentsApi, DeployTarget
 interface DeployModalProps {
   isOpen: boolean
   onClose: () => void
-  onSuccess?: () => void  // Called after successful deployment
+  onSuccess?: (target?: DeployTarget) => void  // Called after successful deployment
   mode?: 'deploy' | 'create-config'  // Mode: deploy (default) or just create config
   target?: DeployTarget  // Optional - if not provided, show target selection
   availableTargets?: DeployTarget[]  // For target selection
@@ -359,8 +359,8 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
       setDeploymentResult(deployResponse.data.message || 'Deployment successful')
       setStep('complete')
 
-      // Notify parent of successful deployment
-      onSuccess?.()
+      // Notify parent of successful deployment, passing the target for follow-on deploys
+      onSuccess?.(selectedTarget ?? undefined)
     } catch (err: any) {
       console.error('Deployment failed:', err)
       setError(`Deployment failed: ${formatError(err)}`)

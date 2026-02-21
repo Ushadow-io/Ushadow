@@ -31,10 +31,12 @@ from .keycloak_auth import (
 )
 from .keycloak_client import KeycloakClient, get_keycloak_client
 from .keycloak_startup import (
-    register_current_environment,
     register_url_with_keycloak,
     register_mobile_client,
 )
+
+# Alias for backward compatibility — function was renamed in keycloak_admin
+register_current_environment = register_current_environment_redirect_uri
 from .keycloak_user_sync import (
     get_or_create_user_from_keycloak,
     get_mongodb_user_id_for_keycloak_user,

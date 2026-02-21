@@ -41,7 +41,8 @@ services:
       # SQLite (default, persisted in mem0_data volume): sqlite:////app/data/openmemory.db
       # PostgreSQL (when supported): postgresql://user:password@host:port/database
       - DATABASE_URL=${OPENMEMORY_DATABASE_URL:-sqlite:////app/data/openmemory.db}
-
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}  # For future PostgreSQL support
+      
       # Qdrant connection (from CapabilityResolver or defaults)
       - QDRANT_HOST=${QDRANT_HOST:-qdrant}
       - QDRANT_PORT=${QDRANT_PORT:-6333}

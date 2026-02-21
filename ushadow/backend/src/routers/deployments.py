@@ -47,10 +47,20 @@ async def list_deployment_targets(
     unode_manager = await get_unode_manager()
     unodes = await unode_manager.list_unodes()
 
+    # In K8s mode, the local leader is a pod (no Docker socket) — skip it so the
+    # frontend falls through to the K8s cluster targets instead.
+    from src.utils.environment import is_kubernetes as _is_kubernetes
+    k8s_mode = _is_kubernetes()
+
     for unode in unodes:
         from src.models.unode import UNodeRole
         parsed = parse_deployment_target_id(unode.deployment_target_id)
         is_leader = unode.role == UNodeRole.LEADER
+
+        if k8s_mode and is_leader:
+            # Skip the K8s pod registered as the local leader — Docker is not available in K8s pods
+            logger.info(f"Skipping local leader UNode {unode.hostname!r} (K8s pod, no Docker socket)")
+            continue
 
         target = DeployTarget(
             id=unode.deployment_target_id,

@@ -384,6 +384,7 @@ async def deploy_service_to_cluster(
         "environment": resolved_service.environment,
         "ports": resolved_service.ports,  # Already in ["3002:3000"] format
         "volumes": resolved_service.volumes,  # Volume mounts for config files
+        "command": resolved_service.command,  # Override image CMD if specified in compose
     }
 
     # TODO: Track deployment status in Deployment record, not ServiceConfig
