@@ -455,7 +455,7 @@ export default function ServiceConfigsPage() {
     }
   }
 
-  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes'; id?: string; configId?: string }) => {
+  const handleDeployConsumer = async (consumerId: string, target: { type: 'local' | 'remote' | 'kubernetes' | 'k8s' | 'docker'; id?: string; configId?: string }) => {
     // consumerId can be either an instance ID or a template ID (for templates without instances)
     // Try to find instance first, otherwise treat as template ID
     const consumerInstance = instances.find(inst => inst.id === consumerId)
@@ -474,21 +474,25 @@ export default function ServiceConfigsPage() {
       // Try to determine a default target based on the button clicked
       let selectedTarget: DeployTarget | undefined
 
-      if (target.type === 'kubernetes') {
+      if (target.type === 'kubernetes' || target.type === 'k8s') {
         // K8s button clicked - try to select a K8s cluster
         const k8sTargets = allTargets.filter(t => t.type === 'k8s')
-        if (k8sTargets.length === 1) {
+        // If target has an id, match exactly; otherwise auto-select if only one cluster
+        if (target.id) {
+          selectedTarget = k8sTargets.find(t => t.id === target.id || t.identifier === target.id)
+        }
+        if (!selectedTarget && k8sTargets.length === 1) {
           selectedTarget = k8sTargets[0]
           console.log(`🎯 Auto-selected single K8s cluster: ${selectedTarget.name}`)
         }
-      } else if (target.type === 'local') {
+      } else if (target.type === 'local' || (target.type === 'docker' && !target.id)) {
         // Local button clicked - select leader Docker unode
         const dockerTargets = allTargets.filter(t => t.type === 'docker')
         selectedTarget = dockerTargets.find(t => t.is_leader) || dockerTargets[0]
         if (selectedTarget) {
           console.log(`🎯 Auto-selected local Docker target: ${selectedTarget.name}`)
         }
-      } else if (target.type === 'remote' && target.id) {
+      } else if ((target.type === 'remote' || target.type === 'docker') && target.id) {
         // Remote button clicked - select specific remote unode
         const dockerTargets = allTargets.filter(t => t.type === 'docker')
         selectedTarget = dockerTargets.find(t => t.identifier === target.id || t.id === target.id)
@@ -1177,6 +1181,9 @@ export default function ServiceConfigsPage() {
     console.log(`🔍 Filtering deployments: filterCurrentEnvOnly=${filterCurrentEnvOnly}, currentEnv=${currentEnv}, currentComposeProject=${currentComposeProject}`)
     const filtered = filterCurrentEnvOnly
       ? deployments.filter((d) => {
+          // K8s deployments always pass the filter — they don't use env-based naming
+          if (d.backend_type === 'kubernetes') return true
+
           // Match deployments from the current environment only
           // Check if the deployment's hostname or container name contains the env name
           const hostname = d.unode_hostname?.toLowerCase() || ''

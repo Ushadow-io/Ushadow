@@ -16,7 +16,7 @@ from src.models.deployment import (
 from src.services.deployment_manager import get_deployment_manager
 from src.services.auth import get_current_user
 from src.services.unode_manager import get_unode_manager
-from src.services.kubernetes_manager import get_kubernetes_manager
+from src.services.kubernetes import get_kubernetes_manager
 from src.models.deploy_target import DeployTarget
 from src.models.unode import UNodeType
 
@@ -124,6 +124,57 @@ async def list_deployment_targets(
 
     logger.info(f"✅ Returning {len(targets)} total deployment targets ({len(unodes)} Docker, {len(clusters)} K8s)")
     return targets
+
+
+@router.get("/targets/{target_id}/infrastructure-env-vars")
+async def get_target_infrastructure_env_vars(
+    target_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get composited infrastructure env vars for a deploy target.
+
+    Returns a list of env vars with source attribution:
+      - source='default'        : from docker-compose.infra.yml baseline
+      - source='infrastructure' : from cluster infra scan (locked=True)
+      - source='override'       : user-saved manual override (locked=False)
+    """
+    from src.models.deploy_target import DeployTarget
+    from src.config import get_settings_store
+    from src.services.infrastructure_env_service import resolve_infrastructure_env_vars
+
+    try:
+        target = await DeployTarget.from_id(target_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    store = get_settings_store()
+    env_vars = await resolve_infrastructure_env_vars(target, store)
+    return {"env_vars": env_vars, "target_name": target.name}
+
+
+@router.put("/targets/{target_id}/infrastructure-env-vars")
+async def save_target_infrastructure_overrides(
+    target_id: str,
+    overrides: Dict[str, str],
+    current_user: dict = Depends(get_current_user),
+):
+    """Save manual infrastructure overrides for a deploy target."""
+    from src.models.deploy_target import DeployTarget
+    from src.config import get_settings_store
+
+    try:
+        target = await DeployTarget.from_id(target_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    if target.type != "k8s":
+        raise HTTPException(status_code=400, detail="Infrastructure overrides only supported for K8s targets")
+
+    cluster_name = target.name  # Use stable name, not volatile cluster_id hex
+    store = get_settings_store()
+    await store.update({f"infrastructure.overrides.{cluster_name}": overrides})
+    return {"success": True, "saved": len(overrides)}
 
 
 # =============================================================================

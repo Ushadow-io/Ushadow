@@ -31,7 +31,7 @@ from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
 from src.services.deployment_manager import init_deployment_manager
-from src.services.kubernetes_manager import init_kubernetes_manager
+from src.services.kubernetes import init_kubernetes_manager
 from src.services.feature_flags import create_feature_flag_service, set_feature_flag_service
 from src.services.mcp_server import setup_mcp_server
 from src.config import get_settings_store
@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):
 
     # Register current environment with Keycloak (non-blocking)
     try:
-        from src.services.keycloak_startup import register_current_environment
+        from src.services.keycloak import register_current_environment
         await register_current_environment()
     except Exception as e:
         logger.warning(f"Keycloak auto-registration failed (non-critical): {e}")

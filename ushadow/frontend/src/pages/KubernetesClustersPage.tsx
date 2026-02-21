@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket, Globe, Copy, Check } from 'lucide-react'
+import { Server, Plus, RefreshCw, Trash2, CheckCircle, XCircle, Clock, Upload, X, Search, Database, AlertCircle, Rocket, Globe, Copy, Check, Settings, Shield } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { kubernetesApi, KubernetesCluster, DeployTarget, deploymentsApi } from '../services/api'
 import Modal from '../components/Modal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DeployModal from '../components/DeployModal'
 import DNSManagementPanel from '../components/kubernetes/DNSManagementPanel'
+import InfrastructureOverridesEditor from '../components/InfrastructureOverridesEditor'
 
 interface InfraService {
   found: boolean
@@ -64,6 +66,7 @@ function KubeconfigCommand({ label, command, platform }: { label: string; comman
 }
 
 export default function KubernetesClustersPage() {
+  const navigate = useNavigate()
   const [clusters, setClusters] = useState<KubernetesCluster[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -84,10 +87,13 @@ export default function KubernetesClustersPage() {
   const [showDnsModal, setShowDnsModal] = useState(false)
   const [selectedClusterForDns, setSelectedClusterForDns] = useState<KubernetesCluster | null>(null)
 
+  // Infrastructure overrides
+  const [showInfraOverrides, setShowInfraOverrides] = useState<string | null>(null)
+
   // Form state
   const [clusterName, setClusterName] = useState('')
   const [kubeconfig, setKubeconfig] = useState('')
-  const [namespace, setNamespace] = useState('default')
+  const [namespace, setNamespace] = useState('ushadow')
   const [error, setError] = useState<string | null>(null)
 
   // Ingress configuration editing
@@ -665,6 +671,27 @@ export default function KubernetesClustersPage() {
                       <Globe className="h-4 w-4" />
                       <span>DNS</span>
                     </button>
+
+                    <button
+                      onClick={() => setShowInfraOverrides(cluster.cluster_id)}
+                      className="btn-secondary flex items-center space-x-2 text-sm"
+                      title="Configure infrastructure overrides"
+                      data-testid={`infra-overrides-${cluster.cluster_id}`}
+                    >
+                      <Settings className="h-4 w-4" />
+                      <span>Infra</span>
+                    </button>
+
+                    <button
+                      onClick={() => navigate(`/wizard/tailscale-operator?cluster=${cluster.cluster_id}`)}
+                      disabled={cluster.status !== 'connected'}
+                      className="btn-secondary flex items-center space-x-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Install Tailscale operator for trusted HTTPS"
+                      data-testid={`tailscale-operator-${cluster.cluster_id}`}
+                    >
+                      <Shield className="h-4 w-4" />
+                      <span>Tailscale</span>
+                    </button>
                   </div>
 
                   <button
@@ -983,6 +1010,28 @@ export default function KubernetesClustersPage() {
         </div>,
         document.body
       )}
+
+      {/* Infrastructure Overrides Modal */}
+      {showInfraOverrides && (() => {
+        const cluster = clusters.find(c => c.cluster_id === showInfraOverrides)
+        if (!cluster) return null
+        return (
+          <Modal
+            isOpen={true}
+            onClose={() => setShowInfraOverrides(null)}
+            title={`Infrastructure Overrides - ${cluster.name}`}
+            maxWidth="2xl"
+            testId="infra-overrides-modal"
+          >
+            <InfrastructureOverridesEditor
+              targetId={cluster.deployment_target_id || cluster.cluster_id}
+              targetName={cluster.name}
+              onSave={() => setShowInfraOverrides(null)}
+              onCancel={() => setShowInfraOverrides(null)}
+            />
+          </Modal>
+        )
+      })()}
 
       {/* DNS Management Modal */}
       {showDnsModal && selectedClusterForDns && (

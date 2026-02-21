@@ -14,7 +14,7 @@ from src.models.kubernetes import (
     KubernetesDeploymentSpec,
     KubernetesNode,
 )
-from src.services.kubernetes_manager import get_kubernetes_manager
+from src.services.kubernetes import get_kubernetes_manager
 from src.services.compose_registry import get_compose_registry
 from src.services.auth import get_current_user
 from src.models.user import User
@@ -567,7 +567,7 @@ async def get_dns_status(
     Returns CoreDNS IP, Ingress IP, cert-manager status, and current DNS mappings.
     """
     from src.models.kubernetes_dns import DNSConfig, DNSStatus
-    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    from src.services.kubernetes import KubernetesDNSManager
     
     k8s_manager = await get_kubernetes_manager()
     
@@ -616,7 +616,7 @@ async def setup_dns(
     After setup, you can add services with DNS names.
     """
     from src.models.kubernetes_dns import DNSConfig, DNSSetupRequest
-    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    from src.services.kubernetes import KubernetesDNSManager
     
     k8s_manager = await get_kubernetes_manager()
     
@@ -678,7 +678,7 @@ async def add_service_dns(
     - Short names: shortname1, shortname2, etc.
     """
     from src.models.kubernetes_dns import DNSConfig, DNSServiceMapping, AddServiceDNSRequest
-    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    from src.services.kubernetes import KubernetesDNSManager
     
     k8s_manager = await get_kubernetes_manager()
     
@@ -735,7 +735,7 @@ async def remove_service_dns(
 ):
     """Remove DNS entry and Ingress for a service."""
     from src.models.kubernetes_dns import DNSConfig
-    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    from src.services.kubernetes import KubernetesDNSManager
     
     k8s_manager = await get_kubernetes_manager()
     
@@ -780,7 +780,7 @@ async def list_certificates(
     
     Shows certificate status, expiration, and renewal time.
     """
-    from src.services.kubernetes_dns_manager import KubernetesDNSManager
+    from src.services.kubernetes import KubernetesDNSManager
     
     k8s_manager = await get_kubernetes_manager()
     

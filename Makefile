@@ -96,11 +96,16 @@ help:
 	@echo "  make k8s-show-dns                    - Show current DNS mappings"
 	@echo "  make k8s-test-dns                    - Test DNS resolution"
 	@echo ""
-	@echo "Keycloak realm management:"
+	@echo "Keycloak realm management (Docker):"
 	@echo "  make keycloak-delete-realm - Delete the ushadow realm"
 	@echo "  make keycloak-create-realm - Create realm from realm-export.json"
 	@echo "  make keycloak-reset-realm  - Delete and recreate realm"
 	@echo "  make keycloak-fresh-start  - Complete fresh setup (stop, clear DB, restart, import)"
+	@echo "Keycloak realm management (K8s):"
+	@echo "  make k8s-keycloak-update-configmap - Sync realm-export.json → K8s ConfigMap"
+	@echo "  make k8s-keycloak-delete-realm     - Delete ushadow realm in K8s Keycloak"
+	@echo "  make k8s-keycloak-create-realm     - Sync ConfigMap + create realm"
+	@echo "  make k8s-keycloak-reset-realm      - Delete + recreate realm (full reimport)"
 	@echo ""
 	@echo "Launcher release:"
 	@echo "  make release VERSION=x.y.z [PLATFORMS=all] [DRAFT=true]"
@@ -595,6 +600,48 @@ keycloak-create-realm:
 
 keycloak-reset-realm: keycloak-delete-realm keycloak-create-realm
 	@echo "✅ Realm reset complete"
+
+# ── K8s Keycloak realm management ────────────────────────────────────────────
+# KC_ADMIN_PASS: reads from ushadow-secret in K8s, falls back to "changeme"
+KC_ADMIN_PASS ?= $(shell grep '^KC_BOOTSTRAP_ADMIN_PASSWORD=' .env 2>/dev/null | cut -d= -f2-)
+KC_POD ?= $(shell kubectl get pod -n root -l app=keycloak \
+	-o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+k8s-keycloak-update-configmap:
+	@echo "📋 Updating keycloak-realm-import ConfigMap from config/keycloak/realm-export.json..."
+	@if [ ! -f config/keycloak/realm-export.json ]; then \
+		echo "❌ Error: config/keycloak/realm-export.json not found"; exit 1; fi
+	@kubectl create configmap keycloak-realm-import \
+		--from-file=realm-export.json=config/keycloak/realm-export.json \
+		-n root --dry-run=client -o yaml | kubectl apply -f -
+	@echo "✅ ConfigMap updated"
+
+k8s-keycloak-delete-realm:
+	@echo "🗑️  Deleting Keycloak realm 'ushadow' in K8s..."
+	@KC_POD=$$(kubectl get pod -n root -l app=keycloak -o jsonpath='{.items[0].metadata.name}' 2>/dev/null); \
+	KC_PASS=$$(grep '^KC_BOOTSTRAP_ADMIN_PASSWORD=' .env | cut -d= -f2-); \
+	test -n "$$KC_POD" || (echo "❌ Keycloak pod not found in namespace root" && exit 1); \
+	kubectl exec -n root $$KC_POD -- /opt/keycloak/bin/kcadm.sh config credentials \
+		--server http://localhost:8080 --realm master \
+		--user admin --password "$$KC_PASS" > /dev/null; \
+	kubectl exec -n root $$KC_POD -- /opt/keycloak/bin/kcadm.sh delete realms/ushadow 2>/dev/null \
+		|| echo "⚠️  Realm didn't exist (continuing)"; \
+	echo "✅ Realm deleted"
+
+k8s-keycloak-create-realm: k8s-keycloak-update-configmap
+	@echo "📦 Creating Keycloak realm 'ushadow' from realm-export.json..."
+	@KC_POD=$$(kubectl get pod -n root -l app=keycloak -o jsonpath='{.items[0].metadata.name}' 2>/dev/null); \
+	KC_PASS=$$(grep '^KC_BOOTSTRAP_ADMIN_PASSWORD=' .env | cut -d= -f2-); \
+	test -n "$$KC_POD" || (echo "❌ Keycloak pod not found in namespace root" && exit 1); \
+	kubectl exec -n root $$KC_POD -- /opt/keycloak/bin/kcadm.sh config credentials \
+		--server http://localhost:8080 --realm master \
+		--user admin --password "$$KC_PASS" > /dev/null; \
+	kubectl exec -n root $$KC_POD -- /opt/keycloak/bin/kcadm.sh create realms \
+		-f /opt/keycloak/data/import/realm-export.json; \
+	echo "✅ Realm created from realm-export.json"
+
+k8s-keycloak-reset-realm: k8s-keycloak-delete-realm k8s-keycloak-create-realm
+	@echo "✅ K8s realm reset complete"
 
 keycloak-fresh-start:
 	@echo "🔄 Starting fresh Keycloak setup..."

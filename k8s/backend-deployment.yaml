@@ -28,10 +28,10 @@ spec:
               value: http://keycloak.root.svc.cluster.local:8080
             # Public: browser OAuth redirects and token issuer
             - name: KC_HOSTNAME_URL
-              value: https://keycloak.chakra
+              value: https://keycloak.spangled-kettle.ts.net
             # Public frontend URL for CORS (browser→backend and Keycloak webOrigins)
             - name: CORS_ORIGINS
-              value: https://ushadow.chakra
+              value: https://ushadow.chakra,https://ushadow.spangled-kettle.ts.net,https://ush.spangled-kettle.ts.net
             # ── Credentials ─────────────────────────────────────────────────
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD
               valueFrom:
@@ -44,12 +44,12 @@ spec:
             # registered in the ushadow UI. Used by the mobile QR endpoint to
             # auto-detect the current deploy target.
             - name: USHADOW_CLUSTER_NAME
-              value: chakra
+              value: k8s
             # USHADOW_PUBLIC_URL: the public-facing base URL for this ushadow
             # installation (what the mobile app uses to reach the API).
             # Must be reachable from mobile devices - typically the ingress host.
             - name: USHADOW_PUBLIC_URL
-              value: https://ushadow.chakra
+              value: https://ush.spangled-kettle.ts.net
             - name: CONFIG_DIR
               value: /config
           image: registry.temp.skaffold/ushadow-backend

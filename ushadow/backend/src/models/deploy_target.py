@@ -58,7 +58,7 @@ class DeployTarget(BaseModel):
             ValueError: If target not found or ID format invalid
         """
         from src.services.unode_manager import get_unode_manager
-        from src.services.kubernetes_manager import get_kubernetes_manager
+        from src.services.kubernetes import get_kubernetes_manager
 
         # Parse the ID
         target_info = parse_deployment_target_id(target_id)

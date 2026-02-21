@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import logging
 
-from src.services.keycloak_admin import get_keycloak_admin
+from src.services.keycloak import get_keycloak_admin
 from src.config.keycloak_settings import get_keycloak_config
 
 router = APIRouter()

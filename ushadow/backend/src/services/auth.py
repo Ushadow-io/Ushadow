@@ -241,7 +241,7 @@ fastapi_users = FastAPIUsers[User, PydanticObjectId](
 
 # User dependencies for protecting endpoints
 # Import hybrid auth dependencies that accept both legacy JWT and Keycloak tokens
-from src.services.keycloak_auth import get_current_user_hybrid, get_current_user_or_none
+from src.services.keycloak import get_current_user_hybrid, get_current_user_or_none
 
 # Use hybrid authentication for all endpoints (supports both legacy and Keycloak)
 get_current_user = get_current_user_hybrid

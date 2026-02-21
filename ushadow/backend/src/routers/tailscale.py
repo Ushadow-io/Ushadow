@@ -23,7 +23,7 @@ from src.models.user import User
 from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
-from src.services.keycloak_startup import register_current_environment
+from src.services.keycloak import register_current_environment
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -724,7 +724,7 @@ async def get_mobile_connection_qr(
         api_url = f"https://{status.hostname}/api/unodes/{leader_unode.hostname}/info"
 
         # Auto-register mobile redirect URIs in Keycloak
-        from src.services.keycloak_admin import get_keycloak_admin
+        from src.services.keycloak import get_keycloak_admin
 
         try:
             keycloak_admin = get_keycloak_admin()

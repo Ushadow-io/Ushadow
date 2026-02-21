@@ -24,7 +24,7 @@ from src.services.docker_manager import (
     ServiceStatus,
     ServiceType,
 )
-from src.services.kubernetes_manager import KubernetesManager, get_kubernetes_manager
+from src.services.kubernetes import KubernetesManager, get_kubernetes_manager
 from src.services.tailscale_manager import (
     AuthUrlResponse,
     CertResponse,

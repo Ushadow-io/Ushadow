@@ -10,7 +10,7 @@ import docker
 
 from src.models.deployment import ResolvedServiceDefinition, Deployment, DeploymentStatus
 from src.models.deploy_target import DeployTarget
-from src.services.kubernetes_manager import KubernetesManager
+from src.services.kubernetes import KubernetesManager
 from src.utils.environment import get_environment_info, is_local_deployment
 from src.utils.docker_helpers import parse_port_config, map_docker_status
 
@@ -954,7 +954,7 @@ def get_deploy_platform(target: DeployTarget, k8s_manager: Optional[KubernetesMa
     """
     if target.type == "k8s":
         if not k8s_manager:
-            from src.services.kubernetes_manager import get_kubernetes_manager
+            from src.services.kubernetes import get_kubernetes_manager
             k8s_manager = get_kubernetes_manager()
         return KubernetesDeployPlatform(k8s_manager)
     else:

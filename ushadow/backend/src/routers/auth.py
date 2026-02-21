@@ -227,7 +227,7 @@ async def get_setup_status(user_manager=Depends(get_user_manager)):
         # KeycloakAdminClient is our wrapper; users_count() is on the underlying .admin object.
         keycloak_user_count = 0
         try:
-            from src.services.keycloak_admin import get_keycloak_admin
+            from src.services.keycloak import get_keycloak_admin
             kc_admin = get_keycloak_admin()
             keycloak_user_count = kc_admin.admin.users_count()
         except Exception as kc_err:
@@ -333,7 +333,7 @@ async def get_current_user_info(user: User = Depends(get_current_user)):
 
     # If user is a Keycloak dict, look up the MongoDB User record
     if isinstance(user, dict):
-        from src.services.keycloak_user_sync import get_mongodb_user_id_for_keycloak_user
+        from src.services.keycloak import get_mongodb_user_id_for_keycloak_user
         from src.models.user import User as UserModel
 
         # Get or create MongoDB User record
@@ -449,7 +449,7 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
         400: If code exchange fails (invalid code, expired, etc.)
         503: If Keycloak is unreachable
     """
-    from src.services.keycloak_client import get_keycloak_client
+    from src.services.keycloak import get_keycloak_client
     from keycloak.exceptions import KeycloakError
 
     logger.info(f"[TOKEN-EXCHANGE] Request received with client_id={request.client_id}")
@@ -633,7 +633,7 @@ async def register_redirect_uri_endpoint(request: RedirectUriRequest):
         400: If redirect URI is invalid
         500: If Keycloak registration fails
     """
-    from src.services.keycloak_admin import get_keycloak_admin
+    from src.services.keycloak import get_keycloak_admin
 
     # Validate redirect URI format
     # Allow http://, https://, tauri:// (desktop app), ushadow:// (mobile), exp:// (Expo)
