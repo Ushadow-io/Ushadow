@@ -179,8 +179,6 @@ jobs:
 
       - name: Pre-build kanban-cli universal binary
         working-directory: ${{ env.LAUNCHER_DIR }}
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           # tauri_build::build() (build.rs) requires bundled/**/* to match at
           # least one file or it aborts compilation.  The real content is
