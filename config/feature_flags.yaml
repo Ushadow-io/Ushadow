@@ -121,6 +121,12 @@ flags:
       interest graph"
     type: release
 
+  # Mobile: show conversations from both Chronicle and Mycelia backends
+  mobile_dual_source_conversations:
+    enabled: true
+    description: "Mobile: show conversations from both Chronicle and Mycelia backends"
+    type: release
+
   # Add your feature flags here following this format:
   # my_feature_name:
   #   enabled: false
