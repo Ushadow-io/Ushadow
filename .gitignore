@@ -195,3 +195,5 @@ config/kubeconfigs
 config/wiring.yaml
 config/service_configs.yaml
 config/wiring.yaml
+ushadow/backend/src/config/service_configs.yaml
+ushadow/backend/src/config/wiring.yaml

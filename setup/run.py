@@ -49,7 +49,7 @@ if not (PROJECT_ROOT / "docker-compose.yml").exists():
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from setup_utils import validate_ports, ensure_secrets_yaml, find_available_redis_db, set_redis_db_env_marker
-from start_utils import ensure_networks, check_infrastructure_running, start_infrastructure, wait_for_backend_health
+from start_utils import ensure_networks, check_infrastructure_running, start_infrastructure, wait_for_backend_health, wait_for_keycloak_realm
 
 # Configuration
 APP_NAME = "ushadow"
@@ -456,7 +456,7 @@ def start_services(dev_mode: bool):
     return compose_up(dev_mode, build=True)
 
 def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
-    """Wait for backend health and optionally open browser."""
+    """Wait for backend and Keycloak to be ready, then optionally open browser."""
     print()
     print("   Waiting for backend to be healthy...")
     time.sleep(3)
@@ -464,10 +464,21 @@ def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
     healthy, _ = wait_for_backend_health(backend_port, timeout=60)
 
     print()
-    if healthy:
+    if not healthy:
+        print_color(Colors.YELLOW, f"{Icons.WARNING}  Backend is slow to start... (continuing anyway)")
+
+    # Wait for Keycloak realm to be ready - the health check passes before
+    # realm import finishes, so we poll the OIDC endpoint instead
+    kc_port = int(os.environ.get("KC_PORT", "8081"))
+    kc_realm = os.environ.get("KC_REALM", "ushadow")
+    print(f"   Waiting for Keycloak realm '{kc_realm}' to be ready...")
+    kc_ready, kc_elapsed = wait_for_keycloak_realm(kc_port, kc_realm, timeout=120)
+
+    print()
+    if healthy and kc_ready:
         print_color(Colors.GREEN + Colors.BOLD, f"{Icons.CHECKMARK} {APP_DISPLAY_NAME} is ready!")
-    else:
-        print_color(Colors.YELLOW, f"{Icons.WARNING}  Backend is starting... (may take a moment)")
+    elif not kc_ready:
+        print_color(Colors.YELLOW, f"{Icons.WARNING}  Keycloak is still starting... (registration may take a moment)")
 
     # Print success box
     print()

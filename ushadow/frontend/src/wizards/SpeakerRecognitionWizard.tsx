@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
 import { Users, CheckCircle, Cpu, Zap, ExternalLink, AlertTriangle, Loader2, Key, ShieldCheck, XCircle, Play, RefreshCw } from 'lucide-react'
 
-import { wizardApi, servicesApi, settingsApi, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
+import { wizardApi, deploymentsApi, settingsApi, type DeployTarget, type Deployment, type HuggingFaceModelsResponse, type ModelAccessStatus } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { useWizard } from '../contexts/WizardContext'
 import { WizardShell, WizardMessage, WhatsNext } from '../components/wizard'
@@ -56,6 +56,7 @@ export default function SpeakerRecognitionWizard() {
   const [modelAccess, setModelAccess] = useState<HuggingFaceModelsResponse | null>(null)
   const [isCheckingModels, setIsCheckingModels] = useState(false)
   const [tokenSaved, setTokenSaved] = useState(false)
+  const [deployTarget, setDeployTarget] = useState<DeployTarget | null>(null)
 
   // Container state for speaker-recognition service
   const [containerStatus, setContainerStatus] = useState<ContainerInfo>({
@@ -75,10 +76,21 @@ export default function SpeakerRecognitionWizard() {
     mode: 'onChange',
   })
 
-  // Load existing configuration
+  // Load existing configuration and deploy target
   useEffect(() => {
     loadExistingConfig()
+    loadDeployTarget()
   }, [])
+
+  const loadDeployTarget = async () => {
+    try {
+      const response = await deploymentsApi.listTargets()
+      const leader = response.data.find((t: DeployTarget) => t.type === 'docker' && t.is_leader)
+      if (leader) setDeployTarget(leader)
+    } catch (error) {
+      console.error('Failed to load deployment targets:', error)
+    }
+  }
 
   // Check model access when entering model access step
   useEffect(() => {
@@ -87,12 +99,12 @@ export default function SpeakerRecognitionWizard() {
     }
   }, [wizard.currentStep.id, tokenSaved])
 
-  // Check container status when entering start_container step
+  // Check container status when entering start_container step (or when deployTarget becomes available)
   useEffect(() => {
-    if (wizard.currentStep.id === 'start_container') {
+    if (wizard.currentStep.id === 'start_container' && deployTarget) {
       checkContainerStatus()
     }
-  }, [wizard.currentStep.id])
+  }, [wizard.currentStep.id, deployTarget])
 
   const loadExistingConfig = async () => {
     try {
@@ -125,51 +137,51 @@ export default function SpeakerRecognitionWizard() {
     }
   }
 
-  // Check container status
+  // Check container status via deploymentsApi
   const checkContainerStatus = async () => {
+    if (!deployTarget) return
     try {
-      const response = await servicesApi.getDockerDetails('speaker-recognition')
-      const isRunning = response.data.status === 'running'
+      const response = await deploymentsApi.listDeployments({ unode_hostname: deployTarget.identifier })
+      const deployment = (response.data as Deployment[]).find((d) => d.service_id.includes('speaker-recognition'))
       setContainerStatus((prev) => ({
         ...prev,
-        status: isRunning ? 'running' : 'stopped',
+        status: deployment?.status === 'running' ? 'running' : 'stopped',
         error: undefined,
       }))
     } catch (error) {
-      // Service might not exist yet - that's expected
-      setContainerStatus((prev) => ({
-        ...prev,
-        status: 'stopped',
-        error: undefined,
-      }))
+      setContainerStatus((prev) => ({ ...prev, status: 'stopped', error: undefined }))
     }
   }
 
-  // Start the speaker-recognition container
+  // Start the speaker-recognition container via deploymentsApi
   const startContainer = async () => {
+    if (!deployTarget) {
+      setMessage({ type: 'error', text: 'No deployment target available' })
+      return
+    }
     setContainerStatus((prev) => ({ ...prev, status: 'starting', error: undefined }))
 
     try {
-      // First install the service (this creates the container if needed)
-      await servicesApi.install('speaker-recognition')
+      await deploymentsApi.deploy('speaker-recognition', deployTarget.identifier)
 
-      // Then start it
-      await servicesApi.startService('speaker-recognition')
-
-      // Poll for running status
       let attempts = 0
-      const maxAttempts = 30 // Longer timeout for speaker-rec (model download)
+      const maxAttempts = 60 // Longer timeout for speaker-rec (model download)
 
       const pollStatus = async () => {
         attempts++
         try {
-          const response = await servicesApi.getDockerDetails('speaker-recognition')
-          const isRunning = response.data.status === 'running'
+          const response = await deploymentsApi.listDeployments({ unode_hostname: deployTarget.identifier })
+          const deployment = (response.data as Deployment[]).find((d) => d.service_id.includes('speaker-recognition'))
 
-          if (isRunning) {
+          if (deployment?.status === 'running') {
             setContainerStatus((prev) => ({ ...prev, status: 'running', error: undefined }))
             updateServiceStatus('speaker-recognition', { configured: true, running: true })
             setMessage({ type: 'success', text: 'Speaker Recognition service started!' })
+            return
+          }
+
+          if (deployment?.status === 'failed') {
+            setContainerStatus((prev) => ({ ...prev, status: 'error', error: 'Deployment failed' }))
             return
           }
 
@@ -183,9 +195,7 @@ export default function SpeakerRecognitionWizard() {
             }))
           }
         } catch (err) {
-          if (attempts < maxAttempts) {
-            setTimeout(pollStatus, 2000)
-          }
+          if (attempts < maxAttempts) setTimeout(pollStatus, 2000)
         }
       }
 

@@ -103,9 +103,15 @@ flags:
 
   # Legacy Services Page - Old Docker service configuration page
   legacy_services_page:
-    enabled: true
+    enabled: false
     description: "Legacy Services page (replaced by Instances page) - Docker service
       configuration"
+    type: release
+
+  # Chronicle - Conversation history and timeline view
+  chronicle:
+    enabled: false
+    description: "Chronicle - Conversation history and timeline view"
     type: release
 
   # Social Feed - Personalized fediverse content curation

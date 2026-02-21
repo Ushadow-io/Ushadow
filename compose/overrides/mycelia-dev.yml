@@ -1,0 +1,36 @@
+# Dev override for mycelia-compose.yml
+# Usage: docker compose -f compose/mycelia-compose.yml -f compose/overrides/mycelia-dev.yml up
+#
+# Adds build-from-source, hot-reload volume mounts, and dev commands.
+# Requires the mycelia submodule to be checked out at ${PROJECT_ROOT:-..}/mycelia
+
+services:
+  mycelia-frontend:
+    build:
+      context: ${PROJECT_ROOT:-..}/mycelia
+      dockerfile: ./frontend/Dockerfile.dev
+    pull_policy: build
+    command: deno task dev
+    volumes:
+      - ${PROJECT_ROOT:-..}/mycelia/frontend:/app
+      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/app/myceliasdk
+    environment:
+      - MYCELIA_FRONTEND_MODE=dev
+
+  mycelia-backend:
+    build:
+      context: ${PROJECT_ROOT:-..}/mycelia
+      dockerfile: ./backend/Dockerfile
+    pull_policy: build
+    command: deno task dev
+    volumes:
+      - ${PROJECT_ROOT:-..}/mycelia/backend:/app
+      - ${PROJECT_ROOT:-..}/mycelia/myceliasdk:/myceliasdk
+
+  mycelia-python-worker:
+    build:
+      context: ${PROJECT_ROOT:-..}/mycelia
+      dockerfile: ./python/Dockerfile
+    pull_policy: build
+    volumes:
+      - ${PROJECT_ROOT:-..}/mycelia/python:/app

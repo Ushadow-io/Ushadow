@@ -81,5 +81,6 @@ def _source_to_config(source: PostSource) -> Dict[str, Any]:
         "source_id": source.source_id,
         "instance_url": source.instance_url or "",
         "api_key": source.api_key or "",
+        "access_token": source.access_token or "",
         "platform_type": source.platform_type,
     }

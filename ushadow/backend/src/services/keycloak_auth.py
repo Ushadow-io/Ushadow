@@ -102,7 +102,7 @@ def validate_keycloak_token(token: str) -> Optional[dict]:
             audience=backend_client_id,
         )
 
-        logger.info(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")
+        logger.debug(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")
         return payload
 
     except jwt.ExpiredSignatureError:
@@ -188,12 +188,12 @@ async def get_current_user_hybrid(
 
     token = credentials.credentials
     token_preview = token[:20] + "..." if len(token) > 20 else token
-    logger.info(f"[AUTH] Validating token: {token_preview}")
+    logger.debug(f"[AUTH] Validating token: {token_preview}")
 
     # Try Keycloak token validation first (with proper signature validation)
     keycloak_user = get_keycloak_user_from_token(token)
     if keycloak_user:
-        logger.info(f"[AUTH] ✅ Keycloak authentication successful: {keycloak_user.get('email')}")
+        logger.debug(f"[AUTH] ✅ Keycloak authentication successful: {keycloak_user.get('email')}")
         return keycloak_user
 
     # Try legacy auth validation
@@ -235,7 +235,7 @@ async def get_current_user_or_none(
     # Try Keycloak token validation first
     keycloak_user = get_keycloak_user_from_token(token)
     if keycloak_user:
-        logger.info(f"[AUTH] ✅ Optional auth - Keycloak user: {keycloak_user.get('email')}")
+        logger.debug(f"[AUTH] ✅ Optional auth - Keycloak user: {keycloak_user.get('email')}")
         return keycloak_user
 
     # Token provided but invalid - return None for optional auth
