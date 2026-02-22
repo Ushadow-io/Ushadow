@@ -11,6 +11,7 @@ mod settings;
 mod bundled;  // Bundled resources locator
 pub mod worktree;
 pub mod platform;  // Platform abstraction layer
+mod claude_sessions;  // Claude Code session monitoring
 mod kanban;  // Kanban ticket integration
 mod oauth_server;  // OAuth callback server for desktop auth
 mod http_client;  // HTTP client for CORS-free requests
@@ -31,6 +32,7 @@ pub use generic_installer::*;  // Export generic installer functions
 pub use permissions::*;
 pub use settings::*;
 pub use worktree::*;
+pub use claude_sessions::*;  // Export Claude session monitoring functions
 pub use kanban::*;  // Export kanban ticket functions
 pub use oauth_server::*;  // Export OAuth server functions
 pub use http_client::*;  // Export HTTP client functions

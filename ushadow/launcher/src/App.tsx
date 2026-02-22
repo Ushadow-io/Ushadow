@@ -17,9 +17,12 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
 import { ProjectManager } from './components/ProjectManager'
 import { AuthButton } from './components/AuthButton'
-import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2, Trello } from 'lucide-react'
+import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2, Trello, Bot } from 'lucide-react'
 import { getColors } from './utils/colors'
 import { KanbanBoard } from './components/KanbanBoard'
+import { ClaudeSessionsPanel } from './components/ClaudeSessionsPanel'
+import { LauncherNotch } from './components/LauncherNotch'
+import { useClaudeSessions } from './hooks/useClaudeSessions'
 
 function App() {
   // Store
@@ -113,6 +116,11 @@ function App() {
   // Tmux monitoring for agent status (only when window is focused and worktrees exist)
   const environmentNames = discovery?.environments.map(e => e.name) ?? []
   const tmuxStatuses = useTmuxMonitoring(environmentNames, isWindowFocused && environmentNames.length > 0)
+
+  // Claude Code session monitoring (always active, file reads are cheap)
+  const environments = discovery?.environments ?? []
+  const { sessions: claudeSessions, hooksInstalled, installing: installingHooks, error: hooksError, installSuccess: hooksInstallSuccess, installHooks } =
+    useClaudeSessions(effectiveProjectRoot, environments)
 
   // Infrastructure service selection
   const [selectedInfraServices, setSelectedInfraServices] = useState<string[]>([])
@@ -1563,6 +1571,21 @@ function App() {
                 Kanban
               </button>
             )}
+            <button
+              onClick={() => setAppMode('claude')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${
+                appMode === 'claude' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+              }`}
+              data-testid="nav-claude"
+            >
+              <Bot className="w-3 h-3" />
+              Claude
+              {claudeSessions.filter(s => s.status !== 'Ended').length > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-yellow-500/30 text-yellow-400 text-[10px] font-bold leading-none">
+                  {claudeSessions.filter(s => s.status !== 'Ended').length}
+                </span>
+              )}
+            </button>
           </div>
 
           {/* Tmux Manager */}
@@ -1761,6 +1784,22 @@ function App() {
               />
             )
           })()
+        ) : appMode === 'claude' ? (
+          /* Claude Sessions Page */
+          <ClaudeSessionsPanel
+            sessions={claudeSessions}
+            hooksInstalled={hooksInstalled}
+            installing={installingHooks}
+            error={hooksError}
+            installSuccess={hooksInstallSuccess}
+            onInstallHooks={installHooks}
+            environments={environments}
+            onOpenInApp={(env) => {
+              if (env.localhost_url) {
+                setEmbeddedView({ url: env.localhost_url, envName: env.name, envColor: env.color ?? env.name, envPath: env.path ?? null })
+              }
+            }}
+          />
         ) : null}
       </main>
 
@@ -1815,6 +1854,16 @@ function App() {
         onSwitchBranch={handleConflictSwitchBranch}
         onDeleteAndRecreate={handleConflictDeleteAndRecreate}
         onCancel={handleConflictCancel}
+      />
+
+      {/* Claude Session Notch Overlay */}
+      <LauncherNotch
+        sessions={claudeSessions}
+        onOpenInApp={(env) => {
+          if (env.localhost_url) {
+            setEmbeddedView({ url: env.localhost_url, envName: env.name, envColor: env.color ?? env.name, envPath: env.path ?? null })
+          }
+        }}
       />
     </div>
   )

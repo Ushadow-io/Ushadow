@@ -307,6 +307,15 @@ export const tauri = {
     tmuxSessionName: string,
     worktreePath: string
   ) => invoke<void>('start_coding_agent_for_ticket', { ticketId, tmuxWindowName, tmuxSessionName, worktreePath }),
+
+  // Claude session monitoring
+  installClaudeHooks: () => invoke<string>('install_claude_hooks'),
+  readClaudeSessions: (projectRoot: string) => invoke<ClaudeSessionEvent[]>('read_claude_sessions', { projectRoot }),
+  getHooksInstalled: () => invoke<boolean>('get_hooks_installed'),
+  readClaudeTranscript: (sessionId: string, cwd: string) =>
+    invoke<TranscriptMessage[]>('read_claude_transcript', { sessionId, cwd }),
+  sendClaudeApproval: (cwd: string, approve: boolean) =>
+    invoke<string>('send_claude_approval', { cwd, approve }),
 }
 
 // DetectedPort type (from env_scanner.rs)
@@ -455,6 +464,29 @@ export interface Ticket {
   order: number
   created_at: string
   updated_at: string
+}
+
+// Claude session monitoring types
+export interface ClaudeSessionEvent {
+  event_type: string        // "SessionStart" | "Stop" | "Notification" | "PreToolUse"
+  session_id: string
+  cwd: string
+  timestamp: string         // ISO 8601
+  data: Record<string, unknown>  // event-specific payload
+}
+
+export interface ToolCallInfo {
+  name: string
+  description: string | null
+  path: string | null
+}
+
+export interface TranscriptMessage {
+  role: 'user' | 'assistant'
+  text: string | null
+  tools: ToolCallInfo[]
+  timestamp: string
+  message_id: string
 }
 
 export default tauri

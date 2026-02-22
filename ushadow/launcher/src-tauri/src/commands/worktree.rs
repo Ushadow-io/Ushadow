@@ -529,17 +529,9 @@ async fn open_in_vscode_impl(path: String, env_name: Option<String>, with_tmux: 
             path, name
         );
 
-        let output = shell_command(&color_setup_cmd)
-            .output()
-            .map_err(|e| format!("Failed to setup VSCode colors: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[open_in_vscode] Warning: Color setup failed: {}", stderr);
-            // Continue anyway - color setup is not critical
-        } else {
-            eprintln!("[open_in_vscode] VSCode colors configured successfully");
-        }
+        // Fire-and-forget: color setup is non-critical, don't block VS Code launch
+        let _ = shell_command(&color_setup_cmd).spawn();
+        eprintln!("[open_in_vscode] VSCode color setup dispatched (async)");
     }
 
     // Open VS Code (don't wait for it to finish)
