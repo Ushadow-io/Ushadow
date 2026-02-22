@@ -339,7 +339,7 @@ export default function UNodeDetailsPage() {
     setShowScanner(true);
   };
 
-  // Reconnect to an existing unode (fetch fresh details with Keycloak auth)
+  // Reconnect to an existing unode (fetch fresh leader info)
   const handleReconnect = async (unodeId: string) => {
     try {
       const node = unodes.find(n => n.id === unodeId);
@@ -350,47 +350,35 @@ export default function UNodeDetailsPage() {
 
       console.log('[UNodeDetails] Reconnecting to unode:', node.hostname);
 
-      // Fetch fresh unode details from API using Keycloak auth
-      const token = await getAuthToken();
-      if (!token) {
-        Alert.alert('Not Authenticated', 'Please login with Keycloak first');
-        router.replace('/');
-        return;
-      }
-
       const baseApiUrl = node.apiUrl.replace(/\/api\/.*$/, '');
-      const infoUrl = `${baseApiUrl}/api/unodes/${node.hostname}/info`;
+      const infoUrl = `${baseApiUrl}/api/unodes/leader/info`;
 
-      console.log('[UNodeDetails] Fetching fresh details from:', infoUrl);
+      console.log('[UNodeDetails] Fetching leader info from:', infoUrl);
 
-      const response = await fetch(infoUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await fetch(infoUrl);
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch unode info: ${response.status}`);
+        throw new Error(`Failed to fetch leader info: ${response.status}`);
       }
 
       const info = await response.json();
-      console.log('[UNodeDetails] Fresh unode info:', info);
+      console.log('[UNodeDetails] Fresh leader info:', info.hostname);
 
-      // Update saved unode with fresh connection details
+      // Update saved unode with fresh connection details from leader
       await saveUnode({
         id: node.id,
-        name: node.name,
+        name: info.display_name || node.name,
         hostname: info.hostname || node.hostname,
-        apiUrl: baseApiUrl,
+        apiUrl: info.ushadow_api_url || baseApiUrl,
         chronicleApiUrl: info.chronicle_api_url,
-        streamUrl: info.ws_pcm_url,
+        streamUrl: info.ws_pcm_url || node.streamUrl,
         tailscaleIp: info.tailscale_ip || node.tailscaleIp,
       });
 
       console.log('[UNodeDetails] ✅ Reconnected successfully');
       await getUnodes();
 
-      Alert.alert('Success', `Reconnected to ${node.name}`);
+      Alert.alert('Success', `Reconnected to ${info.display_name || node.name}`);
     } catch (error) {
       console.error('[UNodeDetails] Reconnect failed:', error);
       Alert.alert(
