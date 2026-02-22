@@ -94,6 +94,52 @@ export interface SourceCreateData {
   handle?: string
 }
 
+// ─── Graph interests (new mem0 endpoint) ─────────────────────────────────────
+
+export interface GraphInterestItem {
+  name: string
+  entity_type: string
+  score: number
+  mentions: number
+  relationship: string
+  all_types: string[]
+}
+
+/** Same shape as GraphInterestItem — separate type for API clarity. */
+export type GraphResearchItem = GraphInterestItem
+
+export interface GraphUpcomingEvent {
+  name: string
+  start: string
+  end?: string | null
+  memory_id: string
+  memory_content: string
+  emoji?: string | null
+  entities: string[]
+}
+
+export interface GraphUserInterestsResponse {
+  user_id: string
+  interests: GraphInterestItem[]
+  research_topics: GraphResearchItem[]
+  upcoming_events: GraphUpcomingEvent[]
+  graph_available: boolean
+  unknown_rel_types: string[]
+  generated_at: string
+}
+
+export interface GraphInterestsParams {
+  include_depth2?: boolean
+  max_interests?: number
+  max_research?: number
+  upcoming_days?: number
+  include_interests?: boolean
+  include_research?: boolean
+  include_events?: boolean
+}
+
+// ─── API object ───────────────────────────────────────────────────────────────
+
 export const feedApi = {
   // Posts
   getPosts: (params: {
@@ -130,6 +176,13 @@ export const feedApi = {
 
   bookmarkPost: (postId: string) =>
     api.post(`/api/feed/posts/${postId}/bookmark`),
+
+  // Graph interests (new mem0 /api/v1/graph/interests endpoint)
+  getGraphInterests: (userId: string, params?: GraphInterestsParams) =>
+    api.get<GraphUserInterestsResponse>(
+      '/api/services/mem0/proxy/api/v1/graph/interests',
+      { params: { user_id: userId, ...params } },
+    ),
 
   // Stats
   getStats: () =>

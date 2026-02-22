@@ -34,8 +34,11 @@ def _is_secret(name: str) -> bool:
 
 
 def _sanitize_compose_default(value: str) -> str:
-    """Strip Docker Compose ${VAR:-default} substitutions, keeping only the literal part."""
-    # Replace ${VAR:-default} with the default part, ${VAR} with empty string
+    """Strip Docker Compose ${VAR:-default} substitutions, keeping only the literal part.
+
+    Loops until no ${...} patterns remain, handling nested substitutions like
+    ${MONGODB_USER:-${MONGODB_USERNAME:-root}} → root.
+    """
     def _replace(m: re.Match) -> str:
         inner = m.group(0)[2:-1]  # strip ${ and }
         if ":-" in inner:
@@ -43,7 +46,13 @@ def _sanitize_compose_default(value: str) -> str:
         if "-" in inner:
             return inner.split("-", 1)[1]
         return ""
-    return _COMPOSE_SUBSTITUTION.sub(_replace, value)
+
+    previous = None
+    result = value
+    while result != previous and _COMPOSE_SUBSTITUTION.search(result):
+        previous = result
+        result = _COMPOSE_SUBSTITUTION.sub(_replace, result)
+    return result
 
 
 async def ensure_compose_defaults_seeded(cluster_name: str, settings_store) -> None:

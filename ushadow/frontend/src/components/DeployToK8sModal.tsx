@@ -150,14 +150,30 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
       setEnvVars(allEnvVars)
 
-      // Use backend-resolved values directly — no frontend override needed.
+      // Use backend-resolved values as a baseline, then overlay any previously saved
+      // ServiceConfig overrides so re-deploying preserves user-modified values.
+      const sanitizedServiceId = service.service_id.replace(/[^a-z0-9-]/g, '-')
+      const clusterName = selectedCluster?.name.toLowerCase().replace(/[^a-z0-9-]/g, '-') ?? ''
+      const instanceId = `${sanitizedServiceId}-${clusterName}`
+
+      let savedOverrides: Record<string, any> = {}
+      try {
+        const existingConfig = await svcConfigsApi.getServiceConfig(instanceId)
+        savedOverrides = existingConfig.data?.config?.values ?? {}
+      } catch {
+        // No existing ServiceConfig — first deploy, no overrides to load
+      }
+
       const initialConfigs: Record<string, EnvVarConfig> = {}
       allEnvVars.forEach(envVar => {
+        const savedValue = savedOverrides[envVar.name]
         initialConfigs[envVar.name] = {
           name: envVar.name,
-          source: (envVar.source as EnvVarConfig['source']) || 'default',
-          setting_path: envVar.setting_path,
-          value: envVar.resolved_value || envVar.value || '',
+          source: savedValue ? 'override' : ((envVar.source as EnvVarConfig['source']) || 'default'),
+          setting_path: typeof savedValue === 'object' && savedValue?._from_setting
+            ? savedValue._from_setting
+            : envVar.setting_path,
+          value: typeof savedValue === 'string' ? savedValue : (envVar.resolved_value || envVar.value || ''),
           new_setting_path: undefined,
         }
       })

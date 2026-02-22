@@ -1517,6 +1517,16 @@ export default function ServiceConfigsPage() {
     // If the service needs setup and has a wizard, redirect to it instead of deploying
     const template = templates.find((t) => t.id === serviceId)
     if (template?.needs_setup && template?.wizard) {
+      // For mycelia, only redirect if token is actually missing
+      if (template.wizard === 'mycelia') {
+        try {
+          const res = await settingsApi.getConfig()
+          if (res.data.api_keys?.mycelia_token) {
+            await handleDeployConsumer(serviceId, { type: 'local' })
+            return
+          }
+        } catch { /* fall through to wizard */ }
+      }
       navigate(`/wizard/${template.wizard}`)
       return
     }
@@ -1531,9 +1541,19 @@ export default function ServiceConfigsPage() {
     handleEditConsumer(serviceId)
   }
 
-  const handleDeployService = (serviceId: string, target: DeployTarget) => {
+  const handleDeployService = async (serviceId: string, target: DeployTarget) => {
     const template = templates.find((t) => t.id === serviceId)
     if (template?.needs_setup && template?.wizard) {
+      // For mycelia, only redirect if token is actually missing
+      if (template.wizard === 'mycelia') {
+        try {
+          const res = await settingsApi.getConfig()
+          if (res.data.api_keys?.mycelia_token) {
+            handleDeployConsumer(serviceId, target)
+            return
+          }
+        } catch { /* fall through to wizard */ }
+      }
       navigate(`/wizard/${template.wizard}`)
       return
     }

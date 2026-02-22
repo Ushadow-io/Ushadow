@@ -6,7 +6,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { feedApi, type FeedPost, type SourceCreateData } from '../services/feedApi'
+import { feedApi, type FeedPost, type SourceCreateData, type GraphUserInterestsResponse } from '../services/feedApi'
 import { useAuth } from '../contexts/AuthContext'
 import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
 
@@ -182,6 +182,34 @@ export function useRefreshFeed(platformType?: string) {
     isRefreshing: mutation.isPending,
     lastResult: mutation.data ?? null,
     error: mutation.error,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Graph Interests (new mem0 /api/v1/graph/interests endpoint)
+// ---------------------------------------------------------------------------
+
+export function useGraphInterests() {
+  const { userId, isLoadingUser } = useUserId()
+  const queryClient = useQueryClient()
+
+  const query = useQuery({
+    queryKey: ['graphInterests', userId],
+    queryFn: () => feedApi.getGraphInterests(userId).then(r => r.data),
+    staleTime: 120_000,
+    enabled: !isLoadingUser,
+  })
+
+  const forceRefresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['graphInterests', userId] })
+  }
+
+  return {
+    data: query.data ?? null,
+    isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    error: query.error,
+    forceRefresh,
   }
 }
 

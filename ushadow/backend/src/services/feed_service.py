@@ -1,7 +1,7 @@
 """Feed Service - Orchestrates interest extraction, post fetching, scoring, and storage.
 
 Business logic layer for the personalized multi-platform feed feature.
-Router -> FeedService -> InterestExtractor / PostFetcher / PostScorer / MongoDB
+Router -> FeedService -> InterestScorer / PostFetcher / PostScorer / MongoDB
 
 Source storage: SettingsStore (config.overrides.yaml under feed.sources).
 YouTube API key: SettingsStore (secrets.yaml under api_keys.youtube_api_key).
@@ -21,7 +21,7 @@ from src.models.feed import (
     PostSource,
     SourceCreate,
 )
-from src.services.interest_extractor import InterestExtractor
+from src.services.interest_scorer import InterestScorer
 from src.services.mastodon_oauth import MastodonOAuthService
 from src.services.post_fetcher import PostFetcher
 from src.services.post_scorer import PostScorer
@@ -38,7 +38,7 @@ class FeedService:
     def __init__(self, db: AsyncIOMotorDatabase, settings: SettingsStore):
         self.db = db
         self._settings = settings
-        self._extractor = InterestExtractor()
+        self._interest_scorer = InterestScorer()
         self._fetcher = PostFetcher()
         self._scorer = PostScorer()
 
@@ -149,8 +149,8 @@ class FeedService:
     # =========================================================================
 
     async def get_interests(self, user_id: str) -> List[Interest]:
-        """Extract and return current interests from the user's knowledge graph."""
-        return await self._extractor.extract_interests(user_id)
+        """Return merged interests from both feed and graph sources."""
+        return await self._interest_scorer.score_interests(user_id)
 
     # =========================================================================
     # Feed Refresh Pipeline
@@ -167,9 +167,9 @@ class FeedService:
 
         Returns summary of what was fetched and stored.
         """
-        # 1. Clear cache and extract fresh interests from memories
-        self._extractor.clear_cache(user_id)
-        interests = await self._extractor.extract_interests(user_id)
+        # 1. Clear cache and extract fresh interests from both sources
+        self._interest_scorer.clear_cache(user_id)
+        interests = await self._interest_scorer.score_interests(user_id)
         if not interests:
             return {
                 "status": "no_interests",

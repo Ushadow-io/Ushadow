@@ -141,6 +141,13 @@ class InterestExtractor:
             f"({len(category_interests)} categories, {len(entity_interests)} entities, "
             f"capped at {MAX_INTERESTS})"
         )
+        for i in interests:
+            tag_str = " ".join(f"#{t}" for t in i.hashtags)
+            logger.info(
+                f"  [{i.labels[0]}] {i.name!r} "
+                f"(score={i.relationship_count}, last_active={i.last_active}) "
+                f"→ tags: {tag_str or '(none)'}"
+            )
 
         # Update cache
         _interest_cache[user_id] = (now, interests)

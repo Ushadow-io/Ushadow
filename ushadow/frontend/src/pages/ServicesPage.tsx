@@ -143,11 +143,11 @@ export default function ServicesPage() {
           // Check if this is mycelia-backend and if token exists
           if (serviceName === 'mycelia-backend') {
             try {
-              const settingsResponse = await settingsApi.getAll()
+              const settingsResponse = await settingsApi.getConfig()
               const settings = settingsResponse.data
 
               // If no mycelia token exists, navigate to wizard
-              if (!settings.mycelia?.token) {
+              if (!settings.api_keys?.mycelia_token) {
                 navigate('/wizard/mycelia')
               }
             } catch (error) {
@@ -1068,8 +1068,20 @@ export default function ServicesPage() {
                           </button>
                         ) : service.needs_setup ? (
                           <button
-                            onClick={(e) => {
+                            onClick={async (e) => {
                               e.stopPropagation()
+                              // For mycelia, only go to wizard if token is missing
+                              if (service.wizard === 'mycelia') {
+                                try {
+                                  const res = await settingsApi.getConfig()
+                                  if (res.data.api_keys?.mycelia_token) {
+                                    // Token exists — open env var editor instead
+                                    if (!isExpanded) handleExpandService(service.service_id)
+                                    setEditingServiceId(service.service_id)
+                                    return
+                                  }
+                                } catch { /* fall through to wizard */ }
+                              }
                               // If service has a wizard, navigate to it
                               if (service.wizard) {
                                 navigate(`/wizard/${service.wizard}`)

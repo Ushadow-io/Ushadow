@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Database, CheckCircle, Loader2, AlertCircle, Rocket } from 'lucide-react'
+import { Database, CheckCircle, Loader2, AlertCircle } from 'lucide-react'
 
 import { servicesApi, deploymentsApi, kubernetesApi, settingsApi, DeployTarget, EnvVarInfo, EnvVarConfig, EnvVarSuggestion } from '../services/api'
 import { useWizardSteps } from '../hooks/useWizardSteps'
@@ -22,9 +22,6 @@ export default function MyceliaWizard() {
   const [isStarting, setIsStarting] = useState(false)
   const [serviceStarted, setServiceStarted] = useState(false)
   const [tokenData, setTokenData] = useState<{ token: string; clientId: string } | null>(null)
-  const [deployFallback, setDeployFallback] = useState(false)
-  const [deployTargets, setDeployTargets] = useState<DeployTarget[]>([])
-  const [deployingTarget, setDeployingTarget] = useState<string | null>(null)
 
   // EnvVar state for AUTH_SECRET_KEY
   const [authSecretKeyEnvVar, setAuthSecretKeyEnvVar] = useState<EnvVarInfo>({
@@ -45,7 +42,7 @@ export default function MyceliaWizard() {
 
   const loadAuthSecretKey = async () => {
     try {
-      const response = await settingsApi.getAll()
+      const response = await settingsApi.getConfig()
       const settings = response.data
 
       // Build suggestions from existing secret keys in settings
@@ -91,16 +88,7 @@ export default function MyceliaWizard() {
         })
       }
 
-      // Check if already configured
-      const hasToken = settings.api_keys?.mycelia_token
-      const hasClientId = settings.api_keys?.mycelia_client_id
-
-      if (hasToken && hasClientId) {
-        // Already configured - skip to complete step
-        setServiceStarted(true)
-        setTokenData({ token: hasToken, clientId: hasClientId })
-        wizard.goTo('complete')
-      }
+      // Note: even if tokens exist, don't pre-fill — let user go through wizard
     } catch (err) {
       console.error('Failed to load auth secret key:', err)
       setMessage({
@@ -114,31 +102,30 @@ export default function MyceliaWizard() {
     setAuthSecretKeyConfig(prev => ({ ...prev, ...updates }))
   }
 
-  // Poll until mycelia-backend is running, generate+save token, then deploy the worker
-  // with the token already in settings — avoiding a restart cycle.
-  const _pollAndGenerateToken = async (unodeHostname?: string) => {
-    const POLL_INTERVAL = 3000
+  // Poll until mycelia-backend is ready by attempting token generation, retrying on 503.
+  // This avoids the problem of the deployment status reporting "running" before the pod
+  // is actually accepting connections.
+  const _pollAndGenerateToken = async () => {
+    const POLL_INTERVAL = 5000
     const TIMEOUT = 180_000
     const deadline = Date.now() + TIMEOUT
-    let isRunning = false
+    let response: Awaited<ReturnType<typeof servicesApi.generateMyceliaToken>> | null = null
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL))
       try {
-        const params = unodeHostname ? { unode_hostname: unodeHostname } : { service_id: 'mycelia-backend' }
-        const deps = await deploymentsApi.listDeployments(params)
-        const backend = deps.data.find((d) => d.service_id.includes('mycelia-backend'))
-        if (backend?.status === 'running') {
-          isRunning = true
-          break
+        response = await servicesApi.generateMyceliaToken()
+        break  // success — pod is up and responded
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number } })?.response?.status
+        if (status === 503) {
+          continue  // Pod not ready yet, keep polling
         }
-      } catch {
-        // ignore transient errors during startup
+        throw err
       }
     }
-    if (!isRunning) throw new Error('Mycelia backend did not start within 3 minutes. Please check the logs.')
+    if (!response) throw new Error('Mycelia backend did not start within 3 minutes. Please check the logs.')
 
     setMessage({ type: 'success', text: 'Mycelia backend running. Generating credentials...' })
-    const response = await servicesApi.generateMyceliaToken()
     const { token, client_id } = response.data
     await settingsApi.update({
       'api_keys.mycelia_token': token,
@@ -146,65 +133,17 @@ export default function MyceliaWizard() {
     })
     setTokenData({ token, clientId: client_id })
     setServiceStarted(true)
-
-    // Deploy the python worker now that the token is in settings.
-    // It needs MYCELIA_TOKEN to authenticate to the backend — doing this
-    // after token generation avoids a restart cycle.
-    if (unodeHostname) {
-      setMessage({ type: 'success', text: 'Credentials saved. Starting Python worker...' })
-      try {
-        await deploymentsApi.deploy('mycelia-python-worker', unodeHostname)
-      } catch {
-        // Non-fatal — the backend is working, worker can be started separately
-      }
-    }
-
-    setMessage({ type: 'success', text: 'Credentials generated successfully!' })
   }
 
   // Deploy a service to a target, routing to the correct API based on type.
   const _deployToTarget = async (serviceId: string, target: DeployTarget) => {
     if (target.type === 'k8s') {
-      // Use the k8s-specific service config so MongoDB/Redis infra vars are correct
-      const configId = serviceId === 'mycelia-backend' ? 'mycelia-backend-k8s' : undefined
       await kubernetesApi.deployService(target.identifier, {
         service_id: serviceId,
         namespace: target.namespace || 'ushadow',
-        config_id: configId,
       })
     } else {
       await deploymentsApi.deploy(serviceId, target.identifier)
-    }
-  }
-
-  // Deploy mycelia-backend directly to a chosen target, then generate token and
-  // deploy python-worker — no modal/configure step, avoids required-field blocks.
-  const handleDirectDeploy = async (target: DeployTarget) => {
-    setDeployingTarget(target.identifier)
-    setIsStarting(true)
-    setMessage({ type: 'info', text: `Deploying to ${target.name}...` })
-    try {
-      await _deployToTarget('mycelia-backend', target)
-      setMessage({ type: 'info', text: 'Waiting for Mycelia backend to be ready...' })
-      await _pollAndGenerateToken()
-
-      // Phase 2: deploy python-worker to the same target now that the token is in settings
-      setMessage({ type: 'success', text: 'Credentials saved. Starting Python worker...' })
-      try {
-        await _deployToTarget('mycelia-python-worker', target)
-      } catch {
-        // Non-fatal — backend is functional, worker can be started separately
-      }
-
-      wizard.next()
-    } catch (error) {
-      setMessage({
-        type: 'error',
-        text: getErrorMessage(error, 'Deployment failed. Please try again.'),
-      })
-    } finally {
-      setIsStarting(false)
-      setDeployingTarget(null)
     }
   }
 
@@ -213,7 +152,7 @@ export default function MyceliaWizard() {
     setMessage(null)
 
     try {
-      // Determine which setting path to use
+      // 1. Save auth secret key
       const settingPath = authSecretKeyConfig.setting_path || authSecretKeyConfig.new_setting_path
 
       if (!settingPath) {
@@ -225,39 +164,51 @@ export default function MyceliaWizard() {
         return
       }
 
-      // 1. If creating a new setting, save it first
       if (authSecretKeyConfig.source === 'new_setting' && authSecretKeyConfig.value) {
         await settingsApi.update({
           [settingPath]: authSecretKeyConfig.value,
         })
       }
 
-      // 2. Copy to security.auth_secret_key if using a different path
-      // Use backend API to get unmasked secret value
       if (settingPath !== 'security.auth_secret_key') {
         const secretResponse = await settingsApi.getSecret(settingPath)
         await settingsApi.update({
           'security.auth_secret_key': secretResponse.data.value,
         })
       }
-      // If already using security.auth_secret_key, no need to copy
 
-      // 2. Find deployment target — prefer local Docker leader, fall back to any target
+      // 2. Find deploy target — prefer Docker leader, then any available target
       const targetsRes = await deploymentsApi.listTargets()
       const leader = targetsRes.data.find((t) => t.type === 'docker' && t.is_leader)
-      if (!leader) {
-        // No local Docker leader — offer target selection (K8s or remote Docker)
-        setDeployTargets(targetsRes.data)
-        setDeployFallback(true)
+      const target = leader || targetsRes.data.find((t) => t.type === 'k8s' || t.type === 'docker')
+
+      if (!target) {
+        setMessage({ type: 'error', text: 'No deployment targets available.' })
         return
       }
 
-      // Phase 1: deploy the backend only — the worker needs MYCELIA_TOKEN which
-      // is generated after the backend is running. We deploy it in _pollAndGenerateToken.
-      await deploymentsApi.deploy('mycelia-backend', leader.identifier)
-      setMessage({ type: 'success', text: 'Mycelia starting... waiting for backend to be ready.' })
+      // 3. Deploy backend only (worker needs token which doesn't exist yet)
+      setMessage({ type: 'info', text: `Deploying to ${target.name}...` })
+      await _deployToTarget('mycelia-backend', target)
+      setMessage({ type: 'success', text: 'Waiting for backend to be ready...' })
 
-      await _pollAndGenerateToken(leader.identifier)
+      // 4. Poll until ready, generate token, save to secrets
+      await _pollAndGenerateToken()
+
+      // 5. Redeploy backend so it picks up MYCELIA_TOKEN from secrets
+      setMessage({ type: 'success', text: 'Redeploying with credentials...' })
+      await _deployToTarget('mycelia-backend', target)
+
+      // 6. Deploy python worker (needs MYCELIA_TOKEN + AUTH_SECRET_KEY)
+      setMessage({ type: 'success', text: 'Starting Python worker...' })
+      try {
+        await _deployToTarget('mycelia-python-worker', target)
+      } catch {
+        // Non-fatal — backend is functional, worker can be started separately
+      }
+
+      setMessage({ type: 'success', text: 'Setup complete!' })
+      wizard.next()
     } catch (error) {
       console.error('Failed to start and generate:', error)
       setMessage({
@@ -273,14 +224,10 @@ export default function MyceliaWizard() {
     if (wizard.currentStep.id === 'setup') {
       if (!serviceStarted) {
         await handleStartAndGenerate()
-        if (serviceStarted) {
-          wizard.next()
-        }
       } else {
         wizard.next()
       }
     } else if (wizard.currentStep.id === 'complete') {
-      // Navigate to service configs page
       navigate('/instances', { state: { refresh: true } })
     }
   }
@@ -305,13 +252,12 @@ export default function MyceliaWizard() {
       onNext={handleNext}
       nextLoading={isStarting}
       nextDisabled={
-        (wizard.currentStep.id === 'setup' && (
-          (!authSecretKeyConfig.value &&
-            !authSecretKeyConfig.resolved_value &&
-            !authSecretKeyConfig.setting_path &&
-            !authSecretKeyConfig.new_setting_path) ||
-          (deployFallback && !serviceStarted)
-        )) ||
+        (wizard.currentStep.id === 'setup' &&
+          !authSecretKeyConfig.value &&
+          !authSecretKeyConfig.resolved_value &&
+          !authSecretKeyConfig.setting_path &&
+          !authSecretKeyConfig.new_setting_path
+        ) ||
         isStarting
       }
       message={message}
@@ -323,10 +269,6 @@ export default function MyceliaWizard() {
           onAuthSecretKeyChange={handleAuthSecretKeyChange}
           isStarting={isStarting}
           serviceStarted={serviceStarted}
-          deployFallback={deployFallback}
-          deployTargets={deployTargets}
-          deployingTarget={deployingTarget}
-          onDirectDeploy={handleDirectDeploy}
         />
       )}
       {wizard.currentStep.id === 'complete' && (
@@ -346,13 +288,9 @@ interface SetupStepProps {
   onAuthSecretKeyChange: (updates: Partial<EnvVarConfig>) => void
   isStarting: boolean
   serviceStarted: boolean
-  deployFallback: boolean
-  deployTargets: DeployTarget[]
-  deployingTarget: string | null
-  onDirectDeploy: (target: DeployTarget) => void
 }
 
-function SetupStep({ authSecretKeyEnvVar, authSecretKeyConfig, onAuthSecretKeyChange, isStarting, serviceStarted, deployFallback, deployTargets, deployingTarget, onDirectDeploy }: SetupStepProps) {
+function SetupStep({ authSecretKeyEnvVar, authSecretKeyConfig, onAuthSecretKeyChange, isStarting, serviceStarted }: SetupStepProps) {
   return (
     <div data-testid="mycelia-step-setup" className="space-y-6">
       {isStarting ? (
@@ -381,54 +319,6 @@ function SetupStep({ authSecretKeyEnvVar, authSecretKeyConfig, onAuthSecretKeyCh
                 Mycelia has been started and credentials have been generated successfully.
               </p>
             </div>
-          </div>
-        </div>
-      ) : deployFallback ? (
-        <div className="space-y-4">
-          <div className="bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 rounded-lg p-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-warning-600 dark:text-warning-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-warning-900 dark:text-warning-100 mb-1">
-                  No Local Docker Target
-                </h3>
-                <p className="text-sm text-warning-800 dark:text-warning-200">
-                  No local Docker node found. Choose a cluster to deploy Mycelia to:
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {deployTargets.filter(t => t.type === 'k8s' || t.type === 'docker').map(target => (
-              <button
-                key={target.identifier}
-                data-testid={`mycelia-deploy-to-${target.identifier}`}
-                onClick={() => onDirectDeploy(target)}
-                disabled={!!deployingTarget}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 disabled:opacity-50 transition-colors text-left"
-              >
-                <div className="flex items-center gap-3">
-                  {deployingTarget === target.identifier
-                    ? <Loader2 className="h-4 w-4 animate-spin text-primary-600" />
-                    : <Rocket className="h-4 w-4 text-neutral-500" />
-                  }
-                  <div>
-                    <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">{target.name}</p>
-                    {target.type === 'k8s' && (
-                      <p className="text-xs text-neutral-500 dark:text-neutral-400">Kubernetes cluster</p>
-                    )}
-                  </div>
-                </div>
-                {deployingTarget === target.identifier && (
-                  <span className="text-xs text-primary-600 dark:text-primary-400">Deploying...</span>
-                )}
-              </button>
-            ))}
-            {deployTargets.filter(t => t.type === 'k8s' || t.type === 'docker').length === 0 && (
-              <p className="text-sm text-neutral-500 dark:text-neutral-400 text-center py-4">
-                No deployment targets available.
-              </p>
-            )}
           </div>
         </div>
       ) : (

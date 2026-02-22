@@ -22,6 +22,7 @@ import {
   StopCircle,
   Pencil,
   Rocket,
+  Search,
   X,
   Trash2,
   Save,
@@ -64,6 +65,8 @@ export interface FlatServiceCardProps {
   onStop?: () => Promise<void>
   /** Called to edit settings */
   onEdit?: () => void
+  /** Called to find existing instances of this service in Docker/K8s */
+  onFind?: () => void
   /** Called to add a new config variant */
   onAddConfig?: () => void
   /** Called to deploy the service */
@@ -426,6 +429,7 @@ export function FlatServiceCard({
   onStart,
   onStop,
   onEdit,
+  onFind,
   onAddConfig,
   onDeploy,
   providerTemplates,
@@ -607,17 +611,29 @@ export function FlatServiceCard({
               )}
             </div>
 
-            {/* Edit - top right */}
-            {onEdit && (
-              <button
-                onClick={onEdit}
-                className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded flex-shrink-0"
-                title="Edit settings"
-                data-testid={`flat-service-edit-${template.id}`}
-              >
-                <Pencil className="h-4 w-4" />
-              </button>
-            )}
+            {/* Action buttons - top right */}
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              {onFind && (
+                <button
+                  onClick={onFind}
+                  className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                  title="Find existing instances in Docker / Kubernetes"
+                  data-testid={`flat-service-find-${template.id}`}
+                >
+                  <Search className="h-4 w-4" />
+                </button>
+              )}
+              {onEdit && (
+                <button
+                  onClick={onEdit}
+                  className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded flex-shrink-0"
+                  title="Edit settings"
+                  data-testid={`flat-service-edit-${template.id}`}
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Description */}

@@ -22,6 +22,7 @@ import {
   Play,
   Cloud,
   PenLine,
+  Sparkles,
 } from 'lucide-react'
 import BlueskyComposeModal from '../components/feed/BlueskyComposeModal'
 import PostCard from '../components/feed/PostCard'
@@ -35,6 +36,7 @@ import {
   useFeedSources,
   useRefreshFeed,
   useFeedStats,
+  useGraphInterests,
 } from '../hooks/useFeed'
 
 type FeedTab = 'social' | 'bluesky' | 'following' | 'videos'
@@ -63,6 +65,7 @@ export default function FeedPage() {
   const { sources, addSource, isAdding, removeSource, isRemoving } = useFeedSources()
   const { refresh, isRefreshing, lastResult } = useRefreshFeed(platformType)
   const { stats } = useFeedStats()
+  const { forceRefresh: regenGraphInterests, isFetching: isRegenGraph } = useGraphInterests()
 
   // Filter sources for the active tab
   const tabSources = sources.filter((s) => s.platform_type === platformType)
@@ -163,6 +166,22 @@ export default function FeedPage() {
               Post
             </button>
           )}
+
+          {/* Regen graph interests */}
+          <button
+            onClick={regenGraphInterests}
+            disabled={isRegenGraph}
+            title="Regenerate interests from knowledge graph"
+            className="inline-flex items-center gap-2 px-3 py-2 border border-neutral-300 dark:border-neutral-600 text-sm rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50"
+            data-testid="feed-regen-graph-interests"
+          >
+            {isRegenGraph ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            Graph Interests
+          </button>
 
           {/* Refresh — scoped to active tab's platform */}
           <button

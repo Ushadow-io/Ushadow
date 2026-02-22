@@ -13,6 +13,13 @@ spec:
   - host: ushadow.chakra
     http:
       paths:
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: ushadow-backend
+            port:
+              number: 8000
       - path: /api
         pathType: Prefix
         backend:

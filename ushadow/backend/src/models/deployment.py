@@ -246,6 +246,49 @@ class ServiceDefinitionCreate(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class DiscoveredWorkload(BaseModel):
+    """A workload found during discovery that has not yet been adopted."""
+    name: str
+    image: str
+    status: str
+    backend_type: str  # "docker" or "kubernetes"
+
+    # Docker-specific
+    container_id: Optional[str] = None
+    compose_project: Optional[str] = None
+    compose_service: Optional[str] = None
+    node_hostname: Optional[str] = None
+
+    # K8s-specific
+    cluster_id: Optional[str] = None
+    cluster_name: Optional[str] = None
+    namespace: Optional[str] = None
+    k8s_deployment_name: Optional[str] = None
+
+    ports: List[str] = Field(default_factory=list)
+    internal_url: Optional[str] = None
+    already_adopted: bool = False
+
+
+class AdoptRequest(BaseModel):
+    """Request to adopt a discovered workload as a managed Deployment."""
+    backend_type: str
+    container_name: str
+    image: str
+    ports: List[str] = Field(default_factory=list)
+    status: str = "running"
+
+    # Docker
+    node_hostname: Optional[str] = None
+    container_id: Optional[str] = None
+    compose_project: Optional[str] = None
+
+    # K8s
+    cluster_id: Optional[str] = None
+    namespace: Optional[str] = None
+    k8s_deployment_name: Optional[str] = None
+
+
 class ServiceDefinitionUpdate(BaseModel):
     """Request to update a service definition."""
     name: Optional[str] = None

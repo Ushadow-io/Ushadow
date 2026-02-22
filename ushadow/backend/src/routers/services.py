@@ -370,9 +370,11 @@ async def get_service_connection_info(
     import os
     from src.services.docker_manager import get_docker_manager
     from src.services.deployment_manager import get_deployment_manager
+    from src.services.compose_registry import get_compose_registry
 
     docker_mgr = get_docker_manager()
     deployment_mgr = get_deployment_manager()
+    compose_registry = get_compose_registry()
 
     container_name = None
     internal_port = 8000
@@ -413,6 +415,18 @@ async def get_service_connection_info(
                     internal_port = int(container_port)
                 else:
                     internal_port = int(first_port)
+        elif matching_deployment.backend_type == "kubernetes":
+            # K8s deployments often store no ports in deployed_config — fall back to
+            # compose service metadata which is the authoritative source.
+            compose_svc = compose_registry.get_service_by_name(name)
+            if compose_svc and compose_svc.ports:
+                first_port = compose_svc.ports[0]
+                container_port = first_port.get("container") or first_port.get("target")
+                if container_port:
+                    try:
+                        internal_port = int(container_port)
+                    except (ValueError, TypeError):
+                        pass
 
         # For deployments, we don't have env_var/default_port metadata
         env_var = None
@@ -547,9 +561,11 @@ async def proxy_service_request(
     import os
     from src.services.docker_manager import get_docker_manager
     from src.services.deployment_manager import get_deployment_manager
+    from src.services.compose_registry import get_compose_registry
 
     docker_mgr = get_docker_manager()
     deployment_mgr = get_deployment_manager()
+    compose_registry = get_compose_registry()
 
     container_name = None
     internal_port = 8000
@@ -607,6 +623,18 @@ async def proxy_service_request(
                     internal_port = int(container_port)
                 else:
                     internal_port = int(first_port)
+        elif matching_deployment.backend_type == "kubernetes":
+            # K8s deployments often store no ports in deployed_config — fall back to
+            # compose service metadata which is the authoritative source of port definitions.
+            compose_service = compose_registry.get_service_by_name(name) if compose_registry else None
+            if compose_service and compose_service.ports:
+                first_port = compose_service.ports[0]
+                container_port = first_port.get("container") or first_port.get("target")
+                if container_port:
+                    try:
+                        internal_port = int(container_port)
+                    except (ValueError, TypeError):
+                        pass
 
         if matching_deployment.backend_type == "kubernetes":
             # K8s: route to pod via cluster DNS — no unode/remote check needed
@@ -784,12 +812,11 @@ async def proxy_service_request(
                     headers=headers
                 )
 
-            # Log the response from Chronicle
-            logger.info(f"[PROXY] Chronicle response: {response.status_code}")
+            logger.info(f"[PROXY] {name} response: {response.status_code}")
             if response.status_code == 206:
                 logger.info(f"[PROXY] Partial content response - Content-Range: {response.headers.get('content-range')}, Content-Type: {response.headers.get('content-type')}")
             if response.status_code not in [200, 206]:
-                logger.warning(f"[PROXY] Chronicle error body: {response.text[:500]}")
+                logger.warning(f"[PROXY] {name} error body: {response.text[:500]}")
 
             # Forward response headers
             response_headers = dict(response.headers)
@@ -1182,10 +1209,14 @@ async def generate_mycelia_token(
         docker_mgr = get_docker_manager()
         compose_registry = get_compose_registry()
 
-        # Try to get service info - check if it's in MANAGEABLE_SERVICES or discovered
+        # Verify Docker is actually reachable before checking service status.
+        # In K8s mode the Docker socket is absent — ping() raises, we fall through to K8s.
+        docker_mgr._client.ping()
+
         container_name = None
 
         # First check if service is in MANAGEABLE_SERVICES
+
         if service_name in docker_mgr.MANAGEABLE_SERVICES:
             service_info = docker_mgr.get_service_info(service_name)
 
@@ -1273,6 +1304,43 @@ async def generate_mycelia_token(
 
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Token generation timed out")
+
+    except Exception:
+        pass  # Docker unavailable (e.g. K8s mode) — fall through to K8s path
+
+    # ---- K8s fallback: find pod by label and exec via Python k8s client ----
+    try:
+        import asyncio
+        from kubernetes.stream import stream as k8s_stream
+        from src.services.kubernetes import get_kubernetes_manager
+        k8s_mgr = await get_kubernetes_manager()
+        clusters = await k8s_mgr.list_clusters()
+        for cluster in clusters:
+            namespace = cluster.namespace or "ushadow"
+            try:
+                pods = await k8s_mgr.list_pods(cluster.cluster_id, namespace=namespace)
+            except Exception as e:
+                logger.warning(f"[MYCELIA-TOKEN] Could not list pods in {cluster.name}: {e}")
+                continue
+            for pod in pods:
+                if (pod["labels"].get("app.kubernetes.io/name") == service_name
+                        and pod["status"] == "Running"):
+                    pod_name = pod["name"]
+                    logger.info(f"[MYCELIA-TOKEN] Exec into K8s pod {pod_name} ({cluster.name})")
+                    core_api, _ = k8s_mgr._k8s_client.get_kube_client(cluster.cluster_id)
+                    loop = asyncio.get_event_loop()
+                    output = await loop.run_in_executor(
+                        None,
+                        lambda: k8s_stream(
+                            core_api.connect_get_namespaced_pod_exec,
+                            pod_name, namespace,
+                            command=["deno", "run", "-A", "server.ts", "token-create"],
+                            stderr=True, stdin=False, stdout=True, tty=False,
+                        ),
+                    )
+                    return _parse_mycelia_token_output(output)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error generating Mycelia token: {e}")
         raise HTTPException(status_code=500, detail=str(e))

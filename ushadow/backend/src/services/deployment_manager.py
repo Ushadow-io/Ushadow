@@ -17,6 +17,8 @@ from src.models.deployment import (
     Deployment,
     DeploymentStatus,
     ResolvedServiceDefinition,
+    DiscoveredWorkload,
+    AdoptRequest,
 )
 from src.models.unode import UNode
 from src.models.deploy_target import DeployTarget
@@ -76,6 +78,7 @@ class DeploymentManager:
         # NOTE: deployments_collection no longer used - deployments are stateless
         # self.deployments_collection = db.deployments
         self.unodes_collection = db.unodes
+        self.adopted_workloads_collection = db.adopted_workloads
         self._http_session: Optional[aiohttp.ClientSession] = None
 
     async def initialize(self):
@@ -191,11 +194,12 @@ class DeploymentManager:
 
         # Choose resolution method based on context:
         # - config_id provided: use for_deployment() (full hierarchy with user overrides)
+        #   Also pass deploy_target so infrastructure env vars are loaded for K8s.
         # - deploy_target provided: use for_deploy_config() (up to deploy_env layer)
         # - neither: use for_service() (up to capability layer)
         if config_id:
-            logger.info(f"Resolving settings for deployment {config_id}")
-            env_resolutions = await settings.for_deployment(config_id)
+            logger.info(f"Resolving settings for deployment {config_id} (deploy_target={deploy_target})")
+            env_resolutions = await settings.for_deployment(config_id, deploy_target=deploy_target)
         elif deploy_target:
             logger.info(f"Resolving settings for service {service_id} targeting {deploy_target}")
             env_resolutions = await settings.for_deploy_config(deploy_target, service_id)
@@ -1249,6 +1253,55 @@ class DeploymentManager:
             except Exception as e:
                 logger.error(f"[list_deployments] Failed to query K8s clusters: {e}")
 
+        # Also include adopted workloads (Docker + K8s) stored in MongoDB.
+        # Docker: containers can't be labelled post-creation, so we store adoption records.
+        # K8s: adopted pods may live in a different namespace than cluster.namespace, so
+        #       the stateless K8s scan misses them; MongoDB is the source of truth here.
+        if not unode_hostname:
+            try:
+                adopted_query: dict = {}
+                if service_id:
+                    adopted_query["service_id"] = service_id
+                async for doc in self.adopted_workloads_collection.find(adopted_query):
+                    backend_type = doc.get("backend_type", "docker")
+                    ports = doc.get("ports", [])
+                    exposed_port = None
+                    if ports:
+                        try:
+                            exposed_port = int(ports[0].split(":")[0])
+                        except (ValueError, IndexError):
+                            pass
+
+                    if backend_type == "kubernetes":
+                        dep_id = f"adopted-k8s-{doc.get('cluster_id', 'unknown')}-{doc['container_name']}"
+                        dep_unode = f"{doc.get('cluster_id', 'unknown')}.k8s"
+                        dep_backend_meta = {
+                            "cluster_id": doc.get("cluster_id"),
+                            "namespace": doc.get("namespace"),
+                            "k8s_deployment_name": doc.get("k8s_deployment_name") or doc["container_name"],
+                        }
+                    else:
+                        dep_id = f"adopted-{doc['container_name']}"
+                        dep_unode = doc.get("node_hostname", "local")
+                        dep_backend_meta = {"compose_project": doc.get("compose_project")}
+
+                    all_deployments.append(Deployment(
+                        id=dep_id,
+                        service_id=doc["service_id"],
+                        config_id=doc.get("config_id"),
+                        unode_hostname=dep_unode,
+                        status=DeploymentStatus.RUNNING if doc.get("status") == "running" else DeploymentStatus.STOPPED,
+                        container_name=doc["container_name"],
+                        container_id=doc.get("container_id"),
+                        deployed_config={"image": doc.get("image", ""), "ports": ports},
+                        backend_type=backend_type,
+                        backend_metadata=dep_backend_meta,
+                        metadata={"adopted": True},
+                        exposed_port=exposed_port,
+                    ))
+            except Exception as e:
+                logger.warning(f"[list_deployments] Failed to query adopted workloads: {e}")
+
         logger.debug(f"[list_deployments] Total deployments: {len(all_deployments)}")
         return all_deployments
 
@@ -1464,6 +1517,256 @@ class DeploymentManager:
             headers=headers
         ) as response:
             return await response.json()
+
+
+    # =========================================================================
+    # Find & Adopt
+    # =========================================================================
+
+    async def find_workloads(self, service_name: str) -> List[DiscoveredWorkload]:
+        """
+        Search Docker and all K8s clusters for workloads matching service_name.
+
+        Matching: case-insensitive substring of container/deployment name,
+        or exact match of com.docker.compose.service label.
+
+        Returns both already-adopted and unadopted results.
+        """
+        results: List[DiscoveredWorkload] = []
+        name_lower = service_name.lower()
+
+        # Pre-load adopted container names from MongoDB for both Docker and K8s.
+        # Docker: containers can't be labelled post-creation, so MongoDB is the only source.
+        # K8s: label-only adoptions (old code) have no MongoDB record — we treat those as
+        #      NOT yet adopted so the user can re-adopt, which writes the missing record.
+        adopted_docker_names: set = set()
+        adopted_k8s_names: set = set()
+        try:
+            async for doc in self.adopted_workloads_collection.find({"container_name": {"$exists": True}}):
+                if doc.get("backend_type") == "kubernetes":
+                    adopted_k8s_names.add(doc["container_name"])
+                else:
+                    adopted_docker_names.add(doc["container_name"])
+        except Exception as e:
+            logger.warning(f"[find_workloads] Failed to load adopted workloads: {e}")
+
+        # -- Docker search --
+        try:
+            import docker as docker_lib
+            docker_client = docker_lib.from_env()
+            for c in docker_client.containers.list(all=True):
+                labels = c.labels or {}
+                compose_svc = labels.get("com.docker.compose.service", "")
+                if name_lower not in c.name.lower() and name_lower not in compose_svc.lower():
+                    continue
+                ports = [
+                    f"{hp['HostPort']}:{cp.split('/')[0]}"
+                    for cp, bindings in (c.ports or {}).items()
+                    for hp in (bindings or [])
+                    if hp.get("HostPort")
+                ]
+                already = bool(labels.get("ushadow.deployment_id")) or c.name in adopted_docker_names
+                results.append(DiscoveredWorkload(
+                    name=c.name,
+                    image=c.image.tags[0] if c.image.tags else c.id[:12],
+                    status=c.status,
+                    backend_type="docker",
+                    container_id=c.id,
+                    compose_project=labels.get("com.docker.compose.project"),
+                    compose_service=compose_svc or None,
+                    node_hostname="local",
+                    ports=ports,
+                    already_adopted=already,
+                ))
+        except Exception as e:
+            logger.warning(f"[find_workloads] Docker search failed: {e}")
+
+        # -- K8s search --
+        try:
+            from src.services.kubernetes import get_kubernetes_manager
+            k8s_mgr = await get_kubernetes_manager()
+            for cluster in await k8s_mgr.list_clusters():
+                try:
+                    _, apps_api = k8s_mgr._k8s_client.get_kube_client(cluster.cluster_id)
+                    k8s_deps = apps_api.list_deployment_for_all_namespaces()
+                    for dep in k8s_deps.items:
+                        if name_lower not in dep.metadata.name.lower():
+                            continue
+                        ns = dep.metadata.namespace
+                        dep_labels = dep.metadata.labels or {}
+                        containers = dep.spec.template.spec.containers or []
+                        image = containers[0].image if containers else "unknown"
+                        ready = dep.status.ready_replicas or 0
+                        desired = dep.spec.replicas or 1
+                        status = "running" if ready >= desired else (
+                            "stopped" if ready == 0 else "degraded"
+                        )
+                        ports = [
+                            str(p.container_port)
+                            for c in containers
+                            for p in (c.ports or [])
+                        ]
+                        internal_url = (
+                            f"http://{dep.metadata.name}.{ns}.svc.cluster.local"
+                            + (f":{ports[0]}" if ports else "")
+                        )
+                        # Use MongoDB as the source of truth for K8s adoptions.
+                        # Workloads with the ushadow label but no MongoDB record
+                        # (old-code adoptions) are treated as re-adoptable so the
+                        # user can click Adopt again, which writes the missing record.
+                        already = dep.metadata.name in adopted_k8s_names
+                        results.append(DiscoveredWorkload(
+                            name=dep.metadata.name,
+                            image=image,
+                            status=status,
+                            backend_type="kubernetes",
+                            cluster_id=cluster.cluster_id,
+                            cluster_name=cluster.name,
+                            namespace=ns,
+                            k8s_deployment_name=dep.metadata.name,
+                            ports=ports,
+                            internal_url=internal_url,
+                            already_adopted=already,
+                        ))
+                except Exception as e:
+                    logger.warning(f"[find_workloads] K8s cluster {cluster.name} failed: {e}")
+        except RuntimeError:
+            pass  # KubernetesManager not initialized
+        except Exception as e:
+            logger.warning(f"[find_workloads] K8s search failed: {e}")
+
+        return results
+
+    async def adopt_workload(self, service_id: str, req: AdoptRequest) -> Deployment:
+        """
+        Adopt a discovered workload as a managed Deployment.
+
+        Creates a ServiceConfig so the workload appears in the wiring UI,
+        then records the running instance so it appears as a Deployment.
+
+        K8s: patches managed-by label + stores MongoDB record.
+        Docker: stores a record in adopted_workloads_collection.
+
+        The workload is NOT restarted or otherwise modified.
+        """
+        import re
+        now = datetime.now(timezone.utc)
+
+        # Derive a valid ServiceConfig ID from the container name
+        safe_name = re.sub(r'[^a-z0-9-]', '-', req.container_name.lower())
+        safe_name = re.sub(r'-+', '-', safe_name).strip('-') or "workload"
+        config_id = f"adopted-{safe_name}"
+
+        # Create a ServiceConfig so the adopted service appears in the wiring UI
+        # and is configurable. Skip silently if it already exists.
+        try:
+            from src.services.service_config_manager import get_service_config_manager
+            from src.models.service_config import ServiceConfigCreate
+            config_manager = get_service_config_manager()
+            if not config_manager.get_service_config(config_id):
+                backend_label = "Kubernetes" if req.backend_type == "kubernetes" else "Docker"
+                config_manager.create_service_config(ServiceConfigCreate(
+                    id=config_id,
+                    template_id=service_id,
+                    name=req.container_name,
+                    description=f"Adopted {backend_label} workload",
+                    config={},
+                ))
+                logger.info(f"[adopt] Created ServiceConfig {config_id} for {req.container_name}")
+        except Exception as e:
+            logger.warning(f"[adopt] Failed to create ServiceConfig: {e}")
+
+        if req.backend_type == "kubernetes":
+            # Patch K8s labels so the workload is recognisable as ushadow-managed in kubectl
+            from src.services.kubernetes import get_kubernetes_manager
+            k8s_mgr = await get_kubernetes_manager()
+            _, apps_api = k8s_mgr._k8s_client.get_kube_client(req.cluster_id)
+            safe_id = service_id.replace(":", "-").replace("/", "-")
+            patch = {"metadata": {"labels": {
+                "app.kubernetes.io/managed-by": "ushadow",
+                "app.kubernetes.io/instance": safe_id,
+                "ushadow.service_id": service_id,   # original (colon-preserved)
+                "ushadow.config_id": config_id,     # matches ServiceConfig.id
+            }}}
+            apps_api.patch_namespaced_deployment(
+                name=req.k8s_deployment_name or req.container_name,
+                namespace=req.namespace or "default",
+                body=patch,
+            )
+            logger.info(
+                f"[adopt] Patched K8s labels on {req.container_name} "
+                f"in {req.namespace} ({req.cluster_id})"
+            )
+
+            # Store in MongoDB so list_deployments() can find it regardless of namespace.
+            # The stateless K8s scan only covers cluster.namespace; adopted workloads may
+            # live in any namespace (e.g. chakra-3eye), so we persist them here.
+            k8s_doc = {
+                "service_id": service_id,
+                "config_id": config_id,
+                "backend_type": "kubernetes",
+                "container_name": req.container_name,
+                "k8s_deployment_name": req.k8s_deployment_name or req.container_name,
+                "cluster_id": req.cluster_id,
+                "namespace": req.namespace or "default",
+                "image": req.image,
+                "ports": req.ports,
+                "status": req.status,
+                "adopted_at": now.isoformat(),
+            }
+            await self.adopted_workloads_collection.replace_one(
+                {"container_name": req.container_name, "backend_type": "kubernetes"},
+                k8s_doc,
+                upsert=True,
+            )
+            logger.info(f"[adopt] Stored K8s adoption record for {req.container_name} in MongoDB")
+
+            unode_hostname = f"{req.cluster_id}.k8s"
+            backend_meta = {
+                "cluster_id": req.cluster_id,
+                "namespace": req.namespace,
+                "k8s_deployment_name": req.k8s_deployment_name or req.container_name,
+            }
+        else:
+            # Docker: store adoption record for proxy routing
+            doc = {
+                "service_id": service_id,
+                "config_id": config_id,
+                "container_name": req.container_name,
+                "container_id": req.container_id,
+                "image": req.image,
+                "ports": req.ports,
+                "status": req.status,
+                "compose_project": req.compose_project,
+                "node_hostname": req.node_hostname or "local",
+                "adopted_at": now.isoformat(),
+            }
+            await self.adopted_workloads_collection.replace_one(
+                {"container_name": req.container_name},
+                doc,
+                upsert=True,
+            )
+            logger.info(f"[adopt] Stored Docker adoption record for {req.container_name}")
+            unode_hostname = req.node_hostname or "local"
+            backend_meta = {"compose_project": req.compose_project}
+
+        dep_id = f"adopted-k8s-{req.cluster_id or 'unknown'}-{req.container_name}" \
+            if req.backend_type == "kubernetes" else f"adopted-{req.container_name}"
+
+        return Deployment(
+            id=dep_id,
+            service_id=service_id,
+            config_id=config_id,
+            unode_hostname=unode_hostname,
+            status=DeploymentStatus.RUNNING if req.status == "running" else DeploymentStatus.STOPPED,
+            container_name=req.container_name,
+            container_id=req.container_id,
+            deployed_at=now,
+            deployed_config={"image": req.image, "ports": req.ports},
+            backend_type=req.backend_type,
+            backend_metadata=backend_meta,
+            metadata={"adopted": True, "adopted_at": now.isoformat()},
+        )
 
 
 # Global instance

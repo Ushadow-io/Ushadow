@@ -216,34 +216,40 @@ class Settings:
             instance_overrides={},
         )
 
-    async def for_deployment(self, deployment_id: str) -> Dict[str, Resolution]:
+    async def for_deployment(
+        self,
+        deployment_id: str,
+        deploy_target: Optional[str] = None,
+    ) -> Dict[str, Resolution]:
         """
         Get settings for a running deployment instance.
 
         Args:
             deployment_id: Deployment/instance identifier
+            deploy_target: Optional deployment target ID (e.g. "k8s.k8s.pink") to
+                          load infrastructure env vars. If not provided, falls back
+                          to whatever _load_deployment_context returns.
 
         Returns:
             Dict mapping env var names to Resolution objects
 
         Resolution layers applied:
             ALL layers (config_default → ... → infrastructure → ... → instance_override)
-
-        Note:
-            Infrastructure defaults are currently not loaded for deployments since we
-            don't have deploy_target information. Instance overrides take precedence anyway.
         """
-        env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, deployment_target = \
+        env_vars, compose_defaults, capability_values, template_overrides, instance_overrides, context_target = \
             await self._load_deployment_context(deployment_id)
+
+        # Use explicitly provided deploy_target, fall back to context-derived one
+        effective_target = deploy_target or context_target
 
         infrastructure_values = {}
         infrastructure_overrides = {}
-        if deployment_target:
+        if effective_target:
             infrastructure_values = await self._load_infrastructure_defaults(
-                deployment_target,
+                effective_target,
                 env_vars
             )
-            infrastructure_overrides = await self._load_infrastructure_overrides(deployment_target)
+            infrastructure_overrides = await self._load_infrastructure_overrides(effective_target)
 
         results = await self._resolve_all(
             env_vars=env_vars,
@@ -788,6 +794,18 @@ class Settings:
 
         # Get service schema from ComposeRegistry
         service = registry.get_service(service_id)
+
+        if not service:
+            # Fallback: config_id may be a convention like "mycelia-backend-k8s" where
+            # the base compose service is "mycelia-backend". Strip known suffixes and retry.
+            for suffix in ("-k8s", "-docker", "-local"):
+                if service_id.endswith(suffix):
+                    base_id = service_id[: -len(suffix)]
+                    service = registry.get_service(base_id)
+                    if service:
+                        logger.info(f"[Settings] Resolved '{service_id}' -> base service '{base_id}'")
+                        service_id = base_id
+                        break
 
         if not service:
             logger.error(f"[Settings] Service '{service_id}' not found in registry")

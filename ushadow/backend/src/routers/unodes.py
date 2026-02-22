@@ -448,8 +448,8 @@ async def _get_leader_info_docker() -> LeaderInfoResponse:
     ws_omi_url = None
     if tailscale_hostname:
         chronicle_api_url = f"https://{tailscale_hostname}/api/services/chronicle-backend/proxy"
-        ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
-        ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
+        ws_pcm_url = f"wss://{tailscale_hostname}/ws/audio/relay"
+        ws_omi_url = f"wss://{tailscale_hostname}/ws/audio/relay"
 
     services: List[ServiceDeployment] = []
     for unode in unodes:
@@ -479,8 +479,8 @@ async def _get_leader_info_docker() -> LeaderInfoResponse:
             service_ws_pcm_url = None
             service_ws_omi_url = None
             if service_name == "chronicle-backend" and tailscale_hostname:
-                service_ws_pcm_url = f"wss://{tailscale_hostname}/ws_pcm"
-                service_ws_omi_url = f"wss://{tailscale_hostname}/ws_omi"
+                service_ws_pcm_url = f"wss://{tailscale_hostname}/ws/audio/relay"
+                service_ws_omi_url = f"wss://{tailscale_hostname}/ws/audio/relay"
 
             services.append(ServiceDeployment(
                 name=service_name,
@@ -561,8 +561,8 @@ async def _get_leader_info_k8s() -> LeaderInfoResponse:
         ushadow_api_url=base_url,
         chronicle_api_url=f"{base_url}/api/services/chronicle-backend/proxy",
         keycloak_url=keycloak_url,
-        ws_pcm_url=f"wss://{ingress_host}/ws_pcm",
-        ws_omi_url=f"wss://{ingress_host}/ws_omi",
+        ws_pcm_url=f"wss://{ingress_host}/ws/audio/relay",
+        ws_omi_url=f"wss://{ingress_host}/ws/audio/relay",
         unodes=[unode] if unode else [],
         services=[],  # TODO: list K8s deployed services
     )

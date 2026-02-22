@@ -65,14 +65,25 @@ async def bridge_to_service_token(
     if not token:
         return None
 
+    # Peek at the JWT header (no verification) to detect token type
+    try:
+        import base64 as _b64, json as _json
+        _header = _json.loads(_b64.urlsafe_b64decode(token.split('.')[0] + '=='))
+        _alg = _header.get('alg', '')
+    except Exception:
+        _alg = ''
+
     # Try to validate as Keycloak token
     keycloak_user = get_keycloak_user_from_token(token)
 
     if not keycloak_user:
-        # Not a valid Keycloak token
-        # Could be a service token already, or invalid
-        # Let it through and let the downstream service validate
-        logger.debug("[TOKEN-BRIDGE] Token is not a Keycloak token, passing through")
+        if _alg == 'RS256':
+            # Looks like a Keycloak token but failed validation (expired, JWKS unreachable, etc.)
+            # Do NOT pass through — Chronicle cannot validate RS256 tokens
+            logger.warning("[TOKEN-BRIDGE] RS256 token failed Keycloak validation (expired or JWKS error) — rejecting")
+            return None
+        # Not a Keycloak token — could be a service token already, pass through
+        logger.debug("[TOKEN-BRIDGE] Non-Keycloak token (alg=%s), passing through", _alg)
         return token
 
     # It's a Keycloak token - bridge it

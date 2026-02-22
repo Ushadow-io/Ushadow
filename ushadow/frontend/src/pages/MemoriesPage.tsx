@@ -21,15 +21,17 @@ import {
   Share2,
   Loader2,
   Database,
+  Sparkles,
 } from 'lucide-react'
 import { MemoryTable } from '../components/memories/MemoryTable'
 import { GraphVisualization } from '../components/memories/GraphVisualization'
+import { MemoryInterestsTab } from '../components/memories/MemoryInterestsTab'
 import { useMemories } from '../hooks/useMemories'
 import { useGraphApi } from '../hooks/useGraphApi'
 import { useMemoriesStore } from '../stores/memoriesStore'
 import type { MemorySource } from '../services/api'
 
-type Tab = 'list' | 'graph'
+type Tab = 'list' | 'graph' | 'interests'
 
 export default function MemoriesPage() {
   const [activeTab, setActiveTab] = useState<Tab>('list')
@@ -208,6 +210,18 @@ export default function MemoriesPage() {
               {stats.node_count} nodes
             </span>
           )}
+        </button>
+        <button
+          data-testid="tab-interests"
+          onClick={() => setActiveTab('interests')}
+          className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors ${
+            activeTab === 'interests'
+              ? 'border-blue-500 text-white'
+              : 'border-transparent text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Sparkles className="w-4 h-4" />
+          Interests
         </button>
       </div>
 
@@ -426,6 +440,9 @@ export default function MemoriesPage() {
           </div>
         </div>
       )}
+
+      {/* Interests Tab */}
+      {activeTab === 'interests' && <MemoryInterestsTab />}
 
       {/* Create Memory Dialog */}
       {showCreateDialog && (

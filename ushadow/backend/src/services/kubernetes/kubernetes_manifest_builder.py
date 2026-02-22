@@ -188,10 +188,15 @@ class KubernetesManifestBuilder:
         config_data: Dict[str, str] = {}
         secret_data: Dict[str, str] = {}
         for key, value in environment.items():
-            if any(p in key.upper() for p in sensitive_patterns):
-                secret_data[key] = base64.b64encode(value.encode()).decode()
+            str_value = str(value)
+            # Sensitive by name, or by value (URL containing credentials user:pass@host)
+            is_secret = any(p in key.upper() for p in sensitive_patterns) or (
+                "://" in str_value and "@" in str_value
+            )
+            if is_secret:
+                secret_data[key] = base64.b64encode(str_value.encode()).decode()
             else:
-                config_data[key] = str(value)
+                config_data[key] = str_value
         return config_data, secret_data
 
     def _parse_volumes(self, service_name: str, volumes: List):
@@ -357,8 +362,8 @@ class KubernetesManifestBuilder:
             container["readinessProbe"] = {**probe, "initialDelaySeconds": 10, "periodSeconds": 30}
 
         container["resources"] = spec.resources or {
-            "limits": {"cpu": "500m", "memory": "512Mi"},
-            "requests": {"cpu": "100m", "memory": "128Mi"},
+            "limits": {"cpu": "1000m", "memory": "1Gi"},
+            "requests": {"cpu": "100m", "memory": "256Mi"},
         }
 
         if volume_mounts:

@@ -840,6 +840,38 @@ export interface DeployTarget {
   raw_metadata: Record<string, any>  // Original UNode or KubernetesCluster data
 }
 
+export interface DiscoveredWorkload {
+  name: string
+  image: string
+  status: string
+  backend_type: 'docker' | 'kubernetes'
+  container_id?: string
+  compose_project?: string
+  compose_service?: string
+  node_hostname?: string
+  cluster_id?: string
+  cluster_name?: string
+  namespace?: string
+  k8s_deployment_name?: string
+  ports: string[]
+  internal_url?: string
+  already_adopted: boolean
+}
+
+export interface AdoptRequest {
+  backend_type: 'docker' | 'kubernetes'
+  container_name: string
+  image: string
+  ports: string[]
+  status: string
+  node_hostname?: string
+  container_id?: string
+  compose_project?: string
+  cluster_id?: string
+  namespace?: string
+  k8s_deployment_name?: string
+}
+
 export const deploymentsApi = {
   // Deployment targets (unified)
   listTargets: () => api.get<DeployTarget[]>('/api/deployments/targets'),
@@ -886,6 +918,12 @@ export const deploymentsApi = {
     }),
   getFunnelConfiguration: (deploymentId: string) =>
     api.get<FunnelConfiguration>(`/api/deployments/${deploymentId}/funnel`),
+
+  // Find & Adopt
+  findWorkloads: (serviceId: string) =>
+    api.get<DiscoveredWorkload[]>(`/api/deployments/find/${serviceId}`),
+  adoptWorkload: (serviceId: string, req: AdoptRequest) =>
+    api.post<Deployment>(`/api/deployments/adopt/${serviceId}`, req),
 }
 
 // Exposed URL types (for service discovery)

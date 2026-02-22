@@ -49,6 +49,7 @@ help:
 	@echo "  make ushadow-push [TAG=latest]            - Build and push ushadow to ghcr.io"
 	@echo "  K8S_REGISTRY=host:port make ushadow-push-local - Build and push ushadow to local K8s registry"
 	@echo "  make chronicle-push [TAG=latest]          - Build and push Chronicle to ghcr.io"
+	@echo "  K8S_REGISTRY=host:port make chronicle-push-local - Build and push Chronicle to local K8s registry"
 	@echo "  make mycelia-push [TAG=latest]            - Build and push Mycelia to ghcr.io"
 	@echo "  make openmemory-push [TAG=latest]         - Build and push OpenMemory to ghcr.io"
 	@echo ""
@@ -263,6 +264,22 @@ ushadow-push-local:
 # Chronicle - Build and push backend + webui
 chronicle-push:
 	@./scripts/build-push-images.sh chronicle $(TAG)
+
+chronicle-push-local:
+	@if [ -z "$(K8S_REGISTRY)" ]; then \
+		echo "❌ Error: K8S_REGISTRY not set"; \
+		echo ""; \
+		echo "Usage: K8S_REGISTRY=anubis:32000 make chronicle-push-local"; \
+		exit 1; \
+	fi
+	@echo "🏗️  Building chronicle-backend for $(K8S_REGISTRY) (amd64)..."
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/chronicle-backend:latest -f chronicle/backends/advanced/Dockerfile chronicle/backends/advanced
+	@echo "📤 Pushing to $(K8S_REGISTRY)..."
+	@docker push $(K8S_REGISTRY)/chronicle-backend:latest
+	@echo "✅ Pushed $(K8S_REGISTRY)/chronicle-backend:latest"
+	@echo ""
+	@echo "To update K8s deployments:"
+	@echo "  kubectl rollout restart deployment/chronicle-backend deployment/chronicle-workers -n ushadow"
 
 # Mycelia - Build and push backend
 mycelia-push:
@@ -516,14 +533,8 @@ k8s-show-dns: ## Show current DNS mappings
 	@kubectl get configmap chakra-dns-hosts -n kube-system -o jsonpath='{.data.chakra\.hosts}' 2>/dev/null || \
 		echo "❌ DNS ConfigMap not found. Run setup first."
 
-k8s-config-show: ## Show saved K8s infrastructure config (overrides + scan results + secrets)
-	@echo "📋 K8s Infrastructure Config"
-	@echo ""
-	@echo "=== config.overrides.yaml (infrastructure section) ==="
-	@python3 -c "import yaml; d=yaml.safe_load(open('config/config.overrides.yaml')) or {}; i=d.get('infrastructure',{}); print(yaml.dump({'infrastructure':i},default_flow_style=False).rstrip() if i else '  (empty)')" 2>/dev/null || echo "  (file not found)"
-	@echo ""
-	@echo "=== SECRETS/secrets.yaml (infrastructure section, values masked) ==="
-	@python3 -c "import yaml,re; d=yaml.safe_load(open('config/SECRETS/secrets.yaml')) or {}; i=d.get('infrastructure',{}); s=yaml.dump({'infrastructure':i},default_flow_style=False) if i else '  (empty)'; print(re.sub(r'(?<=: )\S.*', '****', s).rstrip())" 2>/dev/null || echo "  (file not found)"
+k8s-config-show: ## Show saved K8s infrastructure config (merged overrides + scans + secrets)
+	@python3 scripts/k8s-config-show.py
 
 k8s-test-dns: ## Test DNS resolution for ushadow services
 	@./k8s/scripts/dns/test-ushadow-dns.sh

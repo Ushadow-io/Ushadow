@@ -42,17 +42,10 @@ class AudioRelayConnection:
             separator = "&" if "?" in self.url else "?"
             url_with_token = f"{self.url}{separator}token={self.token}"
 
-            # Detect endpoint type for logging
-            # Note: /ws endpoint accepts codec via query parameter
+            codec = "pcm"
             if "codec=opus" in self.url:
-                endpoint_type = "Opus"
-            elif "codec=pcm" in self.url:
-                endpoint_type = "PCM"
-            elif "/ws" in self.url:
-                endpoint_type = "Unified (codec via query param)"
-            else:
-                endpoint_type = "Unknown"
-            logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [{endpoint_type}]")
+                codec = "opus"
+            logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [codec={codec}]")
 
             self.ws = await websockets.connect(url_with_token)
             self.connected = True
@@ -225,22 +218,9 @@ async def audio_relay_websocket(
         logger.info(f"[AudioRelay] Destinations: {[d['name'] for d in destinations]}")
         logger.info(f"[AudioRelay] Using codec: {codec}")
 
-        # Log exact URLs received from client for debugging
+        # Log destination URLs received from client
         for dest in destinations:
-            # Detect endpoint type (check for old formats first, then new)
-            if "/ws_omi" in dest['url']:
-                endpoint_type = "Opus (LEGACY - use /ws?codec=opus)"
-            elif "/ws_pcm" in dest['url']:
-                endpoint_type = "PCM (LEGACY - use /ws?codec=pcm)"
-            elif "codec=opus" in dest['url']:
-                endpoint_type = "Opus"
-            elif "codec=pcm" in dest['url']:
-                endpoint_type = "PCM"
-            elif "/ws" in dest['url']:
-                endpoint_type = "Unified (missing codec parameter)"
-            else:
-                endpoint_type = "Unknown"
-            logger.info(f"[AudioRelay] Client requested: {dest['name']} -> {dest['url']} [{endpoint_type}]")
+            logger.info(f"[AudioRelay] Client requested: {dest['name']} -> {dest['url']}")
 
     except json.JSONDecodeError as e:
         await websocket.close(code=1008, reason=f"Invalid destinations JSON: {e}")

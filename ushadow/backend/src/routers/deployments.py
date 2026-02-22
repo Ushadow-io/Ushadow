@@ -12,6 +12,8 @@ from src.models.deployment import (
     ServiceDefinitionUpdate,
     Deployment,
     DeployRequest,
+    DiscoveredWorkload,
+    AdoptRequest,
 )
 from src.services.deployment_manager import get_deployment_manager
 from src.services.auth import get_current_user
@@ -508,6 +510,59 @@ async def get_exposed_urls(
             seen_containers.add(deployment.container_name)
             logger.info(f"[exposed-urls] Added deployment URL: {exp_name} -> {exp_url} (deployment {deployment.id}, container {deployment.container_name})")
 
+    # ---- K8s: check running pods across all clusters ----
+    try:
+        k8s_mgr = await get_kubernetes_manager()
+        clusters = await k8s_mgr.list_clusters()
+        for cluster in clusters:
+            namespace = cluster.namespace or "ushadow"
+            try:
+                pods = await k8s_mgr.list_pods(cluster.cluster_id, namespace=namespace)
+            except Exception as e:
+                logger.warning(f"[exposed-urls] Could not list pods in {cluster.name}: {e}")
+                continue
+            for pod in pods:
+                if pod["status"] != "Running":
+                    continue
+                service_name = pod["labels"].get("app.kubernetes.io/name")
+                if not service_name:
+                    continue
+                compose_service = compose_registry.get_service_by_name(service_name)
+                if not compose_service or not getattr(compose_service, "exposes", None):
+                    continue
+                # K8s service DNS: <service-name>.<namespace>.svc.cluster.local
+                k8s_host = f"{service_name}.{namespace}.svc.cluster.local"
+                if k8s_host in seen_containers:
+                    continue
+                for expose in compose_service.exposes:
+                    exp_type = expose.get("type")
+                    exp_name = expose.get("name")
+                    path = expose.get("path", "")
+                    port = expose.get("port")
+                    exp_metadata = expose.get("metadata", {})
+                    if url_type and exp_type != url_type:
+                        continue
+                    if url_name and exp_name != url_name:
+                        continue
+                    if format:
+                        if format not in exp_metadata.get("formats", []):
+                            continue
+                    protocol = "ws" if exp_type == "audio" else "http"
+                    exp_url = f"{protocol}://{k8s_host}:{port}{path}"
+                    result.append({
+                        "instance_id": f"k8s:{cluster.cluster_id}:{pod['name']}",
+                        "instance_name": compose_service.display_name or service_name,
+                        "url": exp_url,
+                        "type": exp_type,
+                        "name": exp_name,
+                        "metadata": exp_metadata,
+                        "status": "running",
+                    })
+                    seen_containers.add(k8s_host)
+                    logger.info(f"[exposed-urls] Added K8s URL: {exp_name} -> {exp_url} (pod {pod['name']})")
+    except Exception as e:
+        logger.warning(f"[exposed-urls] K8s discovery failed: {e}")
+
     logger.info("=" * 80)
     logger.info(f"[exposed-urls] RETURNING {len(result)} TOTAL EXPOSED URLs")
     logger.info(f"[exposed-urls] PARAMS: status={status}, url_type={url_type}, url_name={url_name}, format={format}")
@@ -525,6 +580,42 @@ async def get_exposed_urls(
     logger.info("=" * 80)
 
     return result
+
+
+@router.get("/find/{service_id}", response_model=List[DiscoveredWorkload])
+async def find_workloads(
+    service_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Search Docker and Kubernetes for workloads matching the service name.
+
+    Used by the "Find" button on service cards. Returns running instances
+    that are not yet tracked by Ushadow (already_adopted=False) or
+    are already adopted (already_adopted=True).
+    """
+    manager = get_deployment_manager()
+    return await manager.find_workloads(service_id)
+
+
+@router.post("/adopt/{service_id}", response_model=Deployment)
+async def adopt_workload(
+    service_id: str,
+    req: AdoptRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Adopt a discovered workload as a managed Deployment.
+
+    The workload is NOT restarted or modified. Ushadow begins tracking it:
+    proxy, logs, and restart endpoints become available immediately.
+    """
+    manager = get_deployment_manager()
+    try:
+        return await manager.adopt_workload(service_id, req)
+    except Exception as e:
+        logger.error(f"Failed to adopt workload {service_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{deployment_id}", response_model=Deployment)

@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { Package, Server, Monitor } from 'lucide-react'
 import { FlatServiceCard } from '../wiring'
 import EmptyState from './EmptyState'
+import { FindAndAdoptModal } from './FindAndAdoptModal'
 import { Template, ServiceConfig, Wiring, DeployTarget } from '../../services/api'
 
 interface ServicesTabProps {
@@ -63,6 +64,7 @@ export default function ServicesTab({
   onEditDeployment,
 }: ServicesTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<ServiceSubTab>('api')
+  const [findingService, setFindingService] = useState<{ id: string; name: string } | null>(null)
 
   if (composeTemplates.length === 0) {
     return (
@@ -130,6 +132,7 @@ export default function ServicesTab({
                   onStart={() => onStart(template.id)}
                   onStop={() => onStop(template.id)}
                   onEdit={() => onEdit(template.id)}
+                  onFind={() => setFindingService({ id: template.id, name: template.name })}
                   onDeploy={(target) => onDeploy(template.id, target)}
                 />
               </div>
@@ -267,6 +270,7 @@ export default function ServicesTab({
         onStart={() => onStart(template.id)}
         onStop={() => onStop(template.id)}
         onEdit={() => onEdit(template.id)}
+        onFind={() => setFindingService({ id: template.id, name: template.name })}
         onDeploy={(target) => onDeploy(template.id, target)}
         workers={workers}
         onStartWorker={onStart}
@@ -353,6 +357,15 @@ export default function ServicesTab({
         <EmptyState
           icon={activeSubTab === 'api' ? Server : Monitor}
           title={`No ${activeSubTab === 'api' ? 'API/Worker' : 'UI'} services installed yet.`}
+        />
+      )}
+
+      {findingService && (
+        <FindAndAdoptModal
+          isOpen={true}
+          onClose={() => setFindingService(null)}
+          serviceId={findingService.id}
+          serviceName={findingService.name}
         />
       )}
     </div>
