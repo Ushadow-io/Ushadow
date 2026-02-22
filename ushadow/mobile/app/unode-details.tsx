@@ -358,39 +358,36 @@ export default function UNodeDetailsPage() {
         return;
       }
 
+
       const baseApiUrl = node.apiUrl.replace(/\/api\/.*$/, '');
-      const infoUrl = `${baseApiUrl}/api/unodes/${node.hostname}/info`;
+      const infoUrl = `${baseApiUrl}/api/unodes/leader/info`;
 
-      console.log('[UNodeDetails] Fetching fresh details from:', infoUrl);
+      console.log('[UNodeDetails] Fetching leader info from:', infoUrl);
 
-      const response = await fetch(infoUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await fetch(infoUrl);
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch unode info: ${response.status}`);
+        throw new Error(`Failed to fetch leader info: ${response.status}`);
       }
 
       const info = await response.json();
-      console.log('[UNodeDetails] Fresh unode info:', info);
+      console.log('[UNodeDetails] Fresh leader info:', info.hostname);
 
-      // Update saved unode with fresh connection details
+      // Update saved unode with fresh connection details from leader
       await saveUnode({
         id: node.id,
-        name: node.name,
+        name: info.display_name || node.name,
         hostname: info.hostname || node.hostname,
-        apiUrl: baseApiUrl,
+        apiUrl: info.ushadow_api_url || baseApiUrl,
         chronicleApiUrl: info.chronicle_api_url,
-        streamUrl: info.ws_pcm_url,
+        streamUrl: info.ws_pcm_url || node.streamUrl,
         tailscaleIp: info.tailscale_ip || node.tailscaleIp,
       });
 
       console.log('[UNodeDetails] ✅ Reconnected successfully');
       await getUnodes();
 
-      Alert.alert('Success', `Reconnected to ${node.name}`);
+      Alert.alert('Success', `Reconnected to ${info.display_name || node.name}`);
     } catch (error) {
       console.error('[UNodeDetails] Reconnect failed:', error);
       Alert.alert(

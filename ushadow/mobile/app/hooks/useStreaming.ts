@@ -51,7 +51,8 @@ export const useStreaming = (): UseStreaming => {
   } = useAudioStreamer();
 
   // Live Activity (iOS 16.2+) — lock screen + Dynamic Island recording indicator
-  const liveActivity = useLiveActivity();
+  // Destructure to get stable callback references (useCallback with [] deps)
+  const { startActivity, stopActivity } = useLiveActivity();
 
   // Phone audio recorder
   const {
@@ -92,7 +93,7 @@ export const useStreaming = (): UseStreaming => {
       });
 
       console.log('[Streaming] Streaming started successfully');
-      await liveActivity.startActivity('Phone Microphone');
+      await startActivity('Phone Microphone');
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[Streaming] Error starting streaming:', errorMessage);
@@ -104,7 +105,7 @@ export const useStreaming = (): UseStreaming => {
 
       throw err;
     }
-  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, liveActivity]);
+  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, startActivity]);
 
   // Reconnect WebSocket when app returns to foreground (mic keeps recording during standby)
   useAppLifecycle({
@@ -114,11 +115,17 @@ export const useStreaming = (): UseStreaming => {
         streamUrlRef.current &&
         getWebSocketReadyState() !== WebSocket.OPEN
       ) {
-        console.log('[Streaming] App foregrounded: reconnecting WebSocket (mic still recording)');
+        console.log('[Streaming] App foregrounded: cancelling stale retries and reconnecting WebSocket');
+        // Cancel any exhausted/in-progress background retry attempts first.
+        // Without this, the streamer may be in a "permanently failed" state
+        // (manuallyStoppedRef=true after 5 failed attempts while JS was suspended).
+        // wsStart() resets manuallyStoppedRef, but cancelRetry() clears pending
+        // timeouts that could interfere with our fresh connection.
+        cancelRetry();
         wsStart(streamUrlRef.current, streamModeRef.current, streamCodecRef.current)
           .catch(err => console.warn('[Streaming] Foreground reconnect failed:', err));
       }
-    }, [wsStart, getWebSocketReadyState]),
+    }, [wsStart, getWebSocketReadyState, cancelRetry]),
   });
 
   // Stop streaming: stop recording, then disconnect WebSocket
@@ -133,10 +140,10 @@ export const useStreaming = (): UseStreaming => {
     }
 
     wsStop();
-    await liveActivity.stopActivity();
+    await stopActivity();
 
     console.log('[Streaming] Streaming stopped');
-  }, [stopRecording, wsStop, liveActivity]);
+  }, [stopRecording, wsStop, stopActivity]);
 
   return {
     isStreaming,

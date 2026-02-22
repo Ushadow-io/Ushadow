@@ -285,14 +285,17 @@ export const useAudioManager = ({
     // Stop Live Activity
     await liveActivity.stopActivity();
 
-    // Deactivate audio session to allow iOS to suspend app if needed
-    // (unless other audio is active)
+    // Fully deactivate audio session — must reset ALL properties set during start
+    // to dismiss iOS recording indicator and Dynamic Island
     try {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
+        playsInSilentModeIOS: false,
         staysActiveInBackground: false,
+        interruptionModeIOS: 0, // MixWithOthers (default)
+        shouldDuckAndroid: true,
       });
-      console.log('[useAudioManager] Audio session deactivated');
+      console.log('[useAudioManager] Audio session fully deactivated');
     } catch (audioModeError) {
       console.warn('[useAudioManager] Failed to deactivate audio session:', audioModeError);
     }
@@ -303,7 +306,7 @@ export const useAudioManager = ({
     setCurrentSessionId(null);
     setCurrentConversationId(null);
     previousWsReadyStateRef.current = undefined;
-  }, [stopAudioListener, audioStreamer, offlineMode, lockScreenControls]);
+  }, [stopAudioListener, audioStreamer, offlineMode, liveActivity]);
 
   /**
    * Start phone microphone audio streaming
@@ -365,8 +368,21 @@ export const useAudioManager = ({
     // Stop Live Activity
     await liveActivity.stopActivity();
 
+    // Ensure audio session is fully deactivated even if stopRecording partially failed
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: false,
+        staysActiveInBackground: false,
+        interruptionModeIOS: 0,
+        shouldDuckAndroid: true,
+      });
+    } catch (audioModeError) {
+      console.warn('[useAudioManager] Failed to deactivate audio session:', audioModeError);
+    }
+
     setIsPhoneAudioMode(false);
-  }, [phoneAudioRecorder, audioStreamer, lockScreenControls]);
+  }, [phoneAudioRecorder, audioStreamer, liveActivity]);
 
   /**
    * Toggle phone audio on/off

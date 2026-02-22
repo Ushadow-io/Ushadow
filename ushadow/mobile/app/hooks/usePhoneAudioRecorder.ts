@@ -273,14 +273,18 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
       await AudioRecord.stop();
       console.log('[PhoneAudioRecorder] Recording stopped');
 
-      // Deactivate audio session to allow iOS to suspend app if needed
-      // (unless other audio is active)
+      // Fully deactivate audio session — must reset ALL properties set during start
+      // to dismiss iOS recording indicator and Dynamic Island
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
+          playsInSilentModeIOS: false,
           staysActiveInBackground: false,
+          interruptionModeIOS: 0, // MixWithOthers (default)
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
         });
-        console.log('[PhoneAudioRecorder] Audio session deactivated');
+        console.log('[PhoneAudioRecorder] Audio session fully deactivated');
       } catch (audioModeError) {
         console.warn('[PhoneAudioRecorder] Failed to deactivate audio session:', audioModeError);
       }
@@ -321,6 +325,16 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
       } catch (e) {
         // Ignore if not recording
       }
+
+      // Deactivate iOS audio session on unmount to dismiss recording indicator
+      Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: false,
+        staysActiveInBackground: false,
+        interruptionModeIOS: 0,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
     };
   }, []); // Empty deps = cleanup only on unmount
 

@@ -175,6 +175,8 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
       if (isStreaming && !health.websocket) {
         console.log('[OmiDeviceCard] ❌ WebSocket connection lost in background, reconnecting...');
         try {
+          // Cancel any exhausted/stale retry attempts from background suspension
+          audioStreamer.cancelRetry();
           const wsUrl = buildOmiWebSocketUrl();
           await audioStreamer.startStreaming(wsUrl);
 
@@ -221,11 +223,15 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
 
   /**
    * Cross-connection monitoring (Phase 3: Fix 5)
-   * Stop one connection if the other fails to save resources
+   * Stop one connection if the other fails to save resources.
+   * IMPORTANT: Only run when app is active — WebSocket dying in background
+   * is expected (iOS suspends network) and the foreground handler will reconnect.
    */
   useEffect(() => {
-    // Only monitor if this device is supposed to be streaming
-    if (!isStreaming) return;
+    // Only monitor if this device is supposed to be streaming AND app is active.
+    // In background, WebSocket disconnection is expected and temporary —
+    // tearing down Bluetooth here would kill the pipeline permanently.
+    if (!isStreaming || !isAppActive) return;
 
     const wsReady = audioStreamer.getWebSocketReadyState();
 
@@ -243,7 +249,7 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
       audioStreamer.stopStreaming();
       setIsStreaming(false);
     }
-  }, [isListeningAudio, isStreaming, audioStreamer, stopAudioListener]);
+  }, [isListeningAudio, isStreaming, isAppActive, audioStreamer, stopAudioListener]);
 
   /**
    * Handle device connection/disconnection
