@@ -560,9 +560,13 @@ async def proxy_service_request(
     for deployment in all_deployments:
         # Match by service_id (now just the service name, e.g., "chronicle-backend")
         if deployment.service_id == name:
-            # Only consider deployments belonging to THIS environment
-            if deployment.container_name and not deployment.container_name.startswith(f"{project_name}-"):
-                continue
+            # Scope to this environment: accept project-prefixed containers (e.g. "ushadow-ollama")
+            # OR explicitly-named containers (e.g. container_name: ollama) which have no prefix
+            if deployment.container_name:
+                has_project_prefix = deployment.container_name.startswith(f"{project_name}-")
+                is_explicitly_named = deployment.container_name == name
+                if not has_project_prefix and not is_explicitly_named:
+                    continue
             # Prefer running deployments
             if deployment.status == "running":
                 matching_deployment = deployment

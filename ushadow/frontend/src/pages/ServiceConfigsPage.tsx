@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus,
   RefreshCw,
@@ -79,6 +79,7 @@ function getErrorMessage(error: any, fallback: string): string {
 
 export default function ServiceConfigsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { isEnabled } = useFeatureFlags()
 
   // Feature flag: hide service configs (custom instances)
@@ -199,6 +200,14 @@ export default function ServiceConfigsPage() {
     window.addEventListener('keydown', handleEsc)
     return () => window.removeEventListener('keydown', handleEsc)
   }, [closeAllModals])
+
+  // Refresh when navigated here with { state: { refresh: true } } (e.g. from a wizard)
+  useEffect(() => {
+    if (location.state?.refresh) {
+      refreshData()
+      navigate(location.pathname, { replace: true, state: {} })
+    }
+  }, [location.state])
 
   // Log data for debugging
   useEffect(() => {
@@ -801,7 +810,7 @@ export default function ServiceConfigsPage() {
           name: ev.name,
           source: (ev.source as 'setting' | 'literal' | 'default') || 'default',
           setting_path: ev.setting_path,
-          value: ev.value,
+          value: ev.value ?? ev.resolved_value ?? null,
         }
       }
       setProviderCardEnvConfigs(initial)
@@ -833,6 +842,13 @@ export default function ServiceConfigsPage() {
       // Save settings if any
       if (Object.keys(settingsUpdates).length > 0) {
         await settingsApi.update(settingsUpdates)
+      }
+
+      // Mark provider as installed so it appears in wiring board and instance list
+      const currentConfig = await settingsApi.getConfig()
+      const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+      if (!currentInstalled.includes(providerId)) {
+        await settingsApi.update({ installed_services: [...currentInstalled, providerId] })
       }
 
       // Refresh data
@@ -1091,6 +1107,13 @@ export default function ServiceConfigsPage() {
 
           if (Object.keys(updates).length > 0) {
             await settingsApi.update(updates)
+          }
+
+          // Mark provider as installed so it appears in wiring board and instance list
+          const currentConfig = await settingsApi.getConfig()
+          const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+          if (!currentInstalled.includes(editingProvider.id)) {
+            await settingsApi.update({ installed_services: [...currentInstalled, editingProvider.id] })
           }
 
           setMessage({ type: 'success', text: `${editingProvider.name} settings updated` })
@@ -1480,6 +1503,12 @@ export default function ServiceConfigsPage() {
   }
 
   const handleStartService = async (serviceId: string) => {
+    // If the service needs setup and has a wizard, redirect to it instead of deploying
+    const template = templates.find((t) => t.id === serviceId)
+    if (template?.needs_setup && template?.wizard) {
+      navigate(`/wizard/${template.wizard}`)
+      return
+    }
     await handleDeployConsumer(serviceId, { type: 'local' })
   }
 
@@ -1492,6 +1521,11 @@ export default function ServiceConfigsPage() {
   }
 
   const handleDeployService = (serviceId: string, target: DeployTarget) => {
+    const template = templates.find((t) => t.id === serviceId)
+    if (template?.needs_setup && template?.wizard) {
+      navigate(`/wizard/${template.wizard}`)
+      return
+    }
     handleDeployConsumer(serviceId, target)
   }
 

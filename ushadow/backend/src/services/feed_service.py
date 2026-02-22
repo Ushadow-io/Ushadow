@@ -2,6 +2,10 @@
 
 Business logic layer for the personalized multi-platform feed feature.
 Router -> FeedService -> InterestExtractor / PostFetcher / PostScorer / MongoDB
+
+Source storage: SettingsStore (config.overrides.yaml under feed.sources).
+YouTube API key: SettingsStore (secrets.yaml under api_keys.youtube_api_key).
+Posts: MongoDB via Beanie.
 """
 
 import logging
@@ -10,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from src.config.store import SettingsStore
 from src.models.feed import (
     Interest,
     Post,
@@ -17,17 +22,22 @@ from src.models.feed import (
     SourceCreate,
 )
 from src.services.interest_extractor import InterestExtractor
+from src.services.mastodon_oauth import MastodonOAuthService
 from src.services.post_fetcher import PostFetcher
 from src.services.post_scorer import PostScorer
 
 logger = logging.getLogger(__name__)
 
+_SOURCES_KEY = "feed.sources"
+_YOUTUBE_KEY = "api_keys.youtube_api_key"
+
 
 class FeedService:
     """Orchestrates the personalized feed pipeline."""
 
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(self, db: AsyncIOMotorDatabase, settings: SettingsStore):
         self.db = db
+        self._settings = settings
         self._extractor = InterestExtractor()
         self._fetcher = PostFetcher()
         self._scorer = PostScorer()
@@ -37,34 +47,101 @@ class FeedService:
     # =========================================================================
 
     async def add_source(self, user_id: str, data: SourceCreate) -> PostSource:
-        """Add a content source (Mastodon instance or YouTube API key)."""
+        """Add a content source.
+
+        Mastodon instance_url is saved to config.overrides.yaml.
+        YouTube api_key is saved to secrets.yaml (api_keys.youtube_api_key).
+        """
         source = PostSource(
             user_id=user_id,
             name=data.name,
             platform_type=data.platform_type,
             instance_url=data.instance_url.rstrip("/") if data.instance_url else None,
-            api_key=data.api_key,
         )
-        await source.insert()
+
+        if data.api_key and data.platform_type == "youtube":
+            await self._settings.update(
+                {"api_keys": {"youtube_api_key": data.api_key}}
+            )
+
+        existing = await self._settings.get(_SOURCES_KEY, default=[]) or []
+        source_dict = source.model_dump()
+        source_dict["created_at"] = source_dict["created_at"].isoformat()
+        existing.append(source_dict)
+        await self._settings.update({"feed": {"sources": existing}})
+
         logger.info(
             f"Added {data.platform_type} source '{data.name}' for user {user_id}"
         )
         return source
 
     async def list_sources(self, user_id: str) -> List[PostSource]:
-        """List all configured post sources for a user."""
-        return await PostSource.find(PostSource.user_id == user_id).to_list()
+        """List all configured post sources for a user (from config)."""
+        all_sources = await self._settings.get(_SOURCES_KEY, default=[]) or []
+        return [
+            PostSource(**s)
+            for s in all_sources
+            if s.get("user_id") == user_id
+        ]
+
+    async def get_mastodon_auth_url(
+        self, instance_url: str, redirect_uri: str
+    ) -> str:
+        """Register app (or reuse cached) and return Mastodon authorization URL."""
+        oauth = MastodonOAuthService()
+        return await oauth.get_authorization_url(instance_url, redirect_uri)
+
+    async def connect_mastodon(
+        self,
+        user_id: str,
+        instance_url: str,
+        code: str,
+        redirect_uri: str,
+        name: str,
+    ) -> PostSource:
+        """Exchange OAuth code for a token and create/update a Mastodon source.
+
+        If a source already exists for this user + instance, the token is
+        refreshed in-place. Otherwise a new PostSource is created.
+        """
+        oauth = MastodonOAuthService()
+        access_token = await oauth.exchange_code(instance_url, code, redirect_uri)
+
+        normalised_url = instance_url.rstrip("/")
+        existing = await PostSource.find_one(
+            PostSource.user_id == user_id,
+            PostSource.platform_type == "mastodon",
+            PostSource.instance_url == normalised_url,
+        )
+        if existing:
+            existing.access_token = access_token
+            existing.name = name
+            await existing.save()
+            logger.info(f"Updated Mastodon token for {user_id} on {normalised_url}")
+            return existing
+
+        source = PostSource(
+            user_id=user_id,
+            name=name,
+            platform_type="mastodon",
+            instance_url=normalised_url,
+            access_token=access_token,
+        )
+        await source.insert()
+        logger.info(f"Connected Mastodon account for {user_id} on {normalised_url}")
+        return source
 
     async def remove_source(self, user_id: str, source_id: str) -> bool:
-        """Remove a post source."""
-        source = await PostSource.find_one(
-            PostSource.user_id == user_id,
-            PostSource.source_id == source_id,
-        )
-        if not source:
+        """Remove a post source from config."""
+        all_sources = await self._settings.get(_SOURCES_KEY, default=[]) or []
+        updated = [
+            s for s in all_sources
+            if not (s.get("user_id") == user_id and s.get("source_id") == source_id)
+        ]
+        if len(updated) == len(all_sources):
             return False
-        await source.delete()
-        logger.info(f"Removed source '{source.name}' for user {user_id}")
+        await self._settings.update({"feed": {"sources": updated}})
+        logger.info(f"Removed source {source_id} for user {user_id}")
         return True
 
     # =========================================================================
@@ -105,6 +182,7 @@ class FeedService:
 
         # 2. Get configured sources (optionally filtered by platform)
         sources = await self.list_sources(user_id)
+        sources = await self._inject_api_keys(sources)
         if platform_type:
             sources = [s for s in sources if s.platform_type == platform_type]
         if not sources:
@@ -233,6 +311,18 @@ class FeedService:
         return True
 
     # =========================================================================
+    # Internal helpers
+    # =========================================================================
+
+    async def _inject_api_keys(self, sources: List[PostSource]) -> List[PostSource]:
+        """Inject secrets-backed api_key into YouTube sources at fetch time."""
+        youtube_key = await self._settings.get(_YOUTUBE_KEY)
+        for source in sources:
+            if source.platform_type == "youtube":
+                source.api_key = youtube_key
+        return sources
+
+    # =========================================================================
     # Stats
     # =========================================================================
 
@@ -245,11 +335,11 @@ class FeedService:
         bookmarked = await Post.find(
             Post.user_id == user_id, Post.bookmarked == True  # noqa: E712
         ).count()
-        sources = await PostSource.find(PostSource.user_id == user_id).count()
+        sources_list = await self.list_sources(user_id)
 
         return {
             "total_posts": total,
             "unseen_posts": unseen,
             "bookmarked_posts": bookmarked,
-            "sources_count": sources,
+            "sources_count": len(sources_list),
         }

@@ -425,10 +425,18 @@ export interface ServiceInfo {
 }
 
 /** Quickstart wizard response - aggregated capability requirements */
+export interface ServiceProfile {
+  name: string
+  display_name: string
+  services: string[]
+}
+
 export interface QuickstartConfig {
   required_capabilities: CapabilityRequirement[]
   services: ServiceInfo[]  // Full service info, not just names
   all_configured: boolean
+  profiles: ServiceProfile[]
+  active_profile: string | null
 }
 
 export interface PortMapping {
@@ -466,6 +474,10 @@ export const quickstartApi = {
   /** Save quickstart config - save key values (settings_path -> value) */
   saveConfig: (keyValues: Record<string, string>) =>
     api.post<{ success: boolean; saved: number; message: string }>('/api/wizard/quickstart', keyValues),
+
+  /** Switch to a named service profile (updates default_services in overrides) */
+  selectProfile: (profile: string) =>
+    api.post<{ profile: string; services: string[] }>('/api/wizard/quickstart/profile', { profile }),
 }
 
 // Docker daemon status (minimal - only checks if Docker is available)
@@ -1408,6 +1420,7 @@ export interface ServiceConfigSummary {
   provides?: string
   deployment_target?: string
   access_url?: string
+  config?: Record<string, any>
 }
 
 /** Wiring connection between instances */

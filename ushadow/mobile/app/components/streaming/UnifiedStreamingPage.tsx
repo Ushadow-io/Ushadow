@@ -33,6 +33,7 @@ import { LeaderDiscovery } from '../LeaderDiscovery';
 
 // Hooks
 import { useStreaming } from '../../hooks/useStreaming';
+import { useLiveActivity } from '../../hooks/useLiveActivity';
 import { useOmiConnection } from '../../contexts/OmiConnectionContext';
 import { useDeviceConnection } from '../../hooks/useDeviceConnection';
 import { useAudioListener } from '../../hooks/useAudioListener';
@@ -117,6 +118,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
   // Phone microphone streaming hook
   const phoneStreaming = useStreaming();
+
+  // Live Activity for OMI streaming (phone mic manages its own via useStreaming)
+  const omiLiveActivity = useLiveActivity();
 
   // OMI device connection with bluetooth logging
   const {
@@ -447,6 +451,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       } else {
         await stopAudioListener();
         omiStreamer.stopStreaming();
+        omiLiveActivity.stopActivity();
       }
     }
 
@@ -537,6 +542,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
             await omiStreamer.sendAudio(audioBytes);
           }
         });
+
+        omiLiveActivity.startActivity(selectedSource.deviceName ?? 'OMI Device');
       }
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start streaming';
@@ -569,6 +576,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       } else {
         await stopAudioListener();
         omiStreamer.stopStreaming();
+        omiLiveActivity.stopActivity();
       }
 
       // End session (clean stop via user button)
@@ -586,7 +594,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         currentSessionIdRef.current = null;
       }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, onSessionEnd]);
+  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, onSessionEnd]);
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {

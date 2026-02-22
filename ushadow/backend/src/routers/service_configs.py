@@ -18,6 +18,7 @@ from src.models.service_config import (
 from src.services.auth import get_current_user
 from src.services.service_config_manager import get_service_config_manager
 from src.config import get_settings
+from src.config.helpers import env_var_matches_setting
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,14 @@ async def get_template_env_config(
     Returns same format as /api/services/{name}/env for unified frontend handling.
     """
     from src.config import get_settings, Source
+    from src.services.template_service import list_templates
 
-    template = await get_template(template_id, current_user)
+    # Search provider templates specifically — compose templates share IDs (e.g. 'ollama')
+    # but have empty config_schema. Provider templates have the credential definitions.
+    provider_templates = await list_templates(source='provider')
+    template = next((t for t in provider_templates if t.id == template_id), None)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Provider template not found: {template_id}")
     settings_v2 = get_settings()
 
     result = []
@@ -89,17 +96,15 @@ async def get_template_env_config(
         # Get suggestions using Settings v2 API
         suggestions = await settings_v2.get_suggestions(env_name)
 
-        # Try to find a matching suggestion with a value for auto-mapping
+        # Try to find a matching suggestion with a value for auto-mapping.
+        # Use env_var_matches_setting which normalizes underscores to dots and
+        # requires a direct or suffix match — prevents false positives like
+        # matching WHISPER_SERVER_URL to keycloak.url just because both end in "url".
         matching_suggestion = None
         for s in suggestions:
-            if s.has_value:
-                # Check if suggestion path matches env var name pattern
-                env_lower = env_name.lower()
-                path_parts = s.path.lower().split('.')
-                last_part = path_parts[-1] if path_parts else ''
-                if env_lower.endswith(last_part) or last_part in env_lower:
-                    matching_suggestion = s
-                    break
+            if s.has_value and env_var_matches_setting(env_name, s.path):
+                matching_suggestion = s
+                break
 
         # Determine source and setting_path based on matching suggestion
         if matching_suggestion:

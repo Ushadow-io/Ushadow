@@ -260,17 +260,19 @@ export default function MobileAppWizard() {
                   iOS via TestFlight
                 </h3>
                 <p className="text-gray-400 text-sm mb-3">
-                  Distribute to up to 10,000 testers via Apple's TestFlight. Requires Apple Developer account ($99/year).
+                  Install the beta directly on your iPhone — no developer account needed.
                 </p>
-                <div className="bg-black/30 rounded-lg p-3 font-mono text-sm mb-3">
-                  <div className="text-gray-500"># Build for iOS</div>
-                  <div className="text-indigo-300">eas build --profile preview --platform ios</div>
-                  <div className="text-gray-500 mt-2"># Submit to TestFlight</div>
-                  <div className="text-indigo-300">eas submit --platform ios</div>
-                </div>
-                <p className="text-xs text-gray-500">
-                  After submission, add testers by email in App Store Connect. They'll receive TestFlight invites.
-                </p>
+                <a
+                  href="https://testflight.apple.com/join/tvhtWmQ1"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 w-full justify-center px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors"
+                  data-testid="mobile-testflight-link"
+                >
+                  <Apple className="w-4 h-4" />
+                  Join Beta on TestFlight
+                  <ExternalLink className="w-4 h-4" />
+                </a>
               </div>
 
               {/* Option 4: Expo Go (Limited) */}

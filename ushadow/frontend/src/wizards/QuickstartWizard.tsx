@@ -6,9 +6,11 @@ import {
   servicesApi,
   quickstartApi,
   deploymentsApi,
+  settingsApi,
   type QuickstartConfig,
   type CapabilityRequirement,
   type ServiceInfo,
+  type ServiceProfile,
   type DeployTarget,
   type Deployment
 } from '../services/api'
@@ -70,6 +72,7 @@ function QuickstartWizardContent() {
 
   // Container states - built dynamically from API response
   const [containers, setContainers] = useState<ContainerInfo[]>([])
+  const [isProfileChanging, setIsProfileChanging] = useState(false)
 
   // Deployment target (local leader node)
   const [deployTarget, setDeployTarget] = useState<DeployTarget | null>(null)
@@ -123,6 +126,19 @@ function QuickstartWizardContent() {
     }
   }
 
+  const handleProfileSelect = async (profileName: string) => {
+    if (isProfileChanging) return
+    setIsProfileChanging(true)
+    try {
+      await quickstartApi.selectProfile(profileName)
+      await loadQuickstartConfig()
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to apply profile: ${getErrorMessage(error, 'Unknown error')}` })
+    } finally {
+      setIsProfileChanging(false)
+    }
+  }
+
   // Get capabilities that need configuration (have missing keys)
   const getCapabilitiesNeedingSetup = (): CapabilityRequirement[] => {
     if (!quickstartConfig || !quickstartConfig.required_capabilities) return []
@@ -161,6 +177,23 @@ function QuickstartWizardContent() {
     const result = await saveToApi(quickstartApi.saveConfig)
 
     if (result.success) {
+      // Mark configured providers as installed so they appear in wiring board
+      const providerIds = (quickstartConfig?.required_capabilities ?? [])
+        .map((cap: CapabilityRequirement) => cap.selected_provider)
+        .filter((id): id is string => !!id)
+      const uniqueProviderIds = [...new Set(providerIds)]
+      if (uniqueProviderIds.length > 0) {
+        try {
+          const currentConfig = await settingsApi.getConfig()
+          const currentInstalled: string[] = currentConfig.data?.installed_services ?? []
+          const newInstalled = [...new Set([...currentInstalled, ...uniqueProviderIds])]
+          if (newInstalled.length > currentInstalled.length) {
+            await settingsApi.update({ installed_services: newInstalled })
+          }
+        } catch (err) {
+          console.warn('Failed to update installed_services after quickstart save:', err)
+        }
+      }
       updateApiKeysStatus(true)
       setMessage({ type: 'success', text: 'Configuration saved!' })
       setIsSubmitting(false)
@@ -408,6 +441,10 @@ function QuickstartWizardContent() {
           containers={containers}
           onStart={startContainer}
           onRefresh={checkContainerStatuses}
+          profiles={quickstartConfig?.profiles ?? []}
+          activeProfile={quickstartConfig?.active_profile ?? null}
+          onProfileSelect={handleProfileSelect}
+          isProfileChanging={isProfileChanging}
         />
       )}
 
@@ -441,9 +478,21 @@ interface StartServicesStepProps {
   containers: ContainerInfo[]
   onStart: (name: string) => void
   onRefresh: () => void
+  profiles: ServiceProfile[]
+  activeProfile: string | null
+  onProfileSelect: (name: string) => Promise<void>
+  isProfileChanging: boolean
 }
 
-function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStepProps) {
+function StartServicesStep({
+  containers,
+  onStart,
+  onRefresh,
+  profiles,
+  activeProfile,
+  onProfileSelect,
+  isProfileChanging,
+}: StartServicesStepProps) {
   return (
     <div data-testid="quickstart-step-start-services" className="space-y-6">
       <div className="flex items-center justify-between">
@@ -452,7 +501,7 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
             Start Core Services
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Start the OpenMemory and Chronicle containers to enable the web client.
+            Choose a service profile, then start the containers to enable the web client.
           </p>
         </div>
         <button
@@ -464,6 +513,49 @@ function StartServicesStep({ containers, onStart, onRefresh }: StartServicesStep
           <RefreshCw className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Profile picker */}
+      {profiles.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Service Profile</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {profiles.map((profile) => {
+              const isActive = profile.name === activeProfile
+              return (
+                <button
+                  key={profile.name}
+                  data-testid={`quickstart-profile-${profile.name}`}
+                  onClick={() => !isActive && onProfileSelect(profile.name)}
+                  disabled={isProfileChanging}
+                  className={`text-left p-4 rounded-lg border-2 transition-colors ${
+                    isActive
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-700 bg-white dark:bg-gray-800'
+                  } ${isProfileChanging ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium text-gray-900 dark:text-white text-sm">
+                      {profile.display_name}
+                    </span>
+                    {isActive && (
+                      <CheckCircle
+                        data-testid={`quickstart-profile-${profile.name}-active`}
+                        className="w-4 h-4 text-primary-500 shrink-0"
+                      />
+                    )}
+                    {isProfileChanging && !isActive && (
+                      <Loader2 className="w-4 h-4 animate-spin text-gray-400 shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1">
+                    {profile.services.join(', ')}
+                  </p>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-4">
         {containers.map((container) => (

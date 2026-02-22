@@ -566,11 +566,6 @@ class Settings:
             # This is a config_id - use ServiceConfig
             logger.info(f"[Settings] for_deployment({deployment_id}): Found ServiceConfig, template={service_config.template_id}")
 
-            # Extract deployment_target for infrastructure context
-            deployment_target = service_config.deployment_target
-            if deployment_target:
-                logger.info(f"[Settings] Deployment target: {deployment_target}")
-
             # Extract service_id from template_id
             # Template IDs are like "chronicle-backend" (compose services) or "openai" (providers)
             service_id = service_config.template_id

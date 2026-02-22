@@ -1,7 +1,7 @@
 """Feed models for multi-platform content curation.
 
-PostSource: a content platform to fetch posts from (Mastodon, YouTube, etc.).
-Post: a single content item, scored against the user's interests.
+PostSource: config-backed (SettingsStore YAML), NOT a MongoDB document.
+Post: a single content item, scored against the user's interests (MongoDB).
 Interest: a topic/entity derived from the user's stored memories (not persisted).
 """
 
@@ -17,12 +17,17 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Beanie Documents (MongoDB collections)
+# Config-backed model (stored in config.overrides.yaml via SettingsStore)
 # =============================================================================
 
 
-class PostSource(Document):
-    """A content platform to fetch posts from (Mastodon, YouTube, etc.)."""
+class PostSource(BaseModel):
+    """A content platform to fetch posts from (Mastodon, YouTube, etc.).
+
+    Persisted to config.overrides.yaml under feed.sources.
+    YouTube api_key is stored separately in secrets.yaml (api_keys.youtube_api_key)
+    and injected transiently at fetch time — never persisted on this model.
+    """
 
     source_id: str = Field(
         default_factory=lambda: str(uuid4()),
@@ -37,19 +42,38 @@ class PostSource(Document):
         default=None, description="Server URL (required for mastodon)"
     )
     api_key: Optional[str] = Field(
-        default=None, description="API key (required for youtube)"
+        default=None,
+        description="Transient — injected from secrets at fetch time, never persisted",
+        exclude=True,
+    )
+    # Mastodon OAuth2 — when set, fetches from the user's authenticated home timeline
+    # instead of public hashtag timelines.
+    access_token: Optional[str] = Field(
+        default=None, description="Mastodon OAuth2 access token"
     )
     enabled: bool = Field(default=True)
-
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
+# =============================================================================
+# Beanie Documents (MongoDB collections)
+# =============================================================================
+
+
+class MastodonAppCredential(Document):
+    """Cached OAuth2 app credentials per Mastodon instance.
+
+    Mastodon requires registering an application before starting OAuth.
+    We register once per instance URL and cache the client_id / client_secret.
+    """
+
+    instance_url: str = Field(..., description="Normalised instance base URL")
+    client_id: str
+    client_secret: str
+
     class Settings:
-        name = "feed_sources"
-        indexes = [
-            "user_id",
-            "source_id",
-            [("user_id", 1), ("source_id", 1)],
-        ]
+        name = "mastodon_app_credentials"
+        indexes = ["instance_url"]
 
 
 class Post(Document):

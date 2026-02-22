@@ -67,6 +67,9 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
         logger.info(f"Loading templates - defaults: {default_services}, user_installed: {user_installed}, removed: {removed_services}")
         logger.info(f"Loading templates - final installed_names: {installed_names}")
 
+        from src.services.service_orchestrator import get_service_orchestrator
+        orchestrator = get_service_orchestrator()
+
         for service in registry.get_services():
             if source and source != "compose":
                 continue
@@ -85,6 +88,8 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
             # Debug logging
             logger.debug(f"Service: {service.service_name}, installed: {is_installed}, installed_names: {installed_names}")
 
+            needs_setup = await orchestrator._check_needs_setup(service)
+
             templates.append(Template(
                 id=service.service_id,
                 source=TemplateSource.COMPOSE,
@@ -99,6 +104,8 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
                 mode="local",
                 tags=service.tags,
                 installed=is_installed,
+                needs_setup=needs_setup,
+                wizard=service.wizard,
             ))
     except Exception as e:
         logger.warning(f"Failed to load compose templates: {e}")

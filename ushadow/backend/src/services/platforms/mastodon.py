@@ -28,14 +28,25 @@ class MastodonFetcher(PlatformFetcher):
     async def fetch_for_interests(
         self, interests: List[Interest], config: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Fetch posts for all interest hashtags from a Mastodon instance.
+        """Fetch posts from Mastodon.
+
+        If an OAuth access_token is configured, fetches from the user's
+        authenticated home timeline (all accounts they follow).
+        Otherwise falls back to public hashtag timelines derived from
+        the user's interests.
 
         Args:
             interests: User interests with derived hashtags.
-            config: Must contain 'instance_url'.
+            config: Must contain 'instance_url'; optionally 'access_token'.
         """
         instance_url = config["instance_url"]
+        access_token = config.get("access_token") or ""
+        source_id = config.get("source_id", "")
 
+        if access_token:
+            return await _fetch_home_timeline(instance_url, access_token, source_id)
+
+        # Unauthenticated fallback: public hashtag timelines
         hashtags = _collect_hashtags(interests, MAX_HASHTAGS)
         if not hashtags:
             return []
@@ -44,17 +55,13 @@ class MastodonFetcher(PlatformFetcher):
 
         async def _bounded_fetch(hashtag: str) -> List[Dict[str, Any]]:
             async with semaphore:
-                return await _fetch_hashtag_timeline(
-                    instance_url, hashtag
-                )
+                return await _fetch_hashtag_timeline(instance_url, hashtag)
 
         tasks = [_bounded_fetch(tag) for tag in hashtags]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Flatten and deduplicate by Mastodon URI
         seen_ids: Set[str] = set()
         posts: List[Dict[str, Any]] = []
-        source_id = config.get("source_id", "")
 
         for result in results:
             if isinstance(result, Exception):
@@ -70,7 +77,7 @@ class MastodonFetcher(PlatformFetcher):
 
         logger.info(
             f"Fetched {len(posts)} unique posts from {instance_url} "
-            f"({len(tasks)} requests)"
+            f"({len(tasks)} hashtag requests)"
         )
         return posts
 
@@ -137,6 +144,31 @@ def _collect_hashtags(interests: List[Interest], max_count: int) -> List[str]:
             if len(hashtags) >= max_count:
                 return hashtags
     return hashtags
+
+
+async def _fetch_home_timeline(
+    instance_url: str, access_token: str, source_id: str
+) -> List[Dict[str, Any]]:
+    """Fetch the authenticated user's home timeline (accounts they follow)."""
+    url = f"{instance_url.rstrip('/')}/api/v1/timelines/home"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                url, headers=headers, params={"limit": DEFAULT_LIMIT}
+            )
+            resp.raise_for_status()
+            statuses = resp.json()
+            for s in statuses:
+                s["_source_id"] = source_id
+                s["_source_instance"] = instance_url
+            logger.debug(
+                f"Fetched {len(statuses)} posts from home timeline at {instance_url}"
+            )
+            return statuses
+    except httpx.HTTPError as e:
+        logger.warning(f"Failed to fetch home timeline from {instance_url}: {e}")
+        return []
 
 
 async def _fetch_hashtag_timeline(

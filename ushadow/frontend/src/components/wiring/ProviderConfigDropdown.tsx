@@ -16,6 +16,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import {
   ChevronDown,
   ChevronRight,
@@ -490,6 +491,14 @@ export function ProviderConfigDropdown({
   disabled = false,
   error,
 }: ProviderConfigDropdownProps) {
+  const { isEnabled } = useFeatureFlags()
+  const serviceConfigsEnabled = isEnabled('service_configs')
+
+  // When service_configs flag is off, hide saved configs
+  const effectiveOptions: GroupedProviders = serviceConfigsEnabled
+    ? options
+    : { defaults: options.defaults, saved: [] }
+
   const [isOpen, setIsOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 })
   const [activeSubmenu, setActiveSubmenu] = useState<{ option: ProviderOption; top: number } | null>(null)
@@ -594,7 +603,7 @@ export function ProviderConfigDropdown({
     }
   }
 
-  const hasDefaults = options.defaults.length > 0
+  const hasDefaults = effectiveOptions.defaults.length > 0
 
   // Render the selected value display
   const renderSelectedValue = () => {
@@ -779,8 +788,8 @@ export function ProviderConfigDropdown({
             {/* Provider templates with saved configs indented underneath */}
             {hasDefaults && (
               <>
-                {options.defaults.map(templateOption => {
-                  const childConfigs = options.saved.filter(s => s.templateId === templateOption.templateId)
+                {effectiveOptions.defaults.map(templateOption => {
+                  const childConfigs = effectiveOptions.saved.filter(s => s.templateId === templateOption.templateId)
                   return (
                     <div key={templateOption.id}>
                       {/* Template option */}
@@ -863,7 +872,7 @@ export function ProviderConfigDropdown({
             <Submenu
               option={activeSubmenu.option}
               template={getTemplateForOption(activeSubmenu.option)}
-              savedConfigs={options.saved.filter(s => s.templateId === activeSubmenu.option.templateId)}
+              savedConfigs={effectiveOptions.saved.filter(s => s.templateId === activeSubmenu.option.templateId)}
               isEditingConfig={!activeSubmenu.option.isDefault}
               position={{
                 top: activeSubmenu.top,

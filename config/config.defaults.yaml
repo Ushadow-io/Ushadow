@@ -147,3 +147,28 @@ default_services:
   - chronicle-backend
   - chronicle-workers
   - mem0
+
+# Service Profiles
+# Named sets of default services selectable via: ./dev.sh <profile>
+# The chosen profile's services are written to config.overrides.yaml as
+# default_services, overriding the list above.
+service_profiles:
+  default:
+    display_name: "Chronicle + Memory"
+    services:
+      - chronicle-backend
+      - chronicle-workers
+      - mem0
+  mycelia:
+    display_name: "Mycelia + Memory"
+    services:
+      - mycelia-backend
+      - mycelia-frontend
+      - mycelia-python-worker
+      - mem0
+
+# Feed Configuration
+# Sources are managed here (config.overrides.yaml for user additions).
+# YouTube API key is stored in secrets.yaml under api_keys.youtube_api_key.
+feed:
+  sources: []
