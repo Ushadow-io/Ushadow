@@ -6,12 +6,12 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Radio, Loader2, MessageSquare, Play } from 'lucide-react'
+import { Radio, Loader2, MessageSquare, Play, Cloud } from 'lucide-react'
 import Modal from '../Modal'
 import { SecretInput } from '../settings/SecretInput'
 import type { SourceCreateData } from '../../services/feedApi'
 
-type PlatformType = 'mastodon' | 'youtube'
+type PlatformType = 'mastodon' | 'youtube' | 'bluesky' | 'bluesky_timeline'
 
 interface AddSourceModalProps {
   isOpen: boolean
@@ -26,6 +26,7 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
   const [name, setName] = useState('')
   const [instanceUrl, setInstanceUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [handle, setHandle] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   // Sync platform when modal opens with a new default
@@ -39,6 +40,7 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
     setName('')
     setInstanceUrl('')
     setApiKey('')
+    setHandle('')
     setError(null)
   }
 
@@ -47,8 +49,10 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
     resetForm()
   }
 
-  const isValid = platformType === 'mastodon'
-    ? instanceUrl.trim().length > 0
+  const isValid =
+    platformType === 'mastodon' ? instanceUrl.trim().length > 0
+    : platformType === 'bluesky' ? true
+    : platformType === 'bluesky_timeline' ? handle.trim().length > 0 && apiKey.trim().length > 0
     : apiKey.trim().length > 0
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -65,6 +69,25 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
           name: name.trim() || url.replace(/^https?:\/\//, ''),
           platform_type: 'mastodon',
           instance_url: url,
+        })
+      } else if (platformType === 'bluesky') {
+        const pdsUrl = instanceUrl.trim()
+        let url = pdsUrl
+        if (url && !url.startsWith('http')) url = `https://${url}`
+        url = url.replace(/\/+$/, '')
+
+        await onAdd({
+          name: name.trim() || 'Bluesky',
+          platform_type: 'bluesky',
+          instance_url: url || undefined,
+        })
+      } else if (platformType === 'bluesky_timeline') {
+        const h = handle.trim().replace(/^@/, '')  // normalise @user.bsky.social → user.bsky.social
+        await onAdd({
+          name: name.trim() || `@${h}`,
+          platform_type: 'bluesky_timeline',
+          handle: h,
+          api_key: apiKey.trim(),
         })
       } else {
         await onAdd({
@@ -112,6 +135,32 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
             </button>
             <button
               type="button"
+              onClick={() => handlePlatformChange('bluesky')}
+              className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                platformType === 'bluesky'
+                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                  : 'border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+              }`}
+              data-testid="add-source-platform-bluesky"
+            >
+              <Cloud className="h-4 w-4" />
+              Bluesky
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePlatformChange('bluesky_timeline')}
+              className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                platformType === 'bluesky_timeline'
+                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                  : 'border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+              }`}
+              data-testid="add-source-platform-bluesky-timeline"
+            >
+              <Cloud className="h-4 w-4" />
+              Following
+            </button>
+            <button
+              type="button"
               onClick={() => handlePlatformChange('youtube')}
               className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
                 platformType === 'youtube'
@@ -145,6 +194,58 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
             <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
               Any Mastodon-compatible server (e.g., mastodon.social, fosstodon.org)
             </p>
+          </div>
+        ) : platformType === 'bluesky' ? (
+          <div>
+            <label htmlFor="source-url" className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+              PDS URL <span className="text-neutral-400 font-normal">(optional)</span>
+            </label>
+            <input
+              id="source-url"
+              type="text"
+              placeholder="bsky.social"
+              value={instanceUrl}
+              onChange={(e) => setInstanceUrl(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 text-sm focus:ring-2 focus:ring-primary-500 focus:outline-none"
+              data-testid="add-source-url-input"
+            />
+            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+              Leave blank to use the default public Bluesky AppView. Posts are fetched
+              by your interest hashtags — no account required.
+            </p>
+          </div>
+        ) : platformType === 'bluesky_timeline' ? (
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="bsky-handle" className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                Bluesky Handle
+              </label>
+              <input
+                id="bsky-handle"
+                type="text"
+                placeholder="you.bsky.social"
+                value={handle}
+                onChange={(e) => setHandle(e.target.value)}
+                required
+                className="w-full px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 text-sm focus:ring-2 focus:ring-primary-500 focus:outline-none"
+                data-testid="add-source-handle-input"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                App Password
+              </label>
+              <SecretInput
+                id="bsky-app-password"
+                name="apiKey"
+                value={apiKey}
+                onChange={setApiKey}
+                placeholder="xxxx-xxxx-xxxx-xxxx"
+              />
+              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                Create one at Settings → App Passwords on bsky.app. Never use your main password.
+              </p>
+            </div>
           </div>
         ) : (
           <div>
@@ -182,7 +283,12 @@ export default function AddSourceModal({ isOpen, onClose, onAdd, isAdding, defau
           <input
             id="source-name"
             type="text"
-            placeholder={platformType === 'mastodon' ? 'Auto-detected from URL' : 'YouTube'}
+            placeholder={
+              platformType === 'mastodon' ? 'Auto-detected from URL'
+              : platformType === 'bluesky' ? 'Bluesky'
+              : platformType === 'bluesky_timeline' ? `@${handle || 'you.bsky.social'}`
+              : 'YouTube'
+            }
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 text-sm focus:ring-2 focus:ring-primary-500 focus:outline-none"
