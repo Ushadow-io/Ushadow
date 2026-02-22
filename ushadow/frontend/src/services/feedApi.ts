@@ -12,7 +12,7 @@ export interface FeedPost {
   user_id: string
   source_id: string
   external_id: string
-  platform_type: string // 'mastodon' | 'youtube'
+  platform_type: string // 'mastodon' | 'youtube' | 'bluesky' | 'bluesky_timeline'
   author_handle: string
   author_display_name: string
   author_avatar: string | null
@@ -32,6 +32,8 @@ export interface FeedPost {
   view_count?: number | null
   like_count?: number | null
   duration?: string | null
+  // Bluesky-specific (optional — null for non-bluesky)
+  bluesky_cid?: string | null
   // Scoring & interaction
   relevance_score: number
   matched_interests: string[]
@@ -56,8 +58,14 @@ export interface FeedSource {
   platform_type: string
   instance_url: string | null
   api_key: string | null
+  handle: string | null
   enabled: boolean
   created_at: string
+}
+
+export interface BlueskyComposeData {
+  source_id: string
+  text: string
 }
 
 export interface FeedResponse {
@@ -83,6 +91,7 @@ export interface SourceCreateData {
   platform_type: string
   instance_url?: string
   api_key?: string
+  handle?: string
 }
 
 export const feedApi = {
@@ -127,4 +136,11 @@ export const feedApi = {
     api.get<{ total_posts: number; unseen_posts: number; bookmarked_posts: number; sources_count: number }>(
       '/api/feed/stats'
     ),
+
+  // Bluesky compose
+  bskyPost: (data: BlueskyComposeData) =>
+    api.post<{ uri: string; cid: string }>('/api/feed/bluesky/post', data),
+
+  bskyReply: (postId: string, data: BlueskyComposeData) =>
+    api.post<{ uri: string; cid: string }>(`/api/feed/bluesky/reply/${postId}`, data),
 }

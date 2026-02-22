@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Type
 
 from src.models.feed import Interest, Post, PostSource
 from src.services.platforms import PlatformFetcher
+from src.services.platforms.bluesky import BlueskyFetcher, BlueskyTimelineFetcher
 from src.services.platforms.mastodon import MastodonFetcher
 from src.services.platforms.youtube import YouTubeFetcher
 
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 _STRATEGIES: Dict[str, Type[PlatformFetcher]] = {
     "mastodon": MastodonFetcher,
     "youtube": YouTubeFetcher,
+    "bluesky": BlueskyFetcher,
+    "bluesky_timeline": BlueskyTimelineFetcher,
 }
 
 
@@ -81,6 +84,6 @@ def _source_to_config(source: PostSource) -> Dict[str, Any]:
         "source_id": source.source_id,
         "instance_url": source.instance_url or "",
         "api_key": source.api_key or "",
-        "access_token": source.access_token or "",
+        "handle": source.handle or "",
         "platform_type": source.platform_type,
     }
