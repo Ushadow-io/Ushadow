@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, Settings, Save, FolderGit2, Terminal, Trello } from 'lucide-react'
+import { X, Settings, Save, FolderGit2, Terminal, Trello, Bot } from 'lucide-react'
 import { tauri, type LauncherSettings } from '../hooks/useTauri'
 import { useAppStore } from '../store/appStore'
 
@@ -9,7 +9,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
-  const { multiProjectMode, setMultiProjectMode, kanbanEnabled, setKanbanEnabled } = useAppStore()
+  const { multiProjectMode, setMultiProjectMode, kanbanEnabled, setKanbanEnabled, claudeEnabled, setClaudeEnabled } = useAppStore()
   const [settings, setSettings] = useState<LauncherSettings>({
     default_admin_email: null,
     default_admin_password: null,
@@ -241,6 +241,35 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               </div>
               <p className="text-xs text-text-muted">
                 Enable ticket tracking with a Kanban board. Create tickets, link them to worktrees, and manage development workflows.
+              </p>
+            </div>
+
+            {/* Claude Sessions */}
+            <div className="p-4 bg-surface-800/50 rounded-lg border border-white/5">
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-primary-400" />
+                  <label className="text-sm font-medium">Claude Sessions</label>
+                  <span className="text-xs bg-primary-500/20 text-primary-400 px-2 py-0.5 rounded">
+                    Experimental
+                  </span>
+                </div>
+                <button
+                  onClick={() => setClaudeEnabled(!claudeEnabled)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    claudeEnabled ? 'bg-primary-500' : 'bg-surface-600'
+                  }`}
+                  data-testid="toggle-claude-enabled"
+                >
+                  <div
+                    className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                      claudeEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-xs text-text-muted">
+                Monitor Claude Code sessions across all worktrees. View live transcripts, approve tool requests, and track progress.
               </p>
             </div>
 

@@ -42,6 +42,7 @@ function App() {
     setWorktreesDir,
     multiProjectMode,
     kanbanEnabled,
+    claudeEnabled,
     projects,
     activeProjectId,
   } = useAppStore()
@@ -117,10 +118,10 @@ function App() {
   const environmentNames = discovery?.environments.map(e => e.name) ?? []
   const tmuxStatuses = useTmuxMonitoring(environmentNames, isWindowFocused && environmentNames.length > 0)
 
-  // Claude Code session monitoring (always active, file reads are cheap)
+  // Claude Code session monitoring (only polls when feature flag is enabled)
   const environments = discovery?.environments ?? []
   const { sessions: claudeSessions, hooksInstalled, installing: installingHooks, error: hooksError, installSuccess: hooksInstallSuccess, installHooks } =
-    useClaudeSessions(effectiveProjectRoot, environments)
+    useClaudeSessions(effectiveProjectRoot, environments, claudeEnabled)
 
   // Infrastructure service selection
   const [selectedInfraServices, setSelectedInfraServices] = useState<string[]>([])
@@ -1571,21 +1572,23 @@ function App() {
                 Kanban
               </button>
             )}
-            <button
-              onClick={() => setAppMode('claude')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${
-                appMode === 'claude' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
-              data-testid="nav-claude"
-            >
-              <Bot className="w-3 h-3" />
-              Claude
-              {claudeSessions.filter(s => s.status !== 'Ended').length > 0 && (
-                <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-yellow-500/30 text-yellow-400 text-[10px] font-bold leading-none">
-                  {claudeSessions.filter(s => s.status !== 'Ended').length}
-                </span>
-              )}
-            </button>
+            {claudeEnabled && (
+              <button
+                onClick={() => setAppMode('claude')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${
+                  appMode === 'claude' ? 'bg-surface-600 text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                }`}
+                data-testid="nav-claude"
+              >
+                <Bot className="w-3 h-3" />
+                Claude
+                {claudeSessions.filter(s => s.status !== 'Ended').length > 0 && (
+                  <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-yellow-500/30 text-yellow-400 text-[10px] font-bold leading-none">
+                    {claudeSessions.filter(s => s.status !== 'Ended').length}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Tmux Manager */}
@@ -1784,7 +1787,7 @@ function App() {
               />
             )
           })()
-        ) : appMode === 'claude' ? (
+        ) : appMode === 'claude' && claudeEnabled ? (
           /* Claude Sessions Page */
           <ClaudeSessionsPanel
             sessions={claudeSessions}
