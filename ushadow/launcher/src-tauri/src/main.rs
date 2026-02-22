@@ -8,6 +8,9 @@ mod config;
 mod models;
 
 use commands::{AppState, check_prerequisites, discover_environments, get_os_type,
+    // Claude session monitoring
+    install_claude_hooks, read_claude_sessions, get_hooks_installed, read_claude_transcript,
+    send_claude_approval,
     discover_environments_with_config, discover_environments_v2,
     start_containers, stop_containers, get_container_status,
     start_infrastructure, stop_infrastructure, restart_infrastructure,
@@ -252,6 +255,12 @@ fn main() {
             scan_all_env_vars,
             // Infrastructure discovery
             get_infra_services_from_compose,
+            // Claude session monitoring
+            install_claude_hooks,
+            read_claude_sessions,
+            get_hooks_installed,
+            read_claude_transcript,
+            send_claude_approval,
             // OAuth server
             start_oauth_server,
             wait_for_oauth_callback,
