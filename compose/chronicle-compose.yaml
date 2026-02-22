@@ -47,7 +47,7 @@ x-ushadow:
 
 services:
   chronicle-backend:
-    image: ghcr.io/ushadow-io/chronicle/backend:latest
+    image: ghcr.io/ushadow-io/chronicle-backend:latest
     build:
       context: ../chronicle/backends/advanced
       dockerfile: Dockerfile
@@ -127,7 +127,7 @@ services:
           memory: 2G
 
   chronicle-workers:
-    image: ghcr.io/ushadow-io/chronicle/backend:latest
+    image: ghcr.io/ushadow-io/chronicle-backend:latest
     build:
       context: ../chronicle/backends/advanced
       dockerfile: Dockerfile
@@ -187,7 +187,7 @@ services:
     restart: unless-stopped
 
   chronicle-webui:
-    image: ghcr.io/ushadow-io/chronicle/webui:latest
+    image: ghcr.io/ushadow-io/chronicle-webui:latest
     build:
       context: ../chronicle/backends/advanced/webui
       dockerfile: Dockerfile
