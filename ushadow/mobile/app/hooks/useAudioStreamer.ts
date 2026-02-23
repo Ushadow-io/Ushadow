@@ -26,6 +26,7 @@ export interface UseAudioStreamer {
   cancelRetry: () => void;
   sendAudio: (audioBytes: Uint8Array) => void;
   getWebSocketReadyState: () => number | undefined;
+  getBufferStatus: () => { bufferedChunks: number; droppedChunks: number; isBuffering: boolean };
 }
 
 export interface RelayStatus {
@@ -79,11 +80,15 @@ const createAudioStartFormat = (
 };
 
 // Reconnection constants
-const MAX_RECONNECT_ATTEMPTS = 5;
+const MAX_RECONNECT_ATTEMPTS = 8;
 const MAX_SERVER_ERRORS = 5;
-const BASE_RECONNECT_MS = 3000;
+const BASE_RECONNECT_MS = 1000;  // Reduced from 3000ms for faster foreground reconnect
 const MAX_RECONNECT_MS = 30000;
 const HEARTBEAT_MS = 25000;
+
+// Audio buffer constants for background gap bridging
+const AUDIO_BUFFER_MAX_CHUNKS = 150;  // ~15 seconds of audio at 100ms chunks
+const AUDIO_BUFFER_MAX_AGE_MS = 20000; // Discard buffered chunks older than 20s
 
 export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
   const { onLog, onRelayStatus } = options || {};
@@ -103,6 +108,11 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   const reconnectAttemptsRef = useRef<number>(0);
   const serverErrorCountRef = useRef<number>(0);
   const audioChunkCountRef = useRef<number>(0);
+
+  // Audio buffer for bridging background gaps
+  const audioBufferRef = useRef<Array<{ data: Uint8Array; timestamp: number }>>([]);
+  const droppedChunkCountRef = useRef<number>(0);
+  const backgroundDisconnectTimeRef = useRef<number | null>(null);
 
   // Guard state updates after unmount
   const mountedRef = useRef<boolean>(true);
@@ -170,6 +180,11 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
     onLog?.('disconnected', 'Manually stopped streaming');
 
+    // Clear audio buffer
+    audioBufferRef.current = [];
+    droppedChunkCountRef.current = 0;
+    backgroundDisconnectTimeRef.current = null;
+
     setStateSafe(setIsStreaming, false);
     setStateSafe(setIsConnecting, false);
     setStateSafe(setIsRetrying, false);
@@ -192,6 +207,42 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
   }, [setStateSafe]);
+
+  // Flush buffered audio chunks after reconnection
+  const flushAudioBuffer = useCallback(async () => {
+    const buffer = audioBufferRef.current;
+    if (buffer.length === 0) return;
+
+    const now = Date.now();
+    // Filter out chunks that are too old
+    const validChunks = buffer.filter(chunk => (now - chunk.timestamp) < AUDIO_BUFFER_MAX_AGE_MS);
+    const expiredCount = buffer.length - validChunks.length;
+
+    console.log(`[AudioStreamer] Flushing audio buffer: ${validChunks.length} chunks (${expiredCount} expired, ${droppedChunkCountRef.current} dropped during gap)`);
+
+    const audioFormat = currentCodecRef.current === 'opus' ? AUDIO_FORMAT_OPUS : AUDIO_FORMAT_PCM;
+    let sentCount = 0;
+
+    for (const chunk of validChunks) {
+      if (websocketRef.current?.readyState === WebSocket.OPEN) {
+        try {
+          const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: audioFormat };
+          await sendWyomingEvent(audioChunkEvent, chunk.data);
+          sentCount++;
+        } catch (e) {
+          console.warn('[AudioStreamer] Error flushing buffered chunk:', (e as Error).message);
+          break;
+        }
+      } else {
+        console.warn('[AudioStreamer] WebSocket closed during buffer flush, stopping');
+        break;
+      }
+    }
+
+    console.log(`[AudioStreamer] Buffer flush complete: ${sentCount}/${validChunks.length} chunks sent`);
+    audioBufferRef.current = [];
+    droppedChunkCountRef.current = 0;
+  }, [sendWyomingEvent]);
 
   // Reconnect with exponential backoff
   const attemptReconnect = useCallback(() => {
@@ -291,7 +342,18 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
         ws.onopen = async () => {
           console.log('[AudioStreamer] WebSocket open');
-          onLog?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
+
+          // Log background gap diagnostics if reconnecting
+          if (backgroundDisconnectTimeRef.current !== null) {
+            const gapDurationMs = Date.now() - backgroundDisconnectTimeRef.current;
+            const bufferedChunks = audioBufferRef.current.length;
+            const droppedChunks = droppedChunkCountRef.current;
+            console.log(`[AudioStreamer] RECONNECTED after background gap: ${gapDurationMs}ms, buffered=${bufferedChunks}, dropped=${droppedChunks}`);
+            onLog?.('connected', 'Reconnected after background gap', `Gap: ${Math.round(gapDurationMs / 1000)}s, buffered: ${bufferedChunks}, dropped: ${droppedChunks}`);
+            backgroundDisconnectTimeRef.current = null;
+          } else {
+            onLog?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
+          }
 
           // Set binary type to arraybuffer (matches web implementation)
           if (ws.binaryType !== 'arraybuffer') {
@@ -326,6 +388,15 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
             console.log('[AudioStreamer] audio-start sent successfully');
           } catch (e) {
             console.error('[AudioStreamer] audio-start failed:', e);
+          }
+
+          // Flush any audio buffered during background gap
+          if (audioBufferRef.current.length > 0) {
+            try {
+              await flushAudioBuffer();
+            } catch (e) {
+              console.warn('[AudioStreamer] Buffer flush failed:', (e as Error).message);
+            }
           }
 
           resolve();
@@ -407,11 +478,13 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         reject(new Error(msg));
       }
     });
-  }, [attemptReconnect, sendWyomingEvent, setStateSafe, stopStreaming]);
+  }, [attemptReconnect, sendWyomingEvent, setStateSafe, stopStreaming, flushAudioBuffer]);
 
-  // Send audio data
+  // Send audio data (with buffering when WebSocket is not open)
   const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
-    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
+    if (audioBytes.length === 0) return;
+
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
       try {
         // Log first and every 50th chunk
         audioChunkCountRef.current++;
@@ -427,16 +500,43 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         console.error('[AudioStreamer] sendAudio error:', msg);
         setStateSafe(setError, msg);
       }
+    } else if (!manuallyStoppedRef.current && currentUrlRef.current) {
+      // WebSocket not open but we should be streaming - buffer the audio
+      if (backgroundDisconnectTimeRef.current === null) {
+        backgroundDisconnectTimeRef.current = Date.now();
+        console.log('[AudioStreamer] WebSocket not open, starting to buffer audio chunks');
+      }
+
+      if (audioBufferRef.current.length < AUDIO_BUFFER_MAX_CHUNKS) {
+        audioBufferRef.current.push({ data: audioBytes, timestamp: Date.now() });
+      } else {
+        // Buffer full, count dropped chunks for diagnostics
+        droppedChunkCountRef.current++;
+        if (droppedChunkCountRef.current === 1 || droppedChunkCountRef.current % 50 === 0) {
+          console.warn(`[AudioStreamer] Audio buffer full, dropped ${droppedChunkCountRef.current} chunks. Buffer size: ${AUDIO_BUFFER_MAX_CHUNKS}`);
+        }
+      }
     } else {
-      console.log(
-        `[AudioStreamer] NOT sending audio. hasWS=${!!websocketRef.current
-        } ready=${websocketRef.current?.readyState === WebSocket.OPEN
-        } bytes=${audioBytes.length}`
-      );
+      // Log only occasionally to avoid spam
+      audioChunkCountRef.current++;
+      if (audioChunkCountRef.current % 100 === 0) {
+        console.log(
+          `[AudioStreamer] NOT sending audio (stopped). hasWS=${!!websocketRef.current
+          } ready=${websocketRef.current?.readyState
+          } manuallyStopped=${manuallyStoppedRef.current}`
+        );
+      }
     }
   }, [sendWyomingEvent, setStateSafe]);
 
   const getWebSocketReadyState = useCallback(() => websocketRef.current?.readyState, []);
+
+  // Get current audio buffer status (for diagnostics)
+  const getBufferStatus = useCallback(() => ({
+    bufferedChunks: audioBufferRef.current.length,
+    droppedChunks: droppedChunkCountRef.current,
+    isBuffering: backgroundDisconnectTimeRef.current !== null,
+  }), []);
 
   // Connectivity-triggered reconnect
   useEffect(() => {
@@ -479,5 +579,6 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     cancelRetry,
     sendAudio,
     getWebSocketReadyState,
+    getBufferStatus,
   };
 };

@@ -9,6 +9,7 @@ import { useAudioStreamer } from './useAudioStreamer';
 import { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
 import { useAppLifecycle } from './useAppLifecycle';
 import { useLiveActivity } from './useLiveActivity';
+import { addPersistentLog } from '../services/persistentLogger';
 
 export interface UseStreaming {
   // Combined state
@@ -48,6 +49,7 @@ export const useStreaming = (): UseStreaming => {
     cancelRetry,
     sendAudio,
     getWebSocketReadyState,
+    getBufferStatus,
   } = useAudioStreamer();
 
   // Live Activity (iOS 16.2+) — lock screen + Dynamic Island recording indicator
@@ -108,17 +110,84 @@ export const useStreaming = (): UseStreaming => {
 
   // Reconnect WebSocket when app returns to foreground (mic keeps recording during standby)
   useAppLifecycle({
-    onForeground: useCallback(() => {
+    onForeground: useCallback((backgroundDurationMs: number) => {
+      const wsState = getWebSocketReadyState();
+      const wsStateLabel = wsState === WebSocket.OPEN ? 'OPEN'
+        : wsState === WebSocket.CONNECTING ? 'CONNECTING'
+        : wsState === WebSocket.CLOSING ? 'CLOSING'
+        : wsState === WebSocket.CLOSED ? 'CLOSED'
+        : 'UNDEFINED';
+      const bufferStatus = getBufferStatus();
+
+      // Always log foreground transition diagnostics when streaming
+      if (shouldBeStreamingRef.current) {
+        const diagnostics = {
+          backgroundDurationMs,
+          backgroundDurationSec: Math.round(backgroundDurationMs / 1000),
+          webSocketState: wsStateLabel,
+          webSocketReadyState: wsState,
+          shouldBeStreaming: shouldBeStreamingRef.current,
+          hasStreamUrl: !!streamUrlRef.current,
+          bufferedChunks: bufferStatus.bufferedChunks,
+          droppedChunks: bufferStatus.droppedChunks,
+          isBuffering: bufferStatus.isBuffering,
+          codec: streamCodecRef.current,
+          mode: streamModeRef.current,
+        };
+
+        console.log('[Streaming] App foregrounded while streaming - diagnostics:', JSON.stringify(diagnostics));
+        addPersistentLog('streaming', 'App foregrounded during stream', diagnostics);
+      }
+
       if (
         shouldBeStreamingRef.current &&
         streamUrlRef.current &&
-        getWebSocketReadyState() !== WebSocket.OPEN
+        wsState !== WebSocket.OPEN
       ) {
-        console.log('[Streaming] App foregrounded: reconnecting WebSocket (mic still recording)');
+        console.log(`[Streaming] App foregrounded: reconnecting WebSocket (was in background ${Math.round(backgroundDurationMs / 1000)}s, mic still recording, ws=${wsStateLabel})`);
+        addPersistentLog('connection', 'Foreground reconnect attempt', {
+          backgroundDurationMs,
+          previousWsState: wsStateLabel,
+          bufferedChunks: bufferStatus.bufferedChunks,
+          droppedChunks: bufferStatus.droppedChunks,
+        });
+
         wsStart(streamUrlRef.current, streamModeRef.current, streamCodecRef.current)
-          .catch(err => console.warn('[Streaming] Foreground reconnect failed:', err));
+          .then(() => {
+            console.log('[Streaming] Foreground reconnect succeeded');
+            addPersistentLog('connection', 'Foreground reconnect succeeded', {
+              backgroundDurationMs,
+              bufferedChunksFlushed: bufferStatus.bufferedChunks,
+            });
+          })
+          .catch(err => {
+            const errorMsg = (err as Error).message || String(err);
+            console.warn('[Streaming] Foreground reconnect failed:', errorMsg);
+            addPersistentLog('error', 'Foreground reconnect failed', {
+              error: errorMsg,
+              backgroundDurationMs,
+              willRetry: true,
+            });
+          });
+      } else if (shouldBeStreamingRef.current && wsState === WebSocket.OPEN) {
+        console.log('[Streaming] App foregrounded: WebSocket still open, no reconnect needed');
+        addPersistentLog('streaming', 'Foreground - WebSocket still connected', {
+          backgroundDurationMs,
+        });
       }
-    }, [wsStart, getWebSocketReadyState]),
+    }, [wsStart, getWebSocketReadyState, getBufferStatus]),
+    onBackground: useCallback(() => {
+      if (shouldBeStreamingRef.current) {
+        const wsState = getWebSocketReadyState();
+        const wsStateLabel = wsState === WebSocket.OPEN ? 'OPEN' : String(wsState);
+        console.log(`[Streaming] App backgrounded while streaming (ws=${wsStateLabel})`);
+        addPersistentLog('streaming', 'App backgrounded during stream', {
+          webSocketState: wsStateLabel,
+          codec: streamCodecRef.current,
+          mode: streamModeRef.current,
+        });
+      }
+    }, [getWebSocketReadyState]),
   });
 
   // Stop streaming: stop recording, then disconnect WebSocket

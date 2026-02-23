@@ -38,6 +38,8 @@ import { useOmiConnection } from '../../contexts/OmiConnectionContext';
 import { useDeviceConnection } from '../../hooks/useDeviceConnection';
 import { useAudioListener } from '../../hooks/useAudioListener';
 import { useAudioStreamer } from '../../hooks/useAudioStreamer';
+import { useAppLifecycle } from '../../hooks/useAppLifecycle';
+import { addPersistentLog } from '../../services/persistentLogger';
 
 // Storage
 import {
@@ -113,6 +115,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Session tracking
   const currentSessionIdRef = useRef<string | null>(null);
 
+  // OMI stream URL tracking for foreground reconnection
+  const omiStreamUrlRef = useRef<string | null>(null);
+  const omiShouldBeStreamingRef = useRef<boolean>(false);
+
   // OMI connection context
   const omiConnection = useOmiConnection();
 
@@ -161,6 +167,68 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         onSessionUpdate(currentSessionIdRef.current, status);
       }
     },
+  });
+
+  // OMI foreground reconnection - reconnect WebSocket when app returns from background
+  useAppLifecycle({
+    onForeground: useCallback((backgroundDurationMs: number) => {
+      if (
+        selectedSource.type === 'omi' &&
+        omiShouldBeStreamingRef.current &&
+        omiStreamUrlRef.current
+      ) {
+        const wsState = omiStreamer.getWebSocketReadyState();
+        const wsStateLabel = wsState === WebSocket.OPEN ? 'OPEN'
+          : wsState === WebSocket.CONNECTING ? 'CONNECTING'
+          : wsState === WebSocket.CLOSING ? 'CLOSING'
+          : wsState === WebSocket.CLOSED ? 'CLOSED'
+          : 'UNDEFINED';
+        const bufferStatus = omiStreamer.getBufferStatus();
+
+        const diagnostics = {
+          backgroundDurationMs,
+          backgroundDurationSec: Math.round(backgroundDurationMs / 1000),
+          webSocketState: wsStateLabel,
+          bufferedChunks: bufferStatus.bufferedChunks,
+          droppedChunks: bufferStatus.droppedChunks,
+          bleConnected: connectedDeviceId ? true : false,
+        };
+
+        console.log('[UnifiedStreaming] OMI foreground reconnect - diagnostics:', JSON.stringify(diagnostics));
+        addPersistentLog('streaming', 'OMI foreground reconnect check', diagnostics);
+
+        if (wsState !== WebSocket.OPEN) {
+          console.log(`[UnifiedStreaming] OMI: Reconnecting WebSocket after ${Math.round(backgroundDurationMs / 1000)}s in background (ws=${wsStateLabel})`);
+          addPersistentLog('connection', 'OMI foreground WebSocket reconnect', diagnostics);
+
+          omiStreamer.startStreaming(omiStreamUrlRef.current!, 'streaming', 'opus')
+            .then(() => {
+              console.log('[UnifiedStreaming] OMI foreground reconnect succeeded');
+              addPersistentLog('connection', 'OMI foreground reconnect succeeded', { backgroundDurationMs });
+            })
+            .catch(err => {
+              const errorMsg = (err as Error).message || String(err);
+              console.warn('[UnifiedStreaming] OMI foreground reconnect failed:', errorMsg);
+              addPersistentLog('error', 'OMI foreground reconnect failed', {
+                error: errorMsg,
+                backgroundDurationMs,
+              });
+            });
+        } else {
+          console.log('[UnifiedStreaming] OMI: WebSocket still open after background, no reconnect needed');
+        }
+      }
+    }, [selectedSource.type, omiStreamer, connectedDeviceId]),
+    onBackground: useCallback(() => {
+      if (selectedSource.type === 'omi' && omiShouldBeStreamingRef.current) {
+        const wsState = omiStreamer.getWebSocketReadyState();
+        console.log(`[UnifiedStreaming] OMI: App backgrounded while streaming (ws=${wsState === WebSocket.OPEN ? 'OPEN' : wsState})`);
+        addPersistentLog('streaming', 'OMI app backgrounded during stream', {
+          webSocketState: wsState,
+          bleConnected: connectedDeviceId ? true : false,
+        });
+      }
+    }, [selectedSource.type, omiStreamer, connectedDeviceId]),
   });
 
   // Combined state
@@ -449,6 +517,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (selectedSource.type === 'microphone') {
         await phoneStreaming.stopStreaming();
       } else {
+        omiShouldBeStreamingRef.current = false;
+        omiStreamUrlRef.current = null;
         await stopAudioListener();
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
@@ -533,6 +603,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         const codec = 'opus';
         console.log('[UnifiedStreaming] OMI device - using Opus codec');
 
+        // Store URL for foreground reconnection
+        omiStreamUrlRef.current = streamUrl;
+        omiShouldBeStreamingRef.current = true;
+
         // Start WebSocket with codec
         await omiStreamer.startStreaming(streamUrl, 'streaming', codec);
 
@@ -555,6 +629,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
         currentSessionIdRef.current = null;
       }
+
+      // Clear OMI streaming refs on error
+      omiShouldBeStreamingRef.current = false;
+      omiStreamUrlRef.current = null;
     }
   }, [
     selectedSource,
@@ -574,6 +652,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (selectedSource.type === 'microphone') {
         await phoneStreaming.stopStreaming();
       } else {
+        omiShouldBeStreamingRef.current = false;
+        omiStreamUrlRef.current = null;
         await stopAudioListener();
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
