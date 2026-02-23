@@ -64,18 +64,38 @@ TaskManager.defineTask(BACKGROUND_BLUETOOTH_TASK, async () => {
     console.log('[BackgroundTask] Connection state:', connectionState);
 
     if (connectionState?.isStreaming) {
-      console.log('[BackgroundTask] App is streaming, connections should be maintained');
+      const timeSinceStateUpdate = connectionState.timestamp
+        ? Date.now() - new Date(connectionState.timestamp).getTime()
+        : null;
+
+      console.log('[BackgroundTask] App is streaming, monitoring connection state');
+      console.log('[BackgroundTask] Connection details:', {
+        isConnected: connectionState.isConnected,
+        isStreaming: connectionState.isStreaming,
+        deviceId: connectionState.deviceId,
+        source: connectionState.source,
+        timeSinceLastUpdateMs: timeSinceStateUpdate,
+        checkNumber: checkCount + 1,
+      });
 
       // Note: We can't directly interact with BLE or WebSocket from here
       // The main purpose is to:
-      // 1. Keep the JS thread alive
-      // 2. Log that we're monitoring
-      // 3. Store diagnostic data
+      // 1. Keep the JS thread alive so iOS doesn't suspend the app
+      // 2. Log diagnostic data that persists across background periods
+      // 3. Track how often the background task fires (iOS ~15min intervals)
       //
       // Actual reconnection happens in foreground (useAppLifecycle)
 
-      // Future enhancement: Could use native modules to check BLE state
-      // For now, we just keep the task alive
+      // Store diagnostic snapshot for debugging
+      await AsyncStorage.setItem(
+        '@background_task_last_snapshot',
+        JSON.stringify({
+          timestamp: now,
+          checkNumber: checkCount + 1,
+          connectionState,
+          timeSinceStateUpdateMs: timeSinceStateUpdate,
+        })
+      );
     } else {
       console.log('[BackgroundTask] App not streaming, no action needed');
     }
@@ -222,6 +242,7 @@ export const updateConnectionState = async (state: {
   isConnected: boolean;
   isStreaming: boolean;
   deviceId?: string;
+  source?: 'microphone' | 'omi';
 }): Promise<void> => {
   try {
     await AsyncStorage.setItem(
@@ -244,6 +265,7 @@ export const getStoredConnectionState = async (): Promise<{
   isConnected: boolean;
   isStreaming: boolean;
   deviceId?: string;
+  source?: 'microphone' | 'omi';
   timestamp?: string;
 } | null> => {
   try {

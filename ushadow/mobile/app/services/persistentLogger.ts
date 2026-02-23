@@ -7,11 +7,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LOG_STORAGE_KEY = '@persistent_logs';
-const MAX_LOGS = 100;
+const MAX_LOGS = 200;
 
 export interface PersistentLogEntry {
   timestamp: string;
-  type: 'lifecycle' | 'connection' | 'health' | 'background' | 'error';
+  type: 'lifecycle' | 'connection' | 'health' | 'background' | 'error' | 'streaming';
   message: string;
   details?: any;
 }

@@ -24,7 +24,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import { addPersistentLog } from '../services/persistentLogger';
 
 interface UseAppLifecycleOptions {
-  onForeground?: () => void;
+  onForeground?: (backgroundDurationMs: number) => void;
   onBackground?: () => void;
   onInactive?: () => void;
 }
@@ -34,6 +34,7 @@ interface UseAppLifecycle {
   isActive: boolean;
   isBackground: boolean;
   isInactive: boolean;
+  lastBackgroundDurationMs: number | null;
 }
 
 /**
@@ -48,11 +49,15 @@ export const useAppLifecycle = (options?: UseAppLifecycleOptions): UseAppLifecyc
   const { onForeground, onBackground, onInactive } = options || {};
 
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const [lastBackgroundDurationMs, setLastBackgroundDurationMs] = useState<number | null>(null);
 
   // Use refs for callbacks to avoid recreating listener on every render
   const onForegroundRef = useRef(onForeground);
   const onBackgroundRef = useRef(onBackground);
   const onInactiveRef = useRef(onInactive);
+
+  // Track when app entered background for duration calculation
+  const backgroundEntryTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     onForegroundRef.current = onForeground;
@@ -68,14 +73,30 @@ export const useAppLifecycle = (options?: UseAppLifecycleOptions): UseAppLifecyc
 
       // Detect transitions
       if (appState.match(/inactive|background/) && nextAppState === 'active') {
-        // App has come to foreground
-        console.log('[AppLifecycle] 🟢 App entered FOREGROUND');
-        addPersistentLog('lifecycle', '🟢 App entered FOREGROUND', { from: appState, to: nextAppState });
-        onForegroundRef.current?.();
+        // App has come to foreground - calculate background duration
+        const bgDurationMs = backgroundEntryTimeRef.current
+          ? Date.now() - backgroundEntryTimeRef.current
+          : 0;
+        backgroundEntryTimeRef.current = null;
+        setLastBackgroundDurationMs(bgDurationMs);
+
+        console.log(`[AppLifecycle] 🟢 App entered FOREGROUND (was in background for ${Math.round(bgDurationMs / 1000)}s)`);
+        addPersistentLog('lifecycle', '🟢 App entered FOREGROUND', {
+          from: appState,
+          to: nextAppState,
+          backgroundDurationMs: bgDurationMs,
+          backgroundDurationSec: Math.round(bgDurationMs / 1000),
+        });
+        onForegroundRef.current?.(bgDurationMs);
       } else if (appState === 'active' && nextAppState === 'background') {
         // App has gone to background
+        backgroundEntryTimeRef.current = Date.now();
         console.log('[AppLifecycle] 🔴 App entered BACKGROUND');
-        addPersistentLog('lifecycle', '🔴 App entered BACKGROUND', { from: appState, to: nextAppState });
+        addPersistentLog('lifecycle', '🔴 App entered BACKGROUND', {
+          from: appState,
+          to: nextAppState,
+          timestamp: new Date().toISOString(),
+        });
         onBackgroundRef.current?.();
       } else if (nextAppState === 'inactive') {
         // App is in transition (iOS only)
@@ -101,6 +122,7 @@ export const useAppLifecycle = (options?: UseAppLifecycleOptions): UseAppLifecyc
     isActive: appState === 'active',
     isBackground: appState === 'background',
     isInactive: appState === 'inactive',
+    lastBackgroundDurationMs,
   };
 };
 
