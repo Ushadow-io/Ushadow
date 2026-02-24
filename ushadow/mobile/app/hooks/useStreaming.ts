@@ -27,6 +27,7 @@ export interface UseStreaming {
   isRecording: boolean;
   isInitializing: boolean;
   isRetrying: boolean;
+  isDegraded: boolean;
   retryCount: number;
   maxRetries: number;
   error: string | null;
@@ -52,6 +53,7 @@ export const useStreaming = (): UseStreaming => {
     isStreaming: wsStreaming,
     isConnecting,
     isRetrying,
+    isDegraded,
     retryCount,
     maxRetries,
     error: wsError,
@@ -244,6 +246,7 @@ export const useStreaming = (): UseStreaming => {
     isRecording,
     isInitializing,
     isRetrying,
+    isDegraded,
     retryCount,
     maxRetries,
     error,

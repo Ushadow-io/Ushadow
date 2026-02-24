@@ -33,7 +33,7 @@ import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../th
 /** Check if diagnostics have any meaningful data worth showing */
 const hasDiagnostics = (d: SessionDiagnostics): boolean =>
   d.reconnectCount > 0 || d.backgroundGapCount > 0 || d.totalDroppedChunks > 0 ||
-  d.totalFlushedChunks > 0 || d.healthCheckReconnects > 0;
+  d.totalFlushedChunks > 0 || d.healthCheckReconnects > 0 || !!d.degraded;
 
 export default function SessionsScreen() {
   const { sessions, activeSession, deleteSession, clearAllSessions, isLoading } = useSessionTracking();
@@ -199,6 +199,12 @@ export default function SessionsScreen() {
                 <View style={styles.diagItem}>
                   <Ionicons name="pulse-outline" size={14} color={colors.accent[400]} />
                   <Text style={styles.diagText}>{session.diagnostics.healthCheckReconnects} health-check</Text>
+                </View>
+              )}
+              {session.diagnostics.degraded && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="cloud-offline-outline" size={14} color={colors.error.default} />
+                  <Text style={[styles.diagText, { color: colors.error.default }]}>degraded (no connection for 5+ min)</Text>
                 </View>
               )}
             </View>

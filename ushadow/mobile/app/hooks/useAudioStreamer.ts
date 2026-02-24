@@ -10,6 +10,20 @@
  * - Audio relay: wss://{tailscale-host}/ws/audio/relay?destinations=[...]&token={jwt}
  * - The relay forwards to Chronicle/Mycelia backends internally
  * - Token is appended automatically via appendTokenToUrl()
+ *
+ * iOS Background Strategy (accept-and-reconnect):
+ * React Native's SRWebSocket uses default NSURLSession which iOS kills when the app
+ * enters background, regardless of audio session mode. This is a fundamental iOS
+ * limitation — unlike NSURLSessionConfiguration.background, the default session
+ * has no background transfer capability.
+ *
+ * Our strategy (inspired by Omi's approach):
+ * 1. Accept that WebSocket WILL die in background
+ * 2. Buffer audio locally during the gap (up to ~10 min)
+ * 3. Health-check timer (15s) detects dead connections and reconnects
+ * 4. Foreground callback provides a fast reconnect path when app resumes
+ * 5. Flush buffered audio after reconnection
+ * 6. Track diagnostics (reconnects, gaps, dropped chunks) for session visibility
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import NetInfo from '@react-native-community/netinfo';
@@ -19,6 +33,7 @@ export interface UseAudioStreamer {
   isStreaming: boolean;
   isConnecting: boolean;
   isRetrying: boolean;
+  isDegraded: boolean;
   retryCount: number;
   maxRetries: number;
   error: string | null;
@@ -85,6 +100,8 @@ const createAudioStartFormat = (
 // Reconnection constants
 // No hard cap on reconnect attempts — we retry forever while streaming is active.
 // Inspired by Omi's 15-second periodic reconnect and Chronicle's foreground-service model.
+// iOS WILL kill WebSocket regardless of audio session mode (SRWebSocket uses default
+// NSURLSession which isn't backgroundable). We accept this and reconnect aggressively.
 const MAX_SERVER_ERRORS = 5;
 const BASE_RECONNECT_MS = 1000;
 const MAX_RECONNECT_MS = 60000;  // Cap backoff at 60s (was 30s)
@@ -92,6 +109,11 @@ const HEARTBEAT_MS = 20000;      // 20s heartbeat (was 25s) — more aggressive 
 
 // Background health-check interval (like Omi's 15-second keep-alive timer)
 const HEALTH_CHECK_MS = 15000;
+
+// Degraded connection detection: if we've been retrying continuously for this long
+// without a single successful connection, mark the stream as degraded.
+// This doesn't STOP retrying — it just surfaces the problem to the UI/session tracking.
+const DEGRADED_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes of continuous retry failure
 
 // Audio buffer constants — sized for long background gaps (up to ~10 minutes)
 const AUDIO_BUFFER_MAX_CHUNKS = 6000;  // ~10 minutes of audio at 100ms chunks
@@ -102,6 +124,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
+  const [isDegraded, setIsDegraded] = useState<boolean>(false);
   const [retryCount, setRetryCount] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -121,6 +144,9 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   const audioBufferRef = useRef<Array<{ data: Uint8Array; timestamp: number }>>([]);
   const droppedChunkCountRef = useRef<number>(0);
   const backgroundDisconnectTimeRef = useRef<number | null>(null);
+
+  // Track when continuous retrying started (null = not retrying or last connection succeeded)
+  const retryingStartedAtRef = useRef<number | null>(null);
 
   // Cumulative session diagnostics — survives reconnections, reset on new session
   const diagRef = useRef<SessionDiagnostics>({
@@ -207,10 +233,12 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     audioBufferRef.current = [];
     droppedChunkCountRef.current = 0;
     backgroundDisconnectTimeRef.current = null;
+    retryingStartedAtRef.current = null;
 
     setStateSafe(setIsStreaming, false);
     setStateSafe(setIsConnecting, false);
     setStateSafe(setIsRetrying, false);
+    setStateSafe(setIsDegraded, false);
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
   }, [sendWyomingEvent, setStateSafe, onLog]);
@@ -226,9 +254,11 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     }
 
     setStateSafe(setIsRetrying, false);
+    setStateSafe(setIsDegraded, false);
     setStateSafe(setIsConnecting, false);
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
+    retryingStartedAtRef.current = null;
   }, [setStateSafe]);
 
   // Flush buffered audio chunks after reconnection
@@ -270,6 +300,8 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
   // Reconnect with exponential backoff — retries indefinitely while streaming is active.
   // Like Omi's periodicConnect() and Chronicle's foreground service, we never give up.
+  // After DEGRADED_THRESHOLD_MS of continuous failures, we mark the stream as degraded
+  // so the UI can warn the user (but we keep trying).
   const attemptReconnect = useCallback(() => {
     if (manuallyStoppedRef.current || !currentUrlRef.current) {
       console.log('[AudioStreamer] Not reconnecting: manually stopped or missing URL');
@@ -281,6 +313,19 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     // Exponential backoff capped at MAX_RECONNECT_MS (60s)
     const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, Math.min(reconnectAttemptsRef.current, 6)));
     reconnectAttemptsRef.current = attempt;
+
+    // Track when continuous retrying started
+    if (retryingStartedAtRef.current === null) {
+      retryingStartedAtRef.current = Date.now();
+    }
+
+    // Check for degraded state (retrying too long without success)
+    const retryingDuration = Date.now() - retryingStartedAtRef.current;
+    if (retryingDuration > DEGRADED_THRESHOLD_MS) {
+      setStateSafe(setIsDegraded, true);
+      console.warn(`[AudioStreamer] Connection degraded: retrying for ${Math.round(retryingDuration / 1000)}s without success`);
+      onLog?.('error', 'Connection degraded', `Retrying for ${Math.round(retryingDuration / 60000)}min without success`);
+    }
 
     console.log(`[AudioStreamer] Reconnect attempt ${attempt} in ${delay}ms (will keep trying)`);
     onLog?.('connecting', `Reconnecting (attempt ${attempt})`, `Delay: ${delay}ms`);
@@ -296,7 +341,9 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
           .then(() => {
             // Connection successful, reset retry state
             setStateSafe(setIsRetrying, false);
+            setStateSafe(setIsDegraded, false);
             setStateSafe(setRetryCount, 0);
+            retryingStartedAtRef.current = null;
           })
           .catch(err => {
             console.error('[AudioStreamer] Reconnection failed:', (err as Error).message || err);
@@ -576,7 +623,10 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   }), []);
 
   // Get cumulative session diagnostics (call when ending a session)
-  const getDiagnostics = useCallback((): SessionDiagnostics => ({ ...diagRef.current }), []);
+  const getDiagnostics = useCallback((): SessionDiagnostics => ({
+    ...diagRef.current,
+    degraded: isDegraded,
+  }), [isDegraded]);
 
   // Reset diagnostics (call when starting a new session)
   const resetDiagnostics = useCallback(() => {
@@ -628,6 +678,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     isStreaming,
     isConnecting,
     isRetrying,
+    isDegraded,
     retryCount,
     maxRetries: Infinity,
     error,
