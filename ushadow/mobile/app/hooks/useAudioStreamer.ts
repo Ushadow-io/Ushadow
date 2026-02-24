@@ -80,15 +80,19 @@ const createAudioStartFormat = (
 };
 
 // Reconnection constants
-const MAX_RECONNECT_ATTEMPTS = 8;
+// No hard cap on reconnect attempts — we retry forever while streaming is active.
+// Inspired by Omi's 15-second periodic reconnect and Chronicle's foreground-service model.
 const MAX_SERVER_ERRORS = 5;
-const BASE_RECONNECT_MS = 1000;  // Reduced from 3000ms for faster foreground reconnect
-const MAX_RECONNECT_MS = 30000;
-const HEARTBEAT_MS = 25000;
+const BASE_RECONNECT_MS = 1000;
+const MAX_RECONNECT_MS = 60000;  // Cap backoff at 60s (was 30s)
+const HEARTBEAT_MS = 20000;      // 20s heartbeat (was 25s) — more aggressive keep-alive
 
-// Audio buffer constants for background gap bridging
-const AUDIO_BUFFER_MAX_CHUNKS = 150;  // ~15 seconds of audio at 100ms chunks
-const AUDIO_BUFFER_MAX_AGE_MS = 20000; // Discard buffered chunks older than 20s
+// Background health-check interval (like Omi's 15-second keep-alive timer)
+const HEALTH_CHECK_MS = 15000;
+
+// Audio buffer constants — sized for long background gaps (up to ~10 minutes)
+const AUDIO_BUFFER_MAX_CHUNKS = 6000;  // ~10 minutes of audio at 100ms chunks
+const AUDIO_BUFFER_MAX_AGE_MS = 600000; // Keep buffered chunks up to 10 minutes
 
 export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
   const { onLog, onRelayStatus } = options || {};
@@ -102,6 +106,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   const manuallyStoppedRef = useRef<boolean>(false);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const healthCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentUrlRef = useRef<string>('');
   const currentModeRef = useRef<'batch' | 'streaming'>('streaming');
   const currentCodecRef = useRef<'pcm' | 'opus'>('pcm');
@@ -162,6 +167,10 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     if (heartbeatRef.current) {
       clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
+    }
+    if (healthCheckRef.current) {
+      clearInterval(healthCheckRef.current);
+      healthCheckRef.current = null;
     }
 
     if (websocketRef.current) {
@@ -244,31 +253,22 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     droppedChunkCountRef.current = 0;
   }, [sendWyomingEvent]);
 
-  // Reconnect with exponential backoff
+  // Reconnect with exponential backoff — retries indefinitely while streaming is active.
+  // Like Omi's periodicConnect() and Chronicle's foreground service, we never give up.
   const attemptReconnect = useCallback(() => {
     if (manuallyStoppedRef.current || !currentUrlRef.current) {
       console.log('[AudioStreamer] Not reconnecting: manually stopped or missing URL');
       setStateSafe(setIsRetrying, false);
       return;
     }
-    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
-      console.log('[AudioStreamer] Reconnect attempts exhausted');
-      manuallyStoppedRef.current = true;
-      onLog?.('error', 'Failed to reconnect after multiple attempts', `Max attempts: ${MAX_RECONNECT_ATTEMPTS}`);
-      setStateSafe(setIsStreaming, false);
-      setStateSafe(setIsConnecting, false);
-      setStateSafe(setIsRetrying, false);
-      setStateSafe(setRetryCount, 0);
-      setStateSafe(setError, 'Failed to reconnect after multiple attempts.');
-      return;
-    }
 
     const attempt = reconnectAttemptsRef.current + 1;
-    const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, reconnectAttemptsRef.current));
+    // Exponential backoff capped at MAX_RECONNECT_MS (60s)
+    const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, Math.min(reconnectAttemptsRef.current, 6)));
     reconnectAttemptsRef.current = attempt;
 
-    console.log(`[AudioStreamer] Reconnect attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
-    onLog?.('connecting', `Reconnecting (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})`, `Delay: ${delay}ms`);
+    console.log(`[AudioStreamer] Reconnect attempt ${attempt} in ${delay}ms (will keep trying)`);
+    onLog?.('connecting', `Reconnecting (attempt ${attempt})`, `Delay: ${delay}ms`);
 
     if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     setStateSafe(setIsConnecting, true);
@@ -368,7 +368,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
           setStateSafe(setIsStreaming, true);
           setStateSafe(setError, null);
 
-          // Start heartbeat
+          // Start heartbeat (keep-alive ping)
           if (heartbeatRef.current) clearInterval(heartbeatRef.current);
           heartbeatRef.current = setInterval(() => {
             try {
@@ -377,6 +377,19 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
               }
             } catch {}
           }, HEARTBEAT_MS);
+
+          // Start background health check (like Omi's 15-second keep-alive timer).
+          // This catches cases where WebSocket dies silently (no onclose fired)
+          // and proactively reconnects — critical for background streaming.
+          if (healthCheckRef.current) clearInterval(healthCheckRef.current);
+          healthCheckRef.current = setInterval(() => {
+            if (manuallyStoppedRef.current) return;
+            const ready = websocketRef.current?.readyState;
+            if (ready !== WebSocket.OPEN && ready !== WebSocket.CONNECTING && currentUrlRef.current) {
+              console.log(`[AudioStreamer] Health check: WebSocket dead (readyState=${ready}), triggering reconnect`);
+              attemptReconnect();
+            }
+          }, HEALTH_CHECK_MS);
 
           try {
             const audioStartEvent: WyomingEvent = {
@@ -564,6 +577,10 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
       }
+      if (healthCheckRef.current) {
+        clearInterval(healthCheckRef.current);
+        healthCheckRef.current = null;
+      }
     };
   }, []);
 
@@ -572,7 +589,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     isConnecting,
     isRetrying,
     retryCount,
-    maxRetries: MAX_RECONNECT_ATTEMPTS,
+    maxRetries: Infinity,
     error,
     startStreaming,
     stopStreaming,

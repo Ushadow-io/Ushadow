@@ -3,6 +3,13 @@
  *
  * Combined streaming hook that orchestrates audio recording and WebSocket streaming.
  * Provides a simple interface for the UI to start/stop streaming.
+ *
+ * Background persistence strategy (inspired by Omi & Chronicle):
+ * - Microphone keeps recording via iOS audio session (staysActiveInBackground)
+ * - WebSocket reconnects indefinitely via health-check timer in useAudioStreamer
+ * - Audio is buffered (~10 min) during WebSocket gaps so nothing is lost
+ * - Background task keeps JS thread alive for iOS
+ * - Foreground callback provides an additional fast reconnect path
  */
 import { useState, useCallback, useRef } from 'react';
 import { useAudioStreamer } from './useAudioStreamer';
@@ -10,6 +17,7 @@ import { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
 import { useAppLifecycle } from './useAppLifecycle';
 import { useLiveActivity } from './useLiveActivity';
 import { addPersistentLog } from '../services/persistentLogger';
+import { registerBackgroundTask, unregisterBackgroundTask, updateConnectionState } from '../services/backgroundTasks';
 
 export interface UseStreaming {
   // Combined state
@@ -96,6 +104,12 @@ export const useStreaming = (): UseStreaming => {
 
       console.log('[Streaming] Streaming started successfully');
       await startActivity('Phone Microphone');
+
+      // Register background task to keep JS thread alive during background recording
+      registerBackgroundTask(60).catch(err =>
+        console.warn('[Streaming] Background task registration failed:', err)
+      );
+      updateConnectionState({ isConnected: true, isStreaming: true, source: 'microphone' }).catch(() => {});
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start streaming';
       console.error('[Streaming] Error starting streaming:', errorMessage);
@@ -188,6 +202,7 @@ export const useStreaming = (): UseStreaming => {
           codec: streamCodecRef.current,
           mode: streamModeRef.current,
         });
+        // Update background task with current state so it knows we're actively streaming
         updateConnectionState({
           isConnected: wsState === WebSocket.OPEN,
           isStreaming: true,
@@ -210,6 +225,10 @@ export const useStreaming = (): UseStreaming => {
 
     wsStop();
     await stopActivity();
+
+    // Unregister background task and clear connection state
+    unregisterBackgroundTask().catch(() => {});
+    updateConnectionState({ isConnected: false, isStreaming: false }).catch(() => {});
 
     console.log('[Streaming] Streaming stopped');
   }, [stopRecording, wsStop, stopActivity]);
