@@ -56,7 +56,10 @@ module.exports = {
         'android.permission.RECORD_AUDIO',
         'android.permission.CAMERA',
         'android.permission.FOREGROUND_SERVICE',
+        'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+        'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE',
         'android.permission.WAKE_LOCK',
+        'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
       ],
     },
     web: {
