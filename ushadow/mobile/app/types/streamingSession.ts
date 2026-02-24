@@ -33,6 +33,18 @@ export interface StreamingSession {
   networkType?: string;              // WiFi, cellular, etc.
   error?: string;                    // Error message if session failed
   endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout'; // How the session ended
+  diagnostics?: SessionDiagnostics;  // Background streaming health data
+}
+
+/** Cumulative diagnostics for a streaming session's connection health */
+export interface SessionDiagnostics {
+  reconnectCount: number;            // Total WebSocket reconnections during session
+  backgroundGapCount: number;        // Number of background disconnection gaps
+  totalBackgroundMs: number;         // Total time spent in background gaps (ms)
+  totalBufferedChunks: number;       // Total audio chunks buffered during gaps
+  totalDroppedChunks: number;        // Total audio chunks dropped (buffer full)
+  totalFlushedChunks: number;        // Total buffered chunks successfully sent after reconnect
+  healthCheckReconnects: number;     // Reconnections triggered by health check timer
 }
 
 export interface SessionState {

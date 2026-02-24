@@ -18,6 +18,7 @@ import { useAppLifecycle } from './useAppLifecycle';
 import { useLiveActivity } from './useLiveActivity';
 import { addPersistentLog } from '../services/persistentLogger';
 import { registerBackgroundTask, unregisterBackgroundTask, updateConnectionState } from '../services/backgroundTasks';
+import { SessionDiagnostics } from '../types/streamingSession';
 
 export interface UseStreaming {
   // Combined state
@@ -35,6 +36,8 @@ export interface UseStreaming {
   startStreaming: (streamUrl: string, mode?: 'batch' | 'streaming', codec?: 'pcm' | 'opus') => Promise<void>;
   stopStreaming: () => Promise<void>;
   cancelRetry: () => void;
+  getDiagnostics: () => SessionDiagnostics;
+  resetDiagnostics: () => void;
 }
 
 export const useStreaming = (): UseStreaming => {
@@ -58,6 +61,8 @@ export const useStreaming = (): UseStreaming => {
     sendAudio,
     getWebSocketReadyState,
     getBufferStatus,
+    getDiagnostics,
+    resetDiagnostics,
   } = useAudioStreamer();
 
   // Live Activity (iOS 16.2+) — lock screen + Dynamic Island recording indicator
@@ -244,5 +249,7 @@ export const useStreaming = (): UseStreaming => {
     startStreaming: startStreamingCombined,
     stopStreaming: stopStreamingCombined,
     cancelRetry,
+    getDiagnostics,
+    resetDiagnostics,
   };
 };

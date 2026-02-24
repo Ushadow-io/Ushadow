@@ -13,6 +13,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import NetInfo from '@react-native-community/netinfo';
+import { SessionDiagnostics } from '../types/streamingSession';
 
 export interface UseAudioStreamer {
   isStreaming: boolean;
@@ -27,6 +28,8 @@ export interface UseAudioStreamer {
   sendAudio: (audioBytes: Uint8Array) => void;
   getWebSocketReadyState: () => number | undefined;
   getBufferStatus: () => { bufferedChunks: number; droppedChunks: number; isBuffering: boolean };
+  getDiagnostics: () => SessionDiagnostics;
+  resetDiagnostics: () => void;
 }
 
 export interface RelayStatus {
@@ -118,6 +121,17 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   const audioBufferRef = useRef<Array<{ data: Uint8Array; timestamp: number }>>([]);
   const droppedChunkCountRef = useRef<number>(0);
   const backgroundDisconnectTimeRef = useRef<number | null>(null);
+
+  // Cumulative session diagnostics — survives reconnections, reset on new session
+  const diagRef = useRef<SessionDiagnostics>({
+    reconnectCount: 0,
+    backgroundGapCount: 0,
+    totalBackgroundMs: 0,
+    totalBufferedChunks: 0,
+    totalDroppedChunks: 0,
+    totalFlushedChunks: 0,
+    healthCheckReconnects: 0,
+  });
 
   // Guard state updates after unmount
   const mountedRef = useRef<boolean>(true);
@@ -249,6 +263,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     }
 
     console.log(`[AudioStreamer] Buffer flush complete: ${sentCount}/${validChunks.length} chunks sent`);
+    diagRef.current.totalFlushedChunks += sentCount;
     audioBufferRef.current = [];
     droppedChunkCountRef.current = 0;
   }, [sendWyomingEvent]);
@@ -350,6 +365,14 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
             const droppedChunks = droppedChunkCountRef.current;
             console.log(`[AudioStreamer] RECONNECTED after background gap: ${gapDurationMs}ms, buffered=${bufferedChunks}, dropped=${droppedChunks}`);
             onLog?.('connected', 'Reconnected after background gap', `Gap: ${Math.round(gapDurationMs / 1000)}s, buffered: ${bufferedChunks}, dropped: ${droppedChunks}`);
+
+            // Update cumulative diagnostics
+            diagRef.current.reconnectCount++;
+            diagRef.current.backgroundGapCount++;
+            diagRef.current.totalBackgroundMs += gapDurationMs;
+            diagRef.current.totalBufferedChunks += bufferedChunks;
+            diagRef.current.totalDroppedChunks += droppedChunks;
+
             backgroundDisconnectTimeRef.current = null;
           } else {
             onLog?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
@@ -387,6 +410,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
             const ready = websocketRef.current?.readyState;
             if (ready !== WebSocket.OPEN && ready !== WebSocket.CONNECTING && currentUrlRef.current) {
               console.log(`[AudioStreamer] Health check: WebSocket dead (readyState=${ready}), triggering reconnect`);
+              diagRef.current.healthCheckReconnects++;
               attemptReconnect();
             }
           }, HEALTH_CHECK_MS);
@@ -551,6 +575,22 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     isBuffering: backgroundDisconnectTimeRef.current !== null,
   }), []);
 
+  // Get cumulative session diagnostics (call when ending a session)
+  const getDiagnostics = useCallback((): SessionDiagnostics => ({ ...diagRef.current }), []);
+
+  // Reset diagnostics (call when starting a new session)
+  const resetDiagnostics = useCallback(() => {
+    diagRef.current = {
+      reconnectCount: 0,
+      backgroundGapCount: 0,
+      totalBackgroundMs: 0,
+      totalBufferedChunks: 0,
+      totalDroppedChunks: 0,
+      totalFlushedChunks: 0,
+      healthCheckReconnects: 0,
+    };
+  }, []);
+
   // Connectivity-triggered reconnect
   useEffect(() => {
     const sub = NetInfo.addEventListener(state => {
@@ -597,5 +637,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     sendAudio,
     getWebSocketReadyState,
     getBufferStatus,
+    getDiagnostics,
+    resetDiagnostics,
   };
 };

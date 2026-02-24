@@ -22,12 +22,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   StreamingSession,
+  SessionDiagnostics,
   formatDuration,
   formatBytes,
   isSessionActive,
 } from '../types/streamingSession';
 import { useSessionTracking } from '../hooks/useSessionTracking';
 import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../theme';
+
+/** Check if diagnostics have any meaningful data worth showing */
+const hasDiagnostics = (d: SessionDiagnostics): boolean =>
+  d.reconnectCount > 0 || d.backgroundGapCount > 0 || d.totalDroppedChunks > 0 ||
+  d.totalFlushedChunks > 0 || d.healthCheckReconnects > 0;
 
 export default function SessionsScreen() {
   const { sessions, activeSession, deleteSession, clearAllSessions, isLoading } = useSessionTracking();
@@ -151,6 +157,51 @@ export default function SessionsScreen() {
           <View style={styles.errorContainer}>
             <Ionicons name="alert-circle" size={16} color={colors.error.default} />
             <Text style={styles.errorText}>{session.error}</Text>
+          </View>
+        )}
+
+        {/* Background Streaming Diagnostics */}
+        {session.diagnostics && hasDiagnostics(session.diagnostics) && (
+          <View style={styles.diagnosticsContainer}>
+            <Text style={styles.diagnosticsTitle}>Connection Health</Text>
+            <View style={styles.diagnosticsGrid}>
+              {session.diagnostics.reconnectCount > 0 && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="refresh" size={14} color={colors.accent[400]} />
+                  <Text style={styles.diagText}>{session.diagnostics.reconnectCount} reconnect{session.diagnostics.reconnectCount !== 1 ? 's' : ''}</Text>
+                </View>
+              )}
+              {session.diagnostics.backgroundGapCount > 0 && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="phone-portrait-outline" size={14} color={colors.accent[400]} />
+                  <Text style={styles.diagText}>{session.diagnostics.backgroundGapCount} bg gap{session.diagnostics.backgroundGapCount !== 1 ? 's' : ''}</Text>
+                </View>
+              )}
+              {session.diagnostics.totalBackgroundMs > 0 && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="time-outline" size={14} color={colors.accent[400]} />
+                  <Text style={styles.diagText}>{formatDuration(Math.round(session.diagnostics.totalBackgroundMs / 1000))} in bg</Text>
+                </View>
+              )}
+              {session.diagnostics.totalFlushedChunks > 0 && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="checkmark-circle-outline" size={14} color={colors.primary[400]} />
+                  <Text style={styles.diagText}>{session.diagnostics.totalFlushedChunks} recovered</Text>
+                </View>
+              )}
+              {session.diagnostics.totalDroppedChunks > 0 && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="warning-outline" size={14} color={colors.error.default} />
+                  <Text style={styles.diagText}>{session.diagnostics.totalDroppedChunks} dropped</Text>
+                </View>
+              )}
+              {session.diagnostics.healthCheckReconnects > 0 && (
+                <View style={styles.diagItem}>
+                  <Ionicons name="pulse-outline" size={14} color={colors.accent[400]} />
+                  <Text style={styles.diagText}>{session.diagnostics.healthCheckReconnects} health-check</Text>
+                </View>
+              )}
+            </View>
           </View>
         )}
 
@@ -442,6 +493,34 @@ const styles = StyleSheet.create({
   conversationLinkText: {
     fontSize: fontSize.xs,
     color: colors.primary[400],
+  },
+  diagnosticsContainer: {
+    backgroundColor: colors.surface[700],
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  diagnosticsTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    color: colors.accent[400],
+    marginBottom: spacing.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  diagnosticsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  diagItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  diagText: {
+    fontSize: fontSize.xs,
+    color: theme.textSecondary,
   },
   emptyState: {
     flex: 1,

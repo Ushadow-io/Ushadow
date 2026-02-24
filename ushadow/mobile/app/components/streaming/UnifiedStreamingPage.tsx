@@ -63,7 +63,7 @@ import { verifyUnodeAuth } from '../../services/chronicleApi';
 import { AudioDestination } from '../../services/audioProviderApi';
 
 // Types
-import { SessionSource as SessionSourceType } from '../../types/streamingSession';
+import { SessionSource as SessionSourceType, SessionDiagnostics } from '../../types/streamingSession';
 import { RelayStatus } from '../../hooks/useAudioStreamer';
 
 interface UnifiedStreamingPageProps {
@@ -73,7 +73,7 @@ interface UnifiedStreamingPageProps {
   onBluetoothLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
   onSessionStart?: (source: SessionSourceType, codec: 'pcm' | 'opus') => Promise<string>;
   onSessionUpdate?: (sessionId: string, relayStatus: RelayStatus) => void;
-  onSessionEnd?: (sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout') => void;
+  onSessionEnd?: (sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout', diagnostics?: SessionDiagnostics) => void;
   testID?: string;
 }
 
@@ -169,6 +169,14 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     },
   });
 
+  // Helper: get diagnostics from the active source's streamer
+  const getCurrentDiagnostics = useCallback((): SessionDiagnostics | undefined => {
+    if (selectedSource.type === 'microphone') {
+      return phoneStreaming.getDiagnostics();
+    }
+    return omiStreamer.getDiagnostics();
+  }, [selectedSource.type, phoneStreaming, omiStreamer]);
+
   // OMI foreground reconnection - reconnect WebSocket when app returns from background
   useAppLifecycle({
     onForeground: useCallback((backgroundDurationMs: number) => {
@@ -258,7 +266,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     if (currentError && !currentRetrying && !wasStreaming && currentSessionIdRef.current && onSessionEnd) {
       console.log('[UnifiedStreaming] Connection failed permanently, ending session');
       const endReason = currentError.toLowerCase().includes('timeout') ? 'timeout' : 'connection_lost';
-      onSessionEnd(currentSessionIdRef.current, currentError, endReason);
+      onSessionEnd(currentSessionIdRef.current, currentError, endReason, getCurrentDiagnostics());
       currentSessionIdRef.current = null;
     }
   }, [
@@ -270,6 +278,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     omiStreamer.isRetrying,
     omiStreamer.isStreaming,
     onSessionEnd,
+    getCurrentDiagnostics,
   ]);
 
   const isConnecting = selectedSource.type === 'microphone'
@@ -626,7 +635,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
       // End session with error
       if (currentSessionIdRef.current && onSessionEnd) {
-        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error', getCurrentDiagnostics());
         currentSessionIdRef.current = null;
       }
 
@@ -643,11 +652,15 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     omiStreamer,
     startAudioListener,
     onSessionStart,
+    getCurrentDiagnostics,
     onSessionEnd,
   ]);
 
   // Stop streaming
   const handleStopStreaming = useCallback(async () => {
+    // Capture diagnostics before stopping (stop clears internal state)
+    const diag = getCurrentDiagnostics();
+
     try {
       if (selectedSource.type === 'microphone') {
         await phoneStreaming.stopStreaming();
@@ -659,9 +672,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         omiLiveActivity.stopActivity();
       }
 
-      // End session (clean stop via user button)
+      // End session (clean stop via user button) — include diagnostics
       if (currentSessionIdRef.current && onSessionEnd) {
-        onSessionEnd(currentSessionIdRef.current, undefined, 'manual_stop');
+        onSessionEnd(currentSessionIdRef.current, undefined, 'manual_stop', diag);
         currentSessionIdRef.current = null;
       }
     } catch (err) {
@@ -670,11 +683,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
       // End session with error
       if (currentSessionIdRef.current && onSessionEnd) {
-        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error');
+        onSessionEnd(currentSessionIdRef.current, errorMessage, 'error', diag);
         currentSessionIdRef.current = null;
       }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, onSessionEnd]);
+  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, onSessionEnd, getCurrentDiagnostics]);
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {

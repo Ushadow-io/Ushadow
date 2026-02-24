@@ -11,6 +11,7 @@ import {
   StreamingSession,
   SessionSource,
   SessionDestination,
+  SessionDiagnostics,
   generateSessionId,
   getSessionDuration,
 } from '../types/streamingSession';
@@ -22,7 +23,7 @@ interface UseSessionTrackingReturn {
   activeSession: StreamingSession | null;
   startSession: (source: SessionSource, codec: 'pcm' | 'opus') => string;
   updateSessionStatus: (sessionId: string, relayStatus: RelayStatus) => void;
-  endSession: (sessionId: string, error?: string) => void;
+  endSession: (sessionId: string, error?: string, endReason?: string, diagnostics?: SessionDiagnostics) => void;
   linkToConversation: (sessionId: string, conversationId: string) => void;
   deleteSession: (sessionId: string) => void;
   clearAllSessions: () => void;
@@ -124,7 +125,12 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
    * Called when WebSocket connection drops and doesn't reconnect.
    * Keeps ALL sessions (including failed ones) for debugging conversation drops.
    */
-  const endSession = useCallback((sessionId: string, error?: string, endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout') => {
+  const endSession = useCallback((
+    sessionId: string,
+    error?: string,
+    endReason?: 'manual_stop' | 'connection_lost' | 'error' | 'timeout',
+    diagnostics?: SessionDiagnostics,
+  ) => {
     const endTime = new Date();
 
     setSessions(prev => prev.map(session => {
@@ -145,6 +151,7 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
           durationSeconds,
           error,
           endReason: finalEndReason,
+          diagnostics: diagnostics || session.diagnostics,
         };
       }
       return session;
@@ -154,7 +161,18 @@ export const useSessionTracking = (): UseSessionTrackingReturn => {
       setActiveSession(null);
     }
 
-    console.log('[SessionTracking] Ended session:', sessionId, endReason || 'unknown', error ? `Error: ${error}` : '');
+    if (diagnostics && (diagnostics.reconnectCount > 0 || diagnostics.backgroundGapCount > 0)) {
+      console.log('[SessionTracking] Ended session with diagnostics:', sessionId, {
+        reconnects: diagnostics.reconnectCount,
+        gaps: diagnostics.backgroundGapCount,
+        backgroundMs: diagnostics.totalBackgroundMs,
+        buffered: diagnostics.totalBufferedChunks,
+        dropped: diagnostics.totalDroppedChunks,
+        flushed: diagnostics.totalFlushedChunks,
+      });
+    } else {
+      console.log('[SessionTracking] Ended session:', sessionId, endReason || 'unknown', error ? `Error: ${error}` : '');
+    }
   }, [activeSession]);
 
   /**
