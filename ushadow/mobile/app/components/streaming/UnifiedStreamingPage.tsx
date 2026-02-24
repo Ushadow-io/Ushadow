@@ -18,7 +18,9 @@ import {
   SafeAreaView,
   Alert,
   TouchableOpacity,
+  Platform,
 } from 'react-native';
+import { Audio } from 'expo-av';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
@@ -118,6 +120,14 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // OMI stream URL tracking for foreground reconnection
   const omiStreamUrlRef = useRef<string | null>(null);
   const omiShouldBeStreamingRef = useRef<boolean>(false);
+
+  // iOS audio session keepalive for OMI BLE streaming.
+  // When streaming from OMI (BLE), there's no active microphone recording keeping the
+  // iOS process alive. iOS will suspend the app faster without an active audio session.
+  // We start a silent audio session (playAndRecord category with staysActiveInBackground)
+  // to keep the process running — same technique as the phone mic path but without
+  // actually capturing audio from the mic.
+  const omiAudioKeepaliveRef = useRef<boolean>(false);
 
   // OMI connection context
   const omiConnection = useOmiConnection();
@@ -256,17 +266,34 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     });
   }, [selectedSource.type, isStreaming, phoneStreaming.isStreaming, phoneStreaming.isRecording, omiStreamer.isStreaming, isListeningAudio]);
 
-  // Monitor for permanent connection failures (when reconnection attempts exhausted)
+  // Monitor for connection failure states:
+  // 1. Cancelled retry (isRetrying goes false with error) — user or server gave up
+  // 2. Degraded (isDegraded) — retrying for >5min without success, end session to surface the problem
+  // With infinite retries, isRetrying stays true forever so we use isDegraded as the timeout signal.
+  const isDegraded = selectedSource.type === 'microphone'
+    ? phoneStreaming.isDegraded
+    : omiStreamer.isDegraded;
+
   useEffect(() => {
     const currentError = selectedSource.type === 'microphone' ? phoneStreaming.error : omiStreamer.error;
     const currentRetrying = selectedSource.type === 'microphone' ? phoneStreaming.isRetrying : omiStreamer.isRetrying;
-    const wasStreaming = selectedSource.type === 'microphone' ? phoneStreaming.isStreaming : omiStreamer.isStreaming;
+    const currentStreaming = selectedSource.type === 'microphone' ? phoneStreaming.isStreaming : omiStreamer.isStreaming;
 
-    // If there's an error, not retrying anymore, and we have an active session, it means connection failed permanently
-    if (currentError && !currentRetrying && !wasStreaming && currentSessionIdRef.current && onSessionEnd) {
-      console.log('[UnifiedStreaming] Connection failed permanently, ending session');
+    if (!currentSessionIdRef.current || !onSessionEnd) return;
+
+    // Case 1: Retry cancelled (manually or by server error limit) — immediate session end
+    if (currentError && !currentRetrying && !currentStreaming) {
+      console.log('[UnifiedStreaming] Connection failed (retry cancelled), ending session');
       const endReason = currentError.toLowerCase().includes('timeout') ? 'timeout' : 'connection_lost';
       onSessionEnd(currentSessionIdRef.current, currentError, endReason, getCurrentDiagnostics());
+      currentSessionIdRef.current = null;
+      return;
+    }
+
+    // Case 2: Degraded — retrying for too long without success
+    if (isDegraded && currentError) {
+      console.log('[UnifiedStreaming] Connection degraded (retrying too long), ending session');
+      onSessionEnd(currentSessionIdRef.current, currentError, 'connection_lost', getCurrentDiagnostics());
       currentSessionIdRef.current = null;
     }
   }, [
@@ -274,9 +301,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     phoneStreaming.error,
     phoneStreaming.isRetrying,
     phoneStreaming.isStreaming,
+    phoneStreaming.isDegraded,
     omiStreamer.error,
     omiStreamer.isRetrying,
     omiStreamer.isStreaming,
+    omiStreamer.isDegraded,
+    isDegraded,
     onSessionEnd,
     getCurrentDiagnostics,
   ]);
@@ -531,6 +561,13 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         await stopAudioListener();
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
+        // Deactivate audio keepalive
+        if (omiAudioKeepaliveRef.current) {
+          omiAudioKeepaliveRef.current = false;
+          Audio.setAudioModeAsync({
+            allowsRecordingIOS: false, playsInSilentModeIOS: false, staysActiveInBackground: false,
+          }).catch(() => {});
+        }
       }
     }
 
@@ -616,6 +653,27 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         omiStreamUrlRef.current = streamUrl;
         omiShouldBeStreamingRef.current = true;
 
+        // Activate iOS audio session keepalive for background persistence.
+        // Without an active audio session, iOS suspends the app much faster
+        // and BLE notifications stop being delivered.
+        if (Platform.OS === 'ios' && !omiAudioKeepaliveRef.current) {
+          try {
+            await Audio.setAudioModeAsync({
+              allowsRecordingIOS: true,
+              playsInSilentModeIOS: true,
+              staysActiveInBackground: true,
+              interruptionModeIOS: 2, // DoNotMix
+              shouldDuckAndroid: false,
+              playThroughEarpieceAndroid: false,
+            });
+            omiAudioKeepaliveRef.current = true;
+            console.log('[UnifiedStreaming] OMI: iOS audio session keepalive activated');
+          } catch (audioErr) {
+            console.warn('[UnifiedStreaming] OMI: Failed to activate audio keepalive:', audioErr);
+            // Continue anyway — streaming may still work in foreground
+          }
+        }
+
         // Start WebSocket with codec
         await omiStreamer.startStreaming(streamUrl, 'streaming', codec);
 
@@ -642,6 +700,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       // Clear OMI streaming refs on error
       omiShouldBeStreamingRef.current = false;
       omiStreamUrlRef.current = null;
+      if (omiAudioKeepaliveRef.current) {
+        omiAudioKeepaliveRef.current = false;
+        Audio.setAudioModeAsync({
+          allowsRecordingIOS: false, playsInSilentModeIOS: false, staysActiveInBackground: false,
+        }).catch(() => {});
+      }
     }
   }, [
     selectedSource,
@@ -670,6 +734,17 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         await stopAudioListener();
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
+
+        // Deactivate iOS audio session keepalive
+        if (omiAudioKeepaliveRef.current) {
+          omiAudioKeepaliveRef.current = false;
+          Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: false,
+            staysActiveInBackground: false,
+          }).catch(() => {});
+          console.log('[UnifiedStreaming] OMI: iOS audio session keepalive deactivated');
+        }
       }
 
       // End session (clean stop via user button) — include diagnostics

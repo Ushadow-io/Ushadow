@@ -45,6 +45,7 @@ export interface SessionDiagnostics {
   totalDroppedChunks: number;        // Total audio chunks dropped (buffer full)
   totalFlushedChunks: number;        // Total buffered chunks successfully sent after reconnect
   healthCheckReconnects: number;     // Reconnections triggered by health check timer
+  degraded?: boolean;                // Whether session ended in degraded state (>5min continuous retry failure)
 }
 
 export interface SessionState {
