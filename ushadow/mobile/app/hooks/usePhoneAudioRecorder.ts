@@ -201,21 +201,25 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
 
       console.log('[PhoneAudioRecorder] Starting audio recording...');
 
-      // Configure iOS audio session for background recording
-      // This keeps the audio pipeline active when screen locks
+      // Configure iOS audio session for background recording.
+      // IMPORTANT: This MUST happen before AudioRecord.start() because it sets
+      // AVAudioSessionCategoryPlayAndRecord with staysActiveInBackground, which is
+      // what keeps the process alive when iOS backgrounds the app. The native
+      // react-native-audio-record module was patched to NOT override this category
+      // (it originally set AVAudioSessionCategoryRecord which killed background support).
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
-          staysActiveInBackground: true, // ⭐ Critical for background audio
+          staysActiveInBackground: true, // Critical: keeps audio session active in background
           interruptionModeIOS: 2, // DoNotMix
           shouldDuckAndroid: false,
           playThroughEarpieceAndroid: false,
         });
-        console.log('[PhoneAudioRecorder] ✅ Audio session configured for background recording');
+        console.log('[PhoneAudioRecorder] Audio session: PlayAndRecord + staysActiveInBackground');
       } catch (audioModeError) {
-        console.warn('[PhoneAudioRecorder] ⚠️ Failed to set audio mode:', audioModeError);
-        // Continue anyway - audio recording might still work
+        console.warn('[PhoneAudioRecorder] Failed to set audio mode:', audioModeError);
+        // Continue anyway - audio recording might still work in foreground
       }
 
       // Clear partial chunk buffer from previous session
