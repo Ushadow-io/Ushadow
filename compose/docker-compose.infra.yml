@@ -209,6 +209,9 @@ services:
 
       # Additional Keycloak config
       - KC_REALM=${KC_REALM:-ushadow}  # Default realm
+      # Fix JVM SIGBUS crash on ARM64 (aarch64) — disables shared perf memory
+      # that causes PerfLongVariant::sample() to segfault in containers (pid=1)
+      - JAVA_OPTS_APPEND=-XX:-UsePerfData -XX:+DisableAttachMechanism
     volumes:
       - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
       - ../config/keycloak:/opt/keycloak/data/import:ro
