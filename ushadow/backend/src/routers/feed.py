@@ -6,8 +6,9 @@ Thin HTTP adapter: parses requests, calls FeedService, returns responses.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import BaseModel, Field
 
 from src.config.store import SettingsStore, get_settings_store
 from src.database import get_database
@@ -21,6 +22,7 @@ class MastodonConnectRequest(BaseModel):
     redirect_uri: str
     name: str = "Mastodon"
 from src.services.auth import get_current_user
+from src.services.bluesky_service import BlueskyService, get_bluesky_service
 from src.services.feed_service import FeedService
 from src.utils.auth_helpers import get_user_email
 
@@ -31,6 +33,9 @@ router = APIRouter(prefix="/api/feed", tags=["feed"])
 
 def _get_settings() -> SettingsStore:
     return get_settings_store()
+class BlueskyCompose(BaseModel):
+    source_id: str
+    text: str = Field(..., min_length=1, max_length=300)
 
 
 def get_feed_service(
@@ -38,6 +43,12 @@ def get_feed_service(
     settings: SettingsStore = Depends(_get_settings),
 ) -> FeedService:
     return FeedService(db, settings)
+
+
+def _get_bluesky_service(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+) -> BlueskyService:
+    return get_bluesky_service(db)
 
 
 # =========================================================================
@@ -122,7 +133,14 @@ async def add_source(
         raise HTTPException(
             status_code=422, detail="api_key is required for youtube sources"
         )
-    if data.platform_type not in ("mastodon", "youtube"):
+    if data.platform_type == "bluesky_timeline" and (
+        not data.handle or not data.api_key
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="bluesky_timeline sources require both handle and api_key (app password)",
+        )
+    if data.platform_type not in ("mastodon", "youtube", "bluesky", "bluesky_timeline"):
         raise HTTPException(
             status_code=422, detail=f"Unknown platform_type: {data.platform_type}"
         )
@@ -231,6 +249,42 @@ async def bookmark_post(
     if not ok:
         raise HTTPException(status_code=404, detail="Post not found")
     return {"status": "toggled"}
+
+
+# =========================================================================
+# Bluesky — Compose (post & reply)
+# =========================================================================
+
+
+@router.post("/bluesky/post", status_code=201)
+async def bluesky_create_post(
+    data: BlueskyCompose,
+    bsky: BlueskyService = Depends(_get_bluesky_service),
+    current_user=Depends(get_current_user),
+):
+    """Publish a new post to Bluesky from a bluesky_timeline source."""
+    user_id = get_user_email(current_user)
+    try:
+        result = await bsky.create_post(data.source_id, user_id, data.text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
+
+
+@router.post("/bluesky/reply/{post_id}", status_code=201)
+async def bluesky_reply(
+    post_id: str,
+    data: BlueskyCompose,
+    bsky: BlueskyService = Depends(_get_bluesky_service),
+    current_user=Depends(get_current_user),
+):
+    """Reply to a Bluesky post stored in the feed (requires post CID)."""
+    user_id = get_user_email(current_user)
+    try:
+        result = await bsky.reply_to_post(data.source_id, user_id, data.text, post_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
 
 
 # =========================================================================

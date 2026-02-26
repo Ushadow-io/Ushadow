@@ -20,7 +20,10 @@ import {
   EyeOff,
   MessageSquare,
   Play,
+  Cloud,
+  PenLine,
 } from 'lucide-react'
+import BlueskyComposeModal from '../components/feed/BlueskyComposeModal'
 import PostCard from '../components/feed/PostCard'
 import YouTubePostCard from '../components/feed/YouTubePostCard'
 import InterestChip from '../components/feed/InterestChip'
@@ -34,10 +37,12 @@ import {
   useFeedStats,
 } from '../hooks/useFeed'
 
-type FeedTab = 'social' | 'videos'
+type FeedTab = 'social' | 'bluesky' | 'following' | 'videos'
 
 const TAB_TO_PLATFORM: Record<FeedTab, string> = {
   social: 'mastodon',
+  bluesky: 'bluesky',
+  following: 'bluesky_timeline',
   videos: 'youtube',
 }
 
@@ -47,6 +52,8 @@ export default function FeedPage() {
   const [selectedInterest, setSelectedInterest] = useState<string | undefined>()
   const [showSeen, setShowSeen] = useState(true)
   const [showAddSource, setShowAddSource] = useState(false)
+  const [showCompose, setShowCompose] = useState(false)
+  const [composeReplyTo, setComposeReplyTo] = useState<{ postId: string; handle: string } | undefined>()
 
   const platformType = TAB_TO_PLATFORM[activeTab]
 
@@ -60,6 +67,20 @@ export default function FeedPage() {
   // Filter sources for the active tab
   const tabSources = sources.filter((s) => s.platform_type === platformType)
   const hasTabSources = tabSources.length > 0
+
+  // For the Following tab, pick the first bluesky_timeline source for compose
+  const timelineSource = sources.find((s) => s.platform_type === 'bluesky_timeline')
+  const canCompose = activeTab === 'following' && !!timelineSource
+
+  const handleOpenCompose = () => {
+    setComposeReplyTo(undefined)
+    setShowCompose(true)
+  }
+
+  const handleOpenReply = (postId: string, handle: string) => {
+    setComposeReplyTo({ postId, handle })
+    setShowCompose(true)
+  }
 
   const handleTabChange = (tab: FeedTab) => {
     setActiveTab(tab)
@@ -131,6 +152,18 @@ export default function FeedPage() {
             <Plus className="h-4 w-4" />
           </button>
 
+          {/* Compose — only shown on the Following (bluesky_timeline) tab */}
+          {canCompose && (
+            <button
+              onClick={handleOpenCompose}
+              className="inline-flex items-center gap-2 px-3 py-2 bg-sky-500 text-white text-sm rounded-lg hover:bg-sky-600 transition-colors"
+              data-testid="feed-compose"
+            >
+              <PenLine className="h-4 w-4" />
+              Post
+            </button>
+          )}
+
           {/* Refresh — scoped to active tab's platform */}
           <button
             onClick={handleRefresh}
@@ -162,6 +195,30 @@ export default function FeedPage() {
         >
           <MessageSquare className="h-4 w-4" />
           Social
+        </button>
+        <button
+          onClick={() => handleTabChange('bluesky')}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'bluesky'
+              ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300'
+          }`}
+          data-testid="tab-bluesky"
+        >
+          <Cloud className="h-4 w-4" />
+          Bluesky
+        </button>
+        <button
+          onClick={() => handleTabChange('following')}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'following'
+              ? 'border-sky-500 text-sky-600 dark:text-sky-400'
+              : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300'
+          }`}
+          data-testid="tab-following"
+        >
+          <Cloud className="h-4 w-4" />
+          Following
         </button>
         <button
           onClick={() => handleTabChange('videos')}
@@ -230,6 +287,7 @@ export default function FeedPage() {
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300"
           >
             {s.platform_type === 'youtube' && <Play className="h-3 w-3 text-red-500" />}
+            {s.platform_type === 'bluesky' && <Cloud className="h-3 w-3 text-sky-500" />}
             {s.name}
             <button
               onClick={() => removeSource(s.source_id)}
@@ -248,7 +306,7 @@ export default function FeedPage() {
           data-testid="feed-add-source-inline"
         >
           <Plus className="h-3 w-3" />
-          Add {platformType === 'youtube' ? 'YouTube' : 'Mastodon'} source
+          Add {platformType === 'youtube' ? 'YouTube' : platformType === 'bluesky' ? 'Bluesky' : 'Mastodon'} source
         </button>
       </div>
 
@@ -287,6 +345,7 @@ export default function FeedPage() {
                 post={post}
                 onBookmark={toggleBookmark}
                 onMarkSeen={markSeen}
+                onReply={canCompose ? handleOpenReply : undefined}
               />
             ),
           )}
@@ -334,8 +393,18 @@ export default function FeedPage() {
         onClose={() => setShowAddSource(false)}
         onAdd={addSource}
         isAdding={isAdding}
-        defaultPlatform={platformType as 'mastodon' | 'youtube'}
+        defaultPlatform={platformType as 'mastodon' | 'bluesky' | 'bluesky_timeline' | 'youtube'}
       />
+
+      {/* Bluesky compose / reply modal */}
+      {timelineSource && (
+        <BlueskyComposeModal
+          isOpen={showCompose}
+          onClose={() => setShowCompose(false)}
+          sourceId={timelineSource.source_id}
+          replyTo={composeReplyTo}
+        />
+      )}
     </div>
   )
 }

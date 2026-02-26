@@ -75,7 +75,7 @@ providers:
     mode: local
 
     docker:
-      image: onerahmet/openai-whisper-asr-webservice:latest
+      image: fedirz/faster-whisper-server:latest-cpu
       compose_file: ""
       service_name: whisper
       ports:
@@ -93,9 +93,9 @@ providers:
       server_url:
         env_var: WHISPER_SERVER_URL
         settings_path: transcription.whisper_server_url
-        default: "http://whisper:9000"
         label: "Whisper Server URL"
         type: url
+        required: true
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         settings_path: transcription.language
@@ -142,6 +142,7 @@ providers:
         default: "http://parakeet:8001"
         label: "Parakeet Server URL"
         type: url
+        required: true
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         default: "en"

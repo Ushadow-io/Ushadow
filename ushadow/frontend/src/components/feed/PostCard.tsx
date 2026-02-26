@@ -2,13 +2,15 @@
  * PostCard — renders a single fediverse post with actions and relevance info.
  */
 
-import { Bookmark, Eye, ExternalLink, Clock } from 'lucide-react'
+import { Bookmark, Eye, ExternalLink, Clock, MessageCircle } from 'lucide-react'
 import type { FeedPost } from '../../services/feedApi'
 
 interface PostCardProps {
   post: FeedPost
   onBookmark: (postId: string) => void
   onMarkSeen: (postId: string) => void
+  /** Called when reply button is clicked (only provided for authenticated Bluesky sources) */
+  onReply?: (postId: string, handle: string) => void
 }
 
 function timeAgo(dateStr: string): string {
@@ -37,7 +39,7 @@ function stripHtml(html: string): string {
     .trim()
 }
 
-export default function PostCard({ post, onBookmark, onMarkSeen }: PostCardProps) {
+export default function PostCard({ post, onBookmark, onMarkSeen, onReply }: PostCardProps) {
   const plainText = stripHtml(post.content)
 
   return (
@@ -149,6 +151,18 @@ export default function PostCard({ post, onBookmark, onMarkSeen }: PostCardProps
               data-testid={`post-card-${post.post_id}-seen`}
             >
               <Eye className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Reply — only shown when authenticated Bluesky source is available */}
+          {onReply && (post.platform_type === 'bluesky' || post.platform_type === 'bluesky_timeline') && (
+            <button
+              onClick={() => onReply(post.post_id, post.author_handle)}
+              className="p-1.5 rounded-md text-neutral-400 hover:text-sky-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors"
+              title="Reply on Bluesky"
+              data-testid={`post-card-${post.post_id}-reply`}
+            >
+              <MessageCircle className="h-4 w-4" />
             </button>
           )}
         </div>
