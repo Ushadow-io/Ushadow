@@ -209,9 +209,12 @@ services:
 
       # Additional Keycloak config
       - KC_REALM=${KC_REALM:-ushadow}  # Default realm
-      # Fix JVM SIGBUS crash on ARM64 (aarch64) — disables shared perf memory
-      # that causes PerfLongVariant::sample() to segfault in containers (pid=1)
-      - JAVA_OPTS_APPEND=-XX:-UsePerfData -XX:+DisableAttachMechanism
+      # Fix JVM SIGBUS crash on ARM64 (aarch64) — PerfLongVariant::sample() crash
+      # in containers. JAVA_TOOL_OPTIONS is read by the JVM directly (not by
+      # kc.sh), so it's guaranteed to apply regardless of Quarkus launch path.
+      # -XX:-UsePerfData: disables the perf sampling thread that triggers the bug
+      # -Xshare:off: disables class data sharing (another ARM SIGBUS source)
+      - JAVA_TOOL_OPTIONS=-XX:-UsePerfData -Xshare:off
     volumes:
       - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
       - ../config/keycloak:/opt/keycloak/data/import:ro

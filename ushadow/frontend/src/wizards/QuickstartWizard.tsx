@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Loader2, RefreshCw, CheckCircle } from 'lucide-react'
+import { Sparkles, Loader2, RefreshCw, CheckCircle, ExternalLink } from 'lucide-react'
 
 import {
-  servicesApi,
   quickstartApi,
   deploymentsApi,
   settingsApi,
@@ -61,6 +60,7 @@ export default function QuickstartWizard() {
  * QuickstartWizard content - uses WizardFormContext for form handling
  */
 function QuickstartWizardContent() {
+  const navigate = useNavigate()
   const { markPhaseComplete, updateServiceStatus, updateApiKeysStatus } = useWizard()
   const { getValue, saveToApi } = useWizardForm()
   const wizard = useWizardSteps(STEPS)
@@ -73,6 +73,7 @@ function QuickstartWizardContent() {
   // Container states - built dynamically from API response
   const [containers, setContainers] = useState<ContainerInfo[]>([])
   const [isProfileChanging, setIsProfileChanging] = useState(false)
+  const [hasAutoStarted, setHasAutoStarted] = useState(false)
 
   // Deployment target (local leader node)
   const [deployTarget, setDeployTarget] = useState<DeployTarget | null>(null)
@@ -82,12 +83,42 @@ function QuickstartWizardContent() {
     loadDeploymentTarget()
   }, [])
 
-  // Check container status when entering start_services step
+  // Auto-start all stopped services when entering start_services step
+  const autoStartServices = useCallback(async (currentContainers: ContainerInfo[]) => {
+    if (!deployTarget) return
+    try {
+      const response = await deploymentsApi.listDeployments({ unode_hostname: deployTarget.identifier })
+      const deployments = response.data
+      for (const container of currentContainers) {
+        const deployment = deployments.find((d: Deployment) => d.service_id.includes(container.name))
+        if (!deployment || deployment.status !== 'running') {
+          startContainer(container.name)
+        }
+      }
+    } catch (err) {
+      console.error('[QuickstartWizard] Auto-start failed:', err)
+    }
+  }, [deployTarget])
+
+  // Check status + auto-start when entering start_services step
   useEffect(() => {
     if (wizard.currentStep.id === 'start_services') {
       checkContainerStatuses()
     }
   }, [wizard.currentStep.id])
+
+  // Trigger auto-start once deployTarget and containers are both ready
+  useEffect(() => {
+    if (
+      wizard.currentStep.id === 'start_services' &&
+      deployTarget &&
+      containers.length > 0 &&
+      !hasAutoStarted
+    ) {
+      setHasAutoStarted(true)
+      autoStartServices(containers)
+    }
+  }, [wizard.currentStep.id, deployTarget, containers.length, hasAutoStarted, autoStartServices])
 
   const loadQuickstartConfig = async () => {
     try {
@@ -445,6 +476,7 @@ function QuickstartWizardContent() {
           activeProfile={quickstartConfig?.active_profile ?? null}
           onProfileSelect={handleProfileSelect}
           isProfileChanging={isProfileChanging}
+          onOpenWizard={(wizardId) => navigate(`/wizard/${wizardId}`)}
         />
       )}
 
@@ -482,6 +514,7 @@ interface StartServicesStepProps {
   activeProfile: string | null
   onProfileSelect: (name: string) => Promise<void>
   isProfileChanging: boolean
+  onOpenWizard: (wizardId: string) => void
 }
 
 function StartServicesStep({
@@ -492,7 +525,10 @@ function StartServicesStep({
   activeProfile,
   onProfileSelect,
   isProfileChanging,
+  onOpenWizard,
 }: StartServicesStepProps) {
+  const activeProfileData = profiles.find((p) => p.name === activeProfile)
+
   return (
     <div data-testid="quickstart-step-start-services" className="space-y-6">
       <div className="flex items-center justify-between">
@@ -554,6 +590,25 @@ function StartServicesStep({
               )
             })}
           </div>
+
+          {/* Wizard link for active profile */}
+          {activeProfileData?.wizard && (
+            <div className="p-3 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-primary-800 dark:text-primary-200">
+                  This profile has a guided setup wizard with more options.
+                </p>
+                <button
+                  data-testid={`quickstart-profile-wizard-link-${activeProfileData.wizard}`}
+                  onClick={() => onOpenWizard(activeProfileData.wizard!)}
+                  className="flex items-center gap-1.5 text-sm font-medium text-primary-700 dark:text-primary-300 hover:text-primary-900 dark:hover:text-primary-100 whitespace-nowrap ml-3"
+                >
+                  Open Wizard
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

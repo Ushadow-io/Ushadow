@@ -281,6 +281,9 @@ export const servicesApi = {
       port: number | null
       env_var: string | null
       default_port: number | null
+      proxy_url: string | null
+      internal_url: string | null
+      available: boolean
     }>(`/api/services/${name}/connection-info`),
 
   /** Start a service container */
@@ -429,6 +432,7 @@ export interface ServiceProfile {
   name: string
   display_name: string
   services: string[]
+  wizard?: string  // ID of setup wizard for this profile (e.g., "mycelia")
 }
 
 export interface QuickstartConfig {

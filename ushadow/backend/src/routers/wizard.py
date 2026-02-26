@@ -68,6 +68,7 @@ class ServiceProfile(BaseModel):
     name: str
     display_name: str
     services: List[str]
+    wizard: Optional[str] = None  # ID of setup wizard for this profile (e.g., "mycelia")
 
 
 class QuickstartResponse(BaseModel):
@@ -428,7 +429,16 @@ async def get_quickstart_config() -> QuickstartResponse:
     for name, profile_data in raw_profiles.items():
         profile_services = profile_data.get("services", []) if isinstance(profile_data, dict) else list(profile_data)
         display_name = profile_data.get("display_name", name.title()) if isinstance(profile_data, dict) else name.title()
-        profiles.append(ServiceProfile(name=name, display_name=display_name, services=profile_services))
+
+        # Find wizard ID for this profile by checking each service's template
+        profile_wizard = None
+        for service_name in profile_services:
+            service = registry.get_service_by_name(service_name)
+            if service and service.wizard:
+                profile_wizard = service.wizard
+                break
+
+        profiles.append(ServiceProfile(name=name, display_name=display_name, services=profile_services, wizard=profile_wizard))
         if sorted(profile_services) == sorted(default_services):
             active_profile = name
 

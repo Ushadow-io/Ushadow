@@ -104,6 +104,7 @@ security:
 infrastructure:
   mongodb_uri: ${oc.env:MONGODB_URI,mongodb://mongo:27017}
   mongodb_database: ${oc.env:MONGODB_DATABASE,ushadow}  # Default database name (NOT a URI!)
+  mongodb_user: ${oc.env:MONGODB_USER,root}
   redis_url: ${oc.env:REDIS_URL,redis://redis:6379/0}
   
   qdrant_base_url: qdrant
@@ -144,12 +145,9 @@ selected_providers:
 # These are installed by default in quickstart mode. User modifications
 # (adds/removes) are tracked in config.overrides.yaml → installed_services.
 default_services:
-  - chronicle-backend
-  - chronicle-workers
   - mem0
 
 # Service Profiles
-# Named sets of default services selectable via: ./dev.sh <profile>
 # The chosen profile's services are written to config.overrides.yaml as
 # default_services, overriding the list above.
 service_profiles:
@@ -158,7 +156,6 @@ service_profiles:
     services:
       - chronicle-backend
       - chronicle-workers
-      - mem0
   mycelia:
     display_name: "Mycelia + Memory"
     services:
