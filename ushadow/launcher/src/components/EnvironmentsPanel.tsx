@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, Trello } from 'lucide-react'
+import { Plus, Play, Square, Settings, Loader2, AppWindow, Box, X, AlertCircle, GitMerge, Terminal, FolderOpen, ArrowLeft, ArrowRight, RefreshCw, Trello, LogIn, UserPlus } from 'lucide-react'
 import type { UshadowEnvironment, TmuxStatus } from '../hooks/useTauri'
 import { tauri } from '../hooks/useTauri'
 import { getColors } from '../utils/colors'
 import { TmuxManagerDialog } from './TmuxManagerDialog'
 import { CreateTicketDialog } from './CreateTicketDialog'
+import { TokenManager } from '../services/tokenManager'
+import { AuthButton } from './AuthButton'
 
 interface CreatingEnv {
   name: string
@@ -383,6 +385,40 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
   const colors = getColors(environment.color || environment.name)
   const [iframeError, setIframeError] = useState(false)
   const [iframeLoading, setIframeLoading] = useState(true)
+  const [isAuthenticated, setIsAuthenticated] = useState(() => TokenManager.isAuthenticated())
+  const [registering, setRegistering] = useState(false)
+
+  // Poll for auth changes — detects when AuthButton's OAuth flow completes
+  useEffect(() => {
+    if (isAuthenticated) return
+    const id = setInterval(() => {
+      if (TokenManager.isAuthenticated()) setIsAuthenticated(true)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [isAuthenticated])
+
+  // Re-check auth when environment changes
+  useEffect(() => {
+    setIsAuthenticated(TokenManager.isAuthenticated())
+  }, [environment.name])
+
+  const handleRegister = async () => {
+    if (!environment.backend_port) return
+    setRegistering(true)
+    try {
+      const resp = await tauri.httpRequest(`http://localhost:${environment.backend_port}/api/settings/config`, 'GET')
+      if (resp.status === 200) {
+        const config = JSON.parse(resp.body)
+        const kcUrl = config.keycloak?.public_url || 'http://localhost:8081'
+        const registerUrl = `${kcUrl}/realms/ushadow/protocol/openid-connect/registrations?client_id=ushadow-frontend&response_type=code&scope=openid`
+        await tauri.openBrowser(registerUrl)
+      }
+    } catch (e) {
+      console.error('[BrowserView] Register error:', e)
+    } finally {
+      setRegistering(false)
+    }
+  }
 
   // Prefer Tailscale URL if available, otherwise use localhost
   const baseUrl = environment.tailscale_url || environment.localhost_url || (environment.backend_port ? `http://localhost:${environment.webui_port || environment.backend_port}` : '')
@@ -542,7 +578,7 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
         </div>
       </div>
 
-      {/* iframe */}
+      {/* iframe / auth screen */}
       <div className="flex-1 relative">
         {isLoading ? (
           /* Loading Animation Overlay */
@@ -556,6 +592,36 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
               {!loadingAction && 'Processing...'}
             </p>
             <p className="text-sm text-text-muted">This may take a moment</p>
+          </div>
+        ) : !isAuthenticated ? (
+          /* Native auth screen — replaces Keycloak login page in iframe */
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 gap-5" data-testid="browser-view-auth-screen">
+            <div className="w-14 h-14 rounded-full bg-primary-500/10 flex items-center justify-center">
+              <LogIn className="w-7 h-7 text-primary-400" />
+            </div>
+            <div className="text-center max-w-xs">
+              <h3 className="text-lg font-semibold text-text-primary mb-1">Sign in to {environment.name}</h3>
+              <p className="text-sm text-text-secondary">
+                Log in to access this environment, or create a new account.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <AuthButton environment={environment} variant="header" />
+              {environment.backend_port && (
+                <button
+                  onClick={handleRegister}
+                  disabled={registering}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors text-text-primary font-medium text-sm border border-surface-600 disabled:opacity-50"
+                  data-testid="browser-view-register-button"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  {registering ? 'Opening...' : 'Create Account'}
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-text-muted">
+              After creating an account, return here and click <span className="text-text-secondary">Log In</span>.
+            </p>
           </div>
         ) : (
           <>

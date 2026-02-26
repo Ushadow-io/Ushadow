@@ -72,8 +72,9 @@ export function TicketDetailDialog({
   const [showWorkstreamMenu, setShowWorkstreamMenu] = useState(false)
   const [showRecreateDialog, setShowRecreateDialog] = useState(false)
   const [recreatingTmux, setRecreatingTmux] = useState(false)
-  const [openingTerminal, setOpeningTerminal] = useState(false)
+  const [openingWorkmux, setOpeningWorkmux] = useState(false)
   const [mergingWorktree, setMergingWorktree] = useState(false)
+  const [agentWarning, setAgentWarning] = useState<string | null>(null)
 
   // Load environments on mount
   useEffect(() => {
@@ -226,7 +227,7 @@ export function TicketDetailDialog({
         extractedEnvName // environmentName - extract from branch name
       )
 
-      // Start coding agent in the tmux window
+      // Start coding agent headlessly in the tmux window — no terminal needed
       try {
         await tauri.startCodingAgentForTicket(
           ticket.id,
@@ -235,13 +236,12 @@ export function TicketDetailDialog({
           result.worktree_path
         )
       } catch (agentErr) {
-        console.error('[TicketDetail] Failed to start coding agent:', agentErr)
-        // Don't fail the whole operation if agent fails to start
+        const msg = agentErr instanceof Error ? agentErr.message : String(agentErr)
+        console.error('[TicketDetail] Failed to start coding agent:', msg)
+        setAgentWarning(`Agent failed to start: ${msg}`)
       }
 
-      setSuccessMessage(
-        `Worktree created at ${result.worktree_path} with tmux window ${result.tmux_window_name}`
-      )
+      setSuccessMessage('Workstream created — agent is running in the background')
       setTimeout(() => setSuccessMessage(null), 5000)
       onUpdated()
       await loadEnvironments()
@@ -288,7 +288,7 @@ export function TicketDetailDialog({
         extractedEnvName // environmentName - extract from branch name
       )
 
-      // Start coding agent in the tmux window
+      // Start coding agent headlessly in the tmux window — no terminal needed
       try {
         await tauri.startCodingAgentForTicket(
           ticket.id,
@@ -297,11 +297,12 @@ export function TicketDetailDialog({
           result.worktree_path
         )
       } catch (agentErr) {
-        console.error('[TicketDetail] Failed to start coding agent:', agentErr)
-        // Don't fail the whole operation if agent fails to start
+        const msg = agentErr instanceof Error ? agentErr.message : String(agentErr)
+        console.error('[TicketDetail] Failed to start coding agent:', msg)
+        setAgentWarning(`Agent failed to start: ${msg}`)
       }
 
-      setSuccessMessage(`Ticket assigned to environment ${env.name}`)
+      setSuccessMessage(`Assigned to ${env.name} — agent is running in the background`)
       setTimeout(() => setSuccessMessage(null), 3000)
       onUpdated()
     } catch (err) {
@@ -325,27 +326,15 @@ export function TicketDetailDialog({
     try {
       const { tauri } = await import('../hooks/useTauri')
 
-      // Recreate the tmux window using attach command
+      // Use workmux open to recreate and immediately open the window
       await tauri.attachTmuxToWorktree(
         ticket.worktree_path,
         ticket.environment_name,
-        ticket.tmux_window_name || undefined
+        undefined
       )
 
       setSuccessMessage('Tmux window recreated successfully')
       setTimeout(() => setSuccessMessage(null), 3000)
-
-      // Open terminal — derive canonical window name from env_name (workmux uses dir basename)
-      const windowName = ticket.environment_name
-        ? `ushadow-${ticket.environment_name}`
-        : ticket.tmux_window_name || ''
-      if (windowName) {
-        await tauri.openTmuxInTerminal(
-          windowName,
-          ticket.worktree_path,
-          ticket.environment_name
-        )
-      }
     } catch (err) {
       console.error('[TicketDetail] Error recreating tmux window:', err)
       setError(err instanceof Error ? err.message : 'Failed to recreate tmux window')
@@ -452,6 +441,24 @@ export function TicketDetailDialog({
                   {successMessage}
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Agent Warning (non-fatal) */}
+          {agentWarning && (
+            <div
+              className="rounded-xl p-4 flex items-start gap-3 bg-amber-500/10 border border-amber-500/20"
+              data-testid="ticket-detail-agent-warning"
+            >
+              <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0 text-amber-400" />
+              <div className="flex-1">
+                <p className="text-xs font-semibold text-amber-400 mb-1">Agent could not start automatically</p>
+                <p className="text-sm text-white/60">{agentWarning}</p>
+                <p className="text-xs text-white/40 mt-1">You can start the agent manually via "Open Workmux"</p>
+              </div>
+              <button onClick={() => setAgentWarning(null)} className="text-white/30 hover:text-white/60">
+                <X className="w-4 h-4" />
+              </button>
             </div>
           )}
 
@@ -764,22 +771,18 @@ export function TicketDetailDialog({
                     Actions
                   </h3>
 
-                  {/* Terminal Button */}
+                  {/* Open Workmux Button */}
                   <button
                     onClick={async () => {
-                      if (openingTerminal) return
-                      setOpeningTerminal(true)
+                      if (openingWorkmux) return
+                      setOpeningWorkmux(true)
                       try {
                         const { tauri } = await import('../hooks/useTauri')
-                        // Window name = ushadow-{env_name}: workmux uses the worktree directory
-                        // basename as its handle, not the branch name.
-                        const windowName = ticket.environment_name
-                          ? `ushadow-${ticket.environment_name}`
-                          : ticket.tmux_window_name || ''
-                        await tauri.openTmuxInTerminal(
-                          windowName,
+                        // Use workmux open — registers with dashboard and focuses iTerm
+                        await tauri.attachTmuxToWorktree(
                           ticket.worktree_path!,
-                          ticket.environment_name || undefined
+                          ticket.environment_name || '',
+                          undefined
                         )
                       } catch (err) {
                         const message = err instanceof Error ? err.message : String(err)
@@ -789,18 +792,18 @@ export function TicketDetailDialog({
                           setError(message)
                         }
                       } finally {
-                        setOpeningTerminal(false)
+                        setOpeningWorkmux(false)
                       }
                     }}
-                    disabled={openingTerminal}
+                    disabled={openingWorkmux}
                     className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg font-medium transition-all bg-teal-600/10 border border-teal-500/20 text-teal-400 hover:bg-teal-600/20 hover:border-teal-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                    data-testid="ticket-detail-open-terminal"
+                    data-testid="ticket-detail-open-workmux"
                   >
-                    {openingTerminal
+                    {openingWorkmux
                       ? <Loader2 className="w-4.5 h-4.5 animate-spin" />
                       : <Terminal className="w-4.5 h-4.5" />
                     }
-                    <span>{openingTerminal ? 'Opening…' : 'Open Terminal'}</span>
+                    <span>{openingWorkmux ? 'Opening…' : 'Open Workmux'}</span>
                   </button>
 
                   {/* VSCode Button */}
