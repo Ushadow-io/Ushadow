@@ -41,6 +41,7 @@ providers:
       server_url:
         env_var: MEMORY_SERVER_URL
         value: "http://mem0:8765"
+        required: true
       api_key:
         env_var: MEMORY_API_KEY
         value: ""

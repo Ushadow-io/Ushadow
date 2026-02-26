@@ -37,6 +37,7 @@ providers:
         settings_path: llm.openai_model
         label: "Model"
         default: "gpt-4o-mini"
+        required: true
 
     ui:
       icon: openai
@@ -103,7 +104,7 @@ providers:
         env_var: OLLAMA_BASE_URL
         settings_path: llm.ollama_base_url
         label: "Ollama URL"
-        default: "http://ollama:11434"
+        required: true
       model:
         env_var: OLLAMA_MODEL
         settings_path: llm.ollama_model

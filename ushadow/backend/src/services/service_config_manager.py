@@ -41,14 +41,18 @@ def _get_config_dir() -> Path:
     if config_dir:
         return Path(config_dir)
 
-    # Default: walk up from this file looking for a config/ dir that contains service_configs.yaml
+    # In Docker container, config is mounted at /config (mirrors SettingsStore logic)
+    if Path("/config").exists():
+        return Path("/config")
+
+    # Local dev: walk up from this file looking for a config/ dir that contains service_configs.yaml
     current = Path(__file__).resolve()
     for parent in current.parents:
         candidate = parent / "config"
         if candidate.exists() and (candidate / "service_configs.yaml").exists():
             return candidate
 
-    # Fallback
+    # Fallback for local dev (valid path: project_root/config)
     return Path(__file__).resolve().parents[4] / "config"
 
 
