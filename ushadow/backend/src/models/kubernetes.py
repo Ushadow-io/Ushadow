@@ -114,6 +114,10 @@ class KubernetesNode(BaseModel):
     external_ip: Optional[str] = Field(None, description="External IP address")
     hostname: Optional[str] = Field(None, description="Hostname")
 
+    # GPU capacity (from extended resources)
+    gpu_capacity_nvidia: Optional[int] = Field(None, description="NVIDIA GPU count from nvidia.com/gpu")
+    gpu_capacity_amd: Optional[int] = Field(None, description="AMD GPU count from amd.com/gpu")
+
     # Taints and labels
     taints: List[Dict[str, str]] = Field(default_factory=list, description="Node taints")
     labels: Dict[str, str] = Field(default_factory=dict, description="Node labels")

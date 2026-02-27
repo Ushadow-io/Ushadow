@@ -662,6 +662,29 @@ export interface CertificateStatus {
   renewal_time?: string
 }
 
+export interface KubernetesNode {
+  name: string
+  cluster_id: string
+  status: string
+  ready: boolean
+  kubelet_version?: string
+  os_image?: string
+  kernel_version?: string
+  container_runtime?: string
+  cpu_capacity?: string
+  memory_capacity?: string
+  cpu_allocatable?: string
+  memory_allocatable?: string
+  gpu_capacity_nvidia?: number
+  gpu_capacity_amd?: number
+  roles: string[]
+  internal_ip?: string
+  external_ip?: string
+  hostname?: string
+  taints: Array<{ key: string; value: string; effect: string }>
+  labels: Record<string, string>
+}
+
 export const kubernetesApi = {
   addCluster: (data: { name: string; kubeconfig: string; context?: string; namespace?: string; labels?: Record<string, string> }) =>
     api.post<KubernetesCluster>('/api/kubernetes', data),
@@ -745,6 +768,10 @@ export const kubernetesApi = {
     api.get<{ certificates: CertificateStatus[]; total: number }>(
       `/api/kubernetes/${clusterId}/dns/certificates${namespace ? `?namespace=${namespace}` : ''}`
     ),
+
+  // Node operations
+  listNodes: (clusterId: string) =>
+    api.get<KubernetesNode[]>(`/api/kubernetes/${clusterId}/nodes`),
 }
 
 // Service Definition and Deployment types

@@ -36,6 +36,16 @@ class UNodeType(str, Enum):
     KUBERNETES = "kubernetes"  # Kubernetes cluster
 
 
+class GPUDevice(BaseModel):
+    """A single GPU device detected on the node."""
+    vendor: str  # "nvidia" or "amd"
+    index: int = 0
+    model: str = ""
+    vram_mb: Optional[int] = None
+    cuda_version: Optional[str] = None
+    rocm_version: Optional[str] = None
+
+
 class UNodeCapabilities(BaseModel):
     """Capabilities of a u-node."""
     can_run_docker: bool = True
@@ -45,6 +55,11 @@ class UNodeCapabilities(BaseModel):
     available_memory_mb: int = 0
     available_cpu_cores: float = 0
     available_disk_gb: float = 0
+    # GPU details (additive, backward-compatible defaults)
+    gpu_count: int = 0
+    gpu_devices: List[GPUDevice] = Field(default_factory=list)
+    gpu_model: Optional[str] = None
+    gpu_vram_mb: Optional[int] = None
 
 
 class UNodeBase(BaseModel):
