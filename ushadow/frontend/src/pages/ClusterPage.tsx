@@ -35,6 +35,17 @@ interface UNode {
     available_memory_mb: number
     available_cpu_cores: number
     available_disk_gb: number
+    gpu_count?: number
+    gpu_devices?: Array<{
+      vendor: string
+      index: number
+      model: string
+      vram_mb?: number
+      cuda_version?: string
+      rocm_version?: string
+    }>
+    gpu_model?: string
+    gpu_vram_mb?: number
   }
   metadata?: {
     last_metrics?: {
@@ -102,6 +113,9 @@ interface LeaderInfo {
       available_memory_mb: number
       available_cpu_cores: number
       available_disk_gb: number
+      gpu_count?: number
+      gpu_model?: string
+      gpu_vram_mb?: number
     }
     services?: string[]
     manager_version?: string
@@ -792,6 +806,40 @@ export default function ClusterPage() {
                   </div>
                 )}
               </div>
+
+              {/* GPU Info */}
+              {node.capabilities?.can_run_gpu && (
+                <div
+                  className="flex flex-wrap items-center gap-2 text-xs mb-4"
+                  data-testid={`node-gpu-info-${node.hostname}`}
+                >
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300 font-medium">
+                    {(node.capabilities.gpu_count || 1) > 1
+                      ? `${node.capabilities.gpu_count}x GPU`
+                      : 'GPU'}
+                  </span>
+                  {node.capabilities.gpu_model && (
+                    <span className="text-neutral-600 dark:text-neutral-300">
+                      {node.capabilities.gpu_model}
+                    </span>
+                  )}
+                  {node.capabilities.gpu_vram_mb && (
+                    <span className="text-neutral-500 dark:text-neutral-400">
+                      {(node.capabilities.gpu_vram_mb / 1024).toFixed(0)} GB VRAM
+                    </span>
+                  )}
+                  {node.capabilities.gpu_devices?.[0]?.cuda_version && (
+                    <span className="text-neutral-500 dark:text-neutral-400">
+                      CUDA {node.capabilities.gpu_devices[0].cuda_version}
+                    </span>
+                  )}
+                  {node.capabilities.gpu_devices?.[0]?.rocm_version && (
+                    <span className="text-neutral-500 dark:text-neutral-400">
+                      ROCm {node.capabilities.gpu_devices[0].rocm_version}
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Deployed Services */}
               {getNodeDeployments(node.hostname).length > 0 && (
