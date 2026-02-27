@@ -69,7 +69,7 @@ function App() {
   const [showNewEnvDialog, setShowNewEnvDialog] = useState(false)
   const [showTmuxManager, setShowTmuxManager] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
-  const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string; envPath: string | null } | null>(null)
+  const [embeddedView, setEmbeddedView] = useState<{ url: string; envName: string; envColor: string; envPath: string | null; backendPort: number | null } | null>(null)
   const [creatingEnvs, setCreatingEnvs] = useState<{ name: string; status: 'cloning' | 'starting' | 'error'; path?: string; error?: string }[]>([])
   const [shouldAutoLaunch, setShouldAutoLaunch] = useState(false)
   const [leftColumnWidth, setLeftColumnWidth] = useState(350) // pixels
@@ -770,7 +770,7 @@ function App() {
     const url = env.tailscale_url || env.localhost_url || `http://localhost:${env.webui_port || env.backend_port}`
     const colors = getColors(env.color || env.name)
     log(`Opening ${env.name} in embedded view...`, 'info')
-    setEmbeddedView({ url, envName: env.name, envColor: colors.primary, envPath: env.path })
+    setEmbeddedView({ url, envName: env.name, envColor: colors.primary, envPath: env.path, backendPort: env.backend_port })
   }
 
   const handleMerge = async (envName: string) => {
@@ -1509,6 +1509,7 @@ function App() {
           envName={embeddedView.envName}
           envColor={embeddedView.envColor}
           envPath={embeddedView.envPath}
+          backendPort={embeddedView.backendPort}
           onClose={() => setEmbeddedView(null)}
         />
       )}
@@ -1738,7 +1739,7 @@ function App() {
             </div>
 
             {/* Infrastructure Configuration */}
-            {effectiveProjectRoot && (
+            {multiProjectMode && effectiveProjectRoot && (
               <InfraConfigPanel
                 projectRoot={effectiveProjectRoot}
                 selectedInfraServices={selectedInfraServices}
@@ -1799,7 +1800,7 @@ function App() {
             environments={environments}
             onOpenInApp={(env) => {
               if (env.localhost_url) {
-                setEmbeddedView({ url: env.localhost_url, envName: env.name, envColor: env.color ?? env.name, envPath: env.path ?? null })
+                setEmbeddedView({ url: env.localhost_url, envName: env.name, envColor: env.color ?? env.name, envPath: env.path ?? null, backendPort: env.backend_port })
               }
             }}
           />
@@ -1860,14 +1861,16 @@ function App() {
       />
 
       {/* Claude Session Notch Overlay */}
-      <LauncherNotch
-        sessions={claudeSessions}
-        onOpenInApp={(env) => {
-          if (env.localhost_url) {
-            setEmbeddedView({ url: env.localhost_url, envName: env.name, envColor: env.color ?? env.name, envPath: env.path ?? null })
-          }
-        }}
-      />
+      {claudeEnabled && (
+        <LauncherNotch
+          sessions={claudeSessions}
+          onOpenInApp={(env) => {
+            if (env.localhost_url) {
+              setEmbeddedView({ url: env.localhost_url, envName: env.name, envColor: env.color ?? env.name, envPath: env.path ?? null, backendPort: env.backend_port })
+            }
+          }}
+        />
+      )}
     </div>
   )
 }
