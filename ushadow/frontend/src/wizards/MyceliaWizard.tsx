@@ -1,21 +1,24 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Database, CheckCircle, Loader2, AlertCircle, Wifi, WifiOff, Plus } from 'lucide-react'
+import { Database, CheckCircle, Loader2, AlertCircle, Cloud, HardDrive } from 'lucide-react'
 
 import {
   servicesApi,
   deploymentsApi,
   settingsApi,
   svcConfigsApi,
+  providersApi,
   type EnvVarInfo,
   type EnvVarConfig,
   type EnvVarSuggestion,
   type DeployTarget,
   type Deployment,
   type Template,
+  type ProviderWithStatus,
   type ServiceConfigSummary,
   type Wiring,
 } from '../services/api'
+import { SettingField } from '../components/settings/SettingField'
 import { useWizardSteps } from '../hooks/useWizardSteps'
 import { WizardShell, WizardMessage } from '../components/wizard'
 import type { WizardStep } from '../types/wizard'
@@ -31,8 +34,6 @@ const STEPS: WizardStep[] = [
 
 const MYCELIA_TARGET = 'mycelia-backend'
 const TRANSCRIPTION_CAPABILITY = 'transcription'
-const WHISPER_PROVIDER_TEMPLATE = 'whisper-local'
-const WHISPER_COMPOSE_SERVICE = 'faster-whisper'
 
 export default function MyceliaWizard() {
   const navigate = useNavigate()
@@ -41,6 +42,7 @@ export default function MyceliaWizard() {
   const [isStarting, setIsStarting] = useState(false)
   const [serviceStarted, setServiceStarted] = useState(false)
   const [tokenData, setTokenData] = useState<{ token: string; clientId: string } | null>(null)
+  const hasAutoDeployedRef = useRef(false)
 
   // EnvVar state for AUTH_SECRET_KEY
   const [authSecretKeyEnvVar, setAuthSecretKeyEnvVar] = useState<EnvVarInfo>({
@@ -59,6 +61,14 @@ export default function MyceliaWizard() {
   useEffect(() => {
     loadAuthSecretKey()
   }, [])
+
+  // Auto-deploy when entering the complete step (guarded with ref to prevent double-fire)
+  useEffect(() => {
+    if (wizard.currentStep.id === 'complete' && !serviceStarted && !isStarting && !hasAutoDeployedRef.current) {
+      hasAutoDeployedRef.current = true
+      handleDeploy()
+    }
+  }, [wizard.currentStep.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAuthSecretKey = async () => {
     try {
@@ -348,11 +358,14 @@ function SetupStep({ authSecretKeyEnvVar, authSecretKeyConfig, onAuthSecretKeyCh
 
 function CapabilityConfigStep() {
   const [loading, setLoading] = useState(true)
+  const [providers, setProviders] = useState<ProviderWithStatus[]>([])
+  const [composeTemplates, setComposeTemplates] = useState<Template[]>([])
   const [existingConfigs, setExistingConfigs] = useState<ServiceConfigSummary[]>([])
   const [currentWiring, setCurrentWiring] = useState<Wiring | null>(null)
   const [deployTarget, setDeployTarget] = useState<DeployTarget | null>(null)
-  const [mode, setMode] = useState<'url' | 'local' | null>(null)
-  const [urlInput, setUrlInput] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [showProviders, setShowProviders] = useState(false)
+  const [configValues, setConfigValues] = useState<Record<string, string>>({})
   const [isProcessing, setIsProcessing] = useState(false)
   const [stepMessage, setStepMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null)
 
@@ -363,23 +376,31 @@ function CapabilityConfigStep() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [templatesRes, configsRes, wiringRes, targetsRes] = await Promise.all([
+      const [providersRes, templatesRes, configsRes, wiringRes, targetsRes] = await Promise.all([
+        providersApi.getProvidersByCapability(TRANSCRIPTION_CAPABILITY),
         svcConfigsApi.getTemplates(),
         svcConfigsApi.getServiceConfigs(),
         svcConfigsApi.getWiring(),
         deploymentsApi.listTargets(),
       ])
 
-      // Provider templates that provide transcription
-      const transProviders = templatesRes.data.filter(
-        (t: Template) => t.provides === TRANSCRIPTION_CAPABILITY && t.source === 'provider'
+      setProviders(providersRes.data)
+
+      // Compose services that provide transcription (e.g. faster-whisper)
+      setComposeTemplates(
+        templatesRes.data.filter(
+          (t: Template) => t.source === 'compose' && t.provides === TRANSCRIPTION_CAPABILITY
+        )
       )
 
-      // Existing ServiceConfigs for those templates
-      const transConfigs = configsRes.data.filter((c: ServiceConfigSummary) =>
-        transProviders.some((t: Template) => t.id === c.template_id)
+      // Existing ServiceConfigs for transcription providers
+      const providerIds = new Set(providersRes.data.map((p: ProviderWithStatus) => p.id))
+      setExistingConfigs(
+        configsRes.data.filter(
+          (c: ServiceConfigSummary) =>
+            c.provides === TRANSCRIPTION_CAPABILITY || providerIds.has(c.template_id)
+        )
       )
-      setExistingConfigs(transConfigs)
 
       // Current transcription wiring for mycelia-backend
       const transWiring = wiringRes.data.find(
@@ -387,7 +408,7 @@ function CapabilityConfigStep() {
       )
       setCurrentWiring(transWiring || null)
 
-      // Deploy target for "start locally" option
+      // Deploy target (local leader)
       const leader = targetsRes.data.find((t: DeployTarget) => t.type === 'docker' && t.is_leader)
       setDeployTarget(leader || null)
     } catch (err) {
@@ -408,42 +429,55 @@ function CapabilityConfigStep() {
       target_capability: TRANSCRIPTION_CAPABILITY,
     })
     await loadData()
+    setSelectedId(null)
+    setShowProviders(false)
+    setConfigValues({})
   }
 
-  const handleUseUrl = async () => {
-    if (!urlInput.trim()) return
+  /** Save provider credentials to settings, create a ServiceConfig, and wire it */
+  const handleConfigureProvider = async (provider: ProviderWithStatus) => {
     setIsProcessing(true)
-    setStepMessage({ type: 'info', text: 'Creating configuration...' })
+    setStepMessage({ type: 'info', text: 'Saving configuration...' })
     try {
-      let configId = 'whisper-custom'
-      try {
-        const config = await svcConfigsApi.createServiceConfig({
-          id: configId,
-          template_id: WHISPER_PROVIDER_TEMPLATE,
-          name: 'Whisper (Custom URL)',
-          config: { server_url: urlInput.trim() },
-        })
-        configId = config.data.id
-      } catch {
-        await svcConfigsApi.updateServiceConfig(configId, { config: { server_url: urlInput.trim() } })
+      // Save credentials to their settings paths
+      const settingsUpdate: Record<string, string> = {}
+      for (const cred of provider.credentials ?? []) {
+        if (cred.settings_path && configValues[cred.key]) {
+          settingsUpdate[cred.settings_path] = configValues[cred.key]
+        }
       }
-      await wireConfig(configId)
-      setMode(null)
-      setUrlInput('')
-      setStepMessage({ type: 'success', text: 'Transcription provider configured!' })
+      if (Object.keys(settingsUpdate).length > 0) {
+        await settingsApi.update(settingsUpdate)
+      }
+
+      const configId = `${provider.id}-config`
+      try {
+        const result = await svcConfigsApi.createServiceConfig({
+          id: configId,
+          template_id: provider.id,
+          name: provider.name,
+          config: configValues,
+        })
+        await wireConfig(result.data.id)
+      } catch {
+        await svcConfigsApi.updateServiceConfig(configId, { config: configValues })
+        await wireConfig(configId)
+      }
+      setStepMessage({ type: 'success', text: `${provider.name} configured!` })
     } catch (err) {
-      setStepMessage({ type: 'error', text: getErrorMessage(err, 'Failed to configure') })
+      setStepMessage({ type: 'error', text: getErrorMessage(err, 'Failed to save configuration') })
     } finally {
       setIsProcessing(false)
     }
   }
 
-  const handleStartLocally = async () => {
+  /** Deploy a compose service, then create a provider ServiceConfig and wire it */
+  const handleDeployCompose = async (composeTemplate: Template) => {
     if (!deployTarget) return
     setIsProcessing(true)
-    setStepMessage({ type: 'info', text: 'Deploying Faster-Whisper...' })
+    setStepMessage({ type: 'info', text: `Deploying ${composeTemplate.name}...` })
     try {
-      await deploymentsApi.deploy(WHISPER_COMPOSE_SERVICE, deployTarget.identifier)
+      await deploymentsApi.deploy(composeTemplate.id, deployTarget.identifier)
 
       // Poll until running
       let running = false
@@ -452,43 +486,70 @@ function CapabilityConfigStep() {
         await new Promise(r => setTimeout(r, 3000))
         try {
           const deps = await deploymentsApi.listDeployments({ unode_hostname: deployTarget.identifier })
-          const dep = deps.data.find((d: Deployment) => d.service_id.includes(WHISPER_COMPOSE_SERVICE))
+          const dep = deps.data.find((d: Deployment) => d.service_id.includes(composeTemplate.id))
           if (dep?.status === 'running') running = true
-        } catch {
-          // ignore transient polling errors
-        }
+        } catch { /* ignore transient polling errors */ }
       }
-      if (!running) throw new Error('Deployment timed out')
+      if (!running) throw new Error('Deployment timed out after 3 minutes')
 
-      setStepMessage({ type: 'info', text: 'Whisper running. Configuring connection...' })
+      setStepMessage({ type: 'info', text: `${composeTemplate.name} running. Wiring connection...` })
 
-      // Get internal URL for container-to-container communication
-      const info = await servicesApi.getConnectionInfo(WHISPER_COMPOSE_SERVICE)
+      // Get internal URL for backend→service communication
+      const info = await servicesApi.getConnectionInfo(composeTemplate.id)
       const serverUrl = info.data.internal_url || info.data.proxy_url
-      if (!serverUrl) throw new Error('Could not get service URL')
+      if (!serverUrl) throw new Error('Could not determine service URL')
 
-      // Create provider ServiceConfig with the URL
-      let configId = 'whisper-local'
+      // Find the local provider to use as the ServiceConfig template
+      const localProvider = providers.find(p => p.mode === 'local')
+      const configTemplateId = localProvider?.id ?? composeTemplate.id
+      const configId = `${composeTemplate.id}-auto`
+
       try {
-        const config = await svcConfigsApi.createServiceConfig({
+        const result = await svcConfigsApi.createServiceConfig({
           id: configId,
-          template_id: WHISPER_PROVIDER_TEMPLATE,
-          name: 'Whisper (Local)',
+          template_id: configTemplateId,
+          name: `${composeTemplate.name} (auto)`,
           config: { server_url: serverUrl },
         })
-        configId = config.data.id
+        await wireConfig(result.data.id)
       } catch {
         await svcConfigsApi.updateServiceConfig(configId, { config: { server_url: serverUrl } })
+        await wireConfig(configId)
       }
-      await wireConfig(configId)
-      setMode(null)
-      setStepMessage({ type: 'success', text: 'Faster-Whisper deployed and configured!' })
+
+      setStepMessage({ type: 'success', text: `${composeTemplate.name} deployed and connected!` })
     } catch (err) {
-      setStepMessage({ type: 'error', text: getErrorMessage(err, 'Failed to deploy Whisper') })
+      setStepMessage({ type: 'error', text: getErrorMessage(err, `Failed to deploy ${composeTemplate.name}`) })
     } finally {
       setIsProcessing(false)
     }
   }
+
+  const selectedProvider = providers.find(p => p.id === selectedId)
+  const selectedCompose = composeTemplates.find(t => t.id === selectedId)
+
+  // Validate required credentials before enabling Save & Connect
+  const missingRequiredCreds = (selectedProvider?.credentials ?? []).filter(
+    cred => cred.required && !cred.has_value && !configValues[cred.key]
+  )
+
+  // Group config: defines which providers and compose templates belong together
+  const GROUPS = [
+    {
+      id: 'whisper',
+      label: 'Whisper',
+      providerIds: ['whisper-local'],
+      composeServiceNames: ['faster-whisper'],
+    },
+  ]
+
+  const groupedProviderIds = new Set(GROUPS.flatMap(g => g.providerIds))
+  const groupedComposeIds = new Set(GROUPS.flatMap(g => g.composeServiceNames))
+
+  const standaloneProviders = providers.filter(p => !groupedProviderIds.has(p.id))
+  const standaloneCompose = composeTemplates.filter(t => !(t.service_name && groupedComposeIds.has(t.service_name)))
+
+  const allOptions = providers.length + composeTemplates.length
 
   if (loading) {
     return (
@@ -498,8 +559,6 @@ function CapabilityConfigStep() {
     )
   }
 
-  const isConfigured = !!currentWiring
-
   return (
     <div data-testid="mycelia-step-capability-config" className="space-y-6">
       <div>
@@ -507,151 +566,207 @@ function CapabilityConfigStep() {
           Configure Providers
         </h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          Optionally configure AI providers for Mycelia's features. You can skip and configure later.
+          Optionally configure a transcription provider for voice processing. You can skip and configure later.
         </p>
       </div>
 
-      {/* Transcription slot */}
+      {/* Transcription capability slot */}
       <div className="border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden">
         <div className="px-4 py-3 bg-neutral-50 dark:bg-neutral-800/50 border-b border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
           <div>
             <h3 className="font-medium text-neutral-900 dark:text-neutral-100 text-sm">Transcription</h3>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">Voice-to-text for audio processing</p>
           </div>
-          {isConfigured ? (
-            <div className="flex items-center gap-1.5 text-success-600 dark:text-success-400">
-              <CheckCircle className="w-4 h-4" />
-              <span className="text-xs font-medium">Configured</span>
+          {currentWiring ? (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-success-600 dark:text-success-400">
+                <CheckCircle className="w-4 h-4" />
+                <span className="text-xs font-medium">Configured</span>
+              </div>
+              <button
+                data-testid="mycelia-capability-transcription-change"
+                onClick={() => {
+                  setShowProviders(v => !v)
+                  if (showProviders) {
+                    setSelectedId(null)
+                    setConfigValues({})
+                  }
+                }}
+                className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 ml-2"
+              >
+                {showProviders ? 'Cancel' : 'Change'}
+              </button>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-neutral-400">
-              <WifiOff className="w-4 h-4" />
-              <span className="text-xs">Not configured</span>
-            </div>
+            <span className="text-xs text-neutral-400">Not configured</span>
           )}
         </div>
 
         <div className="p-4 space-y-3">
-          {/* Current wiring */}
-          {isConfigured && (
-            <div className="flex items-center justify-between text-sm bg-success-50 dark:bg-success-900/20 rounded-lg px-3 py-2">
-              <div className="flex items-center gap-2">
-                <Wifi className="w-4 h-4 text-success-600 dark:text-success-400" />
-                <span className="text-neutral-700 dark:text-neutral-300">{currentWiring!.source_config_id}</span>
+          {/* Existing configured ServiceConfigs */}
+          {existingConfigs.length > 0 && !currentWiring && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide">Saved configurations</p>
+              {existingConfigs.map((cfg) => (
+                <button
+                  key={cfg.id}
+                  data-testid={`mycelia-capability-select-config-${cfg.id}`}
+                  onClick={() => wireConfig(cfg.id)}
+                  disabled={isProcessing}
+                  className="w-full text-left flex items-center justify-between px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-400 dark:hover:border-primary-600 text-sm transition-colors"
+                >
+                  <span className="text-neutral-800 dark:text-neutral-200">{cfg.name || cfg.id}</span>
+                  <span className="text-xs text-primary-600 dark:text-primary-400">Use</span>
+                </button>
+              ))}
+              <div className="flex items-center gap-2 my-2">
+                <div className="flex-1 h-px bg-neutral-200 dark:bg-neutral-700" />
+                <span className="text-xs text-neutral-400">or add new</span>
+                <div className="flex-1 h-px bg-neutral-200 dark:bg-neutral-700" />
               </div>
+            </div>
+          )}
+
+          {/* Provider + compose selection cards */}
+          {(!currentWiring || showProviders) && allOptions > 0 && (
+            <div className="space-y-2">
+              {/* Standalone providers (not in any group) */}
+              {standaloneProviders.map((provider) => (
+                <ProviderCard
+                  key={provider.id}
+                  provider={provider}
+                  isSelected={provider.id === selectedId}
+                  disabled={isProcessing}
+                  onSelect={() => {
+                    setSelectedId(provider.id === selectedId ? null : provider.id)
+                    setConfigValues({})
+                    setStepMessage(null)
+                  }}
+                />
+              ))}
+
+              {/* Standalone compose templates (not in any group) */}
+              {standaloneCompose.map((template) => (
+                <ComposeCard
+                  key={template.id}
+                  template={template}
+                  isSelected={template.id === selectedId}
+                  disabled={isProcessing}
+                  onSelect={() => {
+                    setSelectedId(template.id === selectedId ? null : template.id)
+                    setConfigValues({})
+                    setStepMessage(null)
+                  }}
+                />
+              ))}
+
+              {/* Grouped providers */}
+              {GROUPS.map((group) => {
+                const groupProviders = providers.filter(p => group.providerIds.includes(p.id))
+                const groupCompose = composeTemplates.filter(t => t.service_name && group.composeServiceNames.includes(t.service_name))
+                if (groupProviders.length + groupCompose.length === 0) return null
+                return (
+                  <div key={group.id} data-testid={`mycelia-capability-group-${group.id}`} className="border border-neutral-200 dark:border-neutral-700 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-neutral-50 dark:bg-neutral-800/50 border-b border-neutral-200 dark:border-neutral-700">
+                      <span className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">{group.label}</span>
+                    </div>
+                    <div className="p-2 space-y-1.5">
+                      {groupProviders.map((provider) => (
+                        <ProviderCard
+                          key={provider.id}
+                          provider={provider}
+                          isSelected={provider.id === selectedId}
+                          disabled={isProcessing}
+                          onSelect={() => {
+                            setSelectedId(provider.id === selectedId ? null : provider.id)
+                            setConfigValues({})
+                            setStepMessage(null)
+                          }}
+                        />
+                      ))}
+                      {groupCompose.map((template) => (
+                        <ComposeCard
+                          key={template.id}
+                          template={template}
+                          isSelected={template.id === selectedId}
+                          disabled={isProcessing}
+                          onSelect={() => {
+                            setSelectedId(template.id === selectedId ? null : template.id)
+                            setConfigValues({})
+                            setStepMessage(null)
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Config panel for selected provider */}
+          {selectedProvider && (!currentWiring || showProviders) && (
+            <div className="mt-2 p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 space-y-3">
+              {(selectedProvider.credentials ?? []).length === 0 ? (
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 italic">
+                  No configuration required.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {(selectedProvider.credentials ?? []).map((cred) => (
+                    <SettingField
+                      key={cred.key}
+                      id={`mycelia-capability-field-${cred.key}`}
+                      name={cred.key}
+                      label={cred.label ?? cred.key}
+                      type={
+                        cred.type === 'secret' ? 'secret'
+                        : cred.type === 'url' ? 'url'
+                        : 'text'
+                      }
+                      value={configValues[cred.key] ?? (cred.has_value ? '•'.repeat(16) : '')}
+                      onChange={(v) => setConfigValues(prev => ({ ...prev, [cred.key]: v as string }))}
+                      required={cred.required}
+                      disabled={isProcessing}
+                      placeholder={cred.default ?? undefined}
+                    />
+                  ))}
+                </div>
+              )}
               <button
-                data-testid="mycelia-capability-transcription-change"
-                onClick={() => setMode(mode ? null : 'url')}
-                className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                data-testid={`mycelia-capability-provider-save-${selectedProvider.id}`}
+                onClick={() => handleConfigureProvider(selectedProvider)}
+                disabled={isProcessing || missingRequiredCreds.length > 0}
+                title={missingRequiredCreds.length > 0 ? `Missing required fields: ${missingRequiredCreds.map(f => f.label).join(', ')}` : undefined}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Change
+                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {isProcessing ? 'Saving...' : 'Save & Connect'}
               </button>
             </div>
           )}
 
-          {/* Existing configs to select */}
-          {!isConfigured && existingConfigs.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">Use existing config:</p>
-              {existingConfigs.map((config) => (
-                <button
-                  key={config.id}
-                  data-testid={`mycelia-capability-select-config-${config.id}`}
-                  onClick={() => wireConfig(config.id)}
-                  disabled={isProcessing}
-                  className="w-full text-left px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-primary-400 dark:hover:border-primary-600 text-sm transition-colors"
-                >
-                  {config.name || config.id}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Add new options */}
-          {(!isConfigured || mode) && (
-            <div className="space-y-3">
-              {!isConfigured && <p className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">Configure new:</p>}
-
-              {/* Toggle buttons */}
-              <div className="flex gap-2">
-                <button
-                  data-testid="mycelia-capability-mode-url"
-                  onClick={() => setMode(mode === 'url' ? null : 'url')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                    mode === 'url'
-                      ? 'bg-primary-600 text-white border-primary-600'
-                      : 'border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 hover:border-primary-400'
-                  }`}
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Use URL
-                </button>
-                {deployTarget && (
-                  <button
-                    data-testid="mycelia-capability-mode-local"
-                    onClick={() => setMode(mode === 'local' ? null : 'local')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                      mode === 'local'
-                        ? 'bg-primary-600 text-white border-primary-600'
-                        : 'border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 hover:border-primary-400'
-                    }`}
-                  >
-                    <Database className="w-3.5 h-3.5" />
-                    Start Locally
-                  </button>
+          {/* Deploy panel for selected compose service */}
+          {selectedCompose && (!currentWiring || showProviders) && (
+            <div className="mt-2 p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 space-y-3">
+              <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                {selectedCompose.running
+                  ? `${selectedCompose.name} is already running and will be connected automatically.`
+                  : `Deploy ${selectedCompose.name} on this machine. ${selectedCompose.description ?? ''}`}
+              </p>
+              <button
+                data-testid={`mycelia-capability-compose-deploy-${selectedCompose.id}`}
+                onClick={() => handleDeployCompose(selectedCompose)}
+                disabled={isProcessing || !deployTarget}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : (
+                  selectedCompose.running ? <CheckCircle className="w-4 h-4" /> : <Database className="w-4 h-4" />
                 )}
-              </div>
-
-              {/* URL form */}
-              {mode === 'url' && (
-                <div className="space-y-2 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg">
-                  <label className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
-                    Whisper Server URL
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      data-testid="mycelia-capability-url-input"
-                      type="url"
-                      value={urlInput}
-                      onChange={e => setUrlInput(e.target.value)}
-                      placeholder="http://your-whisper-server:9000"
-                      className="flex-1 px-3 py-2 text-sm rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                    />
-                    <button
-                      data-testid="mycelia-capability-url-save"
-                      onClick={handleUseUrl}
-                      disabled={isProcessing || !urlInput.trim()}
-                      className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Start locally form */}
-              {mode === 'local' && (
-                <div className="p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg space-y-2">
-                  <p className="text-xs text-neutral-600 dark:text-neutral-400">
-                    Deploy Faster-Whisper on this machine. Uses CPU; ensure you have enough RAM (~2GB).
-                  </p>
-                  <button
-                    data-testid="mycelia-capability-deploy-local"
-                    onClick={handleStartLocally}
-                    disabled={isProcessing}
-                    className="flex items-center gap-2 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isProcessing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Deploying...
-                      </>
-                    ) : (
-                      'Start Faster-Whisper'
-                    )}
-                  </button>
-                </div>
-              )}
+                {isProcessing
+                  ? (selectedCompose.running ? 'Connecting...' : 'Deploying...')
+                  : (selectedCompose.running ? 'Use This Service' : `Deploy ${selectedCompose.name}`)}
+              </button>
             </div>
           )}
 
@@ -680,6 +795,98 @@ function CapabilityConfigStep() {
 }
 
 // =============================================================================
+// Shared card sub-components
+// =============================================================================
+
+interface ProviderCardProps {
+  provider: ProviderWithStatus
+  isSelected: boolean
+  disabled: boolean
+  onSelect: () => void
+}
+
+function ProviderCard({ provider, isSelected, disabled, onSelect }: ProviderCardProps) {
+  return (
+    <button
+      data-testid={`mycelia-capability-provider-${provider.id}`}
+      onClick={onSelect}
+      disabled={disabled}
+      className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
+        isSelected
+          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 bg-white dark:bg-neutral-800'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        {provider.mode === 'cloud' ? (
+          <Cloud className="w-4 h-4 text-blue-500 shrink-0" />
+        ) : (
+          <HardDrive className="w-4 h-4 text-neutral-400 shrink-0" />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              {provider.name}
+            </span>
+            {provider.configured && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300">
+                Configured
+              </span>
+            )}
+          </div>
+          {provider.description && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">
+              {provider.description}
+            </p>
+          )}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+interface ComposeCardProps {
+  template: Template
+  isSelected: boolean
+  disabled: boolean
+  onSelect: () => void
+}
+
+function ComposeCard({ template, isSelected, disabled, onSelect }: ComposeCardProps) {
+  return (
+    <button
+      data-testid={`mycelia-capability-compose-${template.id}`}
+      onClick={onSelect}
+      disabled={disabled}
+      className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
+        isSelected
+          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 bg-white dark:bg-neutral-800'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <HardDrive className="w-4 h-4 text-green-500 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              {template.name}
+            </span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+              {template.running ? 'Running' : 'Deployable'}
+            </span>
+          </div>
+          {template.description && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">
+              {template.description}
+            </p>
+          )}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// =============================================================================
 // Complete Step
 // =============================================================================
 
@@ -691,13 +898,6 @@ interface CompleteStepProps {
 }
 
 function CompleteStep({ tokenData, serviceStarted, isStarting, onDeploy }: CompleteStepProps) {
-  // Auto-trigger deployment when this step is first shown
-  useEffect(() => {
-    if (!serviceStarted && !isStarting) {
-      onDeploy()
-    }
-  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
-
   return (
     <div data-testid="mycelia-step-complete" className="space-y-6">
       {isStarting ? (

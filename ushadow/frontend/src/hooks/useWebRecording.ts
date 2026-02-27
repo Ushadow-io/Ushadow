@@ -30,6 +30,12 @@ export interface DebugStats {
   connectionAttempts: number
 }
 
+export interface LiveTranscriptEntry {
+  source: string
+  finalText: string
+  interimText: string
+}
+
 export interface WebRecordingReturn {
   // Current state
   currentStep: RecordingStep
@@ -57,6 +63,7 @@ export interface WebRecordingReturn {
   // For components
   analyser: AnalyserNode | null
   debugStats: DebugStats
+  liveTranscript: LiveTranscriptEntry[]
 
   // Utilities
   formatDuration: (seconds: number) => string
@@ -166,6 +173,10 @@ export const useWebRecording = (): WebRecordingReturn => {
     sessionStartTime: null,
     connectionAttempts: 0
   })
+
+  // Live transcript - accumulated text from destination services (e.g. Chronicle Deepgram interim results)
+  const transcriptBySourceRef = useRef<Record<string, { finalText: string; interimText: string }>>({})
+  const [liveTranscript, setLiveTranscript] = useState<LiveTranscriptEntry[]>([])
 
   // Refs for WebSocket adapter and legacy mode
   const adapterRef = useRef<ChronicleWebSocketAdapter | null>(null)
@@ -293,6 +304,8 @@ export const useWebRecording = (): WebRecordingReturn => {
       // Reset state
       chunkCountRef.current = 0
       batchAudioChunksRef.current = []
+      transcriptBySourceRef.current = {}
+      setLiveTranscript([])
       setDebugStats(prev => ({
         ...prev,
         chunksSent: 0,
@@ -492,7 +505,23 @@ export const useWebRecording = (): WebRecordingReturn => {
 
           socket.onmessage = (event) => {
             setDebugStats(prev => ({ ...prev, messagesReceived: prev.messagesReceived + 1 }))
-            console.log('Message from audio relay:', event.data)
+            try {
+              const msg = JSON.parse(event.data)
+              if (msg.type === 'interim_transcript' && msg.source && msg.data?.text !== undefined) {
+                const source = msg.source as string
+                const text = msg.data.text as string
+                const isFinal = !!(msg.data.is_final || msg.data.speech_final)
+                const current = transcriptBySourceRef.current[source] || { finalText: '', interimText: '' }
+                transcriptBySourceRef.current[source] = isFinal
+                  ? { finalText: current.finalText + (text ? text + ' ' : ''), interimText: '' }
+                  : { ...current, interimText: text }
+                setLiveTranscript(
+                  Object.entries(transcriptBySourceRef.current).map(([src, entry]) => ({ source: src, ...entry }))
+                )
+              }
+            } catch {
+              // Non-JSON messages ignored
+            }
           }
         })
 
@@ -745,6 +774,7 @@ export const useWebRecording = (): WebRecordingReturn => {
     setMode,
     analyser,
     debugStats,
+    liveTranscript,
     formatDuration,
     canAccessMicrophone,
     canAccessDualStream

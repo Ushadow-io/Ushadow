@@ -54,7 +54,10 @@ class AudioRelayConnection:
                 endpoint_type = "Unknown"
             logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [{endpoint_type}]")
 
-            self.ws = await websockets.connect(url_with_token)
+            # Disable client-side keepalive pings: we send audio every ~250ms so a dead
+            # connection is detected immediately on the next send. Pings are redundant here
+            # and can cause timeout false-positives when the server is busy flushing frames.
+            self.ws = await websockets.connect(url_with_token, ping_interval=None)
             self.connected = True
             self.error_count = 0
             logger.info(f"[AudioRelay:{self.name}] Connected")
@@ -104,6 +107,32 @@ class AudioRelayConnection:
         self.connected = False
         self.ws = None
         logger.info(f"[AudioRelay:{self.name}] Disconnected")
+
+    async def start_receive_loop(self, client_ws: WebSocket) -> None:
+        """Drain messages from destination and forward to client.
+
+        Without this loop, unread messages from the destination (e.g. Deepgram
+        interim transcripts) fill the TCP receive buffer. Once full, the
+        destination's send() blocks and its event loop stalls, causing the
+        connection to drop with 'no close frame received or sent'.
+        """
+        if not self.connected or not self.ws:
+            return
+        try:
+            async for raw_message in self.ws:
+                if not isinstance(raw_message, str):
+                    continue
+                try:
+                    data = json.loads(raw_message)
+                    data["source"] = self.name
+                    await client_ws.send_json(data)
+                except json.JSONDecodeError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"[AudioRelay:{self.name}] Forward error: {e}")
+        except Exception as e:
+            if self.connected:
+                logger.debug(f"[AudioRelay:{self.name}] Receive loop ended: {e}")
 
 
 class AudioRelaySession:
@@ -259,6 +288,7 @@ async def audio_relay_websocket(
 
     # Create relay session
     session = AudioRelaySession(destinations, service_token)
+    receive_tasks: list = []
 
     try:
         # Connect to all destinations
@@ -277,6 +307,18 @@ async def audio_relay_websocket(
             "type": "relay_status",
             "data": session.get_status()
         })
+
+        # Start receive loops for all connected destinations.
+        # Each loop drains incoming messages (e.g. Deepgram interim transcripts)
+        # and forwards them to the client with a 'source' field added.
+        # Without these loops the destination's TCP send buffer fills up,
+        # blocking its event loop and causing the connection to drop.
+        receive_tasks = [
+            asyncio.create_task(dest.start_receive_loop(websocket))
+            for dest in session.destinations
+            if dest.connected
+        ]
+        logger.info(f"[AudioRelay] Started {len(receive_tasks)} receive loop(s)")
 
         # Relay loop
         while True:
@@ -320,6 +362,12 @@ async def audio_relay_websocket(
             pass
 
     finally:
+        # Cancel receive loops before disconnecting so they don't try to
+        # forward messages on a closing websocket
+        for task in receive_tasks:
+            task.cancel()
+        if receive_tasks:
+            await asyncio.gather(*receive_tasks, return_exceptions=True)
         # Cleanup
         await session.disconnect_all()
         try:

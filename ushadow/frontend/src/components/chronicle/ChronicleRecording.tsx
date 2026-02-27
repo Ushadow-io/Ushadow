@@ -361,6 +361,30 @@ export default function ChronicleRecording({ onAuthRequired, recording }: Chroni
         </div>
       )}
 
+      {/* Live Transcript */}
+      {recording.liveTranscript.some(e => e.finalText || e.interimText) && (
+        <div className="card p-4" data-testid="live-transcript">
+          <h3 className="font-medium text-neutral-900 dark:text-neutral-100 mb-3">Live Transcript</h3>
+          <div className="space-y-3">
+            {recording.liveTranscript.map(entry => (
+              <div key={entry.source} data-testid={`transcript-source-${entry.source}`}>
+                <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide">
+                  {entry.source}
+                </span>
+                <p className="mt-1 text-sm text-neutral-900 dark:text-neutral-100 leading-relaxed">
+                  {entry.finalText}
+                  {entry.interimText && (
+                    <span className="italic text-neutral-500 dark:text-neutral-400">
+                      {entry.interimText}
+                    </span>
+                  )}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Debug Stats */}
       {(recording.isRecording || recording.debugStats.chunksSent > 0) && (
         <div className="card p-4" data-testid="recording-debug-stats">

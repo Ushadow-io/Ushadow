@@ -15,6 +15,37 @@ from pathlib import Path
 from docker_utils import DockerNetworkManager
 
 
+def cleanup_stale_endpoints(networks: list[str] | None = None) -> None:
+    """Force-disconnect endpoints for stopped/crashed containers in shared networks.
+
+    Docker retains network endpoint registrations for stopped containers.
+    When compose tries to (re)start them it fails with 'endpoint already exists'
+    because the old registration is still there. Disconnecting stopped containers
+    from the network clears the stale record so compose can attach cleanly.
+    Running containers are left untouched.
+    """
+    if networks is None:
+        networks = ["infra-network", "ushadow-network"]
+    for network in networks:
+        result = subprocess.run(
+            ["docker", "network", "inspect", network, "--format",
+             "{{range .Containers}}{{.Name}} {{end}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            continue
+        for container in result.stdout.split():
+            running = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", container],
+                capture_output=True, text=True, timeout=5,
+            )
+            if running.returncode != 0 or running.stdout.strip() != "true":
+                subprocess.run(
+                    ["docker", "network", "disconnect", "--force", network, container],
+                    capture_output=True, timeout=10,
+                )
+
+
 def ensure_networks() -> bool:
     """
     Ensure ushadow-network and infra-network exist.
@@ -124,6 +155,9 @@ def start_infrastructure(
         Tuple of (success: bool, message: str)
     """
     try:
+        # Clear stale network endpoints from previously crashed containers
+        cleanup_stale_endpoints()
+
         # Ensure Docker networks exist before starting infrastructure
         if not ensure_networks():
             return False, "Failed to create required Docker networks (ushadow-network, infra-network)"

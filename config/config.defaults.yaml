@@ -158,6 +158,7 @@ service_profiles:
       - chronicle-workers
   mycelia:
     display_name: "Mycelia + Memory"
+    wizard: mycelia
     services:
       - mycelia-backend
       - mycelia-frontend
