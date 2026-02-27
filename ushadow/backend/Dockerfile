@@ -6,9 +6,12 @@
 # ============================================================================
 FROM python:3.12-slim AS builder
 
+# Copy uv binary from official image (more reliable than curl|sh installer)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-# Install system dependencies, build tools, Docker CLI, Tailscale, and uv
+# Install system dependencies, build tools, Docker CLI, and Tailscale
 RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
@@ -23,9 +26,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get update \
     && apt-get install -y docker-ce-cli docker-compose-plugin \
     && curl -fsSL https://tailscale.com/install.sh | sh \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
-    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
@@ -41,9 +41,12 @@ RUN uv sync --frozen --no-dev --no-install-project
 # ============================================================================
 FROM python:3.12-slim
 
+# Copy uv binary from official image (more reliable than curl|sh installer)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-# Install runtime dependencies (curl for healthcheck and uv install, docker-cli for volume cleanup, tailscale)
+# Install runtime dependencies (curl for healthcheck, docker-cli for volume cleanup, tailscale)
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -56,12 +59,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y docker-ce-cli \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
-
-# Install uv for running the app
-# Using official installation script (recommended method)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    ln -s /root/.local/bin/uv /usr/local/bin/uv && \
-    ln -s /root/.local/bin/uvx /usr/local/bin/uvx
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv

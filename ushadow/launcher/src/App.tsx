@@ -1284,7 +1284,7 @@ function App() {
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
     } catch (err) {
-      log(`Clone failed: ${err}`, 'error')
+      log(`${err}`, 'error')
       throw err
     }
   }
@@ -1485,8 +1485,10 @@ function App() {
         log('Quick launch complete!', 'success')
       }
     } catch (err) {
-      console.error('DEBUG: handleQuickLaunch caught error:', err)
-      log(`Quick launch failed: ${err}`, 'error')
+      const errMsg = String(err)
+      // If the error already has a clear message (e.g. network error), show it as-is
+      const isVerbose = errMsg.startsWith('Network error:') || errMsg.startsWith('Permission denied') || errMsg.startsWith('Git clone failed:')
+      log(isVerbose ? errMsg : `Quick launch failed: ${errMsg}`, 'error')
       setAppMode('environments')
     } finally {
       setIsLaunching(false)

@@ -81,10 +81,19 @@ export function ProjectSetupDialog({
           }
         })
       } else {
-        // Single-project: create subdirectories under parent
+        // Single-project: create subdirectories under parent.
+        // But if the user already picked a folder named projectName, use it directly
+        // (avoids D:\ushadow → D:\ushadow\ushadow doubling).
+        const lastSegment = parentPath.replace(/\\/g, '/').split('/').pop() || ''
+        const alreadyNamed = lastSegment.toLowerCase() === projectName.toLowerCase()
+
+        const pathParts = parentPath.replace(/\\/g, '/').split('/')
+        pathParts.pop()
+        const grandParent = pathParts.join('/')
+
         Promise.all([
-          join(parentPath, projectName),
-          join(parentPath, 'worktrees', projectName)
+          alreadyNamed ? Promise.resolve(parentPath) : join(parentPath, projectName),
+          alreadyNamed ? join(grandParent, 'worktrees', projectName) : join(parentPath, 'worktrees', projectName)
         ]).then(async ([installPath, defaultWorktreesPath]) => {
           setFullInstallPath(installPath)
           setWorktreesPath(defaultWorktreesPath)

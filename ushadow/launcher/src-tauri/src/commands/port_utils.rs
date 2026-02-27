@@ -123,6 +123,41 @@ pub fn generate_tailscale_url(
     Ok(Some(url))
 }
 
+/// Parse the host port from a Docker Compose port mapping string.
+///
+/// Handles:
+///   - `"5432:5432"`          → `Some(5432)`
+///   - `"5432"`               → `Some(5432)`
+///   - `"0.0.0.0:8080:8080"` → `Some(8080)` (explicit bind address)
+///   - `"${VAR:-8081}:8080"`  → `Some(8081)` (shell expression, extract default)
+pub fn parse_compose_host_port(mapping: &str) -> Option<u16> {
+    // Split on the LAST ':' — container port is always the rightmost segment.
+    // This correctly handles shell expressions like "${VAR:-8081}:8080" which
+    // contain ':' internally.
+    let host_part = if let Some(last_colon) = mapping.rfind(':') {
+        &mapping[..last_colon]
+    } else {
+        // Bare port with no colon, e.g. "5432"
+        return mapping.trim().parse::<u16>().ok();
+    };
+
+    // Handle shell expressions like "${VAR:-8081}" — extract the default value.
+    if host_part.contains("${") {
+        if let Some(default_start) = host_part.find(":-") {
+            let after = &host_part[default_start + 2..];
+            return after.trim_end_matches('}').trim().parse::<u16>().ok();
+        }
+        return None;
+    }
+
+    // Handle "addr:host" bind-address prefix, e.g. "0.0.0.0:8080".
+    if let Some(inner_colon) = host_part.rfind(':') {
+        return host_part[inner_colon + 1..].parse::<u16>().ok();
+    }
+
+    host_part.trim().parse::<u16>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
