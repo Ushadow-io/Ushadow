@@ -947,10 +947,8 @@ pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<Inf
 
 /// Check if a service container is running
 fn check_service_running(service_name: &str) -> bool {
-    use std::process::Command;
-
     // Check if container exists and is running
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args([
             "ps",
             "--filter",

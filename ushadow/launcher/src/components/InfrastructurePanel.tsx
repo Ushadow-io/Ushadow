@@ -10,6 +10,7 @@ interface InfrastructurePanelProps {
   isLoading: boolean
   selectedServices?: string[]
   onToggleService?: (serviceId: string) => void
+  projectRoot?: string | null
 }
 
 // Parse Docker port mappings into clean port numbers
@@ -43,21 +44,19 @@ export function InfrastructurePanel({
   onRestart,
   isLoading,
   selectedServices = [],
-  onToggleService
+  onToggleService,
+  projectRoot,
 }: InfrastructurePanelProps) {
   const [expanded, setExpanded] = useState(true)
   const [composeServices, setComposeServices] = useState<InfraService[]>([])
 
-  // Load services from docker-compose.infra.yml
+  // Load services from docker-compose.infra.yml — only once project root is set
   useEffect(() => {
+    if (!projectRoot) return
     tauri.getInfraServicesFromCompose()
       .then(setComposeServices)
-      .catch(err => {
-        console.error('[InfrastructurePanel] Failed to load compose services:', err)
-        // Fallback to empty array on error
-        setComposeServices([])
-      })
-  }, [])
+      .catch(() => setComposeServices([]))
+  }, [projectRoot])
 
   // Debug: log discovered services (only once when services change)
   useEffect(() => {
@@ -140,7 +139,13 @@ export function InfrastructurePanel({
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <div className="flex items-center gap-3">
-          {runningCount > 0 && (
+          {isLoading && (
+            <span className="text-xs px-2 py-1 rounded-full bg-primary-500/20 text-primary-400 flex items-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Starting...
+            </span>
+          )}
+          {!isLoading && runningCount > 0 && (
             <span className="text-xs px-2 py-1 rounded-full bg-success-500/20 text-success-400">
               {runningCount} running
             </span>

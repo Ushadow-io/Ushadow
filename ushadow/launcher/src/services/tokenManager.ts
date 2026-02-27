@@ -98,31 +98,19 @@ export class TokenManager {
    */
   static isAuthenticated(): boolean {
     const token = this.getAccessToken()
-    if (!token) {
-      console.log('[TokenManager] No access token found')
-      return false
-    }
+    if (!token) return false
 
     try {
       const decoded = this.decodeToken(token)
       const now = Math.floor(Date.now() / 1000)
       const isValid = decoded.exp > now
-      const expiresIn = decoded.exp - now
-
-      console.log('[TokenManager] Token check:', {
-        isValid,
-        expiresIn: `${Math.floor(expiresIn / 60)}m ${expiresIn % 60}s`,
-        expiresAt: new Date(decoded.exp * 1000).toISOString(),
-      })
 
       if (!isValid) {
-        console.warn('[TokenManager] ⚠️ Token EXPIRED! Clearing expired tokens...')
         this.clearTokens()
       }
 
       return isValid
     } catch (error) {
-      console.error('[TokenManager] Invalid token:', error)
       this.clearTokens()
       return false
     }

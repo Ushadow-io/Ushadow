@@ -1,4 +1,4 @@
-use std::process::Command;
+use super::utils::silent_command;
 
 /// Port pair for backend and frontend (webui)
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ fn is_port_available(port: u16) -> bool {
 /// Get the Tailscale tailnet name from the host machine
 /// Returns the tailnet domain (e.g., "thestumonkey.github")
 pub fn get_tailnet_name() -> Result<String, String> {
-    let output = Command::new("tailscale")
+    let output = silent_command("tailscale")
         .args(["status", "--json"])
         .output()
         .map_err(|e| format!("Failed to run tailscale command: {}", e))?;
