@@ -1731,6 +1731,7 @@ function App() {
               onStart={handleStartInfra}
               onStop={handleStopInfra}
               onRestart={handleRestartInfra}
+              onRefresh={() => refreshDiscovery(true)}
               isLoading={loadingInfra}
               selectedServices={selectedInfraServices}
               onToggleService={handleToggleInfraService}
