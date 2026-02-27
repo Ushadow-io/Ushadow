@@ -225,7 +225,7 @@ async def deploy_service(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Deployment failed: {e}")
+        logger.exception(f"Deployment failed ({type(e).__name__}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

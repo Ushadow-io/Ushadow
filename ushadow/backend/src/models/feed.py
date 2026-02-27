@@ -36,15 +36,18 @@ class PostSource(BaseModel):
     user_id: str = Field(..., description="Owner email")
     name: str = Field(..., min_length=1, max_length=200, description="Display name")
     platform_type: str = Field(
-        default="mastodon", description="mastodon | youtube"
+        default="mastodon", description="mastodon | youtube | bluesky"
     )
     instance_url: Optional[str] = Field(
-        default=None, description="Server URL (required for mastodon)"
+        default=None, description="Server URL (required for mastodon; optional for bluesky)"
     )
     api_key: Optional[str] = Field(
         default=None,
         description="Transient — injected from secrets at fetch time, never persisted",
         exclude=True,
+    )
+    handle: Optional[str] = Field(
+        default=None, description="Account handle (required for bluesky_timeline, e.g. user.bsky.social)"
     )
     # Mastodon OAuth2 — when set, fetches from the user's authenticated home timeline
     # instead of public hashtag timelines.
@@ -87,7 +90,7 @@ class Post(Document):
     source_id: str = Field(..., description="PostSource this came from")
     external_id: str = Field(..., description="Platform-specific ID (for dedup)")
     platform_type: str = Field(
-        default="mastodon", description="mastodon | youtube"
+        default="mastodon", description="mastodon | youtube | bluesky"
     )
 
     # Author
@@ -114,6 +117,11 @@ class Post(Document):
     view_count: Optional[int] = Field(default=None)
     like_count: Optional[int] = Field(default=None)
     duration: Optional[str] = Field(default=None, description="ISO 8601 or HH:MM:SS")
+
+    # Bluesky-specific (optional — only set for bluesky/bluesky_timeline)
+    bluesky_cid: Optional[str] = Field(
+        default=None, description="AT Protocol CID — required to construct reply refs"
+    )
 
     # Scoring
     relevance_score: float = Field(default=0.0, description="Computed by PostScorer")
@@ -173,12 +181,15 @@ class SourceCreate(BaseModel):
     """Request model for adding a post source."""
 
     name: str = Field(..., min_length=1, max_length=200)
-    platform_type: str = Field(default="mastodon", description="mastodon | youtube")
+    platform_type: str = Field(default="mastodon", description="mastodon | youtube | bluesky")
     instance_url: Optional[str] = Field(
         default=None, description="Server URL (required for mastodon)"
     )
     api_key: Optional[str] = Field(
-        default=None, description="API key (required for youtube)"
+        default=None, description="API key (youtube) or app password (bluesky_timeline)"
+    )
+    handle: Optional[str] = Field(
+        default=None, description="Account handle (required for bluesky_timeline)"
     )
 
     model_config = {"extra": "forbid"}

@@ -109,6 +109,21 @@ export default function TabLayout() {
           tabBarAccessibilityLabel: 'Memories Tab',
         }}
       />
+      <Tabs.Screen
+        name="feed"
+        options={{
+          title: 'Feed',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'radio' : 'radio-outline'}
+              size={size}
+              color={color}
+              testID="tab-icon-feed"
+            />
+          ),
+          tabBarAccessibilityLabel: 'Feed Tab',
+        }}
+      />
       {/* Sessions page is accessible via Connection Logs modal (home screen header) */}
       <Tabs.Screen
         name="sessions"

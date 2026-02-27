@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type AppMode = 'install' | 'infra' | 'environments' | 'kanban'
+export type AppMode = 'install' | 'infra' | 'environments' | 'kanban' | 'claude'
 
 export interface SpoofedPrerequisites {
   git_installed: boolean | null  // null = use real value
@@ -28,6 +28,7 @@ interface AppState {
   showDevTools: boolean
   multiProjectMode: boolean  // Enable multi-project support
   kanbanEnabled: boolean     // Enable Kanban board feature
+  claudeEnabled: boolean     // Enable Claude Sessions panel
 
   // UI state
   logExpanded: boolean
@@ -52,6 +53,7 @@ interface AppState {
   setLogExpanded: (expanded: boolean) => void
   setMultiProjectMode: (enabled: boolean) => void
   setKanbanEnabled: (enabled: boolean) => void
+  setClaudeEnabled: (enabled: boolean) => void
   setAppMode: (mode: AppMode) => void
   setSpoofedPrereq: (key: keyof SpoofedPrerequisites, value: boolean | null) => void
   resetSpoofedPrereqs: () => void
@@ -83,6 +85,7 @@ export const useAppStore = create<AppState>()(
       logExpanded: true,
       multiProjectMode: false,
       kanbanEnabled: false,
+      claudeEnabled: false,
       appMode: 'install',
       spoofedPrereqs: defaultSpoofedPrereqs,
       projectRoot: '',
@@ -96,6 +99,7 @@ export const useAppStore = create<AppState>()(
       setLogExpanded: (expanded) => set({ logExpanded: expanded }),
       setMultiProjectMode: (enabled) => set({ multiProjectMode: enabled }),
       setKanbanEnabled: (enabled) => set({ kanbanEnabled: enabled }),
+      setClaudeEnabled: (enabled) => set({ claudeEnabled: enabled }),
       setAppMode: (mode) => set({ appMode: mode }),
       setSpoofedPrereq: (key, value) => set((state) => ({
         spoofedPrereqs: { ...state.spoofedPrereqs, [key]: value }
