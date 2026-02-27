@@ -2,12 +2,18 @@
 # FastAPI-based orchestration API
 
 # ============================================================================
+# UV - pinned to linux/amd64 so Windows Docker Desktop doesn't pull the
+# Windows variant of the uv image and copy a .exe into the Linux container
+# ============================================================================
+FROM --platform=linux/amd64 ghcr.io/astral-sh/uv:latest AS uv
+
+# ============================================================================
 # Builder Stage - Install dependencies with build tools
 # ============================================================================
 FROM python:3.12-slim AS builder
 
 # Copy uv binary from official image (more reliable than curl|sh installer)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -42,7 +48,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 FROM python:3.12-slim
 
 # Copy uv binary from official image (more reliable than curl|sh installer)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
 
