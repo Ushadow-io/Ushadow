@@ -283,6 +283,12 @@ class KubernetesManager:
                         "effect": taint.effect
                     })
 
+                # Parse GPU extended resources
+                gpu_nvidia_raw = capacity.get("nvidia.com/gpu")
+                gpu_amd_raw = capacity.get("amd.com/gpu")
+                gpu_capacity_nvidia = int(gpu_nvidia_raw) if gpu_nvidia_raw else None
+                gpu_capacity_amd = int(gpu_amd_raw) if gpu_amd_raw else None
+
                 k8s_node = KubernetesNode(
                     name=node.metadata.name,
                     cluster_id=cluster_id,
@@ -296,6 +302,8 @@ class KubernetesManager:
                     memory_capacity=capacity.get("memory"),
                     cpu_allocatable=allocatable.get("cpu"),
                     memory_allocatable=allocatable.get("memory"),
+                    gpu_capacity_nvidia=gpu_capacity_nvidia,
+                    gpu_capacity_amd=gpu_capacity_amd,
                     roles=roles,
                     internal_ip=internal_ip,
                     external_ip=external_ip,
