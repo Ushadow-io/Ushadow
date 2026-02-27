@@ -112,7 +112,7 @@ go:
 
 # Development mode - Vite dev server + backend in Docker
 dev:
-	@./start-dev.sh --quick --dev --no-admin
+	@./dev.sh --quick --dev --no-admin
 
 # Production mode - Optimized build with nginx
 prod:

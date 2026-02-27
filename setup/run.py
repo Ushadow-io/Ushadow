@@ -6,7 +6,7 @@ This is the main entry point that can be called from:
 - Linux/macOS: python3 setup/run.py [--quick] [--prod] [--skip-admin]
 - Windows: python setup/run.py [--quick] [--prod] [--skip-admin]
 
-It replaces the bash-specific logic in start-dev.sh with cross-platform Python.
+It replaces the bash-specific logic in dev.sh with cross-platform Python.
 """
 
 import argparse
