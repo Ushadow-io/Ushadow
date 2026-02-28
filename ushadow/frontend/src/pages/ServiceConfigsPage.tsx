@@ -637,9 +637,13 @@ export default function ServiceConfigsPage() {
     }
   }
 
-  // Provider and compose templates
+  // Provider and compose templates for capability slots
+  // Includes YAML provider templates AND running/installed compose services that declare `provides`
   const providerTemplates = templates
-    .filter((t) => t.source === 'provider' && t.provides)
+    .filter((t) => t.provides && (
+      t.source === 'provider' ||
+      (t.source === 'compose' && (t.installed || t.running))
+    ))
 
   const wiringProviders = [
     // Templates (defaults) - show installed providers (configured or needing setup) OR client/upload/remote mode (no config needed)

@@ -143,6 +143,7 @@ class ComposeService:
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all envs)
     capability_env_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)  # capability -> {key -> ENV_VAR}
+    provider_id: Optional[str] = None  # YAML provider this compose service implements (e.g. "whisper-local")
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -300,6 +301,7 @@ class ComposeParser(BaseYAMLParser):
         tags = service_meta.get("tags", [])  # Service tags (e.g., ["audio", "gpu"])
         environments = service_meta.get("environments", [])  # Environments where visible (empty = all)
         capability_env_mappings = service_meta.get("capability_env_mappings", {})  # capability -> {key -> ENV_VAR}
+        provider_id = service_meta.get("provider_id")  # YAML provider this compose service implements
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
@@ -331,6 +333,7 @@ class ComposeParser(BaseYAMLParser):
             tags=tags,
             environments=environments,
             capability_env_mappings=capability_env_mappings,
+            provider_id=provider_id,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:

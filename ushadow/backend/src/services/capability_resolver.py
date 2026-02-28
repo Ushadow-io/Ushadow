@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any
 from src.config.secrets import mask_if_secret
 from src.services.provider_registry import get_provider_registry
 from src.services.compose_registry import get_compose_registry
-from src.models.provider import Provider, EnvMap
+from src.models.provider import Provider
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="Resolve")
@@ -264,9 +264,12 @@ class CapabilityResolver:
 
             value, source, source_path = result
 
-            # Use provider's env_var directly, apply service env_mapping only for overrides
             provider_env = env_map.env_var or env_map.key.upper()
-            service_env = env_mapping.get(provider_env, provider_env)
+            service_env = (
+                env_mapping.get(env_map.key)
+                or env_mapping.get(provider_env)
+                or provider_env
+            )
 
             env[service_env] = EnvVarValue(
                 value=value,
@@ -302,7 +305,7 @@ class CapabilityResolver:
                 use = {
                     'capability': capability,
                     'required': True,
-                    'env_mapping': {}  # Use default provider env var names
+                    'env_mapping': compose_service.capability_env_mappings.get(capability, {}),
                 }
                 capability_env = await self._resolve_capability(use, service_id)
                 env.update(capability_env)
@@ -359,9 +362,16 @@ class CapabilityResolver:
                     )
                 continue
 
-            # Use provider's env_var directly, apply service env_mapping only for overrides
+            # Resolve service env var name.
+            # env_mapping may use canonical keys (e.g. server_url -> TRANSCRIPTION_BASE_URL)
+            # or provider env_var names (e.g. OPENAI_BASE_URL -> TRANSCRIPTION_BASE_URL).
+            # Check canonical key first, then provider env_var, then fall back to provider env_var.
             provider_env = env_map.env_var or env_map.key.upper()
-            service_env = env_mapping.get(provider_env, provider_env)
+            service_env = (
+                env_mapping.get(env_map.key)
+                or env_mapping.get(provider_env)
+                or provider_env
+            )
 
             env[service_env] = str(value)
             logger.debug(
@@ -370,6 +380,22 @@ class CapabilityResolver:
             )
 
         return env
+
+    def _get_provider_for_compose_service(self, service_id: str) -> Optional[Provider]:
+        """
+        Get the YAML Provider for a compose service via its provider_id link.
+
+        Compose services that implement a capability declare which YAML provider
+        definition they use (e.g. faster-whisper -> provider_id: whisper-local).
+        This reuses the existing credential schema without duplicating it.
+
+        Returns:
+            The linked YAML Provider, or None if not found.
+        """
+        service = self._compose_registry.get_service(service_id)
+        if not service or not service.provider_id:
+            return None
+        return self._provider_registry.get_provider(service.provider_id)
 
     async def _get_selected_provider(
         self,
@@ -398,7 +424,7 @@ class CapabilityResolver:
                 consumer_config_id, capability
             )
             if provider_config:
-                # The instance's template_id is the provider ID
+                # The instance's template_id is the provider ID — try YAML provider first
                 provider = self._provider_registry.get_provider(provider_config.template_id)
                 if provider:
                     logger.info(
@@ -407,6 +433,16 @@ class CapabilityResolver:
                     )
                     # Return both provider template AND instance for config override
                     return provider, provider_config
+
+                # Fallback: compose service linked to a YAML provider via provider_id
+                compose_provider = self._get_provider_for_compose_service(provider_config.template_id)
+                if compose_provider:
+                    logger.info(
+                        f"Using compose service '{provider_config.template_id}' "
+                        f"backed by YAML provider '{compose_provider.id}' "
+                        f"for {capability} (consumer={consumer_config_id})"
+                    )
+                    return compose_provider, provider_config
 
         # 2. Try to get explicit selection from settings
         selected = await self._settings.get(f"selected_providers.{capability}")
@@ -587,9 +623,14 @@ class CapabilityResolver:
             logger.debug(f"Service '{service_id}' not found in compose registry")
             return None
 
-        # Convert requires list to uses format
+        # Convert requires list to uses format, including capability_env_mappings
+        # capability_env_mappings: {capability -> {canonical_key -> service_env_var}}
         uses = [
-            {'capability': cap, 'required': True}
+            {
+                'capability': cap,
+                'required': True,
+                'env_mapping': service.capability_env_mappings.get(cap, {}),
+            }
             for cap in service.requires
         ]
 

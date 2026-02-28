@@ -112,8 +112,8 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
         onClick={() => setShowMapping(!showMapping)}
         className={`px-2 py-1 text-xs rounded transition-colors flex-shrink-0 ${
           showMapping
-            ? 'bg-primary-900/30 text-primary-300'
-            : 'text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700'
+            ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+            : 'text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700'
         }`}
         title={showMapping ? 'Enter value' : 'Map to setting'}
         data-testid={`map-button-${envVar.name}`}
@@ -137,7 +137,7 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
                 })
               }
             }}
-            className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer overflow-hidden text-ellipsis"
+            className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-100 dark:bg-neutral-700/50 text-neutral-900 dark:text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer overflow-hidden text-ellipsis"
             data-testid={`map-select-${envVar.name}`}
           >
             <option value="">select...</option>
@@ -163,21 +163,21 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
           <>
             <button
               onClick={() => setEditing(true)}
-              className="text-neutral-500 hover:text-neutral-300 flex-shrink-0"
+              className="text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 flex-shrink-0"
               title="Edit"
             >
               <Pencil className="w-3 h-3" />
             </button>
-            <span className="text-xs text-neutral-300 truncate font-mono" title={config.value}>
+            <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono" title={config.value}>
               {isSecret ? '•'.repeat(Math.min(config.value.length, 20)) : config.value}
             </span>
             <span className={`ml-auto px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
-              config.source === 'env_file' ? 'bg-green-600/20 text-green-400' :
-              config.source === 'capability' ? 'bg-blue-600/20 text-blue-400' :
-              config.source === 'infra' ? 'bg-cyan-600/20 text-cyan-400' :
-              config.source === 'config_default' ? 'bg-purple-600/20 text-purple-400' :
-              config.source === 'compose_default' ? 'bg-neutral-700 text-neutral-400' :
-              'bg-neutral-700 text-neutral-400'
+              config.source === 'env_file' ? 'bg-green-600/20 text-green-600 dark:text-green-400' :
+              config.source === 'capability' ? 'bg-blue-600/20 text-blue-600 dark:text-blue-400' :
+              config.source === 'infra' ? 'bg-cyan-600/20 text-cyan-600 dark:text-cyan-400' :
+              config.source === 'config_default' ? 'bg-purple-600/20 text-purple-600 dark:text-purple-400' :
+              config.source === 'compose_default' ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-400' :
+              'bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-400'
             }`}>
               {config.source === 'env_file' ? '.env' :
                config.source === 'capability' ? 'provider' :
@@ -195,7 +195,7 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
             value={config.value || ''}
             onChange={(e) => handleValueChange(e.target.value)}
             placeholder="enter value"
-            className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-700/50 text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-500"
+            className="flex-1 px-2 py-1.5 text-xs rounded border-0 bg-neutral-100 dark:bg-neutral-700/50 text-neutral-900 dark:text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
             autoFocus={editing}
             onFocus={() => setEditing(true)}
             onBlur={() => setEditing(false)}

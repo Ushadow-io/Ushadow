@@ -794,10 +794,48 @@ export function ProviderConfigDropdown({
                 {effectiveOptions.defaults.map(templateOption => {
                   const childConfigs = effectiveOptions.saved.filter(s => s.templateId === templateOption.templateId)
 
-                  // When exactly one saved config exists, skip the parent/child hierarchy
-                  // and render the saved config directly at the top level
+                  // When exactly one saved config exists, skip the parent/child hierarchy:
+                  // show the template name (recognizable) but clicking selects the saved config.
+                  // Include the edit arrow so the user can still configure it.
                   if (childConfigs.length === 1) {
-                    return renderOption(childConfigs[0], value?.id === childConfigs[0].id)
+                    const singleConfig = childConfigs[0]
+                    const isSelected = value?.id === singleConfig.id
+                    const ModeIcon = templateOption.mode === 'cloud' ? Cloud : HardDrive
+                    const testId = `provider-option-default-${templateOption.templateId}`
+                    return (
+                      <div
+                        key={templateOption.id}
+                        className={`flex items-center text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 ${isSelected ? 'bg-primary-50 dark:bg-primary-900/30' : ''}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleSelect(singleConfig)}
+                          data-testid={testId}
+                          className="flex-1 flex items-center gap-2 px-3 py-2 text-left"
+                        >
+                          <ModeIcon className="h-4 w-4 text-neutral-500 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium truncate">{templateOption.name}</span>
+                              {singleConfig.configSummary && (
+                                <span className="text-neutral-500 dark:text-neutral-400 truncate text-xs">
+                                  - {singleConfig.configSummary}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {isSelected && <Check className="h-4 w-4 text-primary-500 flex-shrink-0" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleArrowClick(singleConfig, e)}
+                          className={`px-2 py-2 hover:bg-neutral-200 dark:hover:bg-neutral-600 border-l border-neutral-200 dark:border-neutral-700 ${activeSubmenu?.option.id === singleConfig.id ? 'bg-neutral-200 dark:bg-neutral-600' : ''}`}
+                          data-testid={`${testId}-arrow`}
+                        >
+                          <ChevronRight className="h-4 w-4 text-neutral-400" />
+                        </button>
+                      </div>
+                    )
                   }
 
                   return (
@@ -877,8 +915,14 @@ export function ProviderConfigDropdown({
             </button>
           </div>
 
-          {/* Submenu - slides out from right */}
-          {activeSubmenu && (
+          {/* Submenu - slides out from right (or left when near screen edge) */}
+          {activeSubmenu && (() => {
+            const submenuWidth = 384 // min-w-96
+            const rightEdge = menuPosition.left + menuPosition.width + 4 + submenuWidth
+            const submenuLeft = rightEdge < window.innerWidth
+              ? menuPosition.left + menuPosition.width + 4
+              : menuPosition.left - submenuWidth - 4
+            return (
             <Submenu
               option={activeSubmenu.option}
               template={getTemplateForOption(activeSubmenu.option)}
@@ -886,7 +930,7 @@ export function ProviderConfigDropdown({
               isEditingConfig={!activeSubmenu.option.isDefault}
               position={{
                 top: activeSubmenu.top,
-                left: menuPosition.left + menuPosition.width + 4,
+                left: submenuLeft,
               }}
               onClose={() => setActiveSubmenu(null)}
               onSelect={() => handleSelect(activeSubmenu.option)}
@@ -899,7 +943,8 @@ export function ProviderConfigDropdown({
               onUpdateConfig={onUpdateConfig}
               onRefresh={onRefresh}
             />
-          )}
+            )
+          })()}
         </>,
         document.body
       )}

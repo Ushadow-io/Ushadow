@@ -75,6 +75,19 @@ async def get_template_env_config(
     # but have empty config_schema. Provider templates have the credential definitions.
     provider_templates = await list_templates(source='provider')
     template = next((t for t in provider_templates if t.id == template_id), None)
+
+    # Fallback: compose service linked to a YAML provider via provider_id
+    if template is None:
+        from src.services.compose_registry import get_compose_registry
+        from src.services.provider_registry import get_provider_registry
+        compose_service = get_compose_registry().get_service(template_id)
+        if compose_service and compose_service.provider_id:
+            provider = get_provider_registry().get_provider(compose_service.provider_id)
+            if provider:
+                template = next(
+                    (t for t in await list_templates(source='provider') if t.id == provider.id),
+                    None,
+                )
     if template is None:
         raise HTTPException(status_code=404, detail=f"Provider template not found: {template_id}")
     settings_v2 = get_settings()
