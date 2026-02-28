@@ -1,14 +1,23 @@
 # nar8 - Routine Planner & Optimiser
 
 **Status:** DRAFT
-**Version:** 0.1
+**Version:** 0.2
 **Date:** 2026-02-28
 
 ---
 
 ## 1. Executive Summary
 
-nar8 is a standalone mobile app for recording, analysing, and optimising daily routines. Users narrate their activities in real time (via phone microphone or Omi necklace), and the system builds a structured timeline of events. An LLM analyses the routine against stated goals, identifies inefficiencies, and suggests improvements. Over multiple recordings, nar8 performs trend analysis to track progress and surface patterns.
+nar8 is a routine planner and optimiser. Users narrate their activities in real time (via phone microphone or Omi necklace), and the system builds a structured timeline of events. An LLM analyses the routine against stated goals, identifies inefficiencies, and suggests improvements. Over multiple recordings, nar8 performs trend analysis to track progress and surface patterns.
+
+### Architecture Strategy: Core + Skin
+
+Rather than forking ushadow/mobile into a separate app, we take a **"core in ushadow, skin for nar8"** approach:
+
+1. **Timeline, routine, and analysis features are built as core ushadow capabilities** — available in the ushadow dashboard and mobile app
+2. **The ushadow mobile app is componentised** into a shared library (`@ushadow/mobile-core`) so features can be consumed by multiple apps
+3. **nar8 is a thin, purpose-built mobile app** with its own UI/flow/branding, importing shared components from the library
+4. This pattern is reusable — future apps and services follow the same model
 
 ### Core Value Proposition
 
@@ -100,7 +109,7 @@ RoutineSession {
 The LLM processes the transcript to produce a structured timeline:
 
 ```
-RoutineEvent {
+TimelineEvent {
   id: UUID
   session_id: UUID
   activity: string              // e.g. "Brushing teeth"
@@ -175,7 +184,7 @@ LLM-generated suggestions based on data:
 
 ### 3.6 Schedule Awareness & Notifications
 
-When the user starts a routine recording, nar8 can monitor progress against the goal time:
+When the user starts a routine recording, the system can monitor progress against the goal time:
 
 ```
 ScheduleAlert {
@@ -228,7 +237,7 @@ TransportLeg {
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌───────────────┐
-│   Routine    │────<│  RoutineSession  │────<│ RoutineEvent  │
+│   Routine    │────<│  RoutineSession  │────<│ TimelineEvent │
 │              │     │                  │     │               │
 │ name         │     │ started_at       │     │ activity      │
 │ goal         │     │ ended_at         │     │ category      │
@@ -258,169 +267,469 @@ TransportLeg {
 
 ---
 
-## 5. Leveraging the Existing Codebase
+## 5. Architecture: Core + Skin
 
-### 5.1 Platform Decision: Fork ushadow/mobile as nar8
-
-The existing `ushadow/mobile` app (Expo/React Native) is the ideal foundation. It already has:
-
-| Existing Capability | Location in Codebase | Reuse for nar8 |
-|---------------------|---------------------|----------------|
-| **Audio streaming (phone mic)** | `app/hooks/useStreaming.ts`, `usePhoneAudioRecorder.ts`, `useAudioStreamer.ts` | Core recording engine — stream narration to backend |
-| **Omi BLE connection** | `app/contexts/OmiConnectionContext.tsx`, `app/hooks/useBluetoothManager.ts`, `app/hooks/useDeviceConnection.ts` | Alternative audio source — Omi necklace for hands-free narration |
-| **Wyoming protocol WebSocket** | `app/hooks/useAudioStreamer.ts` (Wyoming event types, audio-start/chunk/stop) | Reuse the exact same streaming protocol to send audio |
-| **Audio relay (multi-destination)** | `app/hooks/useMultiDestinationStreamer.ts`, backend `routers/audio_relay.py` | Fan audio to both transcription + routine analysis |
-| **Session tracking** | `app/hooks/useSessionTracking.ts`, `app/types/streamingSession.ts` | Adapt for RoutineSession lifecycle |
-| **Conversation/transcript retrieval** | `app/services/chronicleApi.ts`, `app/services/myceliaApi.ts` | Pull transcripts back for timeline generation |
-| **Auth + UNode connectivity** | `app/_utils/authStorage.ts`, `app/_utils/unodeStorage.ts` | Same auth flow — nar8 connects to user's UNode |
-| **Live Activity (iOS)** | `app/hooks/useLiveActivity.ts`, `targets/RecordingWidget/` | Show routine recording status on lock screen |
-| **Background audio** | `app.config.js` UIBackgroundModes: ['audio'] | Keep recording when screen is off |
-| **Theme system** | `app/theme.ts` | Rebrand with nar8 colours |
-| **LLM client** | Backend `services/llm_client.py` (LiteLLM) | Use for activity extraction, analysis, suggestions |
-| **Chat/streaming LLM** | Backend `routers/chat.py` | Adapt for routine coaching chat |
-| **Capability-based providers** | Backend `services/capability_resolver.py`, `provider_registry.py` | Same LLM/transcription provider swapping |
-| **Feature flags** | `app/contexts/FeatureFlagContext.tsx`, backend `services/feature_flags.py` | Gate nar8 features during rollout |
-
-### 5.2 What Needs To Be Built New
-
-| Component | Description | Build Location |
-|-----------|-------------|----------------|
-| **Routine CRUD screens** | Create/edit/list routines with goal definition | New mobile screens |
-| **Recording overlay** | Enhanced recording UI with live timeline + location | New mobile component |
-| **Timeline view** | Visual activity timeline with durations | New mobile component |
-| **Feedback flow** | Post-recording feedback wizard | New mobile screens |
-| **Analysis dashboard** | Trend charts, suggestions, comparisons | New mobile screens |
-| **Notification engine** | Schedule-aware push notifications | New backend service + mobile handlers |
-| **Routine analysis service** | LLM-powered timeline extraction + optimisation | New backend service |
-| **Location tracking hook** | Periodic GPS sampling during recording | New mobile hook (expo-location) |
-| **Transport data integration** | Public transport API client | New backend service |
-| **Routine data models** | MongoDB collections for routines/sessions/events | New backend models |
-| **Routine API endpoints** | CRUD + analysis + schedule APIs | New backend routers |
-
-### 5.3 Architecture: Standalone App, Shared Backend
+### 5.1 Strategy Overview
 
 ```
-┌─────────────────────────────────┐
-│         nar8 Mobile App         │
-│     (Fork of ushadow/mobile)   │
-│                                 │
-│  ┌───────────┐ ┌─────────────┐ │
-│  │ Routines  │ │ Recording   │ │
-│  │ (new)     │ │ (reuse+ext) │ │
-│  ├───────────┤ ├─────────────┤ │
-│  │ Timeline  │ │ Feedback    │ │
-│  │ (new)     │ │ (new)       │ │
-│  ├───────────┤ ├─────────────┤ │
-│  │ Analysis  │ │ Coaching    │ │
-│  │ (new)     │ │ Chat (adapt)│ │
-│  └───────────┘ └─────────────┘ │
-│                                 │
-│  Reused from ushadow/mobile:   │
-│  • useStreaming / useAudioStr.  │
-│  • Omi BLE connection           │
-│  • Wyoming protocol             │
-│  • Auth + UNode discovery       │
-│  • Live Activity widget         │
-│  • Session tracking (adapted)  │
-└────────────┬────────────────────┘
-             │ WebSocket (audio) + REST API
-             │
-┌────────────┴────────────────────┐
-│      ushadow Backend            │
-│      (Extended, not forked)     │
-│                                 │
-│  Existing:                      │
-│  • Audio relay → Chronicle      │
-│  • LLM client (LiteLLM)        │
-│  • Auth / Keycloak              │
-│  • Provider registry            │
-│                                 │
-│  New nar8 services:             │
-│  • RoutineService               │
-│  • TimelineExtractor            │
-│  • RoutineAnalyser              │
-│  • ScheduleMonitor              │
-│  • TransportService             │
-│                                 │
-│  New nar8 routers:              │
-│  • /api/nar8/routines           │
-│  • /api/nar8/sessions           │
-│  • /api/nar8/analysis           │
-│  • /api/nar8/schedule           │
-└────────────┬────────────────────┘
-             │
-      ┌──────┴──────────┐
-      │                 │
-   MongoDB           Chronicle/Mycelia
-   (routines,        (transcription,
-    sessions,         audio storage)
-    events,
-    feedback)
+┌──────────────────────────────────────────────────────────────────┐
+│                        APPS (Skins)                              │
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  │
+│  │  ushadow mobile │  │   nar8 app      │  │  future app    │  │
+│  │                 │  │                 │  │                │  │
+│  │ Full dashboard  │  │ Routine-focused │  │ Other vertical │  │
+│  │ All tabs        │  │ Record → Review │  │ ...            │  │
+│  │ Power-user UI   │  │ Minimal, clean  │  │                │  │
+│  └────────┬────────┘  └────────┬────────┘  └───────┬────────┘  │
+│           │                    │                    │            │
+├───────────┴────────────────────┴────────────────────┴────────────┤
+│                                                                  │
+│                   @ushadow/mobile-core                           │
+│                   (Shared Component Library)                     │
+│                                                                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
+│  │  audio/  │ │  ble/    │ │  auth/   │ │ session/ │           │
+│  │          │ │          │ │          │ │          │           │
+│  │ Streamer │ │ Scanner  │ │ Keycloak │ │ Tracking │           │
+│  │ Recorder │ │ Device   │ │ Token    │ │ Storage  │           │
+│  │ Wyoming  │ │ Listener │ │ Storage  │ │ Types    │           │
+│  │ MultiDst │ │ Context  │ │ Monitor  │ │          │           │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
+│  │timeline/ │ │  chat/   │ │  data/   │ │  core/   │           │
+│  │          │ │          │ │          │ │          │           │
+│  │ Extract  │ │ Message  │ │ Chroncle │ │ Feature  │           │
+│  │ View     │ │ Voice    │ │ Mycelia  │ │  Flags   │           │
+│  │ Compare  │ │ Input    │ │ Memory   │ │ Lifecycl │           │
+│  │ Chart    │ │ API      │ │ Feed     │ │ Logger   │           │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
+│                                                                  │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│                   ushadow Backend (FastAPI)                      │
+│                                                                  │
+│  Existing routes           New core routes (not nar8-namespaced) │
+│  /api/chronicle            /api/routines                         │
+│  /api/chat                 /api/timeline                         │
+│  /api/auth                 /api/schedule                         │
+│  /api/settings             /api/transport                        │
+│  /ws/audio/relay                                                 │
+│                                                                  │
+│  Existing services         New core services                     │
+│  LLMClient                 TimelineExtractor                     │
+│  AudioRelay                RoutineService                        │
+│  ProviderRegistry          RoutineAnalyser                       │
+│  FeatureFlags              ScheduleMonitor                       │
+│                            TransportService                      │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.4 Recommended Approach: Chronicle vs Mycelia vs Direct
+### 5.2 What Goes Where
 
-| Option | Pros | Cons | Recommendation |
-|--------|------|------|----------------|
-| **Chronicle** | Mature transcription, speaker separation, audio storage | Heavier, more features than needed | Use if already deployed |
-| **Mycelia** | Lighter weight, conversation-focused | Less mature | Good alternative |
-| **Direct (new)** | Purpose-built for nar8, no dependencies | More work, duplicates transcription | Only if special requirements |
+#### Built into ushadow core (backend + mobile-core library)
 
-**Recommendation:** Use **Chronicle** for transcription and audio storage via the existing audio relay. The nar8 backend services then pull the transcript from Chronicle and run the routine-specific LLM analysis on top. This avoids reimplementing transcription and leverages the existing Deepgram/Whisper provider system.
+These are **general-purpose capabilities** that ushadow gains, accessible from any app:
 
-The flow is:
-1. nar8 mobile → audio relay → Chronicle (transcription happens)
-2. nar8 backend polls/subscribes for transcript completion
-3. nar8 `TimelineExtractor` service processes transcript → structured timeline
-4. nar8 `RoutineAnalyser` service runs cross-session analysis
+| Feature | Why Core | Backend | Mobile |
+|---------|----------|---------|--------|
+| **Timeline extraction** | Any conversation can become a timeline — not routine-specific | `TimelineExtractor` service | `timeline/` components |
+| **Routine CRUD** | Routines are a data type the platform manages | `RoutineService`, `/api/routines` | `routine/` hooks + types |
+| **Session recording with context** | Extends existing streaming sessions with purpose/goal metadata | Extend `StreamingSession` model | Extend `useSessionTracking` |
+| **Feedback collection** | Generic post-session feedback — useful for any recording type | `FeedbackService`, `/api/feedback` | `feedback/` components |
+| **Location tracking** | Generic capability — useful for conversations, sessions, routines | `/api/sessions/{id}/location` | `useLocationTracking` hook |
+| **LLM analysis** | Extends existing LLM client with structured analysis patterns | Extend `LLMClient` | Analysis display components |
+| **Schedule monitoring** | Could apply to any timed goal, not just routines | `ScheduleMonitor` service | `schedule/` components |
+| **Transport integration** | Location-aware travel estimation — platform capability | `TransportService` | Transport display components |
+
+#### Built as nar8-specific (thin app layer)
+
+These are **nar8 UI/UX decisions** that compose core components differently:
+
+| Feature | Why Skin | What It Imports |
+|---------|----------|-----------------|
+| **nar8 tab layout** | 3 tabs: Routines / Active / Coach — not ushadow's 5-tab layout | Core components, own `_layout.tsx` |
+| **Routine-first home screen** | List of routines with quick-record — not a general dashboard | `routine/` hooks, own screen |
+| **Simplified recording overlay** | Full-screen focused recording with live activity indicator | `audio/`, `session/`, `timeline/` from core |
+| **Post-recording flow** | Recording → Feedback → Timeline review — opinionated wizard | `feedback/`, `timeline/` from core |
+| **Coaching chat context** | Chat pre-loaded with routine data and optimisation context | `chat/` from core, own system prompt |
+| **nar8 branding + theme** | Own colours, logo, app name | Core theme system, own overrides |
+| **nar8 notifications** | Routine-specific notification copy and timing | Core `ScheduleMonitor`, own templates |
+
+### 5.3 How ushadow App Uses Timeline Features
+
+In the ushadow mobile app, timeline features appear naturally alongside existing capabilities:
+
+```
+ushadow App (updated tabs)
+├── Home (existing — streaming + connection)
+│   └── Recording now shows: "Record as routine?" option
+├── Chat (existing)
+│   └── Can ask about routine analysis
+├── Feed (existing)
+├── History (existing conversations tab)
+│   └── NEW: Conversations now show extracted timeline
+│   └── NEW: "View as Timeline" toggle on any conversation
+├── Memories (existing)
+└── NEW: Routines (new tab or section within Home)
+    ├── Routine list
+    ├── Routine detail → sessions → timelines
+    └── Analysis dashboard
+```
+
+The ushadow web dashboard also gains:
+- Routine management page
+- Timeline visualisation for any conversation
+- Analysis/trends dashboard
 
 ---
 
-## 6. API Design
+## 6. Componentisation Plan: @ushadow/mobile-core
 
-### 6.1 Routine Management
+### 6.1 Package Structure
 
-```
-POST   /api/nar8/routines              # Create routine
-GET    /api/nar8/routines              # List user's routines
-GET    /api/nar8/routines/{id}         # Get routine details
-PUT    /api/nar8/routines/{id}         # Update routine
-DELETE /api/nar8/routines/{id}         # Archive routine
-```
-
-### 6.2 Session Management
+The shared library lives within the monorepo as a local package. Apps import from it directly — no npm publishing needed initially.
 
 ```
-POST   /api/nar8/routines/{id}/sessions            # Start recording
-PUT    /api/nar8/sessions/{id}/end                  # End recording
-GET    /api/nar8/sessions/{id}                      # Get session + timeline
-GET    /api/nar8/routines/{id}/sessions             # List sessions for routine
-POST   /api/nar8/sessions/{id}/feedback             # Submit feedback
-POST   /api/nar8/sessions/{id}/location             # Append GPS point
+ushadow/
+├── packages/
+│   └── mobile-core/                    # @ushadow/mobile-core
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── index.ts                    # Public API barrel export
+│       │
+│       ├── audio/                      # Audio streaming
+│       │   ├── index.ts
+│       │   ├── hooks/
+│       │   │   ├── useAudioStreamer.ts        ← from app/hooks/
+│       │   │   ├── usePhoneAudioRecorder.ts   ← from app/hooks/
+│       │   │   ├── useAudioManager.ts         ← from app/hooks/
+│       │   │   ├── useStreaming.ts             ← from app/hooks/
+│       │   │   ├── useMultiDestinationStreamer.ts ← from app/hooks/
+│       │   │   └── useSpeechToText.ts         ← from app/hooks/
+│       │   ├── components/
+│       │   │   ├── SourceSelector.tsx          ← from app/components/streaming/
+│       │   │   ├── StreamingButton.tsx         ← from app/components/streaming/
+│       │   │   ├── CompactStreamingButton.tsx  ← from app/components/streaming/
+│       │   │   ├── StreamingDisplay.tsx        ← from app/components/streaming/
+│       │   │   ├── AudioDestinationSelector.tsx ← from app/components/streaming/
+│       │   │   └── AudioPlayer.tsx             ← from app/components/
+│       │   └── types/
+│       │       └── audio.ts
+│       │
+│       ├── ble/                        # Bluetooth / Omi device
+│       │   ├── index.ts
+│       │   ├── hooks/
+│       │   │   ├── useDeviceScanning.ts       ← from app/hooks/
+│       │   │   ├── useDeviceConnection.ts     ← from app/hooks/
+│       │   │   └── useAudioListener.ts        ← from app/hooks/
+│       │   ├── components/
+│       │   │   ├── DeviceScanner.tsx           ← from app/components/ (OmiDeviceScanner)
+│       │   │   ├── DeviceCard.tsx              ← from app/components/ (OmiDeviceCard)
+│       │   │   └── DeviceSection.tsx           ← from app/components/ (OmiDeviceSection)
+│       │   ├── contexts/
+│       │   │   ├── BluetoothContext.tsx        ← from app/contexts/
+│       │   │   └── OmiConnectionContext.tsx    ← from app/contexts/
+│       │   └── types/
+│       │       └── ble.ts
+│       │
+│       ├── auth/                       # Authentication
+│       │   ├── index.ts
+│       │   ├── keycloakAuth.ts                ← from app/services/
+│       │   ├── authStorage.ts                 ← from app/_utils/
+│       │   ├── useTokenMonitor.ts             ← from app/hooks/
+│       │   └── types.ts
+│       │
+│       ├── session/                    # Session tracking
+│       │   ├── index.ts
+│       │   ├── hooks/
+│       │   │   └── useSessionTracking.ts      ← from app/hooks/
+│       │   ├── utils/
+│       │   │   └── sessionStorage.ts          ← from app/_utils/
+│       │   └── types/
+│       │       └── streamingSession.ts        ← from app/types/
+│       │
+│       ├── data/                       # Backend API clients
+│       │   ├── index.ts
+│       │   ├── chronicleApi.ts                ← from app/services/
+│       │   ├── myceliaApi.ts                  ← from app/services/
+│       │   ├── memoriesApi.ts                 ← from app/services/
+│       │   ├── chatApi.ts                     ← from app/services/
+│       │   ├── feedApi.ts                     ← from app/services/
+│       │   ├── audioProviderApi.ts            ← from app/services/
+│       │   └── routineApi.ts                  # NEW — routine CRUD + analysis
+│       │
+│       ├── timeline/                   # NEW — Timeline feature
+│       │   ├── index.ts
+│       │   ├── components/
+│       │   │   ├── TimelineView.tsx            # Visual timeline
+│       │   │   ├── TimelineEvent.tsx           # Single event card
+│       │   │   ├── TimelineComparison.tsx      # Side-by-side sessions
+│       │   │   └── DurationBar.tsx             # Duration visualisation
+│       │   ├── hooks/
+│       │   │   └── useTimeline.ts             # Fetch + manage timeline data
+│       │   └── types/
+│       │       └── timeline.ts                # TimelineEvent, etc.
+│       │
+│       ├── routine/                    # NEW — Routine management
+│       │   ├── index.ts
+│       │   ├── components/
+│       │   │   ├── RoutineCard.tsx             # Routine list item
+│       │   │   ├── RoutineCreator.tsx          # Create/edit form
+│       │   │   └── GoalSelector.tsx            # Goal type picker
+│       │   ├── hooks/
+│       │   │   ├── useRoutines.ts             # CRUD operations
+│       │   │   └── useRoutineRecording.ts     # Recording lifecycle
+│       │   └── types/
+│       │       └── routine.ts                 # Routine, RoutineSession, etc.
+│       │
+│       ├── feedback/                   # NEW — Post-session feedback
+│       │   ├── index.ts
+│       │   ├── components/
+│       │   │   ├── FeedbackWizard.tsx          # Multi-step feedback flow
+│       │   │   ├── RatingSelector.tsx          # Star rating
+│       │   │   ├── MoodSelector.tsx            # Mood picker
+│       │   │   └── BlockerSelector.tsx         # Blocker multi-select
+│       │   ├── hooks/
+│       │   │   └── useFeedback.ts             # Submit + retrieve feedback
+│       │   └── types/
+│       │       └── feedback.ts
+│       │
+│       ├── analysis/                   # NEW — Trend analysis + suggestions
+│       │   ├── index.ts
+│       │   ├── components/
+│       │   │   ├── TrendChart.tsx              # Duration over time
+│       │   │   ├── SuggestionCard.tsx          # LLM suggestion display
+│       │   │   ├── ActivityBreakdown.tsx       # Category pie/bar chart
+│       │   │   └── ProgressSummary.tsx         # Key metrics
+│       │   ├── hooks/
+│       │   │   ├── useAnalysis.ts             # Fetch analysis data
+│       │   │   └── useSuggestions.ts          # Fetch LLM suggestions
+│       │   └── types/
+│       │       └── analysis.ts
+│       │
+│       ├── schedule/                   # NEW — Schedule monitoring
+│       │   ├── index.ts
+│       │   ├── components/
+│       │   │   ├── ScheduleBar.tsx             # Progress vs expected
+│       │   │   └── AlertBanner.tsx             # Behind-schedule warning
+│       │   ├── hooks/
+│       │   │   └── useScheduleMonitor.ts      # Real-time schedule check
+│       │   └── types/
+│       │       └── schedule.ts
+│       │
+│       ├── location/                   # NEW — GPS tracking
+│       │   ├── index.ts
+│       │   ├── hooks/
+│       │   │   └── useLocationTracking.ts     # Periodic GPS sampling
+│       │   └── types/
+│       │       └── location.ts
+│       │
+│       ├── chat/                       # Chat components
+│       │   ├── index.ts
+│       │   ├── components/
+│       │   │   ├── MessageBubble.tsx           ← extract from chat.tsx
+│       │   │   └── VoiceChatInput.tsx          ← from app/components/chat/
+│       │   └── types/
+│       │       └── chat.ts
+│       │
+│       └── core/                       # Cross-cutting utilities
+│           ├── index.ts
+│           ├── hooks/
+│           │   ├── useAppLifecycle.ts          ← from app/hooks/
+│           │   ├── useConnectionLog.ts         ← from app/hooks/
+│           │   ├── useConnectionHealth.ts      ← from app/hooks/
+│           │   └── useFeatureFlags.ts          ← from app/hooks/
+│           ├── contexts/
+│           │   └── FeatureFlagContext.tsx       ← from app/contexts/
+│           ├── services/
+│           │   ├── featureFlagService.ts       ← from app/services/
+│           │   └── persistentLogger.ts         ← from app/services/
+│           ├── utils/
+│           │   ├── unodeStorage.ts             ← from app/_utils/
+│           │   └── omiDeviceStorage.ts         ← from app/_utils/
+│           └── theme/
+│               ├── ThemeProvider.tsx            # NEW — injectable theme
+│               ├── defaultTheme.ts             ← from app/theme.ts
+│               └── types.ts                    # Theme type definition
 ```
 
-### 6.3 Analysis
+### 6.2 Import Pattern
 
-```
-GET    /api/nar8/routines/{id}/analysis             # Get routine analysis
-GET    /api/nar8/routines/{id}/trends               # Trend data for charts
-GET    /api/nar8/routines/{id}/suggestions           # LLM optimisation suggestions
-POST   /api/nar8/sessions/{id}/process              # Trigger timeline extraction
+Apps consume the library via path aliases:
+
+```typescript
+// In nar8 app:
+import { useAudioStreamer, StreamingButton } from '@ushadow/mobile-core/audio';
+import { useRoutines, RoutineCard } from '@ushadow/mobile-core/routine';
+import { TimelineView } from '@ushadow/mobile-core/timeline';
+import { FeedbackWizard } from '@ushadow/mobile-core/feedback';
+import { useKeycloakAuth } from '@ushadow/mobile-core/auth';
+
+// In ushadow app (same imports):
+import { TimelineView } from '@ushadow/mobile-core/timeline';
+import { useRoutines } from '@ushadow/mobile-core/routine';
 ```
 
-### 6.4 Schedule & Transport
+### 6.3 Theme Injection
 
+The theme system becomes injectable so each app provides its own brand:
+
+```typescript
+// @ushadow/mobile-core/core/theme/types.ts
+export interface AppTheme {
+  colors: {
+    primary: ColorScale;
+    accent: ColorScale;
+    background: string;
+    backgroundCard: string;
+    text: string;
+    textMuted: string;
+    border: string;
+    success: string;
+    warning: string;
+    error: string;
+  };
+  spacing: SpacingScale;
+  borderRadius: RadiusScale;
+  fontSize: FontScale;
+  gradients: Record<string, string[]>;
+}
+
+// In ushadow app:
+<ThemeProvider theme={ushadowTheme}>
+  <App />
+</ThemeProvider>
+
+// In nar8 app:
+<ThemeProvider theme={nar8Theme}>
+  <App />
+</ThemeProvider>
 ```
-GET    /api/nar8/routines/{id}/schedule              # Current schedule state
-POST   /api/nar8/routines/{id}/schedule/check        # Check if on track
-GET    /api/nar8/transport/estimate                   # Travel time estimate
+
+### 6.4 Config Injection
+
+Similarly, the config system becomes injectable:
+
+```typescript
+// @ushadow/mobile-core/core/config/types.ts
+export interface AppConfig {
+  appName: string;
+  defaultBaseUrl: string;
+  bundleId: string;
+  features: {
+    routines: boolean;
+    timeline: boolean;
+    feed: boolean;
+    memories: boolean;
+    chat: boolean;
+  };
+}
+
+// In nar8:
+const nar8Config: AppConfig = {
+  appName: 'nar8',
+  defaultBaseUrl: 'https://api.nar8.io',
+  bundleId: 'io.nar8.app',
+  features: {
+    routines: true,
+    timeline: true,
+    feed: false,       // nar8 doesn't show feeds
+    memories: false,   // nar8 doesn't show general memories
+    chat: true,        // coaching chat only
+  },
+};
 ```
 
 ---
 
-## 7. LLM Prompts (Key Templates)
+## 7. Backend: Core Services (Not nar8-Namespaced)
 
-### 7.1 Activity Extraction
+Since timeline/routine features are core ushadow capabilities, the API routes are **not** namespaced under `/api/nar8/`. They live alongside existing routes.
+
+### 7.1 New API Routes
+
+```
+# Routine Management
+POST   /api/routines                          # Create routine
+GET    /api/routines                          # List user's routines
+GET    /api/routines/{id}                     # Get routine details
+PUT    /api/routines/{id}                     # Update routine
+DELETE /api/routines/{id}                     # Archive routine
+
+# Session Management (extends existing session concept)
+POST   /api/routines/{id}/sessions            # Start recording session
+PUT    /api/sessions/{id}/end                 # End recording session
+GET    /api/sessions/{id}                     # Get session + timeline
+GET    /api/routines/{id}/sessions            # List sessions for routine
+
+# Timeline (works on any conversation, not just routines)
+POST   /api/timeline/extract                  # Extract timeline from any conversation
+GET    /api/sessions/{id}/timeline            # Get timeline for a session
+GET    /api/conversations/{id}/timeline       # Get timeline for any conversation
+
+# Feedback (generic post-session feedback)
+POST   /api/sessions/{id}/feedback            # Submit feedback
+GET    /api/sessions/{id}/feedback            # Get feedback for session
+
+# Analysis
+GET    /api/routines/{id}/analysis            # Get routine analysis
+GET    /api/routines/{id}/trends              # Trend data for charts
+GET    /api/routines/{id}/suggestions         # LLM optimisation suggestions
+
+# Schedule & Transport
+GET    /api/routines/{id}/schedule            # Current schedule state
+POST   /api/routines/{id}/schedule/check      # Check if on track
+GET    /api/transport/estimate                # Travel time estimate
+
+# Location (extends existing sessions)
+POST   /api/sessions/{id}/location            # Append GPS point
+```
+
+### 7.2 New Backend Services
+
+```
+ushadow/backend/src/
+├── services/
+│   ├── timeline_extractor.py      # NEW — LLM-powered transcript → timeline
+│   ├── routine_service.py         # NEW — Routine CRUD + session lifecycle
+│   ├── routine_analyser.py        # NEW — Cross-session trend analysis
+│   ├── schedule_monitor.py        # NEW — Real-time schedule tracking
+│   ├── transport_service.py       # NEW — Public transport API client
+│   ├── feedback_service.py        # NEW — Post-session feedback storage
+│   └── llm_client.py             # EXISTING — extended with analysis prompts
+├── routers/
+│   ├── routines.py               # NEW
+│   ├── timeline.py               # NEW
+│   ├── schedule.py               # NEW
+│   ├── transport.py              # NEW
+│   └── feedback.py               # NEW
+├── models/
+│   ├── routine.py                # NEW — Routine, RoutineSession Beanie docs
+│   ├── timeline.py               # NEW — TimelineEvent model
+│   ├── feedback.py               # NEW — RoutineFeedback model
+│   └── transport.py              # NEW — TransportLeg model
+```
+
+### 7.3 Integration with main.py
+
+```python
+# In main.py — added alongside existing router includes:
+from src.routers import routines, timeline, schedule, transport, feedback
+
+app.include_router(routines.router, prefix="/api/routines", tags=["routines"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["timeline"])
+app.include_router(schedule.router, prefix="/api/schedule", tags=["schedule"])
+app.include_router(transport.router, prefix="/api/transport", tags=["transport"])
+app.include_router(feedback.router, prefix="/api/feedback", tags=["feedback"])
+```
+
+---
+
+## 8. LLM Prompts (Key Templates)
+
+### 8.1 Activity Extraction
 
 ```
 You are analysing a voice transcript of someone performing their daily routine.
@@ -443,7 +752,7 @@ Transcript:
 {transcript}
 ```
 
-### 7.2 Optimisation Analysis
+### 8.2 Optimisation Analysis
 
 ```
 You are a routine optimisation coach. Analyse these {n} recordings of
@@ -467,99 +776,200 @@ Be specific and reference actual data (e.g. "Your 'choosing outfit' step
 averages 7.2 minutes across 8 sessions — try preparing clothes the night before").
 ```
 
+### 8.3 General Timeline Extraction (non-routine)
+
+```
+Analyse this conversation transcript and extract a timeline of events or
+topics discussed. For each segment, provide:
+- topic: short description
+- category: one of [discussion, decision, action_item, question, tangent, other]
+- start_time: ISO timestamp
+- end_time: ISO timestamp
+- key_points: bullet list of main points
+- participants: who was speaking (if identifiable)
+
+Transcript:
+{transcript}
+```
+
 ---
 
-## 8. Mobile App Screen Map
+## 9. Screen Maps
+
+### 9.1 ushadow App (Updated)
+
+```
+ushadow App
+├── Home (existing + extended)
+│   ├── Streaming controls (existing)
+│   ├── "Record as Routine" toggle          # NEW
+│   └── Active routine indicator             # NEW
+├── Chat (existing)
+├── Feed (existing)
+├── History (existing conversations tab, extended)
+│   ├── Conversation list (existing)
+│   ├── [Conversation] → detail
+│   │   └── "View Timeline" button           # NEW
+│   │       └── TimelineView component       # NEW
+│   └── Routines section                     # NEW
+│       ├── Routine list
+│       └── [Routine] → detail + sessions
+├── Memories (existing)
+└── Sessions (existing, extended)
+    └── Sessions now link to timeline if available  # NEW
+```
+
+### 9.2 nar8 App (Standalone)
 
 ```
 nar8 App
-├── Home (Routines List)
-│   ├── [+] New Routine → Routine Creator
+├── Routines (home tab)
+│   ├── [+] New Routine → RoutineCreator
 │   └── [Routine Card] → Routine Detail
 │       ├── Start Recording → Recording Screen
-│       │   └── Recording Ends → Feedback Screen
+│       │   └── Recording Ends → Feedback → Timeline Review
 │       ├── Session History
-│       │   └── [Session] → Timeline View
-│       ├── Analysis Dashboard
-│       │   ├── Trend Charts
-│       │   └── Suggestions
+│       │   └── [Session] → TimelineView
+│       ├── Analysis
+│       │   ├── TrendChart
+│       │   ├── ActivityBreakdown
+│       │   └── SuggestionCards
 │       └── Settings (goal, location, schedule)
-├── Active Recording (overlay / full screen)
-│   ├── Live waveform
+├── Active (recording tab — only visible during recording)
+│   ├── Live waveform (StreamingDisplay)
 │   ├── Current activity indicator
-│   ├── Elapsed time
-│   ├── Schedule status bar
+│   ├── Elapsed time + ScheduleBar
 │   └── End Recording button
-├── Coaching Chat
-│   └── LLM conversation about routines
-└── Settings
-    ├── Audio source (Mic / Omi)
-    ├── UNode connection
-    ├── Notification preferences
-    └── Transport settings
+└── Coach (chat tab)
+    └── LLM chat pre-loaded with routine context
 ```
 
 ---
 
-## 9. Implementation Phases
+## 10. Implementation Phases
 
-### Phase 1: Foundation (MVP)
-- [ ] Fork ushadow/mobile → nar8 branding
-- [ ] Routine CRUD (create, list, edit, delete)
-- [ ] Basic recording using existing streaming infrastructure
-- [ ] Transcript retrieval from Chronicle
-- [ ] LLM timeline extraction (basic)
-- [ ] Timeline view component
-- [ ] Post-recording feedback form
-- [ ] Backend: Routine + Session + Event models
-- [ ] Backend: `/api/nar8/routines` and `/api/nar8/sessions` endpoints
-- [ ] Backend: `TimelineExtractor` service
+### Phase 0: Componentise (prerequisite)
+- [ ] Create `packages/mobile-core/` structure
+- [ ] Extract `audio/` module (hooks + components) from ushadow mobile
+- [ ] Extract `ble/` module
+- [ ] Extract `auth/` module
+- [ ] Extract `session/` module
+- [ ] Extract `data/` module (API clients)
+- [ ] Extract `chat/` module
+- [ ] Extract `core/` module (feature flags, lifecycle, logging, utils)
+- [ ] Make `theme/` injectable via ThemeProvider
+- [ ] Make `config` injectable via ConfigProvider
+- [ ] Update ushadow mobile to import from `@ushadow/mobile-core`
+- [ ] Verify ushadow mobile still works identically after extraction
 
-### Phase 2: Intelligence
-- [ ] Cross-session trend analysis
-- [ ] LLM optimisation suggestions
-- [ ] Analysis dashboard with charts
-- [ ] Activity normalisation and categorisation
-- [ ] Sentiment analysis from narration
-- [ ] Coaching chat (adapt existing chat)
+### Phase 1: Core Features in ushadow (MVP)
+- [ ] Backend: Routine + Session + TimelineEvent + Feedback Beanie models
+- [ ] Backend: `TimelineExtractor` service (LLM-powered)
+- [ ] Backend: `RoutineService` (CRUD + session lifecycle)
+- [ ] Backend: `FeedbackService`
+- [ ] Backend: `/api/routines`, `/api/timeline`, `/api/feedback` routers
+- [ ] Mobile-core: `timeline/` module (TimelineView, TimelineEvent, hooks)
+- [ ] Mobile-core: `routine/` module (RoutineCard, RoutineCreator, hooks)
+- [ ] Mobile-core: `feedback/` module (FeedbackWizard, hooks)
+- [ ] Mobile-core: `data/routineApi.ts` client
+- [ ] ushadow mobile: Add timeline view to conversation detail
+- [ ] ushadow mobile: Add routine section to History tab
+- [ ] ushadow mobile: "Record as routine" option on home screen
 
-### Phase 3: Proactive Features
-- [ ] Location tracking during recording
-- [ ] Public transport API integration
-- [ ] Dynamic schedule monitoring
-- [ ] Push notifications (behind schedule)
+### Phase 2: nar8 App Shell
+- [ ] Create `apps/nar8/` as a new Expo app
+- [ ] nar8 theme + branding
+- [ ] nar8 3-tab layout (Routines / Active / Coach)
+- [ ] nar8 home screen (routine list with quick-record)
+- [ ] nar8 recording screen (compose core audio + routine + schedule components)
+- [ ] nar8 post-recording flow (feedback → timeline review)
+- [ ] nar8 app config (EAS, bundle ID, permissions)
+- [ ] nar8 coaching chat (core chat with routine system prompt)
+
+### Phase 3: Intelligence
+- [ ] Backend: `RoutineAnalyser` service (cross-session trends)
+- [ ] Backend: LLM optimisation suggestion generation
+- [ ] Mobile-core: `analysis/` module (TrendChart, SuggestionCard, etc.)
+- [ ] Activity normalisation and canonical mapping
+- [ ] Sentiment analysis from narration tone
+- [ ] ushadow: Analysis dashboard for routines
+- [ ] nar8: Analysis tab within routine detail
+
+### Phase 4: Proactive Features
+- [ ] Mobile-core: `location/` module (useLocationTracking hook)
+- [ ] Mobile-core: `schedule/` module (ScheduleBar, AlertBanner, hooks)
+- [ ] Backend: `ScheduleMonitor` service
+- [ ] Backend: `TransportService` (public transport API client)
+- [ ] Push notifications when behind schedule
 - [ ] "Leave by" time calculation
-- [ ] Live Activity widget updates for schedule
+- [ ] Live Activity widget updates for schedule status
 
-### Phase 4: Polish & Advanced
+### Phase 5: Polish & Advanced
 - [ ] Routine sharing (anonymised)
 - [ ] Calendar integration
-- [ ] Apple Watch / wearable companion
+- [ ] Apple Watch companion
 - [ ] Habit streak tracking
-- [ ] Export to calendar events
-- [ ] Multi-routine chaining (morning → commute → work arrival)
+- [ ] Multi-routine chaining (morning → commute → arrival)
+- [ ] Web dashboard: routine management + analysis pages
 
 ---
 
-## 10. Technical Notes
+## 11. Technical Notes
 
-### 10.1 New Dependencies (Mobile)
+### 11.1 New Dependencies (Mobile)
 - `expo-location` — GPS tracking during recording
 - `expo-notifications` — schedule-aware push notifications
-- `react-native-chart-kit` or `victory-native` — trend visualisation
-- `expo-calendar` — calendar integration (Phase 4)
+- `victory-native` or `react-native-chart-kit` — trend visualisation
+- `expo-calendar` — calendar integration (Phase 5)
 
-### 10.2 New Dependencies (Backend)
-- Transport APIs: Google Directions API, or open-source alternatives (OpenTripPlanner, Transport API)
+### 11.2 New Dependencies (Backend)
+- Transport APIs: Google Directions API, or OpenTripPlanner / Transitland
 - No new LLM dependencies — uses existing LiteLLM + provider system
 
-### 10.3 Data Storage
-- Routines, sessions, events, feedback → MongoDB (existing ushadow infrastructure)
+### 11.3 Data Storage
+- Routines, sessions, events, feedback → MongoDB (existing infrastructure)
 - Audio + transcripts → Chronicle (existing)
 - Location data → stored with session in MongoDB (array of `{lat, lng, timestamp}`)
 
-### 10.4 App Identity
-- New bundle ID: `io.nar8.app` (iOS) / `io.nar8.app` (Android)
-- New EAS project
-- Shared backend — nar8 routes namespaced under `/api/nar8/`
-- Same Keycloak auth realm — users authenticate the same way
+### 11.4 Monorepo Structure (Updated)
+
+```
+ushadow/
+├── packages/
+│   └── mobile-core/          # @ushadow/mobile-core shared library
+├── apps/
+│   └── nar8/                 # nar8 standalone app
+├── ushadow/
+│   ├── mobile/               # ushadow mobile app (now imports from mobile-core)
+│   ├── backend/              # ushadow backend (extended with routine/timeline services)
+│   ├── frontend/             # ushadow web dashboard
+│   └── launcher/             # Desktop launcher
+├── backend/                  # (existing structure)
+├── chronicle/                # Chronicle submodule
+├── mycelia/                  # Mycelia submodule
+└── ...
+```
+
+### 11.5 App Identities
+
+| Property | ushadow | nar8 |
+|----------|---------|------|
+| Bundle ID | `io.ushadow.app` | `io.nar8.app` |
+| EAS Project | ushadow | nar8 (new) |
+| Backend | Full ushadow backend | Same backend |
+| Auth realm | ushadow Keycloak | Same realm |
+| Tabs | 5 (Home, Chat, Feed, History, Memories) | 3 (Routines, Active, Coach) |
+| Features | Everything | Routines + Timeline + Coaching |
+
+### 11.6 Migration Path for Componentisation
+
+The extraction follows a **strangler fig** pattern — no big bang:
+
+1. Create `packages/mobile-core/` with empty modules
+2. Move one module at a time (start with `audio/`)
+3. Replace imports in ushadow mobile to use `@ushadow/mobile-core/audio`
+4. Verify everything still works
+5. Repeat for next module
+6. Once all modules extracted, ushadow mobile's `app/` contains only screens and layouts
+
+This approach means ushadow mobile never breaks during the componentisation process.
