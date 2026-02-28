@@ -894,12 +894,19 @@ pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<Inf
         ("kafka", "Kafka"),
         ("qdrant", "Qdrant"),
         ("neo4j", "Neo4j"),
+        ("keycloak", "Keycloak"),
+        ("ollama", "Ollama"),
     ].iter().copied().collect();
 
     for (service_id, service_config) in services {
         let service_name = service_id.as_str()
             .ok_or("Service name is not a string")?
             .to_string();
+
+        // Skip one-off init containers (restart: "no" with -init suffix)
+        if service_name.ends_with("-init") || service_name.ends_with("-migration") || service_name.ends_with("-setup") {
+            continue;
+        }
 
         // Get display name (capitalize if not in map)
         let display_name = display_names.get(service_name.as_str())
@@ -908,15 +915,12 @@ pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<Inf
             .to_string();
 
         // Extract default port from exposed ports
+        // Handles plain "5432:5432", bare "5432", and Docker Compose shell expressions "${VAR:-8081}:8080"
         let default_port = service_config.get("ports")
             .and_then(|ports| ports.as_sequence())
             .and_then(|seq| seq.first())
             .and_then(|port_mapping| port_mapping.as_str())
-            .and_then(|mapping| {
-                // Parse port mapping like "5432:5432" or "5432"
-                let parts: Vec<&str> = mapping.split(':').collect();
-                parts.first().and_then(|p| p.parse::<u16>().ok())
-            });
+            .and_then(|mapping| super::port_utils::parse_compose_host_port(mapping));
 
         // Extract profiles
         let profiles = service_config.get("profiles")
@@ -947,10 +951,8 @@ pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<Inf
 
 /// Check if a service container is running
 fn check_service_running(service_name: &str) -> bool {
-    use std::process::Command;
-
     // Check if container exists and is running
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args([
             "ps",
             "--filter",

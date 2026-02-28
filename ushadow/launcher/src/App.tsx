@@ -161,12 +161,13 @@ function App() {
   const lastStateRef = useRef<string>('')
 
   // Logging functions
-  const log = useCallback((message: string, level: LogLevel = 'info') => {
+  const log = useCallback((message: string, level: LogLevel = 'info', detailed = false) => {
     setLogs(prev => [...prev, {
       id: logIdRef.current++,
       timestamp: new Date(),
       message,
       level,
+      detailed,
     }])
   }, [])
 
@@ -565,12 +566,15 @@ function App() {
         log('[DRY RUN] Infrastructure start simulated', 'success')
       } else {
         const result = await tauri.startInfrastructure()
-        log(result, 'success')
+        // Log the full compose output to Detail tab only — it contains pull progress
+        log(result, 'info', true)
+        log('✓ Infrastructure started', 'success')
       }
       await refreshDiscovery()
     } catch (err) {
       log(`Failed to start infrastructure`, 'error')
-      log(String(err), 'error')
+      // Log the detailed error output to Detail tab
+      log(String(err), 'error', true)
     } finally {
       setLoadingInfra(false)
     }
@@ -1280,7 +1284,7 @@ function App() {
       await tauri.setProjectRoot(path)
       setProjectRoot(path)
     } catch (err) {
-      log(`Clone failed: ${err}`, 'error')
+      log(`${err}`, 'error')
       throw err
     }
   }
@@ -1311,19 +1315,8 @@ function App() {
     setLogExpanded(true)
     log('🚀 Starting Ushadow quick launch...', 'step')
 
-    // Check if we need to install prereqs or start infra
-    const prereqs = getEffectivePrereqs(prerequisites)
-    const needsPrereqs = !prereqs?.git_installed || !prereqs?.python_installed || !prereqs?.docker_installed || !prereqs?.docker_running
-    const needsInfra = !discovery || !discovery.docker_ok || discovery.infrastructure.some(svc => !svc.running)
-
-    // If prereqs or infra need setup, switch to infra page first
-    if (needsPrereqs || needsInfra) {
-      setAppMode('infra')
-      log('Installing prerequisites and starting infrastructure...', 'step')
-    } else {
-      // Everything ready, go straight to environments
-      setAppMode('environments')
-    }
+    // Always navigate to infra page so the user can see what's happening
+    setAppMode('infra')
 
     // Give UI a brief moment to render
     await new Promise(r => setTimeout(r, 50))
@@ -1459,25 +1452,32 @@ function App() {
         if (infraRunning) {
           log('✓ Infrastructure already running', 'success')
         } else {
-          log('Starting infrastructure...', 'step')
-          if (dryRunMode) {
-            log('[DRY RUN] Would start infrastructure', 'warning')
-            await new Promise(r => setTimeout(r, 1000))
-            log('[DRY RUN] Infrastructure started', 'success')
-          } else {
-            const infraResult = await tauri.startInfrastructure()
-            log(infraResult, 'success')
+          log('Starting infrastructure (pulling images if needed)...', 'step')
+          setLoadingInfra(true)
+          try {
+            if (dryRunMode) {
+              log('[DRY RUN] Would start infrastructure', 'warning')
+              await new Promise(r => setTimeout(r, 1000))
+              log('[DRY RUN] Infrastructure started', 'success')
+            } else {
+              const infraResult = await tauri.startInfrastructure()
+              // Full compose output (including pull progress) goes to Detail tab
+              log(infraResult, 'info', true)
+              log('✓ Infrastructure started', 'success')
+            }
+          } finally {
+            setLoadingInfra(false)
           }
         }
       }
       await refreshDiscovery()
 
+      // Switch to environments page before starting env — user sees the "creating" card immediately
+      setAppMode('environments')
+
       // Step 7: Start the ushadow environment
       log(`Starting ushadow environment...`, 'step')
       await handleStartEnv('ushadow', undefined)
-
-      // Switch to environments page after setup is complete
-      setAppMode('environments')
 
       if (failedInstalls.length > 0) {
         log('Quick launch completed with warnings', 'warning')
@@ -1485,9 +1485,10 @@ function App() {
         log('Quick launch complete!', 'success')
       }
     } catch (err) {
-      console.error('DEBUG: handleQuickLaunch caught error:', err)
-      log(`Quick launch failed: ${err}`, 'error')
-      // On error, also switch to environments page to show the error
+      const errMsg = String(err)
+      // If the error already has a clear message (e.g. network error), show it as-is
+      const isVerbose = errMsg.startsWith('Network error:') || errMsg.startsWith('Permission denied') || errMsg.startsWith('Git clone failed:')
+      log(isVerbose ? errMsg : `Quick launch failed: ${errMsg}`, 'error')
       setAppMode('environments')
     } finally {
       setIsLaunching(false)
@@ -1632,147 +1633,144 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-hidden p-4">
-        {appMode === 'install' ? (
-          /* Install Page - Project Configuration */
-          <div className="h-full flex flex-col overflow-y-auto p-8">
-            {multiProjectMode ? (
-              /* Multi-Project Mode - Project Manager */
-              <>
-                <div className="text-center mb-8">
-                  <h2 className="text-2xl font-bold mb-2">Project Management</h2>
-                  <p className="text-text-secondary">
-                    Manage multiple projects with independent configurations
-                  </p>
-                </div>
-                <div className="max-w-4xl mx-auto w-full">
-                  <ProjectManager />
-                </div>
-              </>
-            ) : (
-              /* Single-Project Mode - One-Click Launch */
-              <div className="flex flex-col items-center justify-center flex-1">
-                <div className="text-center mb-8">
-                  <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
-                  <p className="text-text-secondary">
-                    Automatically install prerequisites and start Ushadow
-                  </p>
-                </div>
+      <main className="flex-1 overflow-hidden p-4 relative">
+        {/* Install Page — always mounted for instant tab switch */}
+        <div className={`h-full flex flex-col overflow-y-auto p-8 ${appMode === 'install' ? '' : 'hidden'}`}>
+          {multiProjectMode ? (
+            /* Multi-Project Mode - Project Manager */
+            <>
+              <div className="text-center mb-8">
+                <h2 className="text-2xl font-bold mb-2">Project Management</h2>
+                <p className="text-text-secondary">
+                  Manage multiple projects with independent configurations
+                </p>
+              </div>
+              <div className="max-w-4xl mx-auto w-full">
+                <ProjectManager />
+              </div>
+            </>
+          ) : (
+            /* Single-Project Mode - One-Click Launch */
+            <div className="flex flex-col items-center justify-center flex-1">
+              <div className="text-center mb-8">
+                <h2 className="text-2xl font-bold mb-2">One-Click Launch</h2>
+                <p className="text-text-secondary">
+                  Automatically install prerequisites and start Ushadow
+                </p>
+              </div>
 
-                {/* Project Folder Display */}
-                <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
-                  <FolderOpen className="w-4 h-4 text-text-muted" />
-                  <span className="text-text-muted">Project folder:</span>
-                  <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
-                    {projectRoot || 'Not set'}
-                  </span>
-                  <button
-                    onClick={() => setShowProjectDialog(true)}
-                    className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
-                    title="Change folder locations"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
+              {/* Project Folder Display */}
+              <div className="flex items-center gap-2 px-4 py-2 bg-surface-800 rounded-lg mb-6 text-sm">
+                <FolderOpen className="w-4 h-4 text-text-muted" />
+                <span className="text-text-muted">Project folder:</span>
+                <span className="text-text-secondary truncate max-w-md" title={projectRoot}>
+                  {projectRoot || 'Not set'}
+                </span>
                 <button
-                  onClick={handleQuickLaunch}
-                  disabled={isLaunching}
-                  className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
-                    isLaunching
-                      ? 'bg-surface-600 cursor-not-allowed'
-                      : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
-                  }`}
-                  data-testid="quick-launch-button"
+                  onClick={() => setShowProjectDialog(true)}
+                  className="p-1 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary ml-1"
+                  title="Change folder locations"
                 >
-                  {isLaunching ? (
-                    <>
-                      <Loader2 className="w-6 h-6 animate-spin" />
-                      Launching...
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="w-6 h-6" />
-                      Launch Ushadow
-                    </>
-                  )}
+                  <Pencil className="w-3.5 h-3.5" />
                 </button>
               </div>
-            )}
+
+              <button
+                onClick={handleQuickLaunch}
+                disabled={isLaunching}
+                className={`px-12 py-4 rounded-xl transition-all font-semibold text-lg flex items-center justify-center gap-3 ${
+                  isLaunching
+                    ? 'bg-surface-600 cursor-not-allowed'
+                    : 'bg-gradient-brand hover:opacity-90 hover:shadow-lg hover:shadow-primary-500/20 active:scale-95'
+                }`}
+                data-testid="quick-launch-button"
+              >
+                {isLaunching ? (
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    Launching...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-6 h-6" />
+                    Launch Ushadow
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Infra Page — always mounted for instant tab switch */}
+        <div className={`h-full flex flex-col gap-4 overflow-y-auto ${appMode === 'infra' ? '' : 'hidden'}`}>
+          <div className="text-center mb-4">
+            <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
+            <p className="text-text-secondary">
+              Install prerequisites and configure shared infrastructure
+            </p>
           </div>
-        ) : appMode === 'infra' ? (
-          /* Infra Page - Prerequisites & Infrastructure Setup */
-          <div className="h-full flex flex-col gap-4 overflow-y-auto">
-            <div className="text-center mb-4">
-              <h2 className="text-2xl font-bold mb-2">Setup & Installation</h2>
-              <p className="text-text-secondary">
-                Install prerequisites and configure shared infrastructure
-              </p>
+
+          {/* Prerequisites and Infrastructure Side-by-Side */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-4">
+              <PrerequisitesPanel
+                prerequisites={effectivePrereqs}
+                prerequisitesConfig={prerequisitesConfig}
+                isInstalling={isInstalling}
+                installingItem={installingItem}
+                onInstall={handleInstall}
+                onStartDocker={handleStartDocker}
+                showDevTools={showDevTools}
+                onToggleDevTools={() => setShowDevTools(!showDevTools)}
+              />
+              {showDevTools && <DevToolsPanel />}
             </div>
 
-            {/* Prerequisites and Infrastructure Side-by-Side */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-4">
-                <PrerequisitesPanel
-                  prerequisites={effectivePrereqs}
-                  prerequisitesConfig={prerequisitesConfig}
-                  isInstalling={isInstalling}
-                  installingItem={installingItem}
-                  onInstall={handleInstall}
-                  onStartDocker={handleStartDocker}
-                  showDevTools={showDevTools}
-                  onToggleDevTools={() => setShowDevTools(!showDevTools)}
-                />
-                {/* Dev Tools Panel - appears below Prerequisites */}
-                {showDevTools && <DevToolsPanel />}
-              </div>
-
-              <InfrastructurePanel
-                services={discovery?.infrastructure ?? []}
-                onStart={handleStartInfra}
-                onStop={handleStopInfra}
-                onRestart={handleRestartInfra}
-                isLoading={loadingInfra}
-                selectedServices={selectedInfraServices}
-                onToggleService={handleToggleInfraService}
-              />
-            </div>
-
-            {/* Infrastructure Configuration */}
-            {multiProjectMode && effectiveProjectRoot && (
-              <InfraConfigPanel
-                projectRoot={effectiveProjectRoot}
-                selectedInfraServices={selectedInfraServices}
-                onSave={(config) => {
-                  // TODO: Save to backend
-                }}
-              />
-            )}
-          </div>
-        ) : appMode === 'environments' ? (
-          /* Environments Page - Worktree Management */
-          <div className="h-full flex flex-col overflow-hidden p-4">
-            <EnvironmentsPanel
-              environments={discovery?.environments ?? []}
-              creatingEnvs={creatingEnvs}
-              onStart={handleStartEnv}
-              onStop={handleStopEnv}
-              onCreate={() => setShowNewEnvDialog(true)}
-              onOpenInApp={handleOpenInApp}
-              onMerge={handleMerge}
-              onDelete={handleDelete}
-              onAttachTmux={handleAttachTmux}
-              onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
-              loadingEnv={loadingEnv}
-              tmuxStatuses={tmuxStatuses}
-              selectedEnvironment={selectedEnvironment}
-              onSelectEnvironment={(env) => {
-                console.log('[App] onSelectEnvironment called with:', env?.name)
-                setSelectedEnvironment(env)
-              }}
+            <InfrastructurePanel
+              services={discovery?.infrastructure ?? []}
+              onStart={handleStartInfra}
+              onStop={handleStopInfra}
+              onRestart={handleRestartInfra}
+              onRefresh={() => refreshDiscovery(true)}
+              isLoading={loadingInfra}
+              selectedServices={selectedInfraServices}
+              onToggleService={handleToggleInfraService}
+              projectRoot={effectiveProjectRoot}
             />
           </div>
-        ) : appMode === 'kanban' && kanbanEnabled ? (
+
+          {multiProjectMode && effectiveProjectRoot && (
+            <InfraConfigPanel
+              projectRoot={effectiveProjectRoot}
+              selectedInfraServices={selectedInfraServices}
+              onSave={(_config) => {}}
+            />
+          )}
+        </div>
+
+        {/* Environments Page — always mounted for instant tab switch */}
+        <div className={`h-full flex flex-col overflow-hidden p-4 ${appMode === 'environments' ? '' : 'hidden'}`}>
+          <EnvironmentsPanel
+            environments={discovery?.environments ?? []}
+            creatingEnvs={creatingEnvs}
+            onStart={handleStartEnv}
+            onStop={handleStopEnv}
+            onCreate={() => setShowNewEnvDialog(true)}
+            onOpenInApp={handleOpenInApp}
+            onMerge={handleMerge}
+            onDelete={handleDelete}
+            onAttachTmux={handleAttachTmux}
+            onDismissError={(name) => setCreatingEnvs(prev => prev.filter(e => e.name !== name))}
+            loadingEnv={loadingEnv}
+            tmuxStatuses={tmuxStatuses}
+            selectedEnvironment={selectedEnvironment}
+            onSelectEnvironment={(env) => {
+              setSelectedEnvironment(env)
+            }}
+          />
+        </div>
+
+        {appMode === 'kanban' && kanbanEnabled ? (
           /* Kanban Page - Ticket Management */
           (() => {
             // Use the first available backend (running or not)

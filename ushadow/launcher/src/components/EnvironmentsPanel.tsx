@@ -389,11 +389,12 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
   const [registering, setRegistering] = useState(false)
 
   // Poll for auth changes — detects when AuthButton's OAuth flow completes
+  // 5s interval is sufficient since the OAuth callback also updates state via storage events
   useEffect(() => {
     if (isAuthenticated) return
     const id = setInterval(() => {
       if (TokenManager.isAuthenticated()) setIsAuthenticated(true)
-    }, 1000)
+    }, 5000)
     return () => clearInterval(id)
   }, [isAuthenticated])
 
