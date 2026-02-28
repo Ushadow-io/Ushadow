@@ -114,6 +114,9 @@ function Submenu({ option, template, savedConfigs, isEditingConfig, position, on
     if (!template?.id) return
 
     const fetchEnvConfig = async () => {
+      // Clear stale data from previous template before loading new one
+      setEnvVars([])
+      setConfigs({})
       setLoading(true)
       try {
         const response = await svcConfigsApi.getTemplateEnvConfig(template.id)
@@ -790,12 +793,19 @@ export function ProviderConfigDropdown({
               <>
                 {effectiveOptions.defaults.map(templateOption => {
                   const childConfigs = effectiveOptions.saved.filter(s => s.templateId === templateOption.templateId)
+
+                  // When exactly one saved config exists, skip the parent/child hierarchy
+                  // and render the saved config directly at the top level
+                  if (childConfigs.length === 1) {
+                    return renderOption(childConfigs[0], value?.id === childConfigs[0].id)
+                  }
+
                   return (
                     <div key={templateOption.id}>
                       {/* Template option */}
                       {renderOption(templateOption, value?.id === templateOption.id)}
 
-                      {/* Saved configs indented under this template */}
+                      {/* Saved configs indented under this template (when >1 exist) */}
                       {childConfigs.map(savedConfig => (
                         <div
                           key={savedConfig.id}

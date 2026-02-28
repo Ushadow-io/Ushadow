@@ -141,7 +141,7 @@ export function useProviderConfigs(
     // and installed compose services (e.g., faster-whisper providing transcription)
     const capabilityTemplates = initialTemplates!.filter(
       t => t.provides === capability &&
-        (t.source === 'provider' || (t.source === 'compose' && t.installed))
+        (t.source === 'provider' || (t.source === 'compose' && (t.installed || t.running)))
     )
     // Filter configs that are based on capability templates
     const templateIds = new Set(capabilityTemplates.map(t => t.id))
@@ -193,7 +193,7 @@ export function useProviderConfigs(
       // and installed compose services (e.g., faster-whisper providing transcription)
       const capabilityTemplates = templatesRes.data.filter(
         t => t.provides === capability &&
-          (t.source === 'provider' || (t.source === 'compose' && t.installed))
+          (t.source === 'provider' || (t.source === 'compose' && (t.installed || t.running)))
       )
 
       // Filter configs that are based on capability templates
