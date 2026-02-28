@@ -138,6 +138,13 @@ class DiscoveredService:
     # e.g., {"transcription": {"server_url": "TRANSCRIPTION_BASE_URL"}}
     capability_env_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
+    # YAML provider this compose service implements (links to provider registry)
+    provider_id: Optional[str] = None
+
+    # Capability env var mappings: capability -> {canonical_key -> service_env_var}
+    # e.g., {"transcription": {"server_url": "TRANSCRIPTION_BASE_URL"}}
+    capability_env_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
     # Environment variables
     required_env_vars: List[ComposeEnvVar] = field(default_factory=list)
     optional_env_vars: List[ComposeEnvVar] = field(default_factory=list)

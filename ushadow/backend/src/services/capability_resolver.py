@@ -467,6 +467,7 @@ class CapabilityResolver:
                         )
                         return compose_provider, None
 
+
         # 2. Try to get explicit selection from settings
         selected = await self._settings.get(f"selected_providers.{capability}")
         if selected:
