@@ -64,7 +64,6 @@ services:
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
       - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
-      # Constructed URI - set MONGODB_URI directly or it will be built from components
       - MONGODB_URI=${MONGODB_URI}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
       - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}
@@ -146,7 +145,6 @@ services:
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-ushadow}
       - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
-      # Constructed URI - set MONGODB_URI directly or it will be built from components
       - MONGODB_URI=${MONGODB_URI}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
       - QDRANT_BASE_URL=${QDRANT_BASE_URL:-qdrant}

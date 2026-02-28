@@ -8,6 +8,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import DeployModal from '../components/DeployModal'
 import DNSManagementPanel from '../components/kubernetes/DNSManagementPanel'
 import InfrastructureOverridesEditor from '../components/InfrastructureOverridesEditor'
+import ClusterNodeList from '../components/kubernetes/ClusterNodeList'
 
 interface InfraService {
   found: boolean
@@ -626,6 +627,13 @@ export default function KubernetesClustersPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Nodes */}
+                <ClusterNodeList
+                  clusterId={cluster.cluster_id}
+                  clusterStatus={cluster.status}
+                  nodeCount={cluster.node_count}
+                />
 
                 {/* Actions */}
                 <div className="flex justify-between items-center pt-4 border-t border-neutral-200 dark:border-neutral-700 gap-2">

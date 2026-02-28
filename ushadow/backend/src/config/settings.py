@@ -645,7 +645,9 @@ class Settings:
         if service.requires:
             try:
                 resolver = CapabilityResolver()
-                capability_values = await resolver.resolve_for_service(service_id)
+                # Use resolve_for_instance so wiring is always checked — the service
+                # name doubles as the consumer ID (matches target_config_id in wiring.yaml)
+                capability_values = await resolver.resolve_for_instance(service_id)
             except Exception as e:
                 logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
 
@@ -779,7 +781,7 @@ class Settings:
                                 logger.warning(f"[Load] [ServiceConfig Override] {env_var}: _from_setting path {setting_path!r} resolved to None")
                     elif value:
                         instance_overrides_from_config[env_var] = str(value)
-                        logger.info(f"[Load] [ServiceConfig Override] {env_var} = {value}")
+                    logger.info(f"[Load] [ServiceConfig Override] {env_var} = {value}")
         else:
             # Not a ServiceConfig - try as direct service_id/template_id
             logger.info(f"[Settings] for_deployment({deployment_id}): Not a ServiceConfig, using as service_id")
@@ -838,6 +840,11 @@ class Settings:
         # Don't resolve mappings yet - store raw values so we can track the mapping path
         template_overrides = {}
         template_config = await self._store.get(f"services.{service_id}") or {}
+        # Fallback: config.defaults.yaml stores entries by service_name (e.g., "faster-whisper")
+        # but service_id includes the compose prefix (e.g., "whisper-compose:faster-whisper")
+        if not template_config and ":" in service_id:
+            service_name = service_id.split(":", 1)[-1]
+            template_config = await self._store.get(f"services.{service_name}") or {}
         if template_config:
             for env_var, value in template_config.items():
                 if value:

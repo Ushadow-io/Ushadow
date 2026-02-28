@@ -138,8 +138,36 @@ pub async fn clone_ushadow_repo(target_dir: String, branch: Option<String>) -> R
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("Git clone failed: {}. stdout: {}", stderr, stdout));
+
+        // Git uses stderr for both progress ("Cloning into...") and real errors.
+        // Filter to only the fatal/error lines so we don't include progress noise.
+        let error_lines: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("fatal:") || l.starts_with("error:") || l.starts_with("remote: error"))
+            .collect();
+
+        let git_error = if error_lines.is_empty() {
+            stderr.trim().to_string()
+        } else {
+            error_lines.join("\n")
+        };
+
+        // Provide actionable messages for common failure modes
+        return Err(if git_error.contains("Could not resolve host") || git_error.contains("resolve host") {
+            format!(
+                "Network error: Could not connect to GitHub. Please check your internet connection and try again.\n\nDetails: {}",
+                git_error
+            )
+        } else if git_error.contains("Permission denied") || git_error.to_lowercase().contains("access denied") {
+            format!(
+                "Permission denied cloning to {}. Please check you have write access to that directory.\n\nDetails: {}",
+                target_dir, git_error
+            )
+        } else if git_error.contains("already exists") {
+            format!("Target directory already exists and is not empty: {}", target_dir)
+        } else {
+            format!("Git clone failed: {}", git_error)
+        });
     }
 
     // Verify the clone actually worked by checking for .git directory

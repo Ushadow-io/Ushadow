@@ -5,6 +5,12 @@ Generate Mycelia authentication token and client ID
 This script creates API credentials directly in MongoDB without
 needing to spin up the full Mycelia compose stack.
 
+MongoDB URI resolution order:
+  1. --mongo-uri CLI argument
+  2. Ushadow OmegaConf settings (infrastructure.mongodb_uri) — works in Docker and K8s
+  3. MONGODB_URI / MONGO_URL environment variable
+  4. Fallback: mongodb://mongo:27017
+
 Usage:
     python3 mycelia-generate-token.py [--mongo-uri MONGO_URI] [--db-name DB_NAME]
 """
@@ -12,36 +18,57 @@ Usage:
 import argparse
 import base64
 import hashlib
+import os
 import secrets
 import sys
 from datetime import datetime
-from pathlib import Path
 
 try:
     from pymongo import MongoClient
-    from bson import ObjectId
     HAS_PYMONGO = True
 except ImportError:
     HAS_PYMONGO = False
 
 
-def load_env_file():
-    """Load .env file from project root if it exists."""
-    env_vars = {}
-    env_file = Path(__file__).parent.parent.parent / '.env'
+def get_mongo_uri() -> str:
+    """
+    Resolve MongoDB URI using the same priority chain as the ushadow backend.
 
-    if env_file.exists():
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    env_vars[key] = value.strip('"').strip("'")
+    1. Ushadow OmegaConf settings (works in Docker and K8s via config mounts)
+    2. MONGODB_URI / MONGO_URL environment variable
+    3. Fallback to mongo:27017 (default docker-compose hostname)
+    """
+    # Try ushadow settings store (available when script is invoked from within the backend)
+    try:
+        import sys
+        import os
+        # Add backend src to path if available
+        backend_src = os.path.join(os.path.dirname(__file__), '..', '..', 'ushadow', 'backend', 'src')
+        if os.path.isdir(backend_src):
+            sys.path.insert(0, os.path.abspath(backend_src))
 
-    return env_vars
+        from config import get_settings_store
+        import asyncio
+
+        async def _read():
+            store = get_settings_store()
+            return await store.get("infrastructure.mongodb_uri")
+
+        uri = asyncio.run(_read())
+        if uri:
+            return str(uri)
+    except Exception:
+        pass
+
+    # Fall back to environment variable (K8s injects these via ConfigMap/Secret)
+    uri = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URL")
+    if uri:
+        return uri
+
+    return "mongodb://mongo:27017"
 
 
-def generate_api_key():
+def generate_api_key() -> str:
     """Generate a random API key with mycelia_ prefix."""
     random_bytes = secrets.token_bytes(32)
     return f"mycelia_{base64.urlsafe_b64encode(random_bytes).decode().rstrip('=')}"
@@ -55,109 +82,58 @@ def hash_api_key(api_key: str, salt: bytes) -> str:
     return base64.b64encode(hasher.digest()).decode()
 
 
-def generate_credentials_with_mongo(mongo_uri: str, db_name: str):
-    """Generate credentials and store in MongoDB."""
+def generate_credentials(mongo_uri: str, db_name: str) -> tuple[str, str]:
+    """
+    Generate credentials and store in MongoDB.
+
+    Returns:
+        (MYCELIA_TOKEN, MYCELIA_CLIENT_ID)
+    """
     if not HAS_PYMONGO:
-        print("ERROR: pymongo not installed. Install with: pip install pymongo")
-        print("Or use the docker compose method instead:")
-        print("  docker compose -f compose/mycelia-compose.yml run --rm mycelia-backend deno run -A server.ts token-create")
+        print("ERROR: pymongo not installed. Install with: pip install pymongo", file=sys.stderr)
         sys.exit(1)
 
-    # Generate token and salt
     api_key = generate_api_key()
     salt = secrets.token_bytes(32)
     hashed_key = hash_api_key(api_key, salt)
 
-    # Connect to MongoDB
-    try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        client.admin.command('ping')  # Test connection
-        db = client[db_name]
+    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+    client.admin.command("ping")
+    db = client[db_name]
 
-        # Create API key document
-        doc = {
-            'hashedKey': hashed_key,
-            'salt': base64.b64encode(salt).decode(),
-            'owner': 'admin',
-            'name': f'ushadow_generated_{int(datetime.now().timestamp())}',
-            'policies': [{'resource': '**', 'action': '**', 'effect': 'allow'}],
-            'openPrefix': api_key[:16],
-            'createdAt': datetime.now(),
-            'isActive': True
-        }
+    result = db.api_keys.insert_one({
+        "hashedKey": hashed_key,
+        "salt": base64.b64encode(salt).decode(),
+        "owner": "admin",
+        "name": f"ushadow_generated_{int(datetime.now().timestamp())}",
+        "policies": [{"resource": "**", "action": "**", "effect": "allow"}],
+        "openPrefix": api_key[:16],
+        "createdAt": datetime.now(),
+        "isActive": True,
+    })
 
-        # Insert into database
-        result = db.api_keys.insert_one(doc)
-        client_id = str(result.inserted_id)
-
-        # Print credentials
-        print("\n✓ Credentials generated successfully!\n")
-        print(f"MYCELIA_CLIENT_ID={client_id}")
-        print(f"MYCELIA_TOKEN={api_key}")
-        print("\nCopy these values into the ushadow wizard or your .env file")
-
-    except Exception as e:
-        print(f"ERROR: Failed to connect to MongoDB: {e}")
-        print("\nAlternatively, use the docker compose method:")
-        print("  docker compose -f compose/mycelia-compose.yml run --rm mycelia-backend deno run -A server.ts token-create")
-        sys.exit(1)
+    return api_key, str(result.inserted_id)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Generate Mycelia authentication credentials',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Use default MongoDB connection (localhost:27017)
-  python3 mycelia-generate-token.py
-
-  # Specify custom MongoDB URI
-  python3 mycelia-generate-token.py --mongo-uri mongodb://localhost:27018
-
-  # Specify custom database name
-  python3 mycelia-generate-token.py --db-name my_mycelia_db
-
-If pymongo is not installed or MongoDB is not accessible, the script will
-provide instructions to use the docker compose method instead.
-        """
-    )
-
-    parser.add_argument(
-        '--mongo-uri',
-        default=None,
-        help='MongoDB connection URI (default: mongodb://localhost:27017)'
-    )
-
-    parser.add_argument(
-        '--db-name',
-        default='mycelia',
-        help='Database name (default: mycelia)'
-    )
-
+    parser = argparse.ArgumentParser(description="Generate Mycelia authentication credentials")
+    parser.add_argument("--mongo-uri", default=None, help="MongoDB connection URI")
+    parser.add_argument("--db-name", default=None, help="Database name (default: mycelia)")
     args = parser.parse_args()
 
-    # Load environment variables
-    env_vars = load_env_file()
+    mongo_uri = args.mongo_uri or get_mongo_uri()
+    db_name = args.db_name or os.environ.get("MYCELIA_DATABASE_NAME", "mycelia")
 
-    # Determine MongoDB URI
-    if args.mongo_uri:
-        mongo_uri = args.mongo_uri
-    elif 'MONGO_URL' in env_vars:
-        mongo_uri = env_vars['MONGO_URL']
-    else:
-        mongo_uri = 'mongodb://localhost:27017'
+    try:
+        token, client_id = generate_credentials(mongo_uri, db_name)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Determine database name
-    db_name = env_vars.get('MYCELIA_DATABASE_NAME', args.db_name)
-
-    print("Mycelia Token Generator")
-    print("=======================\n")
-    print(f"MongoDB URI: {mongo_uri}")
-    print(f"Database: {db_name}\n")
-
-    generate_credentials_with_mongo(mongo_uri, db_name)
+    # Output in a format that's easy to parse (matches deno token-create output)
+    print(f"MYCELIA_TOKEN={token}")
+    print(f"MYCELIA_CLIENT_ID={client_id}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

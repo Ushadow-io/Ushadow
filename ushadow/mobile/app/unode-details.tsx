@@ -472,8 +472,11 @@ export default function UNodeDetailsPage() {
     await setActiveUnode(savedNode.id);
     setShowDiscoveryModal(false);
 
-    // Don't save QR code token - user will login with Keycloak instead
-    console.log('[UNodeDetails] UNode added, user will login with Keycloak');
+    // Clear any stale auth token so home screen detects unauthenticated state
+    // and auto-shows the Keycloak login for the newly-scanned environment.
+    await clearAuthToken();
+    console.log('[UNodeDetails] UNode added, navigating home for Keycloak login');
+    router.replace('/');
   };
 
   // Get selected node

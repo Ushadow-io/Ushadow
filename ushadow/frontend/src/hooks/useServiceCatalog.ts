@@ -54,15 +54,16 @@ export function useServiceCatalog(): UseServiceCatalogResult {
     mutationFn: async (serviceId: string) => {
       const serviceToInstall = catalogQuery.data?.find((s: any) => s.service_id === serviceId)
 
-      // If service has a wizard, navigate immediately and install in background
-      if (serviceToInstall?.wizard) {
+      // If service has a wizard AND still needs setup, navigate to wizard first.
+      // If already configured (needs_setup === false), just install directly.
+      if (serviceToInstall?.wizard && serviceToInstall?.needs_setup) {
         setIsOpen(false)
         navigate(`/wizard/${serviceToInstall.wizard}`)
 
         // Continue installation in background
         await servicesApi.install(serviceId)
       } else {
-        // For services without wizard, wait for installation
+        // No setup required (or no wizard) — install directly
         await servicesApi.install(serviceId)
       }
     },

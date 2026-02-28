@@ -126,6 +126,13 @@ class DiscoveredService:
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all)
 
+    # YAML provider this compose service implements (links to provider registry)
+    provider_id: Optional[str] = None
+
+    # Capability env var mappings: capability -> {canonical_key -> service_env_var}
+    # e.g., {"transcription": {"server_url": "TRANSCRIPTION_BASE_URL"}}
+    capability_env_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
     # Environment variables
     required_env_vars: List[ComposeEnvVar] = field(default_factory=list)
     optional_env_vars: List[ComposeEnvVar] = field(default_factory=list)
@@ -290,6 +297,8 @@ class ComposeServiceRegistry:
                 exposes=service.exposes,
                 tags=service.tags,
                 environments=service.environments,
+                provider_id=service.provider_id,
+                capability_env_mappings=service.capability_env_mappings,
                 required_env_vars=service.required_env_vars,
                 optional_env_vars=service.optional_env_vars,
             )

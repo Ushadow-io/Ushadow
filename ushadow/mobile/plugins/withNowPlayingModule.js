@@ -1,4 +1,4 @@
-const { withDangerousMod } = require('@expo/config-plugins');
+const { withDangerousMod, withXcodeProject } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
@@ -139,22 +139,33 @@ RCT_EXTERN_METHOD(endActivity:(NSString *)activityId
 `,
 };
 
-module.exports = function withNativeModules(config) {
+/**
+ * Phase 1 (dangerous mod): Write Swift/ObjC source files to ios/ushadow/.
+ *
+ * withDangerousMod can create arbitrary files on disk early in the prebuild.
+ * We also patch the bridging header here if it already exists (incremental
+ * prebuilds). On --clean prebuilds the bridging header doesn't exist yet at
+ * this point — it will be written by the Expo template after this phase, so
+ * we can't patch it here. The pbxproj additions are handled in phase 2.
+ */
+function withSwiftFiles(config) {
   return withDangerousMod(config, [
     'ios',
     (config) => {
       const projectRoot = config.modRequest.platformProjectRoot;
       const targetDir = path.join(projectRoot, 'ushadow');
-      const pbxprojPath = path.join(projectRoot, 'ushadow.xcodeproj', 'project.pbxproj');
 
-      // Write source files into ios/ushadow/ (they are wiped by --clean prebuild)
+      // Ensure directory exists (wiped by --clean prebuild)
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      // Write source files
       for (const [filename, content] of Object.entries(FILE_CONTENTS)) {
         const dest = path.join(targetDir, filename);
         fs.writeFileSync(dest, content, 'utf8');
         console.log(`[withNativeModules] Wrote ${filename}`);
       }
 
-      // Also update bridging header to expose React types to Swift
+      // Patch bridging header if it already exists (incremental prebuilds)
       const bridgingHeader = path.join(targetDir, 'ushadow-Bridging-Header.h');
       if (fs.existsSync(bridgingHeader)) {
         let header = fs.readFileSync(bridgingHeader, 'utf8');
@@ -165,44 +176,109 @@ module.exports = function withNativeModules(config) {
         }
       }
 
-      // Patch project.pbxproj to add file references
-      let content = fs.readFileSync(pbxprojPath, 'utf8');
-
-      for (const file of FILES) {
-        if (content.includes(file.name)) {
-          console.log(`[withNativeModules] ${file.name} already present in pbxproj, skipping.`);
-          continue;
-        }
-
-        // 1. PBXBuildFile
-        content = content.replace(
-          /^(\/\* End PBXBuildFile section \*\/)/m,
-          `\t\t${file.buildUUID} /* ${file.name} in Sources */ = {isa = PBXBuildFile; fileRef = ${file.fileUUID} /* ${file.name} */; };\n$1`
-        );
-
-        // 2. PBXFileReference
-        content = content.replace(
-          /^(\/\* End PBXFileReference section \*\/)/m,
-          `\t\t${file.fileUUID} /* ${file.name} */ = {isa = PBXFileReference; lastKnownFileType = ${file.type}; name = ${file.name}; path = ushadow/${file.name}; sourceTree = "<group>"; };\n$1`
-        );
-
-        // 3. PBXGroup (insert after AppDelegate.swift)
-        content = content.replace(
-          /(F11748412D0307B40044C1D9 \/\* AppDelegate\.swift \*\/,)/,
-          `$1\n\t\t\t\t${file.fileUUID} /* ${file.name} */,`
-        );
-
-        // 4. PBXSourcesBuildPhase (insert after AppDelegate.swift in Sources)
-        content = content.replace(
-          /(F11748422D0307B40044C1D9 \/\* AppDelegate\.swift in Sources \*\/,)/,
-          `$1\n\t\t\t\t${file.buildUUID} /* ${file.name} in Sources */,`
-        );
-
-        console.log(`[withNativeModules] Added ${file.name} to Xcode project.`);
-      }
-
-      fs.writeFileSync(pbxprojPath, content);
       return config;
     },
   ]);
+}
+
+/**
+ * Phase 2 (withXcodeProject): Add file references and build phase entries to
+ * the in-memory Xcode project.
+ *
+ * withXcodeProject operates on the parsed project object BEFORE it is written
+ * to disk, so this works correctly for both --clean and incremental prebuilds.
+ * Entries are keyed by stable UUIDs so the operation is idempotent.
+ */
+function withPbxprojEntries(config) {
+  return withXcodeProject(config, (config) => {
+    const xcodeProject = config.modResults;
+    const objects = xcodeProject.hash.project.objects;
+
+    // Find main app target to locate the correct Sources build phase
+    const nativeTargets = objects.PBXNativeTarget || {};
+    let sourcesBuildPhase = null;
+    let mainGroup = null;
+
+    for (const [key, target] of Object.entries(nativeTargets)) {
+      if (key.endsWith('_comment')) continue;
+      const name = target.name;
+      if (name === '"ushadow"' || name === 'ushadow') {
+        // Find Sources build phase for this target
+        for (const phaseRef of (target.buildPhases || [])) {
+          const phaseUUID = typeof phaseRef === 'object' ? phaseRef.value : phaseRef;
+          const phase = (objects.PBXSourcesBuildPhase || {})[phaseUUID];
+          if (phase) {
+            sourcesBuildPhase = phase;
+            break;
+          }
+        }
+        break;
+      }
+    }
+
+    // Find main app group named 'ushadow'
+    for (const [key, group] of Object.entries(objects.PBXGroup || {})) {
+      if (key.endsWith('_comment')) continue;
+      if (group.name === '"ushadow"' || group.name === 'ushadow') {
+        mainGroup = group;
+        break;
+      }
+    }
+
+    for (const file of FILES) {
+      // Idempotent: skip if file reference UUID already present
+      if ((objects.PBXFileReference || {})[file.fileUUID]) {
+        console.log(`[withNativeModules] ${file.name} already present in pbxproj, skipping.`);
+        continue;
+      }
+
+      // 1. PBXFileReference
+      objects.PBXFileReference = objects.PBXFileReference || {};
+      objects.PBXFileReference[file.fileUUID] = {
+        isa: 'PBXFileReference',
+        lastKnownFileType: file.type,
+        name: `"${file.name}"`,
+        path: `"ushadow/${file.name}"`,
+        sourceTree: '"<group>"',
+      };
+      objects.PBXFileReference[file.fileUUID + '_comment'] = file.name;
+
+      // 2. PBXBuildFile
+      objects.PBXBuildFile = objects.PBXBuildFile || {};
+      objects.PBXBuildFile[file.buildUUID] = {
+        isa: 'PBXBuildFile',
+        fileRef: file.fileUUID,
+        fileRef_comment: file.name,
+      };
+      objects.PBXBuildFile[file.buildUUID + '_comment'] = `${file.name} in Sources`;
+
+      // 3. Add to PBXGroup (main app group)
+      if (mainGroup && mainGroup.children) {
+        if (!mainGroup.children.some(c => c.value === file.fileUUID)) {
+          mainGroup.children.push({ value: file.fileUUID, comment: file.name });
+        }
+      } else {
+        console.warn(`[withNativeModules] Could not find main group for ${file.name}`);
+      }
+
+      // 4. Add to PBXSourcesBuildPhase
+      if (sourcesBuildPhase && sourcesBuildPhase.files) {
+        if (!sourcesBuildPhase.files.some(f => f.value === file.buildUUID)) {
+          sourcesBuildPhase.files.push({ value: file.buildUUID, comment: `${file.name} in Sources` });
+        }
+      } else {
+        console.warn(`[withNativeModules] Could not find Sources build phase for ${file.name}`);
+      }
+
+      console.log(`[withNativeModules] Added ${file.name} to Xcode project.`);
+    }
+
+    return config;
+  });
+}
+
+module.exports = function withNativeModules(config) {
+  config = withSwiftFiles(config);
+  config = withPbxprojEntries(config);
+  return config;
 };

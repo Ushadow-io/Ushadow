@@ -5,17 +5,20 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 
-def build_mongodb_uri_from_env() -> Optional[str]:
+def build_mongodb_uri_from_env(env: Optional[dict] = None) -> Optional[str]:
     """
     Construct MongoDB URI from component environment variables.
 
-    Reads individual MongoDB configuration from environment:
+    Reads individual MongoDB configuration from the provided dict or os.environ:
     - MONGODB_HOST (default: mongo)
     - MONGODB_PORT (default: 27017)
     - MONGODB_USER (optional)
     - MONGODB_PASSWORD (optional)
     - MONGODB_DATABASE (optional, for default database in URI)
     - MONGODB_AUTH_SOURCE (default: admin, only used with authentication)
+
+    Args:
+        env: Optional dict of env vars. Defaults to os.environ if not provided.
 
     Returns:
         Constructed MongoDB URI string, or None if MONGODB_HOST not set
@@ -28,15 +31,16 @@ def build_mongodb_uri_from_env() -> Optional[str]:
         With authentication:
         mongodb://user:pass@mongo:27017/ushadow?authSource=admin
     """
-    host = os.environ.get("MONGODB_HOST")
+    source = env if env is not None else os.environ
+    host = source.get("MONGODB_HOST")
     if not host:
         return None
 
-    port = os.environ.get("MONGODB_PORT", "27017")
-    user = os.environ.get("MONGODB_USER", "")
-    password = os.environ.get("MONGODB_PASSWORD", "")
-    database = os.environ.get("MONGODB_DATABASE", "")
-    auth_source = os.environ.get("MONGODB_AUTH_SOURCE", "admin")
+    port = source.get("MONGODB_PORT", "27017")
+    user = source.get("MONGODB_USER", "")
+    password = source.get("MONGODB_PASSWORD", "")
+    database = source.get("MONGODB_DATABASE", "")
+    auth_source = source.get("MONGODB_AUTH_SOURCE", "admin")
 
     # URL-encode credentials to handle special characters
     if user:

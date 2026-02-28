@@ -172,6 +172,7 @@ class UshadowManager:
             "manager_version": MANAGER_VERSION,
             "platform": platform.system().lower(),
             "docker_available": self.docker_client is not None,
+            "capabilities": self.get_capabilities(),
         })
 
     async def handle_upgrade(self, request: web.Request) -> web.Response:
@@ -600,6 +601,109 @@ class UshadowManager:
 
         return services
 
+    def _collect_gpu_info(self) -> Dict[str, Any]:
+        """Collect detailed GPU information from NVIDIA and AMD tools."""
+        import subprocess
+
+        devices: List[Dict[str, Any]] = []
+        cuda_version: Optional[str] = None
+
+        # --- NVIDIA GPUs ---
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().splitlines():
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) >= 3:
+                        devices.append({
+                            "vendor": "nvidia",
+                            "index": int(parts[0]),
+                            "model": parts[1],
+                            "vram_mb": int(float(parts[2])),
+                        })
+
+                # Get CUDA toolkit version via nvcc
+                try:
+                    nvcc = subprocess.run(
+                        ["nvcc", "--version"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if nvcc.returncode == 0:
+                        import re
+                        m = re.search(r"release (\d+\.\d+)", nvcc.stdout)
+                        if m:
+                            cuda_version = m.group(1)
+                except Exception:
+                    pass
+
+                # Fallback: driver version from nvidia-smi
+                if not cuda_version:
+                    try:
+                        drv = subprocess.run(
+                            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if drv.returncode == 0 and drv.stdout.strip():
+                            cuda_version = f"driver-{drv.stdout.strip().splitlines()[0].strip()}"
+                    except Exception:
+                        pass
+
+                # Attach cuda_version to each nvidia device
+                for dev in devices:
+                    if dev["vendor"] == "nvidia" and cuda_version:
+                        dev["cuda_version"] = cuda_version
+        except Exception:
+            pass
+
+        # --- AMD GPUs ---
+        try:
+            result = subprocess.run(
+                ["rocm-smi", "--showproductname", "--csv"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                rocm_version: Optional[str] = None
+                # Try to get ROCm version
+                try:
+                    ri = subprocess.run(
+                        ["rocminfo"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if ri.returncode == 0:
+                        import re
+                        m = re.search(r"ROCm Runtime Version:\s+(\S+)", ri.stdout)
+                        if m:
+                            rocm_version = m.group(1)
+                except Exception:
+                    pass
+
+                lines = result.stdout.strip().splitlines()
+                for i, line in enumerate(lines):
+                    if i == 0:  # skip header
+                        continue
+                    parts = [p.strip() for p in line.split(",")]
+                    if parts:
+                        dev = {
+                            "vendor": "amd",
+                            "index": i - 1,
+                            "model": parts[0] if parts else "Unknown AMD GPU",
+                        }
+                        if rocm_version:
+                            dev["rocm_version"] = rocm_version
+                        devices.append(dev)
+        except Exception:
+            pass
+
+        return {
+            "gpu_count": len(devices),
+            "gpu_devices": devices,
+            "gpu_model": devices[0]["model"] if devices else None,
+            "gpu_vram_mb": devices[0].get("vram_mb") if devices else None,
+        }
+
     def get_capabilities(self) -> Dict[str, Any]:
         """Get node capabilities."""
         capabilities = {
@@ -609,6 +713,10 @@ class UshadowManager:
             "available_memory_mb": 0,
             "available_cpu_cores": 0,
             "available_disk_gb": 0,
+            "gpu_count": 0,
+            "gpu_devices": [],
+            "gpu_model": None,
+            "gpu_vram_mb": None,
         }
 
         try:
@@ -621,16 +729,14 @@ class UshadowManager:
         except ImportError:
             pass
 
-        # Check for GPU
+        # Collect GPU info
         try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "-L"],
-                capture_output=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                capabilities["can_run_gpu"] = True
+            gpu_info = self._collect_gpu_info()
+            capabilities["can_run_gpu"] = gpu_info["gpu_count"] > 0
+            capabilities["gpu_count"] = gpu_info["gpu_count"]
+            capabilities["gpu_devices"] = gpu_info["gpu_devices"]
+            capabilities["gpu_model"] = gpu_info["gpu_model"]
+            capabilities["gpu_vram_mb"] = gpu_info["gpu_vram_mb"]
         except Exception:
             pass
 

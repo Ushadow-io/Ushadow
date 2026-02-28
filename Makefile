@@ -119,7 +119,7 @@ go:
 
 # Development mode - Vite dev server + backend in Docker
 dev:
-	@./start-dev.sh --quick --dev --no-admin
+	@./dev.sh --quick --dev --no-admin
 
 # Production mode - Optimized build with nginx
 prod:
@@ -165,6 +165,8 @@ INFRA_COMPOSE := docker compose -f compose/docker-compose.infra.yml -p infra --p
 infra-up:
 	@echo "🏗️  Starting infrastructure..."
 	@docker network create infra-network 2>/dev/null || true
+	@docker network create ushadow-network 2>/dev/null || true
+	@cd $(shell pwd) && python3 -c "import sys; sys.path.insert(0,'setup'); from start_utils import cleanup_stale_endpoints; cleanup_stale_endpoints()"
 	@$(INFRA_COMPOSE) up -d
 	@echo "✅ Infrastructure started"
 

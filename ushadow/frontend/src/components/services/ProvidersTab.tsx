@@ -35,7 +35,7 @@ export default function ProvidersTab({
 }: ProvidersTabProps) {
   const { grouped, sortedCapabilities, needsSetupCount } = useMemo(() => {
     // Show configured providers and installed-but-unconfigured ones (not unrelated providers)
-    const relevant = providers.filter((p) => p.configured || p.installed)
+    const relevant = providers.filter((p) => p.configured || p.installed || p.running)
 
     const capabilityOrder = ['llm', 'transcription', 'memory', 'embedding', 'tts', 'other']
 

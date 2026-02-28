@@ -1229,25 +1229,108 @@ pub async fn attach_tmux_to_worktree(
         }
     }
 
-    // Workmux has created/opened the window, now just focus iTerm
+    // workmux open manages the tmux side. Now we need to make it visible in iTerm.
+    // workmux open always uses the "workmux" session.
+    let window_name_derived = format!("ushadow-{}", env_name.to_lowercase());
+
+    // Pre-select the window so the terminal attach lands on the right pane.
+    let _ = shell_command(&format!(
+        "tmux select-window -t workmux:'{}'",
+        window_name_derived
+    ))
+    .output();
+
+    // Spawn agent resume in background (after window is selected).
+    let wpath = worktree_path.clone();
+    let wname = window_name_derived.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = check_and_resume_agent("workmux", &wname, &wpath).await;
+    });
+
     #[cfg(target_os = "macos")]
     {
-        let focus_script = r#"tell application "iTerm" to activate"#;
-        let _ = Command::new("osascript")
-            .arg("-e")
-            .arg(focus_script)
-            .output();
+        use std::fs;
 
-        eprintln!("[attach_tmux_to_worktree] Focused iTerm");
+        // Check if an iTerm window is already showing the workmux session.
+        let find_script = format!(
+            r#"tell application "iTerm"
+    set matched to false
+    repeat with w in windows
+        if name of w contains "{}" then
+            select w
+            set matched to true
+            exit repeat
+        end if
+    end repeat
+    if matched then
+        return "found"
+    else
+        return "not_found"
+    end if
+end tell"#,
+            env_name
+        );
+
+        let iterm_running = Command::new("osascript")
+            .arg("-e")
+            .arg("application \"iTerm\" is running")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+            .unwrap_or(false);
+
+        let found_window = if iterm_running {
+            Command::new("osascript")
+                .arg("-e")
+                .arg(&find_script)
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim() == "found")
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        if found_window {
+            eprintln!("[attach_tmux_to_worktree] S2: Focused existing iTerm window for '{}'", env_name);
+            let _ = Command::new("osascript")
+                .arg("-e")
+                .arg(r#"tell application "iTerm" to activate"#)
+                .output();
+        } else {
+            // Open a new iTerm window attached to the workmux session.
+            // The session-select above already moved focus to the right window.
+            eprintln!("[attach_tmux_to_worktree] S3: Opening new iTerm window for '{}'", env_name);
+            let temp_script = format!("/tmp/ushadow_attach_{}.sh", env_name.replace('/', "_"));
+            let script_content = format!(
+                "#!/bin/bash\nprintf '\\033]0;{}\\007'\nexec tmux attach-session -t workmux\n",
+                env_name
+            );
+            if fs::write(&temp_script, &script_content).is_ok() {
+                let _ = shell_command(&format!("chmod +x {}", temp_script)).output();
+                let applescript = format!(
+                    r#"tell application "iTerm"
+    activate
+    set newWindow to (create window with default profile)
+    tell current session of newWindow
+        write text "{} && exit"
+    end tell
+end tell"#,
+                    temp_script
+                );
+                let _ = Command::new("osascript")
+                    .arg("-e")
+                    .arg(&applescript)
+                    .output();
+            }
+        }
+
+        eprintln!("[attach_tmux_to_worktree] iTerm opened/focused for '{}'", env_name);
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        // For Linux, try to focus terminal
-        let _ = Command::new("wmctrl")
-            .arg("-a")
-            .arg("tmux")
-            .spawn();
+        let _ = Command::new("wmctrl").arg("-a").arg("tmux").spawn();
     }
 
     Ok(format!("Attached to worktree at {}", worktree_path))
@@ -1718,12 +1801,23 @@ pub async fn check_and_resume_agent(
     // 1. Check the current foreground process in the pane — this is reliable because
     //    Claude's startup banner stays in the scrollback after it exits, so scanning
     //    pane text gives false positives.
+    //    Use shell_command but take only the last non-empty line — login shell profile
+    //    output (e.g. workmux version banner) appears before the tmux output and was
+    //    being mistaken for the pane command.
     let current_command = shell_command(&format!(
         "tmux display-message -t {}:{} -p '#{{pane_current_command}}'",
         tmux_session_name, tmux_window_name
     ))
     .output()
-    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    .map(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .last()
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    })
     .unwrap_or_default();
 
     eprintln!("[check_and_resume_agent] Current pane command: '{}'", current_command);
@@ -1770,7 +1864,7 @@ pub async fn check_and_resume_agent(
     // so any unbalanced inner quotes turn "You are working" into "Youareworking".
     // A temp script path has no special characters, so the outer quoting is trivially safe.
     // Inside the script we use bash $'...' (ANSI-C quoting) which handles \' and \n cleanly.
-    let script_key = format!("{}-{}", tmux_session_name, tmux_window_name).replace('/', "_");
+    let script_key = tmux_window_name.replace('/', "_");
     let temp_script = format!("/tmp/ushadow_claude_{}.sh", script_key);
 
     let script_content = if let Some(session_id) = latest_session_id {

@@ -15,6 +15,37 @@ from pathlib import Path
 from docker_utils import DockerNetworkManager
 
 
+def cleanup_stale_endpoints(networks: list[str] | None = None) -> None:
+    """Force-disconnect endpoints whose containers no longer exist.
+
+    Only removes endpoints for containers that have been fully deleted.
+    Stopped/exited containers are left alone — compose handles their restart
+    and network re-attachment correctly. This only handles the case where a
+    container was removed (e.g. docker rm) but its network endpoint persisted.
+    """
+    if networks is None:
+        networks = ["infra-network", "ushadow-network"]
+    for network in networks:
+        result = subprocess.run(
+            ["docker", "network", "inspect", network, "--format",
+             "{{range .Containers}}{{.Name}} {{end}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            continue
+        for container in result.stdout.split():
+            exists = subprocess.run(
+                ["docker", "inspect", container],
+                capture_output=True, timeout=5,
+            )
+            if exists.returncode != 0:
+                # Container no longer exists — safe to remove the stale endpoint
+                subprocess.run(
+                    ["docker", "network", "disconnect", "--force", network, container],
+                    capture_output=True, timeout=10,
+                )
+
+
 def ensure_networks() -> bool:
     """
     Ensure ushadow-network and infra-network exist.
@@ -124,6 +155,9 @@ def start_infrastructure(
         Tuple of (success: bool, message: str)
     """
     try:
+        # Clear stale network endpoints from previously crashed containers
+        cleanup_stale_endpoints()
+
         # Ensure Docker networks exist before starting infrastructure
         if not ensure_networks():
             return False, "Failed to create required Docker networks (ushadow-network, infra-network)"

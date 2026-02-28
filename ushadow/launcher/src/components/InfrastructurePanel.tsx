@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Play, Square, RotateCcw, Loader2, ChevronDown, ChevronRight, Check } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Play, Square, Power, RefreshCw, Loader2, ChevronDown, ChevronRight, Check } from 'lucide-react'
 import { tauri, type InfraService, type ComposeServiceDefinition } from '../hooks/useTauri'
 
 interface InfrastructurePanelProps {
@@ -7,9 +7,11 @@ interface InfrastructurePanelProps {
   onStart: () => void
   onStop: () => void
   onRestart: () => void
+  onRefresh?: () => void
   isLoading: boolean
   selectedServices?: string[]
   onToggleService?: (serviceId: string) => void
+  projectRoot?: string | null
 }
 
 // Parse Docker port mappings into clean port numbers
@@ -41,23 +43,35 @@ export function InfrastructurePanel({
   onStart,
   onStop,
   onRestart,
+  onRefresh,
   isLoading,
   selectedServices = [],
-  onToggleService
+  onToggleService,
+  projectRoot,
 }: InfrastructurePanelProps) {
   const [expanded, setExpanded] = useState(true)
   const [composeServices, setComposeServices] = useState<InfraService[]>([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
-  // Load services from docker-compose.infra.yml
-  useEffect(() => {
+  const loadComposeServices = useCallback(() => {
+    if (!projectRoot) return
     tauri.getInfraServicesFromCompose()
       .then(setComposeServices)
-      .catch(err => {
-        console.error('[InfrastructurePanel] Failed to load compose services:', err)
-        // Fallback to empty array on error
-        setComposeServices([])
-      })
-  }, [])
+      .catch(() => setComposeServices([]))
+  }, [projectRoot])
+
+  // Load services from docker-compose.infra.yml — only once project root is set
+  useEffect(() => {
+    loadComposeServices()
+  }, [loadComposeServices])
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true)
+    loadComposeServices()
+    onRefresh?.()
+    // Brief visual feedback — discovery is async so give it a moment
+    setTimeout(() => setIsRefreshing(false), 800)
+  }, [loadComposeServices, onRefresh])
 
   // Debug: log discovered services (only once when services change)
   useEffect(() => {
@@ -140,19 +154,35 @@ export function InfrastructurePanel({
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <div className="flex items-center gap-3">
-          {runningCount > 0 && (
+          {isLoading && (
+            <span className="text-xs px-2 py-1 rounded-full bg-primary-500/20 text-primary-400 flex items-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Starting...
+            </span>
+          )}
+          {!isLoading && runningCount > 0 && (
             <span className="text-xs px-2 py-1 rounded-full bg-success-500/20 text-success-400">
               {runningCount} running
             </span>
           )}
           <div className="flex gap-1">
+            {/* Refresh status — always visible, never touches Docker */}
+            <button
+              onClick={handleRefresh}
+              disabled={isLoading || isRefreshing}
+              className="p-1.5 rounded bg-surface-700 text-text-muted hover:bg-surface-600 hover:text-text-primary transition-colors disabled:opacity-50"
+              title="Refresh status"
+              data-testid="infra-refresh-button"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
             {/* Start: only show if there are selected services that are NOT running */}
             {hasSelectedNotRunning && (
               <button
                 onClick={onStart}
                 disabled={isLoading}
                 className="p-1.5 rounded bg-success-500/20 text-success-400 hover:bg-success-500/30 transition-colors disabled:opacity-50"
-                title="Start selected services that aren't running"
+                title="Start selected services"
                 data-testid="infra-start-button"
               >
                 {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
@@ -164,10 +194,10 @@ export function InfrastructurePanel({
                 onClick={onRestart}
                 disabled={isLoading}
                 className="p-1.5 rounded bg-warning-500/20 text-warning-400 hover:bg-warning-500/30 transition-colors disabled:opacity-50"
-                title="Restart selected running services"
+                title="Restart selected services (power cycle)"
                 data-testid="infra-restart-button"
               >
-                {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
               </button>
             )}
             {/* Stop: only show if there are selected services that ARE running */}
@@ -176,7 +206,7 @@ export function InfrastructurePanel({
                 onClick={onStop}
                 disabled={isLoading}
                 className="p-1.5 rounded bg-error-500/20 text-error-400 hover:bg-error-500/30 transition-colors disabled:opacity-50"
-                title="Stop selected running services"
+                title="Stop selected services"
                 data-testid="infra-stop-button"
               >
                 {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}

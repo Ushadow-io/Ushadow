@@ -121,10 +121,46 @@ Settings are resolved through a 6-layer hierarchy (highest priority wins):
 1. config.defaults.yaml           (lowest priority)
 2. Compose file defaults           ${VAR:-default}
 3. os.environ (.env file)          Environment variables
-4. Capability                      Wired providers
+4. Capability                      Wired providers (via CapabilityResolver)
 5. Template Override               services.{service_id}
 6. Instance Override               instances.{deployment_id}  (highest priority)
 ```
+
+### Capability Layer (Layer 4)
+
+The capability layer resolves provider credentials and injects them as env vars.
+It is the **only** place `CapabilityResolver` should be called — never directly from
+deployment or orchestration code.
+
+**How it works:**
+
+A service declares what capabilities it needs in its compose file's `x-ushadow` block:
+
+```yaml
+x-ushadow:
+  mycelia-backend:
+    requires: ["llm", "transcription"]
+    capability_env_mappings:
+      transcription:
+        server_url: TRANSCRIPTION_BASE_URL   # canonical key → service env var
+        api_key: TRANSCRIPTION_API_KEY
+        model: TRANSCRIPTION_MODEL
+```
+
+The resolver selects a provider using this priority:
+1. **Wiring** — `wiring.yaml` maps a provider instance to this consumer service
+2. **`selected_providers.{capability}`** — global user selection in settings
+3. **Default** — based on `wizard_mode` (cloud vs local)
+
+Provider credentials are then mapped to the service's env var names via
+`capability_env_mappings`. If no mapping is declared the provider's own env var
+names are used directly.
+
+**Important:** `for_service()` and `for_deployment()` both resolve capabilities.
+`for_deployment(config_id)` checks wiring first so instance-specific provider
+assignments are honoured. `for_service(service_id)` uses the service name as the
+consumer ID, which also finds wiring since `target_config_id` in wiring entries
+matches the service name (e.g. `mycelia-backend`).
 
 ### Source Enum
 

@@ -140,21 +140,6 @@ export default function ServicesPage() {
             return next
           })
 
-          // Check if this is mycelia-backend and if token exists
-          if (serviceName === 'mycelia-backend') {
-            try {
-              const settingsResponse = await settingsApi.getConfig()
-              const settings = settingsResponse.data
-
-              // If no mycelia token exists, navigate to wizard
-              if (!settings.api_keys?.mycelia_token) {
-                navigate('/wizard/mycelia')
-              }
-            } catch (error) {
-              console.error('Failed to check mycelia token:', error)
-            }
-          }
-
           return
         }
 

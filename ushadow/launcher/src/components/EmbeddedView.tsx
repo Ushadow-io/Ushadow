@@ -1,18 +1,23 @@
 import { useState, useEffect } from 'react'
-import { X, ExternalLink, RefreshCw, ArrowLeft, Terminal, AlertCircle, Loader2 } from 'lucide-react'
-import { tauri } from '../hooks/useTauri'
+import { X, ExternalLink, RefreshCw, ArrowLeft, AlertCircle, Loader2, LogIn, UserPlus } from 'lucide-react'
+import { tauri, type UshadowEnvironment } from '../hooks/useTauri'
+import { TokenManager } from '../services/tokenManager'
+import { AuthButton } from './AuthButton'
 
 interface EmbeddedViewProps {
   url: string
   envName: string
   envColor?: string
   envPath: string | null
+  backendPort: number | null
   onClose: () => void
 }
 
-export function EmbeddedView({ url, envName, envColor, envPath, onClose }: EmbeddedViewProps) {
+export function EmbeddedView({ url, envName, envColor, envPath, backendPort, onClose }: EmbeddedViewProps) {
   const [iframeError, setIframeError] = useState(false)
   const [iframeLoading, setIframeLoading] = useState(true)
+  const [isAuthenticated, setIsAuthenticated] = useState(() => TokenManager.isAuthenticated())
+  const [registering, setRegistering] = useState(false)
 
   // Add launcher query param so frontend knows to hide footer
   // Add timestamp to force reload and avoid cookie conflicts
@@ -29,6 +34,17 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
     setIframeError(false)
     setIframeLoading(true)
   }, [envName, iframeUrl])
+
+  // Poll for auth changes — detects when AuthButton's OAuth flow completes
+  useEffect(() => {
+    if (isAuthenticated) return
+    const id = setInterval(() => {
+      if (TokenManager.isAuthenticated()) {
+        setIsAuthenticated(true)
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [isAuthenticated])
 
   const handleIframeLoad = () => {
     console.log(`[EmbeddedView] Iframe loaded successfully for ${envName}`)
@@ -76,23 +92,58 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-surface-900" data-testid="embedded-view">
-      {/* Header bar */}
-      <div
-        className="flex items-center justify-between px-4 py-2 bg-surface-800 border-b border-surface-700"
-        style={{ borderLeftColor: envColor, borderLeftWidth: envColor ? '4px' : '0' }}
-      >
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
-            title="Back to launcher"
-            data-testid="embedded-view-back"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <span className="text-sm font-medium text-text-primary">{envName}</span>
+  const handleRegister = async () => {
+    if (!backendPort) return
+    setRegistering(true)
+    try {
+      const resp = await tauri.httpRequest(`http://localhost:${backendPort}/api/settings/config`, 'GET')
+      if (resp.status === 200) {
+        const config = JSON.parse(resp.body)
+        const kcUrl = config.keycloak?.public_url || 'http://localhost:8081'
+        const registerUrl = `${kcUrl}/realms/ushadow/protocol/openid-connect/registrations?client_id=ushadow-frontend&response_type=code&scope=openid`
+        await tauri.openBrowser(registerUrl)
+      }
+    } catch (e) {
+      console.error('[EmbeddedView] Register error:', e)
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  // Minimal env object needed by AuthButton (only backend_port is used in the login flow)
+  const minimalEnv: UshadowEnvironment = {
+    name: envName,
+    backend_port: backendPort,
+    color: envColor || '',
+    localhost_url: url,
+    tailscale_url: null,
+    webui_port: null,
+    running: true,
+    status: 'Running',
+    tailscale_active: false,
+    containers: [],
+    path: envPath,
+    branch: null,
+    is_worktree: false,
+    base_branch: null,
+  }
+
+  const header = (
+    <div
+      className="flex items-center justify-between px-4 py-2 bg-surface-800 border-b border-surface-700 flex-shrink-0"
+      style={{ borderLeftColor: envColor, borderLeftWidth: envColor ? '4px' : '0' }}
+    >
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
+          title="Back to launcher"
+          data-testid="embedded-view-back"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <span className="text-sm font-medium text-text-primary">{envName}</span>
+        {isAuthenticated && (
           <button
             onClick={handleOpenExternal}
             className="text-xs text-text-muted hover:text-primary-400 truncate max-w-[300px] transition-colors cursor-pointer underline decoration-dotted"
@@ -101,9 +152,11 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
           >
             {displayUrl}
           </button>
-        </div>
+        )}
+      </div>
 
-        <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2">
+        {isAuthenticated && (
           <button
             onClick={handleRefresh}
             className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
@@ -112,47 +165,90 @@ export function EmbeddedView({ url, envName, envColor, envPath, onClose }: Embed
           >
             <RefreshCw className="w-4 h-4" />
           </button>
+        )}
 
-          {/* VSCode and Terminal buttons - only show if envPath exists */}
-          {envPath && (
-            <>
-              <button
-                onClick={handleOpenTerminal}
-                className="p-1.5 rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors"
-                title="Open in Terminal"
-                data-testid="embedded-view-terminal"
-              >
-                <img src="/iterm-icon.png" alt="Terminal" className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleOpenVscode}
-                className="p-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors"
-                title="Open in VS Code"
-                data-testid="embedded-view-vscode"
-              >
-                <img src="/vscode48.png" alt="VS Code" className="w-4 h-4" />
-              </button>
-            </>
-          )}
+        {/* VSCode and Terminal buttons - only show if envPath exists */}
+        {envPath && (
+          <>
+            <button
+              onClick={handleOpenTerminal}
+              className="p-1.5 rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors"
+              title="Open in Terminal"
+              data-testid="embedded-view-terminal"
+            >
+              <img src="/iterm-icon.png" alt="Terminal" className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleOpenVscode}
+              className="p-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors"
+              title="Open in VS Code"
+              data-testid="embedded-view-vscode"
+            >
+              <img src="/vscode48.png" alt="VS Code" className="w-4 h-4" />
+            </button>
+          </>
+        )}
 
-          <button
-            onClick={handleOpenExternal}
-            className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
-            title="Open in browser"
-            data-testid="embedded-view-external"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
-            title="Close"
-            data-testid="embedded-view-close"
-          >
-            <X className="w-5 h-5" />
-          </button>
+        <button
+          onClick={handleOpenExternal}
+          className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
+          title="Open in browser"
+          data-testid="embedded-view-external"
+        >
+          <ExternalLink className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded hover:bg-surface-700 transition-colors text-text-muted hover:text-text-primary"
+          title="Close"
+          data-testid="embedded-view-close"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+    </div>
+  )
+
+  // Show native auth screen when not logged in
+  if (!isAuthenticated) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-surface-900" data-testid="embedded-view">
+        {header}
+        <div className="flex flex-col items-center justify-center flex-1 gap-6 p-8" data-testid="embedded-view-auth-screen">
+          <div className="w-16 h-16 rounded-full bg-primary-500/10 flex items-center justify-center">
+            <LogIn className="w-8 h-8 text-primary-400" />
+          </div>
+          <div className="text-center max-w-sm">
+            <h2 className="text-xl font-semibold text-text-primary mb-2">Sign in to {envName}</h2>
+            <p className="text-sm text-text-secondary">
+              Log in to your account to access this environment, or create a new account if this is your first time.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <AuthButton environment={minimalEnv} variant="header" />
+            {backendPort && (
+              <button
+                onClick={handleRegister}
+                disabled={registering}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-700 hover:bg-surface-600 transition-colors text-text-primary font-medium text-sm border border-surface-600 disabled:opacity-50"
+                data-testid="register-button"
+              >
+                <UserPlus className="w-4 h-4" />
+                {registering ? 'Opening...' : 'Create Account'}
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-text-muted">
+            After creating an account, return here and click <span className="text-text-secondary">Log In</span>.
+          </p>
         </div>
       </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-surface-900" data-testid="embedded-view">
+      {header}
 
       {/* iframe container */}
       <div className="flex-1 relative">

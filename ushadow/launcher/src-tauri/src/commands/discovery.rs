@@ -5,15 +5,112 @@ use crate::models::{DiscoveryResult, EnvironmentStatus, InfraService, UshadowEnv
 use super::prerequisites::{check_docker, check_tailscale};
 use super::utils::silent_command;
 use super::worktree::{list_worktrees, get_colors_for_name};
+use super::bundled;
 
-/// Infrastructure service patterns
+/// Infrastructure service patterns (fallback when compose file not available)
 const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("mongo", "MongoDB"),
     ("postgres", "PostgreSQL"),
     ("redis", "Redis"),
     ("neo4j", "Neo4j"),
     ("qdrant", "Qdrant"),
+    ("keycloak", "Keycloak"),
+    ("ollama", "Ollama"),
 ];
+
+/// Display name overrides for well-known service IDs
+fn get_display_name(service_name: &str) -> String {
+    match service_name {
+        "mongo" | "mongodb"   => "MongoDB",
+        "postgres"            => "PostgreSQL",
+        "redis"               => "Redis",
+        "neo4j"               => "Neo4j",
+        "qdrant"              => "Qdrant",
+        "keycloak"            => "Keycloak",
+        "ollama"              => "Ollama",
+        "mysql"               => "MySQL",
+        "elasticsearch"       => "Elasticsearch",
+        "rabbitmq"            => "RabbitMQ",
+        "kafka"               => "Kafka",
+        other => return other.to_string(),
+    }.to_string()
+}
+
+/// A resolved infra service pattern derived from the compose file
+struct InfraPattern {
+    /// The container name to match against `docker ps` output
+    container_name: String,
+    /// Canonical service ID (compose service key)
+    service_name: String,
+    /// Human-readable display name
+    display_name: String,
+}
+
+/// Load infra service patterns from docker-compose.infra.yml.
+/// Falls back to an empty vec on any error; callers should then fall back to INFRA_PATTERNS.
+fn load_compose_infra_patterns(project_root: &str) -> Vec<InfraPattern> {
+    use serde_yaml::Value;
+
+    // Prefer the project's own compose file; fall back to the bundled one
+    let project_compose = std::path::Path::new(project_root)
+        .join("compose")
+        .join("docker-compose.infra.yml");
+
+    let bundled_compose = bundled::get_compose_file(project_root, "docker-compose.infra.yml");
+
+    let compose_path = if project_compose.exists() {
+        project_compose
+    } else {
+        bundled_compose
+    };
+
+    let contents = match std::fs::read_to_string(&compose_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let yaml: Value = match serde_yaml::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let services = match yaml.get("services").and_then(|s| s.as_mapping()) {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+
+    // Compose project name (used when no explicit container_name)
+    let project_name = yaml.get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("infra");
+
+    let mut patterns = Vec::new();
+
+    for (key, config) in services {
+        let service_name = match key.as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        // Skip one-off init / migration containers
+        if service_name.ends_with("-init") || service_name.ends_with("-migration") || service_name.ends_with("-setup") {
+            continue;
+        }
+
+        // Use explicit container_name if present; otherwise Compose defaults to
+        // "{project_name}-{service_name}-1"
+        let container_name = config.get("container_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{}-{}-1", project_name, service_name));
+
+        let display_name = get_display_name(&service_name);
+
+        patterns.push(InfraPattern { container_name, service_name, display_name });
+    }
+
+    patterns
+}
 
 /// Read ports from environment's .env file
 /// Returns (backend_port, webui_port)
@@ -143,6 +240,10 @@ pub async fn discover_environments_with_config(
         worktree_map.insert(wt.name.clone(), wt);
     }
 
+    // Load infra service definitions from compose file (dynamic), fall back to static list
+    let compose_patterns = load_compose_infra_patterns(&main_repo);
+    let use_compose = !compose_patterns.is_empty();
+
     // Infrastructure and environment maps
     let mut infrastructure = Vec::new();
     let mut found_infra = HashSet::new();
@@ -168,32 +269,54 @@ pub async fn discover_environments_with_config(
                 let ports = if parts.len() > 2 { Some(parts[2].trim().to_string()) } else { None };
                 let is_running = status.contains("Up");
 
-                // Check infrastructure services
-                for (pattern, display_name) in INFRA_PATTERNS {
-                    // Match various container name patterns:
-                    // - exact: "postgres"
-                    // - hyphen suffix: "infra-postgres", "infra-postgres-1"
-                    // - underscore suffix: "hash_postgres", "d5904eb91d56_postgres"
-                    // - contains: any container with the service name in it
-                    let is_match = name == *pattern
-                        || name.ends_with(&format!("-{}", pattern))
-                        || name.ends_with(&format!("-{}-1", pattern))
-                        || name.ends_with(&format!("_{}", pattern))
-                        || name.contains(&format!("_{}", pattern));
+                // Match against infra services from compose file (or static fallback)
+                if use_compose {
+                    for pattern in &compose_patterns {
+                        // Primary match: exact container_name from compose
+                        // Fallback: fuzzy suffix match for containers without explicit container_name
+                        let is_match = name == pattern.container_name
+                            || name.ends_with(&format!("-{}", pattern.service_name))
+                            || name.ends_with(&format!("_{}", pattern.service_name));
 
-                    if is_match {
-                        if !found_infra.contains(*pattern) {
-                            found_infra.insert(pattern.to_string());
-                            infrastructure.push(InfraService {
-                                name: pattern.to_string(),
-                                display_name: display_name.to_string(),
-                                running: is_running,
-                                ports: ports.clone(),
-                            });
-                        } else if is_running {
-                            // Update existing entry to running if we find a running instance
-                            if let Some(service) = infrastructure.iter_mut().find(|s| s.name == *pattern) {
-                                service.running = true;
+                        if is_match {
+                            if !found_infra.contains(&pattern.service_name) {
+                                found_infra.insert(pattern.service_name.clone());
+                                infrastructure.push(InfraService {
+                                    name: pattern.service_name.clone(),
+                                    display_name: pattern.display_name.clone(),
+                                    running: is_running,
+                                    ports: ports.clone(),
+                                });
+                            } else if is_running {
+                                if let Some(service) = infrastructure.iter_mut().find(|s| s.name == pattern.service_name) {
+                                    service.running = true;
+                                    if ports.is_some() { service.ports = ports.clone(); }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Static fallback (no compose file found)
+                    for (pattern, display_name) in INFRA_PATTERNS {
+                        let is_match = name == *pattern
+                            || name.ends_with(&format!("-{}", pattern))
+                            || name.ends_with(&format!("-{}-1", pattern))
+                            || name.ends_with(&format!("_{}", pattern))
+                            || name.contains(&format!("_{}", pattern));
+
+                        if is_match {
+                            if !found_infra.contains(*pattern) {
+                                found_infra.insert(pattern.to_string());
+                                infrastructure.push(InfraService {
+                                    name: pattern.to_string(),
+                                    display_name: display_name.to_string(),
+                                    running: is_running,
+                                    ports: ports.clone(),
+                                });
+                            } else if is_running {
+                                if let Some(service) = infrastructure.iter_mut().find(|s| s.name == *pattern) {
+                                    service.running = true;
+                                }
                             }
                         }
                     }

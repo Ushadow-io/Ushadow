@@ -281,6 +281,9 @@ export const servicesApi = {
       port: number | null
       env_var: string | null
       default_port: number | null
+      proxy_url: string | null
+      internal_url: string | null
+      available: boolean
     }>(`/api/services/${name}/connection-info`),
 
   /** Start a service container */
@@ -362,6 +365,12 @@ export const servicesApi = {
 
   /** Generate Mycelia authentication token */
   generateMyceliaToken: () => api.post<{ token: string; client_id: string }>('/api/services/mycelia/generate-token'),
+
+  /** Provision Mycelia credentials (idempotent — reuses existing if present) */
+  provisionMyceliaTokens: (force = false) =>
+    api.post<{ client_id: string; token_preview: string }>(
+      `/api/services/mycelia/provision-tokens${force ? '?force=true' : ''}`
+    ),
 }
 
 // Compose service configuration endpoints
@@ -430,6 +439,7 @@ export interface ServiceProfile {
   name: string
   display_name: string
   services: string[]
+  wizard?: string  // ID of setup wizard for this profile (e.g., "mycelia")
 }
 
 export interface QuickstartConfig {
@@ -663,6 +673,29 @@ export interface CertificateStatus {
   renewal_time?: string
 }
 
+export interface KubernetesNode {
+  name: string
+  cluster_id: string
+  status: string
+  ready: boolean
+  kubelet_version?: string
+  os_image?: string
+  kernel_version?: string
+  container_runtime?: string
+  cpu_capacity?: string
+  memory_capacity?: string
+  cpu_allocatable?: string
+  memory_allocatable?: string
+  gpu_capacity_nvidia?: number
+  gpu_capacity_amd?: number
+  roles: string[]
+  internal_ip?: string
+  external_ip?: string
+  hostname?: string
+  taints: Array<{ key: string; value: string; effect: string }>
+  labels: Record<string, string>
+}
+
 export const kubernetesApi = {
   addCluster: (data: { name: string; kubeconfig: string; context?: string; namespace?: string; labels?: Record<string, string> }) =>
     api.post<KubernetesCluster>('/api/kubernetes', data),
@@ -746,6 +779,10 @@ export const kubernetesApi = {
     api.get<{ certificates: CertificateStatus[]; total: number }>(
       `/api/kubernetes/${clusterId}/dns/certificates${namespace ? `?namespace=${namespace}` : ''}`
     ),
+
+  // Node operations
+  listNodes: (clusterId: string) =>
+    api.get<KubernetesNode[]>(`/api/kubernetes/${clusterId}/nodes`),
 }
 
 /** A single infrastructure env var with source attribution */

@@ -109,6 +109,7 @@ security:
 infrastructure:
   mongodb_uri: ${oc.env:MONGODB_URI,mongodb://mongo:27017}
   mongodb_database: ${oc.env:MONGODB_DATABASE,ushadow}  # Default database name (NOT a URI!)
+  mongodb_user: ${oc.env:MONGODB_USER,root}
   redis_url: ${oc.env:REDIS_URL,redis://redis:6379/0}
   
   qdrant_base_url: qdrant
@@ -149,12 +150,9 @@ selected_providers:
 # These are installed by default in quickstart mode. User modifications
 # (adds/removes) are tracked in config.overrides.yaml → installed_services.
 default_services:
-  - chronicle-backend
-  - chronicle-workers
   - mem0
 
 # Service Profiles
-# Named sets of default services selectable via: ./dev.sh <profile>
 # The chosen profile's services are written to config.overrides.yaml as
 # default_services, overriding the list above.
 service_profiles:
@@ -163,9 +161,9 @@ service_profiles:
     services:
       - chronicle-backend
       - chronicle-workers
-      - mem0
   mycelia:
     display_name: "Mycelia + Memory"
+    wizard: mycelia
     services:
       - mycelia-backend
       - mycelia-frontend
@@ -177,3 +175,14 @@ service_profiles:
 # YouTube API key is stored in secrets.yaml under api_keys.youtube_api_key.
 feed:
   sources: []
+
+# Service env var mappings
+# These tell the settings resolution chain where to find values for compose env vars,
+# used by _check_needs_setup and _build_env_vars_from_compose_config.
+services:
+  mycelia-backend:
+    SECRET_KEY: '@settings.security.auth_secret_key'
+  mycelia-python-worker:
+    SECRET_KEY: '@settings.security.auth_secret_key'
+  faster-whisper:
+    WHISPER__MODEL: '@settings.transcription.whisper_model'

@@ -1,7 +1,7 @@
 use crate::config::LauncherConfig;
 use crate::models::{EnvironmentStatus, InfraService, UshadowEnvironment};
 use serde_json::Value;
-use std::process::Command;
+use super::utils::silent_command;
 
 /// Information about a discovered container
 #[derive(Debug, Clone)]
@@ -35,7 +35,7 @@ pub fn discover_environment_containers(
     };
 
     // Query Docker for containers with this compose project label
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args([
             "ps",
             "-a",
@@ -71,7 +71,7 @@ pub fn discover_environment_containers(
 
 /// Inspect a single container to extract service name, status, and ports
 fn inspect_container(container_name: &str) -> Result<ContainerInfo, String> {
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args(["inspect", container_name])
         .output()
         .map_err(|e| format!("Failed to inspect container: {}", e))?;
@@ -165,7 +165,7 @@ fn extract_port_mappings(container: &Value) -> Result<Vec<PortMapping>, String> 
 pub fn discover_infrastructure_containers(
     config: &LauncherConfig,
 ) -> Result<Vec<InfraService>, String> {
-    let output = Command::new("docker")
+    let output = silent_command("docker")
         .args([
             "ps",
             "-a",

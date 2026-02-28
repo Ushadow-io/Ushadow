@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { Tag, Folder, GitBranch, Terminal, Clock, AlertCircle } from 'lucide-react'
+import { Tag, Folder, GitBranch, Loader2 } from 'lucide-react'
+
+function ClaudeIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-1.227-.072L2 12.66l.063-.584.112-.05 1.603.05 2.387.097 2.339.072.79.049h.018l-.79-.658-1.943-1.702-1.724-1.578-.717-.687-.52-.585.456-.728.354-.056.505.392 1.29 1.158 1.822 1.675 1.453 1.369.79.755-.073-.875-.137-2.064-.113-2.209-.017-1.514.033-1.126.048-.042.663-.056.072.042.211 1.175.137 2.209.081 2.282v.292l.549-.6 1.498-1.53 1.661-1.595 1.13-.998.936-.768.505.546-.033.384-1.001.9-1.582 1.562-1.498 1.53-1.017 1.079.073-.024 2.404-.657 2.291-.56 1.516-.413.304-.024.16.37-.016.433-.426.15-1.549.405-2.307.559-2.485.657-.4.097z"/>
+    </svg>
+  )
+}
 import type { Ticket, Epic } from './KanbanBoard'
 import { TicketDetailDialog } from './TicketDetailDialog'
 import { EnvironmentBadge } from './EnvironmentBadge'
@@ -29,6 +37,21 @@ const PRIORITY_LABELS = {
 export function TicketCard({ ticket, epics, onUpdate, backendUrl, projectRoot }: TicketCardProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [showDetail, setShowDetail] = useState(false)
+  const [openingWorkmux, setOpeningWorkmux] = useState(false)
+
+  const handleOpenWorkmux = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!ticket.worktree_path || !ticket.environment_name || openingWorkmux) return
+    setOpeningWorkmux(true)
+    try {
+      const { tauri } = await import('../hooks/useTauri')
+      await tauri.attachTmuxToWorktree(ticket.worktree_path, ticket.environment_name, undefined)
+    } catch (err) {
+      console.error('[TicketCard] Failed to open workmux:', err)
+    } finally {
+      setOpeningWorkmux(false)
+    }
+  }
 
   // Find epic for this ticket
   const epic = ticket.epic_id ? epics.find(e => e.id === ticket.epic_id) : null
@@ -146,16 +169,20 @@ export function TicketCard({ ticket, epics, onUpdate, backendUrl, projectRoot }:
           </div>
         )}
 
-        {/* Tmux Window */}
-        {ticket.tmux_window_name && (
-          <div
-            className="flex items-center gap-1 text-green-500"
-            title="Tmux window active"
-            data-testid="ticket-card-tmux"
+        {/* Open Workmux */}
+        {ticket.worktree_path && ticket.environment_name && (
+          <button
+            onClick={handleOpenWorkmux}
+            disabled={openingWorkmux}
+            title="Open Claude session in workmux"
+            className="flex items-center text-orange-400 hover:text-orange-300 transition-colors disabled:opacity-50"
+            data-testid="ticket-card-open-workmux"
           >
-            <Terminal className="w-3 h-3" />
-            <span>Active</span>
-          </div>
+            {openingWorkmux
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <ClaudeIcon className="w-3.5 h-3.5" />
+            }
+          </button>
         )}
 
         {/* ID */}
