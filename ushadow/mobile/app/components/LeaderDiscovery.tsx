@@ -22,7 +22,7 @@ import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 import { useFeatureFlagContext } from '../contexts/FeatureFlagContext';
 
 interface LeaderDiscoveryProps {
-  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string, hostname?: string) => void;
+  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string, hostname?: string) => Promise<void> | void;
 }
 
 export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
@@ -59,9 +59,12 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
     // This now saves the server AND attempts to connect
     const result = await connectFromQR(data);
     if (result.success && result.leader && onLeaderFound) {
-      console.log('[LeaderDiscovery] Successfully connected to UNode, refreshing feature flags...');
+      console.log('[LeaderDiscovery] Successfully connected to UNode, saving and refreshing feature flags...');
 
-      // Refresh feature flags from the newly connected UNode
+      // Save the UNode to storage first so feature flag refresh reads the correct environment
+      await onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl, result.leader.hostname);
+
+      // Now refresh feature flags — active UNode is already saved, so the correct API URL is used
       try {
         await refreshFlags();
         console.log('[LeaderDiscovery] Feature flags refreshed successfully');
@@ -69,9 +72,6 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
         console.error('[LeaderDiscovery] Failed to refresh feature flags:', err);
         // Don't fail the connection if feature flags fail to load
       }
-
-      // Pass auth token from QR code if available (v3+)
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
