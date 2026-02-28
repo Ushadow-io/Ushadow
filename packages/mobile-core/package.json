@@ -1,0 +1,29 @@
+{
+  "name": "@ushadow/mobile-core",
+  "version": "0.1.0",
+  "description": "Shared component library for ushadow mobile apps",
+  "main": "index.ts",
+  "types": "index.ts",
+  "private": true,
+  "exports": {
+    ".": "./index.ts",
+    "./audio": "./audio/index.ts",
+    "./ble": "./ble/index.ts",
+    "./auth": "./auth/index.ts",
+    "./session": "./session/index.ts",
+    "./data": "./data/index.ts",
+    "./timeline": "./timeline/index.ts",
+    "./routine": "./routine/index.ts",
+    "./feedback": "./feedback/index.ts",
+    "./analysis": "./analysis/index.ts",
+    "./schedule": "./schedule/index.ts",
+    "./location": "./location/index.ts",
+    "./chat": "./chat/index.ts",
+    "./core": "./core/index.ts"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.70.0",
+    "expo": ">=50.0.0"
+  }
+}

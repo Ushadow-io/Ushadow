@@ -21,12 +21,14 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from src.models.user import User  # Beanie document model
 from src.models.share import ShareToken  # Beanie document model
 from src.models.feed import Post, MastodonAppCredential  # Beanie document models
+from src.models.routine import Routine, RoutineSession, TimelineEvent, RoutineFeedback  # Routine/timeline models
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
 from src.routers import kubernetes, tailscale, unodes, docker, sse
 from src.routers import github_import, audio_relay, memories, share, keycloak_admin, dashboard
 from src.routers import feed
+from src.routers import routines, timeline, sessions as sessions_router
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
 from src.services.unode_manager import init_unode_manager, get_unode_manager
@@ -136,7 +138,8 @@ async def lifespan(app: FastAPI):
     # Initialize Beanie ODM with document models
     await init_beanie(
         database=db,
-        document_models=[User, ShareToken, Post, MastodonAppCredential],
+        document_models=[User, ShareToken, Post, MastodonAppCredential,
+                         Routine, RoutineSession, TimelineEvent, RoutineFeedback],
     )
     logger.info("✓ Beanie ODM initialized")
     
@@ -214,6 +217,9 @@ app.include_router(share.router, tags=["sharing"])
 app.include_router(keycloak_admin.router, prefix="/api/keycloak", tags=["keycloak-admin"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(feed.router, tags=["feed"])
+app.include_router(routines.router, prefix="/api/routines", tags=["routines"])
+app.include_router(sessions_router.router, prefix="/api/sessions", tags=["sessions"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["timeline"])
 
 # Setup MCP server for LLM tool access
 setup_mcp_server(app)
