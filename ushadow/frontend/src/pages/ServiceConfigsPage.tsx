@@ -1605,7 +1605,7 @@ export default function ServiceConfigsPage() {
         />
       ) : activeTab === 'providers' ? (
         <ProvidersTab
-          providers={providerTemplates}
+          providers={providerTemplates.map((t) => addedProviderIds.has(t.id) ? { ...t, installed: true } : t)}
           expandedProviderId={expandedProviderCard}
           onToggleExpand={handleExpandProviderCard}
           envVars={providerCardEnvVars}

@@ -430,13 +430,14 @@ async def get_quickstart_config() -> QuickstartResponse:
         profile_services = profile_data.get("services", []) if isinstance(profile_data, dict) else list(profile_data)
         display_name = profile_data.get("display_name", name.title()) if isinstance(profile_data, dict) else name.title()
 
-        # Find wizard ID for this profile by checking each service's template
-        profile_wizard = None
-        for service_name in profile_services:
-            service = registry.get_service_by_name(service_name)
-            if service and service.wizard:
-                profile_wizard = service.wizard
-                break
+        # Wizard ID: prefer explicit config value, fall back to checking compose metadata
+        profile_wizard = profile_data.get("wizard") if isinstance(profile_data, dict) else None
+        if not profile_wizard:
+            for service_name in profile_services:
+                service = registry.get_service_by_name(service_name)
+                if service and service.wizard:
+                    profile_wizard = service.wizard
+                    break
 
         profiles.append(ServiceProfile(name=name, display_name=display_name, services=profile_services, wizard=profile_wizard))
         if sorted(profile_services) == sorted(default_services):
@@ -456,10 +457,10 @@ async def get_quickstart_config() -> QuickstartResponse:
 @router.post("/quickstart/profile")
 async def select_service_profile(body: Dict[str, str]) -> Dict[str, Any]:
     """
-    Switch to a named service profile.
+    Apply a named service profile.
 
-    Writes the profile's services as default_services in config.overrides.yaml.
-    The wizard reloads after this to show the new service list.
+    Merges the profile's services into installed_services so existing services
+    from other profiles are preserved rather than replaced.
     """
     profile_name = body.get("profile")
     if not profile_name:
@@ -472,10 +473,26 @@ async def select_service_profile(body: Dict[str, str]) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Profile '{profile_name}' not found")
 
     profile_data = raw_profiles[profile_name]
-    services = profile_data.get("services", []) if isinstance(profile_data, dict) else list(profile_data)
+    profile_services = profile_data.get("services", []) if isinstance(profile_data, dict) else list(profile_data)
 
-    await settings.set("default_services", services)
-    return {"profile": profile_name, "services": services}
+    existing = await settings.get("installed_services") or []
+    removed = await settings.get("removed_services") or []
+
+    # Add profile services that aren't already tracked, restoring any previously removed
+    merged = list(existing)
+    restored = []
+    for svc in profile_services:
+        if svc not in merged:
+            merged.append(svc)
+        if svc in removed:
+            removed.remove(svc)
+            restored.append(svc)
+
+    await settings.set("installed_services", merged)
+    if restored:
+        await settings.set("removed_services", removed)
+
+    return {"profile": profile_name, "services": profile_services}
 
 
 @router.post("/quickstart")

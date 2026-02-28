@@ -90,6 +90,13 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
 
             needs_setup = await orchestrator._check_needs_setup(service)
 
+            # Check if container is actually running (don't rely on default=True)
+            try:
+                service_status = await orchestrator.get_service_status(service.service_name)
+                is_running = service_status is not None and service_status.get("status") == "running"
+            except Exception:
+                is_running = False
+
             templates.append(Template(
                 id=service.service_id,
                 source=TemplateSource.COMPOSE,
@@ -103,6 +110,7 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
                 service_name=service.service_name,
                 mode="local",
                 tags=service.tags,
+                running=is_running,
                 installed=is_installed,
                 needs_setup=needs_setup,
                 wizard=service.wizard,

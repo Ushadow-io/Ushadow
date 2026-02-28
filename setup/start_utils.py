@@ -16,13 +16,12 @@ from docker_utils import DockerNetworkManager
 
 
 def cleanup_stale_endpoints(networks: list[str] | None = None) -> None:
-    """Force-disconnect endpoints for stopped/crashed containers in shared networks.
+    """Force-disconnect endpoints whose containers no longer exist.
 
-    Docker retains network endpoint registrations for stopped containers.
-    When compose tries to (re)start them it fails with 'endpoint already exists'
-    because the old registration is still there. Disconnecting stopped containers
-    from the network clears the stale record so compose can attach cleanly.
-    Running containers are left untouched.
+    Only removes endpoints for containers that have been fully deleted.
+    Stopped/exited containers are left alone — compose handles their restart
+    and network re-attachment correctly. This only handles the case where a
+    container was removed (e.g. docker rm) but its network endpoint persisted.
     """
     if networks is None:
         networks = ["infra-network", "ushadow-network"]
@@ -35,11 +34,12 @@ def cleanup_stale_endpoints(networks: list[str] | None = None) -> None:
         if result.returncode != 0:
             continue
         for container in result.stdout.split():
-            running = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Running}}", container],
-                capture_output=True, text=True, timeout=5,
+            exists = subprocess.run(
+                ["docker", "inspect", container],
+                capture_output=True, timeout=5,
             )
-            if running.returncode != 0 or running.stdout.strip() != "true":
+            if exists.returncode != 0:
+                # Container no longer exists — safe to remove the stale endpoint
                 subprocess.run(
                     ["docker", "network", "disconnect", "--force", network, container],
                     capture_output=True, timeout=10,

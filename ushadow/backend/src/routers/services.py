@@ -1148,6 +1148,35 @@ async def uninstall_service(
     return result
 
 
+@router.post("/mycelia/provision-tokens")
+async def provision_mycelia_tokens(
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Provision Mycelia credentials (idempotent).
+
+    Retrieves existing tokens from settings or generates fresh ones via
+    mycelia-generate-token.py (pymongo direct — Mycelia need not be running).
+    Newly generated tokens are saved to ushadow settings immediately.
+
+    Query params:
+        force: Generate new tokens even if existing ones are stored.
+    """
+    from src.services.deployment_manager import get_deployment_manager
+
+    manager = get_deployment_manager()
+    tokens = await manager._ensure_mycelia_tokens(force_regenerate=force)
+    if not tokens:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to provision Mycelia tokens. Ensure MongoDB is running.",
+        )
+    return {
+        "client_id": tokens["MYCELIA_CLIENT_ID"],
+        "token_preview": tokens["MYCELIA_TOKEN"][:24] + "...",
+    }
+
+
 @router.post("/mycelia/generate-token")
 async def generate_mycelia_token(
     orchestrator: ServiceOrchestrator = Depends(get_orchestrator),

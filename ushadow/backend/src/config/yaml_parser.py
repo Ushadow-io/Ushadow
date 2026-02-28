@@ -138,9 +138,11 @@ class ComposeService:
     infra_services: List[str] = field(default_factory=list)  # Infra services to start first
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
     wizard: Optional[str] = None  # Setup wizard ID
+    setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # URLs this service exposes (audio intake, http api, etc.)
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all envs)
+    capability_env_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)  # capability -> {key -> ENV_VAR}
 
     @property
     def required_env_vars(self) -> List[ComposeEnvVar]:
@@ -297,9 +299,11 @@ class ComposeParser(BaseYAMLParser):
         exposes = service_meta.get("exposes", [])  # URLs this service exposes
         tags = service_meta.get("tags", [])  # Service tags (e.g., ["audio", "gpu"])
         environments = service_meta.get("environments", [])  # Environments where visible (empty = all)
+        capability_env_mappings = service_meta.get("capability_env_mappings", {})  # capability -> {key -> ENV_VAR}
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
+        setup_script = x_ushadow.get("setup")  # Script to run on install of any service in this compose
         # Route path for Tailscale Serve (e.g., "/chronicle")
         route_path = service_meta.get("route_path")
 
@@ -322,9 +326,11 @@ class ComposeParser(BaseYAMLParser):
             infra_services=infra_services,
             route_path=route_path,
             wizard=wizard,
+            setup_script=setup_script,
             exposes=exposes,
             tags=tags,
             environments=environments,
+            capability_env_mappings=capability_env_mappings,
         )
 
     def _resolve_image(self, image: Optional[str]) -> Optional[str]:

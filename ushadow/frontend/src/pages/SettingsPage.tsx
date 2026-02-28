@@ -1,6 +1,6 @@
-import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle, Globe, Wifi } from 'lucide-react'
+import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle, Globe, Wifi, Zap } from 'lucide-react'
 import { useState, useEffect } from 'react'
-import { settingsApi } from '../services/api'
+import { settingsApi, servicesApi } from '../services/api'
 import { JsonTreeViewer } from '../components/JsonTreeViewer'
 import { StatusBadge } from '../components/StatusBadge'
 import { RequiredFieldsSection, UnifiedServiceSettings, NetworkTab } from '../components/settings'
@@ -32,6 +32,9 @@ export default function SettingsPage() {
   const [resetting, setResetting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [provisioningTokens, setProvisioningTokens] = useState(false)
+  const [tokenResult, setTokenResult] = useState<{ client_id: string; token_preview: string } | null>(null)
+  const [tokenError, setTokenError] = useState<string | null>(null)
 
   useEffect(() => {
     loadConfig()
@@ -64,6 +67,20 @@ export default function SettingsPage() {
       setError('Failed to refresh configuration')
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleProvisionMyceliaTokens = async (force = false) => {
+    setProvisioningTokens(true)
+    setTokenError(null)
+    try {
+      const response = await servicesApi.provisionMyceliaTokens(force)
+      setTokenResult(response.data)
+      await loadConfig()
+    } catch (err: any) {
+      setTokenError(err?.response?.data?.detail || 'Failed to provision Mycelia tokens')
+    } finally {
+      setProvisioningTokens(false)
     }
   }
 
@@ -262,6 +279,70 @@ export default function SettingsPage() {
       {/* API Keys Tab */}
       {activeTab === 'api-keys' && (
         <div className="space-y-4" data-testid="api-keys-tab">
+
+          {/* Mycelia Credentials Card */}
+          <div className="card p-6" data-testid="mycelia-credentials-card">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center space-x-3">
+                <Zap className="h-5 w-5 text-accent-500" />
+                <div>
+                  <h3 className="font-semibold text-neutral-900 dark:text-neutral-100">
+                    Mycelia Credentials
+                  </h3>
+                  <p className="text-sm text-neutral-500 mt-0.5">
+                    Generate auth tokens for Mycelia's API. Required before first deploy.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                {apiKeys.some(k => k.name === 'mycelia_token') && (
+                  <button
+                    onClick={() => handleProvisionMyceliaTokens(true)}
+                    disabled={provisioningTokens}
+                    className="btn btn-secondary text-sm"
+                    data-testid="mycelia-regenerate-tokens"
+                  >
+                    {provisioningTokens ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    <span className="ml-1">Regenerate</span>
+                  </button>
+                )}
+                {!apiKeys.some(k => k.name === 'mycelia_token') && (
+                  <button
+                    onClick={() => handleProvisionMyceliaTokens(false)}
+                    disabled={provisioningTokens}
+                    className="btn btn-primary text-sm"
+                    data-testid="mycelia-generate-tokens"
+                  >
+                    {provisioningTokens ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                    <span className="ml-1">Generate Credentials</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {tokenError && (
+              <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg flex items-start space-x-2" data-testid="mycelia-token-error">
+                <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                <p className="text-sm text-red-700 dark:text-red-400">{tokenError}</p>
+              </div>
+            )}
+
+            {tokenResult && (
+              <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg" data-testid="mycelia-token-result">
+                <p className="text-sm font-medium text-green-700 dark:text-green-400 mb-1">Credentials saved to settings</p>
+                <code className="text-xs text-neutral-600 dark:text-neutral-400 block">Client ID: {tokenResult.client_id}</code>
+                <code className="text-xs text-neutral-600 dark:text-neutral-400 block">Token: {tokenResult.token_preview}</code>
+              </div>
+            )}
+
+            {apiKeys.some(k => k.name === 'mycelia_token') && !tokenResult && (
+              <div className="mt-3 flex items-center space-x-2 text-sm text-green-600 dark:text-green-400" data-testid="mycelia-token-present">
+                <CheckCircle className="h-4 w-4" />
+                <span>Credentials already provisioned</span>
+              </div>
+            )}
+          </div>
+
           <div className="card p-6">
             <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">
               Saved API Keys

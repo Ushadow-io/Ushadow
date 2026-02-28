@@ -26,6 +26,9 @@ from src.utils.environment import is_local_deployment as env_is_local_deployment
 
 logger = logging.getLogger(__name__)
 
+# Mycelia compose service names that need token injection before deploy
+_MYCELIA_SERVICES = frozenset({"mycelia-backend", "mycelia-python-worker", "mycelia-frontend"})
+
 
 def _is_local_deployment(unode_hostname: str) -> bool:
     """Check if deployment is to the local node."""
@@ -125,6 +128,76 @@ class DeploymentManager:
         """Close HTTP session."""
         if self._http_session and not self._http_session.closed:
             await self._http_session.close()
+
+    async def _ensure_mycelia_tokens(self, force_regenerate: bool = False) -> dict:
+        """Generate (or retrieve existing) Mycelia auth tokens.
+
+        Checks ushadow settings first so tokens survive redeploys without
+        creating duplicate credentials in Mycelia's MongoDB.  When new tokens
+        are generated they are saved back to settings immediately.
+
+        Runs mycelia-generate-token.py which writes directly to Mycelia's
+        api_keys collection via pymongo — Mycelia does NOT need to be running.
+
+        Args:
+            force_regenerate: Skip the settings cache and always generate fresh tokens.
+
+        Returns:
+            Dict with MYCELIA_TOKEN and MYCELIA_CLIENT_ID on success, else empty dict.
+        """
+        import subprocess
+        from pathlib import Path
+        from src.config import get_settings
+
+        settings = get_settings()
+
+        if not force_regenerate:
+            existing_token = await settings.get("api_keys.mycelia_token")
+            existing_client_id = await settings.get("api_keys.mycelia_client_id")
+            if existing_token and existing_client_id:
+                logger.info("[MYCELIA] Reusing existing tokens from settings")
+                return {
+                    "MYCELIA_TOKEN": str(existing_token),
+                    "MYCELIA_CLIENT_ID": str(existing_client_id),
+                }
+
+        # Resolve script path: Docker mount first, then dev repo layout
+        script = Path("/compose/scripts/mycelia-generate-token.py")
+        if not script.exists():
+            script = Path(__file__).parents[4] / "compose" / "scripts" / "mycelia-generate-token.py"
+
+        if not script.exists():
+            logger.warning("[MYCELIA] Token script not found at %s; skipping", script)
+            return {}
+
+        try:
+            result = subprocess.run(
+                ["python3", str(script)],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode != 0:
+                logger.error("[MYCELIA] Token generation failed: %s", result.stderr)
+                return {}
+
+            tokens = {}
+            for line in result.stdout.splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    tokens[key.strip()] = value.strip()
+
+            if "MYCELIA_TOKEN" not in tokens or "MYCELIA_CLIENT_ID" not in tokens:
+                logger.warning("[MYCELIA] Unexpected script output: %r", result.stdout)
+                return {}
+
+            await settings.update({
+                "api_keys.mycelia_token": tokens["MYCELIA_TOKEN"],
+                "api_keys.mycelia_client_id": tokens["MYCELIA_CLIENT_ID"],
+            })
+            logger.info("[MYCELIA] Token generation successful and saved to settings")
+            return tokens
+        except Exception as e:
+            logger.error("[MYCELIA] Token generation error: %s", e)
+            return {}
 
     # =========================================================================
     # Centralized Service Resolution
@@ -529,6 +602,13 @@ class DeploymentManager:
         except ValueError as e:
             logger.error(f"Failed to resolve service {service_id}: {e}")
             raise ValueError(f"Service resolution failed: {e}")
+
+        # For mycelia services: generate tokens in MongoDB before deploying.
+        # The script writes directly via pymongo — Mycelia does not need to be running.
+        if resolved_service.name in _MYCELIA_SERVICES:
+            tokens = await self._ensure_mycelia_tokens()
+            if tokens:
+                resolved_service.environment.update(tokens)
 
         # Get u-node
         unode_dict = await self.unodes_collection.find_one({"hostname": unode_hostname})

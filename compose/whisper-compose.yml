@@ -11,7 +11,7 @@ services:
     image: fedirz/faster-whisper-server:latest-cpu
     container_name: faster-whisper
     environment:
-      - WHISPER__MODEL=Systran/faster-whisper-base
+      - WHISPER__MODEL=${WHISPER_MODEL:-Systran/faster-whisper-base}
       - UVICORN_HOST=0.0.0.0
       - UVICORN_PORT=8000
     volumes:

@@ -137,9 +137,11 @@ export function useProviderConfigs(
   const filteredInitial = useMemo(() => {
     if (!capability || !hasInitialData) return null
 
-    // Filter templates that provide this capability
+    // Filter templates that provide this capability - include provider templates
+    // and installed compose services (e.g., faster-whisper providing transcription)
     const capabilityTemplates = initialTemplates!.filter(
-      t => t.provides === capability && t.source === 'provider'
+      t => t.provides === capability &&
+        (t.source === 'provider' || (t.source === 'compose' && t.installed))
     )
     // Filter configs that are based on capability templates
     const templateIds = new Set(capabilityTemplates.map(t => t.id))
@@ -183,13 +185,15 @@ export function useProviderConfigs(
     try {
       // Fetch all templates and filter by capability
       const [templatesRes, configsRes] = await Promise.all([
-        svcConfigsApi.getTemplates('provider'),
+        svcConfigsApi.getTemplates(),
         svcConfigsApi.getServiceConfigs(),
       ])
 
-      // Filter templates that provide this capability
+      // Filter templates that provide this capability - include provider templates
+      // and installed compose services (e.g., faster-whisper providing transcription)
       const capabilityTemplates = templatesRes.data.filter(
-        t => t.provides === capability
+        t => t.provides === capability &&
+          (t.source === 'provider' || (t.source === 'compose' && t.installed))
       )
 
       // Filter configs that are based on capability templates

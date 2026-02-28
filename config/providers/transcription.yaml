@@ -70,8 +70,8 @@ providers:
   # Whisper (Local) - Local Transcription
   # ==========================================================================
   - id: whisper-local
-    name: "Whisper (Local)"
-    description: "OpenAI Whisper running locally - private and offline"
+    name: "Whisper (Remote)"
+    description: "Connect to an OpenAI-compatible Whisper server via URL"
     mode: local
 
     docker:
@@ -95,20 +95,18 @@ providers:
         settings_path: transcription.whisper_server_url
         label: "Whisper Server URL"
         type: url
+        default: "http://faster-whisper:8000"
         required: true
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         settings_path: transcription.language
         default: "en"
-
-    config:
-      model_size:
-        env_var: WHISPER_MODEL_SIZE
-        settings_path: transcription.whisper_model_size
-        label: "Model Size"
-        description: "Larger = more accurate but slower"
-        default: "base"
-        options: ["tiny", "base", "small", "medium", "large"]
+      model:
+        env_var: WHISPER_MODEL
+        settings_path: transcription.whisper_model
+        label: "Model"
+        description: "HuggingFace model name for faster-whisper (e.g. Systran/faster-whisper-base)"
+        default: "Systran/faster-whisper-base"
 
     ui:
       icon: whisper

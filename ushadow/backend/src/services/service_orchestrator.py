@@ -747,12 +747,62 @@ class ServiceOrchestrator:
 
         logger.info(f"Installed service: {service_name}")
 
+        # Run setup script if declared in x-ushadow
+        setup_output = {}
+        if service.setup_script:
+            setup_output = await self._run_setup_script(service)
+
         return {
             "service_id": service.service_id,
             "service_name": service_name,
             "installed": True,
-            "message": f"Service '{service_name}' has been installed"
+            "message": f"Service '{service_name}' has been installed",
+            "setup": setup_output,
         }
+
+    async def _run_setup_script(self, service: DiscoveredService) -> Dict[str, Any]:
+        """Run a service's x-ushadow setup script and save KEY=VALUE output to settings.
+
+        The script path is resolved relative to the compose file's directory.
+        Each KEY=VALUE line in stdout is saved as api_keys.{key.lower()} in settings.
+
+        Returns dict with 'saved' (list of setting paths written) and optional 'error'.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script_path = Path(service.setup_script)
+        if not script_path.is_absolute():
+            script_path = service.compose_file.parent / script_path
+
+        if not script_path.exists():
+            logger.warning("[SETUP] Script not found: %s", script_path)
+            return {"error": f"Setup script not found: {script_path}"}
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                logger.error("[SETUP] Script failed (%s): %s", service.service_name, result.stderr)
+                return {"error": result.stderr.strip()}
+
+            updates = {}
+            for line in result.stdout.splitlines():
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    updates[f"api_keys.{key.strip().lower()}"] = value.strip()
+
+            if updates:
+                await self.settings.update(updates)
+                logger.info("[SETUP] %s: saved %s", service.service_name, list(updates.keys()))
+
+            return {"saved": list(updates.keys())}
+        except Exception as e:
+            logger.error("[SETUP] Script error (%s): %s", service.service_name, e)
+            return {"error": str(e)}
 
     async def uninstall_service(self, name: str) -> Optional[Dict[str, Any]]:
         """Uninstall a service (remove from installed list)."""

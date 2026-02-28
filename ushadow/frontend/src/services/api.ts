@@ -365,6 +365,12 @@ export const servicesApi = {
 
   /** Generate Mycelia authentication token */
   generateMyceliaToken: () => api.post<{ token: string; client_id: string }>('/api/services/mycelia/generate-token'),
+
+  /** Provision Mycelia credentials (idempotent — reuses existing if present) */
+  provisionMyceliaTokens: (force = false) =>
+    api.post<{ client_id: string; token_preview: string }>(
+      `/api/services/mycelia/provision-tokens${force ? '?force=true' : ''}`
+    ),
 }
 
 // Compose service configuration endpoints

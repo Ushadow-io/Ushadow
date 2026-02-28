@@ -20,13 +20,19 @@ x-ushadow:
   namespace: mycelia
   # Infra services to start before this compose (from docker-compose.infra.yml)
   infra_services: ["mongo", "redis"]
+  # Setup script: runs when any service in this compose is installed
+  setup: scripts/mycelia-generate-token.py
   mycelia-backend:
     display_name: "Mycelia"
     description: "Self-hosted AI memory and timeline - capture ideas via voice, screenshots, or text"
     requires: ["llm", "transcription"]
+    capability_env_mappings:
+      transcription:
+        server_url: TRANSCRIPTION_BASE_URL
+        api_key: TRANSCRIPTION_API_KEY
+        model: TRANSCRIPTION_MODEL
     provides: memory  # Primary capability (timeline, transcription are secondary)
     tags: ["ai", "memory", "voice", "transcription", "timeline"]
-    wizard: "mycelia"  # ID of the setup wizard
     exposes:
       - name: audio_intake
         type: audio
@@ -62,8 +68,8 @@ services:
       - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
     environment:
       - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:8888}
-      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
-      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
+      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-none}
+      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-none}
     networks:
       - ushadow-network
     healthcheck:
@@ -90,9 +96,9 @@ services:
       - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://localhost:8888}
       - MYCELIA_FRONTEND_HOST=${MYCELIA_FRONTEND_HOST:-http://mycelia-frontend:8080}
 
-      # Authentication (optional - configured via wizard on first start)
-      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-}
-      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-}
+      # Authentication - optional at startup, set by mycelia startup script after first boot
+      - MYCELIA_TOKEN=${MYCELIA_TOKEN:-none}
+      - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-none}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
 
       # MongoDB Configuration (component-based)

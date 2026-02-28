@@ -5,7 +5,7 @@
  * Used by WizardStartPage to dynamically list all wizards.
  */
 
-import { LucideIcon, Sparkles, Shield, Smartphone, Mic, CheckCircle2, Wand2, Server, MessageSquare, Brain, Database } from 'lucide-react'
+import { LucideIcon, Sparkles, Shield, Smartphone, Mic, CheckCircle2, Wand2, Server, MessageSquare, Brain } from 'lucide-react'
 
 export interface WizardMetadata {
   id: string
@@ -87,13 +87,6 @@ export const wizardRegistry: WizardMetadata[] = [
     label: 'Memory',
     description: 'OpenMemory setup',
     icon: Brain,
-  },
-  {
-    id: 'mycelia',
-    path: '/wizard/mycelia',
-    label: 'Mycelia',
-    description: 'AI memory and timeline',
-    icon: Database,
   },
 ]
 

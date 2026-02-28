@@ -170,3 +170,14 @@ service_profiles:
 # YouTube API key is stored in secrets.yaml under api_keys.youtube_api_key.
 feed:
   sources: []
+
+# Service env var mappings
+# These tell the settings resolution chain where to find values for compose env vars,
+# used by _check_needs_setup and _build_env_vars_from_compose_config.
+services:
+  mycelia-backend:
+    SECRET_KEY: '@settings.security.auth_secret_key'
+  mycelia-python-worker:
+    SECRET_KEY: '@settings.security.auth_secret_key'
+  faster-whisper:
+    WHISPER__MODEL: '@settings.transcription.whisper_model'
