@@ -4,6 +4,8 @@
  * Sets up the navigation and global providers.
  * Uses tab-based navigation with Home, Conversations, and Memories.
  * Provides feature flags, Bluetooth, and OMI connection contexts.
+ *
+ * Configures @ushadow/mobile-core/auth with ushadow-specific settings.
  */
 
 import { Stack } from 'expo-router';
@@ -11,6 +13,17 @@ import { StatusBar } from 'expo-status-bar';
 import { theme } from './theme';
 import { BluetoothProvider, OmiConnectionProvider } from './contexts';
 import { FeatureFlagProvider } from './contexts/FeatureFlagContext';
+import { configureAuth, refreshKeycloakToken } from '../../../packages/mobile-core/auth';
+import AppConfig from './config';
+
+// Initialise shared auth module with ushadow-specific settings.
+// This must run before any auth operations (token reads, OAuth flows, etc.).
+configureAuth({
+  defaultServerUrl: AppConfig.DEFAULT_SERVER_URL,
+  oauthScheme: 'ushadow',
+  storagePrefix: '@ushadow',
+  refreshTokenFn: refreshKeycloakToken,
+});
 
 export default function RootLayout() {
   return (

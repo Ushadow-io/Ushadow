@@ -3,10 +3,54 @@
  *
  * Authentication — Keycloak OAuth, token storage, and monitoring.
  *
- * Planned exports:
- * - keycloakAuth (from app/services/keycloakAuth.ts)
- * - authStorage (from app/_utils/authStorage.ts)
- * - useTokenMonitor (from app/hooks/useTokenMonitor.ts)
+ * Setup: call configureAuth() once at app startup before any auth operations.
+ *
+ *   import { configureAuth, refreshKeycloakToken } from '@ushadow/mobile-core/auth';
+ *
+ *   configureAuth({
+ *     defaultServerUrl: 'https://my.server.com',
+ *     oauthScheme: 'myapp',
+ *     storagePrefix: '@myapp',
+ *     refreshTokenFn: refreshKeycloakToken,
+ *   });
  */
 
-export {};
+// Configuration
+export { configureAuth, getAuthConfig } from './authConfig';
+export type { AuthConfig } from './authConfig';
+
+// Token storage
+export {
+  saveAuthToken,
+  saveRefreshToken,
+  getRefreshToken,
+  getAuthToken,
+  clearAuthToken,
+  saveIdToken,
+  getIdToken,
+  saveApiUrl,
+  getApiUrl,
+  isAuthenticated,
+  getAuthInfo,
+  getUserEmail,
+  appendTokenToUrl,
+  getDefaultServerUrl,
+  setDefaultServerUrl,
+  clearDefaultServerUrl,
+  getEffectiveServerUrl,
+  handleUnauthorized,
+} from './authStorage';
+
+// Keycloak OAuth
+export {
+  getKeycloakConfigFromUnode,
+  getKeycloakConfig,
+  authenticateWithKeycloak,
+  refreshKeycloakToken,
+  logoutFromKeycloak,
+  isKeycloakAvailable,
+} from './keycloakAuth';
+export type { KeycloakConfig, KeycloakTokens } from './keycloakAuth';
+
+// Token monitoring hook
+export { useTokenMonitor } from './useTokenMonitor';
