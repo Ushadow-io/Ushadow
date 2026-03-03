@@ -23,7 +23,7 @@ import {
   clearAuthToken,
   isAuthenticated,
 } from './authStorage';
-import { logoutFromKeycloak } from './keycloakAuth';
+import { logout as oidcLogout } from './oidcAuth';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -152,13 +152,13 @@ export function ProfileScreen({
         onPress: async () => {
           setLoggingOut(true);
           try {
-            // Keycloak server-side logout
+            // OIDC provider-side logout
             if (serverUrl) {
               try {
                 const idToken = await getIdToken();
-                await logoutFromKeycloak(serverUrl, idToken || undefined, hostname);
+                await oidcLogout(serverUrl, idToken || undefined, hostname);
               } catch (error) {
-                console.warn('[ProfileScreen] Keycloak logout failed, continuing:', error);
+                console.warn('[ProfileScreen] Provider logout failed, continuing:', error);
               }
             }
             // Clear local tokens

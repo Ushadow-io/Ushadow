@@ -1,17 +1,17 @@
 /**
  * @ushadow/mobile-core/auth
  *
- * Authentication — Keycloak OAuth, token storage, and monitoring.
+ * Authentication — provider-agnostic OIDC, token storage, and monitoring.
  *
  * Setup: call configureAuth() once at app startup before any auth operations.
  *
- *   import { configureAuth, refreshKeycloakToken } from '@ushadow/mobile-core/auth';
+ *   import { configureAuth, refreshToken } from '@ushadow/mobile-core/auth';
  *
  *   configureAuth({
  *     defaultServerUrl: 'https://my.server.com',
  *     oauthScheme: 'myapp',
  *     storagePrefix: '@myapp',
- *     refreshTokenFn: refreshKeycloakToken,
+ *     refreshTokenFn: refreshToken,
  *   });
  */
 
@@ -41,7 +41,19 @@ export {
   handleUnauthorized,
 } from './authStorage';
 
-// Keycloak OAuth
+// OIDC Authentication (provider-agnostic)
+export {
+  authenticate,
+  refreshToken,
+  logout,
+  isOidcAvailable,
+  getOidcConfig,
+  fetchOidcDiscovery,
+  clearDiscoveryCache,
+} from './oidcAuth';
+export type { OidcProviderConfig, OidcDiscovery, OidcTokens } from './oidcAuth';
+
+// Legacy Keycloak OAuth (retained for backward compatibility)
 export {
   getKeycloakConfigFromUnode,
   getKeycloakConfig,

@@ -414,13 +414,50 @@ async def logout(
     )
 
 
-# Keycloak OAuth Token Exchange
+# ── OIDC Provider Config (provider-agnostic) ────────────────────────
+
+
+class OidcConfigResponse(BaseModel):
+    """Public OIDC provider configuration for mobile/frontend clients."""
+    issuer_url: str = Field(..., description="OIDC issuer URL (use for discovery)")
+    client_id: str = Field(..., description="OAuth client ID for this app")
+    provider_name: str = Field("OIDC", description="Human-readable provider name")
+
+
+@router.get("/config", response_model=OidcConfigResponse)
+async def get_auth_config():
+    """Get OIDC provider configuration for clients.
+
+    Returns the issuer URL and client ID needed to initiate an OAuth flow.
+    Clients should fetch ``{issuer_url}/.well-known/openid-configuration``
+    to discover authorization, token, and logout endpoints.
+
+    Works with any OIDC provider (Keycloak, Authentik, Auth0, etc.).
+    """
+    from src.config.oidc_settings import get_oidc_config
+
+    config = get_oidc_config()
+
+    if not config["issuer_url"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No OIDC provider configured"
+        )
+
+    return OidcConfigResponse(
+        issuer_url=config["issuer_url"],
+        client_id=config["client_id"],
+        provider_name=config["provider_name"],
+    )
+
+
+# ── OAuth Token Exchange ─────────────────────────────────────────────
 class TokenExchangeRequest(BaseModel):
     """Request for exchanging OAuth authorization code for tokens."""
-    code: str = Field(..., description="Authorization code from Keycloak")
+    code: str = Field(..., description="Authorization code from OIDC provider")
     code_verifier: str = Field(..., description="PKCE code verifier")
     redirect_uri: str = Field(..., description="Redirect URI used in authorization request")
-    client_id: Optional[str] = Field(None, description="OAuth client ID (defaults to frontend client)")
+    client_id: Optional[str] = Field(None, description="OAuth client ID (defaults to configured client)")
 
 
 class TokenExchangeResponse(BaseModel):
@@ -437,35 +474,58 @@ class TokenExchangeResponse(BaseModel):
 async def exchange_code_for_tokens(request: TokenExchangeRequest):
     """Exchange OAuth authorization code for access/refresh tokens.
 
-    Standard OAuth 2.0 Authorization Code Flow with PKCE using python-keycloak.
+    Provider-agnostic: resolves the token endpoint via OIDC settings and
+    performs a standard OAuth 2.0 Authorization Code + PKCE exchange.
 
     Args:
         request: Contains authorization code, PKCE verifier, and redirect URI
 
     Returns:
-        Access token, refresh token, and ID token from Keycloak
+        Access token, refresh token, and ID token from the OIDC provider
 
     Raises:
         400: If code exchange fails (invalid code, expired, etc.)
-        503: If Keycloak is unreachable
+        503: If OIDC provider is unreachable
     """
-    from src.services.keycloak_client import get_keycloak_client
-    from keycloak.exceptions import KeycloakError
+    import httpx
+    from src.config.oidc_settings import get_oidc_config, get_oidc_internal_token_endpoint
 
-    logger.info(f"[TOKEN-EXCHANGE] Request received with client_id={request.client_id}")
+    oidc_config = get_oidc_config()
+    client_id = request.client_id or oidc_config["client_id"]
 
-    try:
-        kc_client = get_keycloak_client()
+    logger.info(f"[TOKEN-EXCHANGE] Request received with client_id={client_id}")
 
-        # Exchange authorization code for tokens
-        tokens = kc_client.exchange_code_for_tokens(
-            code=request.code,
-            redirect_uri=request.redirect_uri,
-            code_verifier=request.code_verifier,
-            client_id=request.client_id
+    token_endpoint = get_oidc_internal_token_endpoint()
+    if not token_endpoint:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not resolve OIDC token endpoint"
         )
 
-        logger.info("[TOKEN-EXCHANGE] ✓ Successfully exchanged code for tokens")
+    logger.info(f"[TOKEN-EXCHANGE] Using token endpoint: {token_endpoint}")
+
+    try:
+        response = httpx.post(
+            token_endpoint,
+            data={
+                "grant_type": "authorization_code",
+                "code": request.code,
+                "redirect_uri": request.redirect_uri,
+                "code_verifier": request.code_verifier,
+                "client_id": client_id,
+            },
+            timeout=10.0,
+        )
+
+        if response.status_code != 200:
+            logger.error(f"[TOKEN-EXCHANGE] Provider returned {response.status_code}: {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Token exchange failed: {response.status_code}"
+            )
+
+        tokens = response.json()
+        logger.info("[TOKEN-EXCHANGE] Successfully exchanged code for tokens")
 
         return TokenExchangeResponse(
             access_token=tokens["access_token"],
@@ -476,12 +536,8 @@ async def exchange_code_for_tokens(request: TokenExchangeRequest):
             token_type=tokens.get("token_type", "Bearer")
         )
 
-    except KeycloakError as e:
-        logger.error(f"[TOKEN-EXCHANGE] Keycloak error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Token exchange failed: {str(e)}"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[TOKEN-EXCHANGE] Unexpected error: {e}", exc_info=True)
         raise HTTPException(
@@ -500,15 +556,11 @@ class TokenRefreshRequest(BaseModel):
 async def refresh_access_token(request: TokenRefreshRequest):
     """Refresh access token using refresh token.
 
-    Standard OAuth 2.0 refresh token flow with issuer URL translation.
+    Provider-agnostic OAuth 2.0 refresh token flow.
 
-    Handles Docker network URL translation: tokens issued by external URLs
-    (localhost:8081, Tailscale) must be refreshed using the same URL, not
-    the internal Docker network URL (keycloak:8080).
-
-    IMPORTANT: Extracts the issuer from the refresh token to ensure
-    we use the same Keycloak URL that issued the token (handles multi-domain
-    scenarios where browser uses Tailscale hostname but backend sees IP).
+    Extracts the issuer from the refresh token JWT to resolve the correct
+    token endpoint. Sets X-Forwarded-Host/Proto headers so providers behind
+    reverse proxies (Keycloak, Authentik) compute the correct issuer.
 
     Args:
         request: Contains refresh token
@@ -518,18 +570,17 @@ async def refresh_access_token(request: TokenRefreshRequest):
 
     Raises:
         401: If refresh token is invalid or expired
-        503: If Keycloak is unreachable
+        503: If OIDC provider is unreachable
     """
     import httpx
-    from keycloak.exceptions import KeycloakError
-    from src.config.keycloak_settings import get_keycloak_config
-    import jwt
+    import jwt as pyjwt
     from urllib.parse import urlparse
+    from src.config.oidc_settings import get_oidc_config, get_oidc_internal_token_endpoint
 
     try:
         # Decode refresh token WITHOUT validation to extract issuer and client
-        # This is safe - we're only reading metadata, not trusting the token yet
-        decoded = jwt.decode(request.refresh_token, options={"verify_signature": False})
+        # This is safe — we only read metadata, not trust the token yet.
+        decoded = pyjwt.decode(request.refresh_token, options={"verify_signature": False})
         issuer = decoded.get("iss")
 
         if not issuer:
@@ -538,23 +589,38 @@ async def refresh_access_token(request: TokenRefreshRequest):
                 detail="Refresh token missing issuer claim"
             )
 
-        kc_config = get_keycloak_config()
-        internal_url = kc_config["url"]  # http://keycloak:8080 (always reachable from backend)
+        oidc_config = get_oidc_config()
 
-        # Use azp (authorized party) from the token as client_id — this handles both
-        # web (ushadow-frontend) and mobile (ushadow-mobile) tokens correctly.
-        client_id = decoded.get("azp") or kc_config["frontend_client_id"]
+        # Use azp (authorized party) from the token as client_id — handles
+        # web, mobile, and other clients correctly.
+        client_id = decoded.get("azp") or oidc_config["client_id"]
 
-        # Call the internal URL but set X-Forwarded-Host/Proto to match the token's issuer.
-        # Keycloak (KC_PROXY_HEADERS=xforwarded) uses these headers to compute its issuer,
-        # which must match the iss claim in the refresh token or it rejects with invalid_grant.
-        issuer_parsed = urlparse(issuer.split("/realms/")[0] if "/realms/" in issuer else issuer)
-        token_url = f"{internal_url}/realms/{kc_config['realm']}/protocol/openid-connect/token"
+        # Resolve the internal token endpoint
+        token_endpoint = get_oidc_internal_token_endpoint()
+        if not token_endpoint:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not resolve OIDC token endpoint"
+            )
 
-        logger.info(f"[TOKEN-REFRESH] Refreshing via {token_url} forwarding as {issuer_parsed.scheme}://{issuer_parsed.netloc} (client={client_id})")
+        # Set X-Forwarded headers so the provider computes an issuer matching
+        # the iss claim in the refresh token (critical for Keycloak behind proxy).
+        # Strip provider-specific path segments to get the base host.
+        issuer_base = issuer
+        for segment in ["/realms/", "/application/o/"]:
+            if segment in issuer_base:
+                issuer_base = issuer_base.split(segment)[0]
+                break
+        issuer_parsed = urlparse(issuer_base)
+
+        logger.info(
+            f"[TOKEN-REFRESH] Refreshing via {token_endpoint} "
+            f"forwarding as {issuer_parsed.scheme}://{issuer_parsed.netloc} "
+            f"(client={client_id})"
+        )
 
         response = httpx.post(
-            token_url,
+            token_endpoint,
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": request.refresh_token,
@@ -568,11 +634,14 @@ async def refresh_access_token(request: TokenRefreshRequest):
         )
 
         if response.status_code != 200:
-            raise KeycloakError(f"{response.status_code}: {response.text!r}")
+            logger.error(f"[TOKEN-REFRESH] Provider returned {response.status_code}: {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Token refresh failed: {response.status_code}"
+            )
 
         tokens = response.json()
-
-        logger.info("[TOKEN-REFRESH] ✓ Successfully refreshed access token")
+        logger.info("[TOKEN-REFRESH] Successfully refreshed access token")
 
         return TokenExchangeResponse(
             access_token=tokens["access_token"],
@@ -583,12 +652,6 @@ async def refresh_access_token(request: TokenRefreshRequest):
             token_type=tokens.get("token_type", "Bearer")
         )
 
-    except KeycloakError as e:
-        logger.error(f"[TOKEN-REFRESH] Keycloak error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token refresh failed: {str(e)}"
-        )
     except HTTPException:
         raise
     except Exception as e:

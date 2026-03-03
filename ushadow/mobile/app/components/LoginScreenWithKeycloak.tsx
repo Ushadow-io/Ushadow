@@ -1,8 +1,9 @@
 /**
- * Login Screen Component with Keycloak Support
+ * Login Screen Component with OIDC Support
  *
- * Uses Keycloak OAuth2 (Authorization Code + PKCE) for authentication.
- * The component auto-detects if Keycloak is available on the backend.
+ * Uses provider-agnostic OIDC (Authorization Code + PKCE) for authentication.
+ * Works with Keycloak, Authentik, Auth0, or any OIDC provider.
+ * The component auto-detects if an OIDC provider is available on the backend.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -21,18 +22,17 @@ import {
 import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 import { saveAuthToken, saveRefreshToken, saveIdToken, saveApiUrl, getDefaultServerUrl, setDefaultServerUrl } from '../_utils/authStorage';
 import {
-  isKeycloakAvailable,
-  authenticateWithKeycloak,
-  KeycloakTokens,
-} from '../services/keycloakAuth';
+  isOidcAvailable,
+  authenticate,
+} from '../../../../packages/mobile-core/auth/oidcAuth';
 
 interface LoginScreenProps {
   visible: boolean;
   onClose: () => void;
   onLoginSuccess: (token: string, apiUrl: string) => void;
   initialApiUrl?: string;
-  hostname?: string;  // UNode hostname for fetching Keycloak config
-  autoStartKeycloak?: boolean;  // Auto-trigger OAuth when Keycloak is detected (e.g. QR scan)
+  hostname?: string;  // UNode hostname for fetching OIDC config
+  autoStartKeycloak?: boolean;  // Auto-trigger OAuth when provider is detected (e.g. QR scan)
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({
@@ -48,36 +48,30 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
 
-  // Keycloak availability detection
-  const [checkingKeycloak, setCheckingKeycloak] = useState(false);
-  const [keycloakEnabled, setKeycloakEnabled] = useState<boolean | null>(null);
+  // OIDC availability detection
+  const [checkingAuth, setCheckingAuth] = useState(false);
+  const [authAvailable, setAuthAvailable] = useState<boolean | null>(null);
 
   // Guard: only auto-start once per modal open
   const autoStartedRef = useRef(false);
 
-  // Debug logging
-  console.log('[LoginScreen] Props:', { visible, initialApiUrl, hostname });
-
   // Load the default server URL when modal opens
   useEffect(() => {
     if (visible) {
-      console.log('[LoginScreen] Modal opened, initialApiUrl:', initialApiUrl, 'hostname:', hostname);
       if (initialApiUrl) {
         setApiUrl(initialApiUrl);
       } else {
         getDefaultServerUrl().then((defaultUrl) => {
-          console.log('[LoginScreen] Loaded default URL:', defaultUrl);
           setApiUrl(defaultUrl);
         });
       }
     }
   }, [visible, initialApiUrl, hostname]);
 
-  // Check if Keycloak is available when API URL changes
+  // Check if OIDC is available when API URL changes
   useEffect(() => {
-    console.log('[LoginScreen] apiUrl changed:', apiUrl, 'hostname:', hostname);
     if (apiUrl.trim()) {
-      checkKeycloakAvailability();
+      checkAuthAvailability();
     }
   }, [apiUrl, hostname]);
 
@@ -88,50 +82,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   }, [visible]);
 
-  // Auto-start Keycloak OAuth when triggered by QR scan
+  // Auto-start OAuth when triggered by QR scan
   useEffect(() => {
     if (
       autoStartKeycloak &&
-      keycloakEnabled === true &&
-      !checkingKeycloak &&
+      authAvailable === true &&
+      !checkingAuth &&
       !loading &&
       !autoStartedRef.current
     ) {
       autoStartedRef.current = true;
-      handleKeycloakLogin();
+      handleOidcLogin();
     }
-  }, [autoStartKeycloak, keycloakEnabled, checkingKeycloak, loading]);
+  }, [autoStartKeycloak, authAvailable, checkingAuth, loading]);
 
-  const checkKeycloakAvailability = async () => {
+  const checkAuthAvailability = async () => {
     const url = extractBaseUrl(apiUrl);
     if (!url) return;
 
-    setCheckingKeycloak(true);
+    setCheckingAuth(true);
     try {
-      const available = await isKeycloakAvailable(url, hostname);
-      setKeycloakEnabled(available);
-      console.log('[Login] Keycloak available:', available, hostname ? `(unode: ${hostname})` : '');
-    } catch (error) {
-      console.error('[Login] Failed to check Keycloak:', error);
-      setKeycloakEnabled(false);
+      const available = await isOidcAvailable(url, hostname);
+      setAuthAvailable(available);
+      console.log('[Login] OIDC available:', available, hostname ? `(unode: ${hostname})` : '');
+    } catch (err) {
+      console.error('[Login] Failed to check OIDC:', err);
+      setAuthAvailable(false);
     } finally {
-      setCheckingKeycloak(false);
+      setCheckingAuth(false);
     }
   };
 
-  /**
-   * Extract base URL from a URL that might contain an API path.
-   * Examples:
-   * - "https://example.com/api/unodes/Orion/info" -> "https://example.com"
-   * - "https://example.com" -> "https://example.com"
-   */
   const extractBaseUrl = (url: string): string => {
     const trimmed = url.trim().replace(/\/$/, '');
-    // Remove any /api/... path to get the base URL
     return trimmed.replace(/\/api\/.*$/, '');
   };
 
-  const handleKeycloakLogin = async () => {
+  const handleOidcLogin = async () => {
     const baseUrl = extractBaseUrl(apiUrl);
     if (!baseUrl) {
       setError('Please enter a server URL');
@@ -142,41 +129,29 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setError(null);
 
     try {
-      console.log('[Login] Starting Keycloak authentication...', hostname ? `(unode: ${hostname})` : '');
+      console.log('[Login] Starting OIDC authentication...', hostname ? `(unode: ${hostname})` : '');
 
-      const tokens = await authenticateWithKeycloak(baseUrl, hostname);
+      const tokens = await authenticate(baseUrl, hostname);
 
       if (!tokens || !tokens.access_token) {
         throw new Error('Authentication cancelled or failed');
       }
 
-      console.log('[Login] Keycloak authentication successful');
-      console.log('[Login] Received tokens:', {
-        hasAccessToken: !!tokens.access_token,
-        hasIdToken: !!tokens.id_token,
-        hasRefreshToken: !!tokens.refresh_token,
-      });
+      console.log('[Login] Authentication successful');
 
       // Save tokens and API URL
       await saveAuthToken(tokens.access_token);
       if (tokens.refresh_token) {
         await saveRefreshToken(tokens.refresh_token);
-        console.log('[Login] Refresh token saved for automatic token refresh');
-      } else {
-        console.warn('[Login] No refresh token received - token refresh will not work');
       }
       if (tokens.id_token) {
         await saveIdToken(tokens.id_token);
-        console.log('[Login] ID token saved for logout');
-      } else {
-        console.warn('[Login] No ID token received - logout may require additional configuration');
       }
       await saveApiUrl(baseUrl);
 
       // Optionally save as default server URL
       if (saveAsDefault) {
         await setDefaultServerUrl(baseUrl);
-        console.log('[Login] Saved as default server URL');
       }
 
       // Clear form
@@ -185,14 +160,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       // Notify parent
       onLoginSuccess(tokens.access_token, baseUrl);
     } catch (err) {
-      console.error('[Login] Keycloak error:', err);
+      console.error('[Login] OIDC error:', err);
       setError(err instanceof Error ? err.message : 'Authentication failed');
     } finally {
       setLoading(false);
     }
   };
-
-  // Legacy email/password login removed - Keycloak only
 
   return (
     <Modal
@@ -226,7 +199,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </Text>
             <Text style={styles.formSubtitle}>
               {hostname
-                ? extractBaseUrl(initialApiUrl || apiUrl) || 'Checking server…'
+                ? extractBaseUrl(initialApiUrl || apiUrl) || 'Checking server\u2026'
                 : 'Enter your server URL to connect to your leader node'}
             </Text>
 
@@ -259,35 +232,35 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               </View>
             )}
 
-            {/* Loading indicator while checking Keycloak */}
-            {checkingKeycloak && (
+            {/* Loading indicator while checking auth */}
+            {checkingAuth && (
               <View style={styles.checkingContainer}>
                 <ActivityIndicator size="small" color={theme.primaryButton} />
                 <Text style={styles.checkingText}>Checking authentication methods...</Text>
               </View>
             )}
 
-            {/* Keycloak Login Button */}
-            {keycloakEnabled && !checkingKeycloak && (
+            {/* Login Button */}
+            {authAvailable && !checkingAuth && (
               <TouchableOpacity
                 style={[styles.loginButton, loading && styles.loginButtonDisabled]}
-                onPress={handleKeycloakLogin}
+                onPress={handleOidcLogin}
                 disabled={loading}
-                testID="login-keycloak"
+                testID="login-oidc"
               >
                 {loading ? (
                   <ActivityIndicator color={theme.primaryButtonText} />
                 ) : (
-                  <Text style={styles.loginButtonText}>Sign In with Keycloak</Text>
+                  <Text style={styles.loginButtonText}>Sign In</Text>
                 )}
               </TouchableOpacity>
             )}
 
-            {/* Show message if Keycloak is not available */}
-            {keycloakEnabled === false && !checkingKeycloak && (
+            {/* Show message if auth is not available */}
+            {authAvailable === false && !checkingAuth && (
               <View style={styles.errorContainer}>
                 <Text style={styles.errorText}>
-                  Keycloak authentication is not available on this server. Please check your server configuration.
+                  Authentication is not available on this server. Please check your server configuration.
                 </Text>
               </View>
             )}
@@ -439,16 +412,6 @@ const styles = StyleSheet.create({
     color: theme.primaryButtonText,
     fontSize: fontSize.base,
     fontWeight: '600',
-  },
-  alternativeButton: {
-    padding: spacing.md,
-    alignItems: 'center',
-    marginBottom: spacing.xl,
-  },
-  alternativeButtonText: {
-    color: theme.link,
-    fontSize: fontSize.sm,
-    textDecorationLine: 'underline',
   },
   helpText: {
     fontSize: fontSize.sm,

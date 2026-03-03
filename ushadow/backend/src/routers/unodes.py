@@ -540,15 +540,23 @@ async def get_leader_info():
     )
 
 
+class OidcConfigPayload(BaseModel):
+    """Provider-agnostic OIDC configuration for clients."""
+    issuer_url: str
+    client_id: str
+    provider_name: str = "OIDC"
+
+
 class UNodeInfoResponse(BaseModel):
-    """Public unode information including Keycloak configuration."""
+    """Public unode information including authentication configuration."""
     hostname: str
     envname: Optional[str]
     role: UNodeRole
     status: UNodeStatus
     tailscale_ip: str
     api_url: str
-    keycloak_config: Optional[dict] = None
+    oidc_config: Optional[OidcConfigPayload] = None
+    keycloak_config: Optional[dict] = None  # Legacy — retained for old clients
 
 
 @router.get("/{hostname}/info", response_model=UNodeInfoResponse)
@@ -558,9 +566,9 @@ async def get_unode_info(hostname: str):
 
     This endpoint does NOT require authentication and is used by:
     - Mobile apps after scanning QR code
-    - External tools that need to discover Keycloak config
+    - External tools that need to discover auth config
 
-    Returns unode details including Keycloak configuration.
+    Returns unode details including OIDC configuration.
     """
     unode_manager = await get_unode_manager()
     unode = await unode_manager.get_unode(hostname)
@@ -569,27 +577,38 @@ async def get_unode_info(hostname: str):
         raise HTTPException(status_code=404, detail="UNode not found")
 
     # Build API URL for this unode
-    # Use Tailscale IP or public IP depending on context
     port = os.getenv("BACKEND_PORT", "8000")
     api_url = f"http://{unode.tailscale_ip}:{port}"
 
-    # Get Keycloak configuration
-    from src.config.keycloak_settings import get_keycloak_config
+    # Provider-agnostic OIDC config
+    from src.config.oidc_settings import get_oidc_config
+    oidc = get_oidc_config()
 
-    kc_config = get_keycloak_config()
+    oidc_config = OidcConfigPayload(
+        issuer_url=oidc["issuer_url"],
+        client_id=oidc["client_id"],
+        provider_name=oidc["provider_name"],
+    ) if oidc["issuer_url"] else None
 
-    # Mobile URL: explicit override > auto-derived from Tailscale IP + KC port
-    kc_port = os.getenv("KC_PORT", "8081")
-    mobile_url = kc_config.get("mobile_url") or f"http://{unode.tailscale_ip}:{kc_port}"
+    # Legacy Keycloak config for old clients
+    keycloak_config = None
+    try:
+        from src.config.keycloak_settings import get_keycloak_config
 
-    keycloak_config = {
-        "enabled": True,  # If this endpoint is reached, Keycloak is configured
-        "public_url": kc_config.get("public_url"),
-        "mobile_url": mobile_url,
-        "realm": kc_config.get("realm"),
-        "frontend_client_id": kc_config.get("frontend_client_id"),
-        "mobile_client_id": "ushadow-mobile",  # Dedicated mobile client
-    }
+        kc_config = get_keycloak_config()
+        kc_port = os.getenv("KC_PORT", "8081")
+        mobile_url = kc_config.get("mobile_url") or f"http://{unode.tailscale_ip}:{kc_port}"
+
+        keycloak_config = {
+            "enabled": True,
+            "public_url": kc_config.get("public_url"),
+            "mobile_url": mobile_url,
+            "realm": kc_config.get("realm"),
+            "frontend_client_id": kc_config.get("frontend_client_id"),
+            "mobile_client_id": "ushadow-mobile",
+        }
+    except Exception:
+        pass  # Keycloak not configured — that's fine if oidc_config is set
 
     return UNodeInfoResponse(
         hostname=unode.hostname,
@@ -598,6 +617,7 @@ async def get_unode_info(hostname: str):
         status=unode.status,
         tailscale_ip=unode.tailscale_ip,
         api_url=api_url,
+        oidc_config=oidc_config,
         keycloak_config=keycloak_config,
     )
 

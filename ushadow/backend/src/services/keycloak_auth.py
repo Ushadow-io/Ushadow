@@ -1,7 +1,10 @@
 """
-Keycloak Token Validation
+OIDC Token Validation
 
-Validates Keycloak JWT access tokens with signature verification but issuer-agnostic.
+Validates JWT access tokens with signature verification but issuer-agnostic.
+Works with any OIDC provider (Keycloak, Authentik, Auth0, etc.) by resolving
+the JWKS endpoint from the OIDC settings layer.
+
 This allows the app to work from any domain (localhost, Tailscale, public URLs).
 """
 
@@ -14,121 +17,150 @@ from jwt.exceptions import PyJWKClientError
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from .keycloak_client import get_keycloak_client
-
 logger = logging.getLogger(__name__)
 
 # Security scheme for extracting Bearer tokens
 security = HTTPBearer(auto_error=False)
 
-# Cache for JWKS client (fetches Keycloak's public keys)
+# Cache for JWKS client (fetches provider's public keys)
 _jwks_client: Optional[PyJWKClient] = None
 
 
 def get_jwks_client() -> PyJWKClient:
-    """Get cached JWKS client for fetching Keycloak's public keys."""
+    """Get cached JWKS client for fetching the OIDC provider's public keys.
+
+    Resolves the JWKS URL from the provider's OIDC discovery document via
+    the oidc_settings layer (works for Keycloak, Authentik, or any OIDC IdP).
+    Falls back to Keycloak-style URL pattern if discovery is unavailable.
+    """
     global _jwks_client
     if _jwks_client is None:
-        import os
-        from src.config import get_settings_store
+        import httpx
+        from src.config.oidc_settings import get_oidc_config
 
-        settings = get_settings_store()
-        app_realm = settings.get_sync("keycloak.realm", "ushadow")
+        config = get_oidc_config()
+        internal_url = config["internal_url"]
 
-        # IMPORTANT: Backend must use internal URL for JWKS, never external/proxy URLs
-        # Priority: KC_URL env var (via OmegaConf keycloak.url) > Docker default
-        internal_url = (
-            settings.get_sync("keycloak.url") or
-            "http://keycloak:8080"
-        )
+        jwks_url = None
 
-        # Construct JWKS URL from internal Keycloak URL
-        # IMPORTANT: Use application realm (ushadow), not admin realm (master)
-        jwks_url = f"{internal_url}/realms/{app_realm}/protocol/openid-connect/certs"
+        # Try OIDC discovery to find jwks_uri
+        if internal_url:
+            try:
+                well_known = f"{internal_url}/.well-known/openid-configuration"
+                resp = httpx.get(well_known, timeout=5.0)
+                if resp.status_code == 200:
+                    doc = resp.json()
+                    discovered_jwks = doc.get("jwks_uri")
+                    if discovered_jwks:
+                        # Rewrite host to internal URL for backend reachability
+                        from urllib.parse import urlparse, urlunparse
+                        parsed_internal = urlparse(internal_url)
+                        parsed_jwks = urlparse(discovered_jwks)
+                        rewritten = parsed_jwks._replace(
+                            scheme=parsed_internal.scheme,
+                            netloc=parsed_internal.netloc,
+                        )
+                        jwks_url = urlunparse(rewritten)
+            except Exception as e:
+                logger.debug(f"[OIDC-AUTH] Discovery failed for JWKS, using fallback: {e}")
+
+        # Fallback: Keycloak-style certs endpoint
+        if not jwks_url and internal_url:
+            if "/realms/" in internal_url:
+                jwks_url = f"{internal_url}/protocol/openid-connect/certs"
+            else:
+                # Generic fallback
+                jwks_url = f"{internal_url}/.well-known/jwks.json"
+
+        if not jwks_url:
+            raise RuntimeError("Cannot resolve JWKS URL: no OIDC config available")
+
         _jwks_client = PyJWKClient(jwks_url)
-        logger.info(f"[KC-AUTH] Initialized JWKS client for realm '{app_realm}': {jwks_url}")
+        logger.info(f"[OIDC-AUTH] Initialized JWKS client: {jwks_url}")
     return _jwks_client
 
 
 def clear_jwks_cache() -> None:
-    """Clear the JWKS client cache. Call this when realm keys change."""
+    """Clear the JWKS client cache. Call this when provider keys change."""
     global _jwks_client
     _jwks_client = None
-    logger.info("[KC-AUTH] Cleared JWKS cache")
+    logger.info("[OIDC-AUTH] Cleared JWKS cache")
 
 
 def validate_keycloak_token(token: str) -> Optional[dict]:
     """
-    Validate a Keycloak JWT access token with signature verification but issuer-agnostic.
+    Validate a JWT access token with signature verification but issuer-agnostic.
+
+    Works with any OIDC provider (Keycloak, Authentik, Auth0, etc.).
 
     This approach:
-    - ✅ Verifies JWT signature using Keycloak's public keys (JWKS)
-    - ✅ Checks token expiration
-    - ✅ Works from ANY domain (localhost, Tailscale, public URLs)
-    - ✅ No backend client or introspection permissions needed
-    - ✅ Fast (no network call after JWKS cached)
+    - Verifies JWT signature using provider's public keys (JWKS)
+    - Checks token expiration
+    - Works from ANY domain (localhost, Tailscale, public URLs)
+    - No backend client or introspection permissions needed
+    - Fast (no network call after JWKS cached)
 
     The issuer check is skipped to allow multi-domain deployments where
     users access the app from different URLs (localhost:3000, tailscale, etc).
 
     Args:
-        token: JWT access token from Keycloak
+        token: JWT access token from the OIDC provider
 
     Returns:
         Decoded token payload if valid, None if invalid/expired
     """
     try:
-        # Get JWKS client (fetches Keycloak's public keys for signature verification)
+        # Get JWKS client (fetches provider's public keys for signature verification)
         jwks_client = get_jwks_client()
 
         # Get the signing key from JWKS
         signing_key = jwks_client.get_signing_key_from_jwt(token)
 
         # Decode and validate JWT
-        # - Verify signature using Keycloak's public key (RS256 via JWKS)
+        # - Verify signature using provider's public key (RS256 via JWKS)
         # - Check expiration
-        # - Skip issuer check: tokens may be issued by localhost:8081 or Tailscale URLs
-        # - Verify audience: token must be intended for "ushadow-backend"
-        #   (configured via audience mapper on ushadow-frontend / ushadow-mobile clients)
-        from src.config import get_settings_store
-        settings = get_settings_store()
-        backend_client_id = settings.get_sync("keycloak.backend_client_id", "ushadow-backend")
+        # - Skip issuer check: tokens may be issued from different URLs
+        # - Verify audience: token must be intended for the backend
+        from src.config.oidc_settings import get_oidc_config
+        backend_audience = get_oidc_config()["backend_audience"]
 
         payload = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             options={"verify_iss": False},  # Allow any issuer (multi-domain support)
-            audience=backend_client_id,
+            audience=backend_audience,
         )
 
-        logger.debug(f"[KC-AUTH] ✓ Token validated for user: {payload.get('preferred_username')}")
+        logger.debug(f"[OIDC-AUTH] Token validated for user: {payload.get('preferred_username') or payload.get('email')}")
         return payload
 
     except jwt.ExpiredSignatureError:
-        logger.warning("[KC-AUTH] Token expired")
+        logger.warning("[OIDC-AUTH] Token expired")
         return None
 
     except PyJWKClientError as e:
-        logger.warning(f"[KC-AUTH] Signing key not found (kid mismatch or realm reset): {e}")
+        logger.warning(f"[OIDC-AUTH] Signing key not found (kid mismatch or key rotation): {e}")
         return None
 
     except jwt.InvalidTokenError as e:
-        logger.warning(f"[KC-AUTH] Invalid token: {e}")
+        logger.warning(f"[OIDC-AUTH] Invalid token: {e}")
         return None
 
     except Exception as e:
         # Unexpected errors still get logged with full trace
-        logger.error(f"[KC-AUTH] Unexpected error validating token: {e}", exc_info=True)
+        logger.error(f"[OIDC-AUTH] Unexpected error validating token: {e}", exc_info=True)
         return None
 
 
 def get_keycloak_user_from_token(token: str) -> Optional[dict]:
     """
-    Extract user info from a Keycloak token.
+    Extract user info from an OIDC access token.
+
+    Works with any OIDC provider (Keycloak, Authentik, Auth0, etc.).
 
     Args:
-        token: JWT access token from Keycloak
+        token: JWT access token from the OIDC provider
 
     Returns:
         User info dict with keys: email, name, sub (user ID), etc.
@@ -144,9 +176,6 @@ def get_keycloak_user_from_token(token: str) -> Optional[dict]:
         family_name = payload.get("family_name", "")
         if given_name or family_name:
             name = f"{given_name} {family_name}".strip()
-            logger.debug(f"[KC-AUTH] Built name from given_name + family_name: {name}")
-    else:
-        logger.debug(f"[KC-AUTH] Using name from token: {name}")
 
     return {
         "sub": payload.get("sub"),
@@ -154,8 +183,8 @@ def get_keycloak_user_from_token(token: str) -> Optional[dict]:
         "name": name,
         "preferred_username": payload.get("preferred_username"),
         "email_verified": payload.get("email_verified", False),
-        # Mark as Keycloak user for backend logic
-        "auth_type": "keycloak",
+        # Mark as OIDC-authenticated user for backend logic
+        "auth_type": "oidc",
     }
 
 

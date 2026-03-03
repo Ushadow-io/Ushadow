@@ -13,7 +13,7 @@ import { StatusBar } from 'expo-status-bar';
 import { theme } from './theme';
 import { BluetoothProvider, OmiConnectionProvider } from './contexts';
 import { FeatureFlagProvider } from './contexts/FeatureFlagContext';
-import { configureAuth, refreshKeycloakToken } from '../../../packages/mobile-core/auth';
+import { configureAuth, refreshToken } from '../../../packages/mobile-core/auth';
 import AppConfig from './config';
 
 // Initialise shared auth module with ushadow-specific settings.
@@ -22,7 +22,7 @@ configureAuth({
   defaultServerUrl: AppConfig.DEFAULT_SERVER_URL,
   oauthScheme: 'ushadow',
   storagePrefix: '@ushadow',
-  refreshTokenFn: refreshKeycloakToken,
+  refreshTokenFn: refreshToken,
 });
 
 export default function RootLayout() {
