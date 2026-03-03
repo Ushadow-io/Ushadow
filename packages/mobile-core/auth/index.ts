@@ -54,3 +54,7 @@ export type { KeycloakConfig, KeycloakTokens } from './keycloakAuth';
 
 // Token monitoring hook
 export { useTokenMonitor } from './useTokenMonitor';
+
+// Profile screen
+export { ProfileScreen } from './ProfileScreen';
+export type { ProfileTheme, ProfileScreenProps } from './ProfileScreen';

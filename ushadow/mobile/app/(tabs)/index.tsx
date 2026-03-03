@@ -25,25 +25,21 @@ import {
   BackgroundTaskDebugPanel,
 } from '../components';
 import { useConnectionLog, useSessionTracking } from '../hooks';
-import { colors, theme, gradients, spacing, borderRadius, fontSize } from '../theme';
+import { theme, gradients, spacing, borderRadius, fontSize } from '../theme';
 import {
   getAuthToken,
-  clearAuthToken,
   getAuthInfo,
   isAuthenticated,
   saveAuthToken,
   saveApiUrl,
   getApiUrl,
-  getIdToken,
 } from '../_utils/authStorage';
 import { getActiveUnode } from '../_utils/unodeStorage';
 import { ConnectionState, createInitialConnectionState } from '../types/connectionLog';
-import { logoutFromKeycloak } from '../services/keycloakAuth';
 
 export default function HomeScreen() {
   // Auth state
   const [authToken, setAuthToken] = useState<string | null>(null);
-  const [authInfo, setAuthInfo] = useState<{ email: string; userId: string } | null>(null);
   const [showLoginScreen, setShowLoginScreen] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [currentHostname, setCurrentHostname] = useState<string | undefined>(undefined);
@@ -71,7 +67,6 @@ export default function HomeScreen() {
           const token = await getAuthToken();
           const info = await getAuthInfo();
           setAuthToken(token);
-          setAuthInfo(info);
           logEvent('server', 'connected', 'Authenticated session restored', info?.email);
         }
 
@@ -116,18 +111,15 @@ export default function HomeScreen() {
 
         if (authenticated) {
           const token = await getAuthToken();
-          const info = await getAuthInfo();
           // Only update if token changed
           if (token !== authToken) {
             setAuthToken(token);
-            setAuthInfo(info);
           }
         } else {
           // Not authenticated
           if (authToken) {
-            // Token was cleared or expired
+            // Token was cleared or expired (logout happened in Profile tab)
             setAuthToken(null);
-            setAuthInfo(null);
           }
 
           // Auto-show login if there's a recently saved unode (within last 5 seconds)
@@ -158,7 +150,6 @@ export default function HomeScreen() {
       await saveApiUrl(apiUrl);
       setAuthToken(token);
       const info = await getAuthInfo();
-      setAuthInfo(info);
       setShowLoginScreen(false);
       setAutoStartKeycloak(false);
       setConnectionState((prev) => ({ ...prev, server: 'connected' }));
@@ -167,25 +158,6 @@ export default function HomeScreen() {
     [logEvent]
   );
 
-  const handleLogout = useCallback(async () => {
-    // Logout from Keycloak session first (if available)
-    if (currentApiUrl) {
-      try {
-        const idToken = await getIdToken();
-        console.log('[Home] Logging out with ID token:', idToken ? 'present' : 'missing');
-        await logoutFromKeycloak(currentApiUrl, idToken || undefined, currentHostname);
-      } catch (error) {
-        console.warn('[Home] Keycloak logout failed, continuing with local logout:', error);
-      }
-    }
-
-    // Clear local auth state
-    await clearAuthToken();
-    setAuthToken(null);
-    setAuthInfo(null);
-    setConnectionState((prev) => ({ ...prev, server: 'disconnected' }));
-    logEvent('server', 'disconnected', 'Logged out');
-  }, [logEvent, currentApiUrl, currentHostname]);
 
   return (
     <SafeAreaView style={styles.container} testID="home-screen">
@@ -221,33 +193,17 @@ export default function HomeScreen() {
         <Text style={styles.subtitle}>Mobile Control</Text>
       </View>
 
-      {/* Auth Status */}
-      {!authLoading && (
+      {/* Auth Status — login prompt only (profile/logout moved to Profile tab) */}
+      {!authLoading && !authToken && (
         <View style={styles.authStatus} testID="auth-status">
-          {authToken ? (
-            <View style={styles.authLoggedIn}>
-              <View style={styles.authInfo}>
-                <Text style={styles.authLabel}>Signed in as</Text>
-                <Text style={styles.authEmail}>{authInfo?.email || 'Unknown'}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.logoutButton}
-                onPress={handleLogout}
-                testID="logout-button"
-              >
-                <Text style={styles.logoutButtonText}>Logout</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <TouchableOpacity
-              style={styles.loginPrompt}
-              onPress={() => setShowLoginScreen(true)}
-              testID="login-prompt"
-            >
-              <Ionicons name="log-in-outline" size={18} color={theme.link} />
-              <Text style={styles.loginPromptText}>Sign in to your account</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.loginPrompt}
+            onPress={() => setShowLoginScreen(true)}
+            testID="login-prompt"
+          >
+            <Ionicons name="log-in-outline" size={18} color={theme.link} />
+            <Text style={styles.loginPromptText}>Sign in to your account</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -351,36 +307,6 @@ const styles = StyleSheet.create({
   authStatus: {
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
-  },
-  authLoggedIn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: theme.backgroundCard,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-  },
-  authInfo: {
-    flex: 1,
-  },
-  authLabel: {
-    fontSize: fontSize.xs,
-    color: theme.textMuted,
-  },
-  authEmail: {
-    fontSize: fontSize.sm,
-    color: theme.textPrimary,
-    fontWeight: '500',
-  },
-  logoutButton: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.sm,
-    backgroundColor: theme.backgroundInput,
-  },
-  logoutButtonText: {
-    color: theme.textSecondary,
-    fontSize: fontSize.sm,
   },
   loginPrompt: {
     flexDirection: 'row',

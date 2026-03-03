@@ -124,6 +124,21 @@ export default function TabLayout() {
           tabBarAccessibilityLabel: 'Feed Tab',
         }}
       />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'person-circle' : 'person-circle-outline'}
+              size={size}
+              color={color}
+              testID="tab-icon-profile"
+            />
+          ),
+          tabBarAccessibilityLabel: 'Profile Tab',
+        }}
+      />
       {/* Sessions page is accessible via Connection Logs modal (home screen header) */}
       <Tabs.Screen
         name="sessions"
