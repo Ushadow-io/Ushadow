@@ -1,0 +1,204 @@
+# ════════════════════════════════════════════════════════════════════════
+# Shared Mobile Build Targets
+# ════════════════════════════════════════════════════════════════════════
+#
+# Include this from your app's Makefile:
+#   include ../../packages/mobile-build/Makefile.include
+#
+# Optional overrides (set before include):
+#   APP_NAME  - Display name for logs (default: directory name)
+
+APP_NAME ?= $(notdir $(CURDIR))
+
+.PHONY: help build-ios build-ios-preview submit-testflight build-and-submit \
+        build-list install clean build-ios-local build-local-and-submit \
+        fastlane-setup fastlane-beta fastlane-build fastlane-submit env-setup
+
+# Load environment variables from .env.local if it exists
+ifneq (,$(wildcard .env.local))
+    include .env.local
+    export
+endif
+
+# ════════════════════════════════════════════════════════════════════════
+# Help
+# ════════════════════════════════════════════════════════════════════════
+
+help:
+	@echo "$(APP_NAME) — Build & Deployment Commands"
+	@echo ""
+	@echo "🚀 Fastlane (FASTEST — recommended!):"
+	@echo "  make env-setup           - Configure Apple ID and credentials (.env.local)"
+	@echo "  make fastlane-beta       - Build and upload to TestFlight (5-10 min, no queues!)"
+	@echo "  make fastlane-build      - Build iOS app only"
+	@echo "  make fastlane-submit     - Submit existing build to TestFlight"
+	@echo "  make fastlane-setup      - Install Fastlane and dependencies"
+	@echo ""
+	@echo "Cloud Builds (slower, uses EAS builders):"
+	@echo "  make build-ios           - Build production iOS app for TestFlight/App Store"
+	@echo "  make build-ios-preview   - Build preview iOS app for internal testing (requires UDID)"
+	@echo "  make build-and-submit    - Build and auto-submit to TestFlight in one step"
+	@echo ""
+	@echo "Local Builds (faster compile, slower upload):"
+	@echo "  make build-ios-local     - Build iOS locally (no EAS queue wait)"
+	@echo "  make build-local-and-submit - Build locally and submit to TestFlight"
+	@echo ""
+	@echo "Submit & Manage:"
+	@echo "  make submit-testflight   - Submit latest build to TestFlight"
+	@echo "  make build-list          - List all EAS builds"
+	@echo ""
+	@echo "Development:"
+	@echo "  make install             - Install dependencies"
+	@echo "  make clean               - Clean build artifacts"
+	@echo ""
+	@echo "⚡ Quick start:"
+	@echo "  make env-setup           # Configure Apple ID (first time only)"
+	@echo "  make fastlane-setup      # Install Fastlane (first time only)"
+	@echo "  make fastlane-beta       # Deploy to TestFlight (fastest!)"
+
+# ════════════════════════════════════════════════════════════════════════
+# EAS Cloud Builds
+# ════════════════════════════════════════════════════════════════════════
+
+build-ios:
+	@echo "Building $(APP_NAME) iOS production build..."
+	eas build --platform ios --profile production
+
+build-ios-preview:
+	@echo "Building $(APP_NAME) iOS preview build for device testing..."
+	eas build --platform ios --profile preview
+
+submit-testflight:
+	@echo "Submitting latest $(APP_NAME) build to TestFlight..."
+	eas submit --platform ios --latest
+
+build-and-submit:
+	@echo "Building and submitting $(APP_NAME) to TestFlight..."
+	eas build --platform ios --profile production --auto-submit
+
+# ════════════════════════════════════════════════════════════════════════
+# EAS Local Builds
+# ════════════════════════════════════════════════════════════════════════
+
+build-ios-local:
+	@echo "Building $(APP_NAME) iOS production build locally..."
+	@echo "⚠️  This requires Xcode and valid code signing credentials"
+	eas build --platform ios --profile production --local
+
+build-local-and-submit:
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Building $(APP_NAME) iOS locally and submitting to TestFlight"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "⚠️  Requirements:"
+	@echo "   - Xcode and valid code signing credentials"
+	@echo "   - Good internet upload speed (recommended: >10 Mbps)"
+	@echo ""
+	@echo "▶️  Step 1/2: Building locally..."
+	eas build --platform ios --profile production --local
+	@echo ""
+	@echo "✅ Build complete!"
+	@echo ""
+	@echo "▶️  Step 2/2: Uploading to TestFlight..."
+	eas submit --platform ios --latest
+	@echo ""
+	@echo "✅ Upload complete!"
+
+build-list:
+	@echo "Listing all EAS builds..."
+	eas build:list
+
+# ════════════════════════════════════════════════════════════════════════
+# Fastlane (Fastest Deployment!)
+# ════════════════════════════════════════════════════════════════════════
+
+env-setup:
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Configure Fastlane Environment Variables"
+	@echo "════════════════════════════════════════════════════════════"
+	@if [ -f .env.local ]; then \
+		echo "⚠️  .env.local already exists!"; \
+		echo ""; \
+		echo "Current configuration:"; \
+		grep -E "^FASTLANE_APPLE_ID=" .env.local || echo "  FASTLANE_APPLE_ID: (not set)"; \
+		echo ""; \
+		read -p "Do you want to reconfigure? (y/N): " confirm; \
+		if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
+			echo "Keeping existing configuration."; \
+			exit 0; \
+		fi; \
+	fi
+	@echo ""
+	@echo "Please enter your Apple ID (email for App Store Connect):"
+	@read -p "Apple ID: " apple_id; \
+	if [ -z "$$apple_id" ]; then \
+		echo "❌ Apple ID cannot be empty"; \
+		exit 1; \
+	fi; \
+	echo "# Fastlane Environment Variables" > .env.local; \
+	echo "# Generated by: make env-setup" >> .env.local; \
+	echo "" >> .env.local; \
+	echo "FASTLANE_APPLE_ID=$$apple_id" >> .env.local; \
+	echo "FASTLANE_SKIP_WAITING_FOR_BUILD_PROCESSING=true" >> .env.local; \
+	echo "FASTLANE_OPT_OUT_USAGE=1" >> .env.local; \
+	echo ""; \
+	echo "✅ Configuration saved to .env.local"; \
+	echo "Apple ID: $$apple_id"; \
+	echo ""; \
+	echo "Next steps:"; \
+	echo "  1. Run: make fastlane-setup (if you haven't already)"; \
+	echo "  2. Run: make fastlane-beta"
+
+fastlane-setup:
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Setting up Fastlane for $(APP_NAME)"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Installing Ruby gems (Fastlane)..."
+	@which bundle > /dev/null || gem install bundler
+	bundle install
+	@echo ""
+	@echo "✅ Fastlane installed!"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Configure your Apple ID: make env-setup"
+	@echo "  2. Deploy to TestFlight:    make fastlane-beta"
+
+fastlane-beta:
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "🚀 Fastlane: Build $(APP_NAME) and Upload to TestFlight"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "  ✓ No EAS queues"
+	@echo "  ✓ Direct to Apple"
+	@echo "  ✓ Total time: ~5-10 minutes"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo ""
+	bundle exec fastlane beta
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "✅ Deployment complete!"
+	@echo "📱 Build will appear in TestFlight in ~5-10 minutes"
+	@echo "════════════════════════════════════════════════════════════"
+
+fastlane-build:
+	@echo "Building $(APP_NAME) iOS app with Fastlane..."
+	bundle exec fastlane build
+	@echo "✅ Build complete! IPA saved to ./build/"
+
+fastlane-submit:
+	@echo "Submitting $(APP_NAME) to TestFlight with Fastlane..."
+	bundle exec fastlane submit
+	@echo "✅ Submitted to TestFlight!"
+
+# ════════════════════════════════════════════════════════════════════════
+# Development
+# ════════════════════════════════════════════════════════════════════════
+
+install:
+	@echo "Installing $(APP_NAME) dependencies..."
+	npm install
+
+clean:
+	@echo "Cleaning $(APP_NAME) build artifacts..."
+	rm -rf node_modules/.cache
+	rm -rf .expo
+	rm -rf build/
+	rm -rf ios/build/

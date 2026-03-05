@@ -1,0 +1,10 @@
+# Shared Gemfile for Expo mobile app builds
+# Apps should eval_gemfile this from their own Gemfile
+source "https://rubygems.org"
+
+# Fastlane for iOS deployment automation
+gem "fastlane", "~> 2.220"
+
+# CocoaPods for iOS dependency management
+# Must be in Gemfile so bundle exec (used by Fastlane) can find the `pod` executable
+gem "cocoapods", "~> 1.16"

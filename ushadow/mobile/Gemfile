@@ -1,13 +1,8 @@
-# Gemfile for Fastlane iOS automation
+# ushadow Mobile — Ruby dependencies
+# Shared gems are defined in packages/mobile-build/Gemfile
 source "https://rubygems.org"
+eval_gemfile File.join(__dir__, '..', '..', 'packages', 'mobile-build', 'Gemfile')
 
-# Fastlane for iOS deployment automation
-gem "fastlane", "~> 2.220"
-
-# CocoaPods for iOS dependency management
-# Must be in Gemfile so bundle exec (used by Fastlane) can find the `pod` executable
-gem "cocoapods", "~> 1.16"
-
-# Plugins
+# App-specific plugins
 plugins_path = File.join(File.dirname(__FILE__), 'fastlane', 'Pluginfile')
 eval_gemfile(plugins_path) if File.exist?(plugins_path)

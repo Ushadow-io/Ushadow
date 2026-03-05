@@ -1,0 +1,7 @@
+{
+  "scheme": "ushadow",
+  "app_identifier": "io.ushadow.mobile",
+  "extensions": {
+    "io.ushadow.mobile.widget": "RecordingWidget"
+  }
+}
