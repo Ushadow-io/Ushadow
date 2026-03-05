@@ -125,6 +125,21 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="routines"
+        options={{
+          title: 'Routines',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'timer' : 'timer-outline'}
+              size={size}
+              color={color}
+              testID="tab-icon-routines"
+            />
+          ),
+          tabBarAccessibilityLabel: 'Routines Tab',
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',

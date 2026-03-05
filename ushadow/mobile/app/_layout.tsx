@@ -13,7 +13,9 @@ import { StatusBar } from 'expo-status-bar';
 import { theme } from './theme';
 import { BluetoothProvider, OmiConnectionProvider } from './contexts';
 import { FeatureFlagProvider } from './contexts/FeatureFlagContext';
+import { ThemeProvider } from '../../../packages/mobile-core/core';
 import { configureAuth, refreshToken } from '../../../packages/mobile-core/auth';
+import { ushadowAppTheme } from './theme/appTheme';
 import AppConfig from './config';
 
 // Initialise shared auth module with ushadow-specific settings.
@@ -27,20 +29,22 @@ configureAuth({
 
 export default function RootLayout() {
   return (
-    <FeatureFlagProvider>
-      <BluetoothProvider>
-        <OmiConnectionProvider>
-          <StatusBar style="light" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: theme.background },
-            }}
-          >
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          </Stack>
-        </OmiConnectionProvider>
-      </BluetoothProvider>
-    </FeatureFlagProvider>
+    <ThemeProvider theme={ushadowAppTheme}>
+      <FeatureFlagProvider>
+        <BluetoothProvider>
+          <OmiConnectionProvider>
+            <StatusBar style="light" />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: theme.background },
+              }}
+            >
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            </Stack>
+          </OmiConnectionProvider>
+        </BluetoothProvider>
+      </FeatureFlagProvider>
+    </ThemeProvider>
   );
 }
