@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "nar8",
+    "slug": "nar8",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "nar8",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a12"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "io.nar8.app",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "nar8 uses Bluetooth to connect to your recording device.",
+        "NSBluetoothPeripheralUsageDescription": "nar8 uses Bluetooth to connect to your recording device.",
+        "NSMicrophoneUsageDescription": "nar8 uses the microphone to record your routine narration.",
+        "UIBackgroundModes": ["audio", "bluetooth-central"]
+      }
+    },
+    "android": {
+      "package": "io.nar8.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a12"
+      },
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "ACCESS_FINE_LOCATION",
+        "RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}
