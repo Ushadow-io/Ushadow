@@ -1,0 +1,6 @@
+# card-template — Fastlane configuration
+#
+# All lanes are provided by the shared SharedFastfile.
+# App-specific config lives in ../build.json and ../eas.json.
+
+import "../../../packages/mobile-build/fastlane/SharedFastfile"
