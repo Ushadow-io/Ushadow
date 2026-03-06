@@ -1,17 +1,33 @@
 /**
  * @ushadow/mobile-core/ble
  *
- * Bluetooth / Omi device discovery and connection.
- *
- * Planned exports:
- * - useDeviceScanning (from app/hooks/useDeviceScanning.ts)
- * - useDeviceConnection (from app/hooks/useDeviceConnection.ts)
- * - useAudioListener (from app/hooks/useAudioListener.ts)
- * - BluetoothContext / BluetoothProvider (from app/contexts/BluetoothContext.tsx)
- * - OmiConnectionContext (from app/contexts/OmiConnectionContext.tsx)
- * - DeviceScanner (from app/components/OmiDeviceScanner.tsx)
- * - DeviceCard (from app/components/OmiDeviceCard.tsx)
- * - DeviceSection (from app/components/OmiDeviceSection.tsx)
+ * Bluetooth / OMI device discovery, connection, and audio streaming.
  */
 
-export {};
+// Contexts
+export { BluetoothProvider, useBluetooth } from './contexts/BluetoothContext';
+export type { BluetoothContextType } from './contexts/BluetoothContext';
+export { OmiConnectionProvider, useOmiConnection } from './contexts/OmiConnectionContext';
+
+// Hooks
+export { useDeviceScanning } from './hooks/useDeviceScanning';
+export type { UseDeviceScanningReturn } from './hooks/useDeviceScanning';
+export { useDeviceConnection } from './hooks/useDeviceConnection';
+export type { UseDeviceConnectionReturn, UseDeviceConnectionOptions } from './hooks/useDeviceConnection';
+export { useAudioListener } from './hooks/useAudioListener';
+export type { UseAudioListenerReturn } from './hooks/useAudioListener';
+
+// Storage
+export {
+  createDeviceStorage,
+  getSavedDevices,
+  saveDevice,
+  updateDeviceName,
+  removeDevice,
+  getDeviceById,
+  setActiveDevice,
+  getActiveDeviceId,
+  getActiveDevice,
+  clearActiveDevice,
+} from './storage/deviceStorage';
+export type { SavedDevice } from './storage/deviceStorage';
