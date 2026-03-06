@@ -1,24 +1,34 @@
 /**
  * @ushadow/mobile-core/core
  *
- * Cross-cutting utilities — feature flags, lifecycle, logging, theme.
- *
- * Active exports:
+ * Cross-cutting utilities — theme, feature flags, lifecycle, logging.
  */
 
 // Theme
 export { ThemeProvider, useTheme } from './theme/ThemeProvider';
 export type { AppTheme, ColorScale } from './theme/types';
 
-/**
- * Planned exports (extraction pending):
- * - useAppLifecycle (from app/hooks/useAppLifecycle.ts)
- * - useConnectionLog (from app/hooks/useConnectionLog.ts)
- * - useConnectionHealth (from app/hooks/useConnectionHealth.ts)
- * - useFeatureFlags (from app/hooks/useFeatureFlags.ts)
- * - FeatureFlagContext (from app/contexts/FeatureFlagContext.tsx)
- * - featureFlagService (from app/services/featureFlagService.ts)
- * - persistentLogger (from app/services/persistentLogger.ts)
- * - unodeStorage (from app/_utils/unodeStorage.ts)
- * - omiDeviceStorage (from app/_utils/omiDeviceStorage.ts)
- */
+// Hooks
+export { useAppLifecycle } from './hooks/useAppLifecycle';
+export type { UseAppLifecycleOptions, UseAppLifecycleReturn } from './hooks/useAppLifecycle';
+export { useConnectionHealth } from './hooks/useConnectionHealth';
+export type { UseConnectionHealthOptions, UseConnectionHealthReturn } from './hooks/useConnectionHealth';
+export { useConnectionLog } from './hooks/useConnectionLog';
+export type { UseConnectionLogReturn } from './hooks/useConnectionLog';
+
+// Contexts
+export { FeatureFlagProvider, useFeatureFlagContext } from './contexts/FeatureFlagContext';
+
+// Services
+export { createFeatureFlagService } from './services/featureFlagService';
+export type { FeatureFlag, FeatureFlagsResponse, FeatureFlagServiceConfig } from './services/featureFlagService';
+export {
+  addPersistentLog,
+  getPersistentLogs,
+  clearPersistentLogs,
+  getPersistentLogsText,
+} from './services/persistentLogger';
+export type { PersistentLogEntry } from './services/persistentLogger';
+
+// Types
+export * from './types/connectionLog';
