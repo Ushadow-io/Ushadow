@@ -1,6 +1,7 @@
 # psyclo — Build & Deployment
-# All shared targets come from packages/mobile-build/Makefile.include
 
 APP_NAME ?= psyclo
 
-include ../../packages/mobile-build/Makefile.include
+# Mobile build targets (env-setup, fastlane-beta, etc.)
+# Run `make mobile-help` to see all mobile commands
+-include Makefile.mobile
