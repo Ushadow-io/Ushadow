@@ -62,7 +62,7 @@ export const api = axios.create({
 
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
-  // Check for Keycloak token first (in localStorage)
+  // Check for Casdoor/OIDC token first (in localStorage)
   const kcToken = localStorage.getItem('kc_access_token')
 
   // Check for native login token (in localStorage - persists)
@@ -71,7 +71,7 @@ api.interceptors.request.use((config) => {
   // Fallback to legacy JWT token (in localStorage)
   const legacyToken = localStorage.getItem(getStorageKey('token'))
 
-  // Priority: Keycloak > Native > Legacy (all in localStorage now)
+  // Priority: Casdoor > Native > Legacy (all in localStorage now)
   const token = kcToken || nativeToken || legacyToken
 
   // Only set header if we have a valid token (not null, undefined, or the string "null")

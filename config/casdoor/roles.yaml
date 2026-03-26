@@ -1,0 +1,4 @@
+# Casdoor Role Definitions
+# Apply with: make casdoor-provision
+
+roles: []

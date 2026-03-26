@@ -2,7 +2,23 @@
 
 Test environment runs isolated services on different ports to avoid conflicts with development.
 
-**DEFAULT MODE**: Dev mode - keeps containers running for fast iteration (~5s per test run).
+**DEFAULT MODE**: Dev mode — keeps containers running for fast iteration (~5s per test run).
+
+## Authentication
+
+Tests authenticate through **Casdoor** using a real password-grant JWT — no local auth bypass.
+
+On suite setup, `resources/setup/init.py` provisions the test Casdoor instance by running
+`casdoor-db-setup` and `casdoor-provision` from the ushadow-sdk against `.env.test`.
+All Robot Framework tests then obtain a real Casdoor JWT via:
+
+```
+POST http://localhost:8282/api/login/oauth/access_token
+  grant_type=password, client_id=ushadow, client_secret=test-casdoor-secret
+  username=admin, password=ushadow
+```
+
+This means every test exercises the full auth flow — JWKS validation, user sync — not a stub.
 
 ## Test Modes
 
@@ -13,14 +29,14 @@ Test environment runs isolated services on different ports to avoid conflicts wi
 | **Prod** | `make test-prod` | CI/CD pipelines | Full cleanup after tests |
 
 **Dev mode workflow** (recommended):
-1. Run `make test` - containers start automatically
-2. Run again - instant! (containers reused)
+1. Run `make test` — containers start automatically
+2. Run again — instant! (containers reused)
 3. Containers stay running between test runs
-4. Run `make stop` when done (end of day)
+4. Run `make stop` when done
 
 ## Quick Start
 
-### Dev Mode (Default - Fastest)
+### Dev Mode (Default — Fastest)
 ```bash
 cd robot_tests
 
@@ -31,50 +47,41 @@ make test
 make test
 
 # Run specific suite
-make test-keycloak
+robot --outputdir results api/api_settings_hierarchy.robot
 ```
 
 ### After Code Changes
 ```bash
-# Rebuild containers and run tests
 make test-rebuild
 ```
 
 ### CI/CD Mode (Full Cleanup)
 ```bash
-# Fresh environment with full cleanup after
 make test-prod
 ```
 
 ### Manual Container Management
 ```bash
-# Start containers manually
-make start
-
-# Run tests (fast - no container startup)
-make test-quick
-
-# Stop containers (saves logs)
-make stop
+make start       # Start containers
+make test-quick  # Run tests (no container startup)
+make stop        # Stop containers
 ```
 
 ## Test Environment Ports
 
-The test environment uses **different ports** from development:
-
 | Service | Dev Port | Test Port | URL |
 |---------|----------|-----------|-----|
-| Keycloak | 8081 | **8181** | http://localhost:8181 |
+| Backend | 8000 | **8200** | http://localhost:8200 |
+| Casdoor | 8082 | **8282** | http://localhost:8282 |
 | MongoDB | 27017 | **27118** | mongodb://localhost:27118 |
 | Redis | 6379 | **6480** | redis://localhost:6480 |
-| Postgres (Keycloak DB) | 5432 | **5433** | postgres://localhost:5433 |
+| Postgres (Casdoor DB) | 5432 | **5433** | postgres://localhost:5433 |
 
 **Test Credentials:**
-- Keycloak Admin: `admin` / `admin`
+- Casdoor built-in admin: `admin` / `123` (Casdoor bootstrap default, set by `CASDOOR_ADMIN_*`)
+- App-level admin for ROPC/tests: `admin` / `ushadow` (provisioned by `casdoor-provision`, set by `CASDOOR_APP_ADMIN_*`)
 
 ## Running Tests
-
-### From Command Line
 
 ```bash
 # Full test run (starts containers + runs tests)
@@ -84,64 +91,40 @@ make test
 make test-quick
 
 # Run specific test file
-robot --outputdir results api/keycloak_registration.robot
+robot --outputdir results api/api_settings_hierarchy.robot
+
+# Run single test case
+robot --test "TC-001*" --outputdir results api/api_settings_hierarchy.robot
+
+# Debug with verbose HTTP logging
+robot --loglevel DEBUG --outputdir results api/
 ```
-
-### From VSCode
-
-**Prerequisites:**
-1. **Install Extension**: "Robot Framework Language Server"
-2. **Start Containers Once**: Run in terminal: `cd robot_tests && make start`
-   - Containers stay running in background
-   - Only need to start once per session
-   - Or run VSCode task: Cmd+Shift+P → "Tasks: Run Task" → "Start Robot Test Containers"
-
-**Running Tests:**
-1. **Open Test File**: Open any `.robot` file in `robot_tests/api/`
-2. **Run Test**: Click "Run Test" codelens above test case or press F5
-3. **View Results**: Check terminal for test output
-
-**VSCode Run Configurations:**
-- "Robot: Run Current Test" - Runs the entire test file
-- "Robot: Run Current Test Case" - Runs selected test case only
-- "Robot: Run All Keycloak Tests" - Runs all Keycloak tests
-
-**Development Workflow:**
-1. Start containers once: `cd robot_tests && make start`
-2. Edit tests in VSCode
-3. Run tests with F5 or codelens (instant - no container restart)
-4. Repeat steps 2-3 as needed
-5. Stop containers when done: `cd robot_tests && make stop`
 
 ## Environment Variables
 
-Test environment variables are defined in `.env.test`:
+Defined in `.env.test` and `resources/setup/test_env.py`:
 
 ```bash
-TEST_KEYCLOAK_PORT=8181    # Test Keycloak port
-BACKEND_PORT=8290          # Backend API port (production instance)
-TEST_MONGO_PORT=27118      # Test MongoDB port
-TEST_REDIS_PORT=6480       # Test Redis port
+TEST_BACKEND_PORT=8200
+TEST_CASDOOR_PORT=8282
+TEST_MONGO_PORT=27118
+TEST_REDIS_PORT=6480
+TEST_POSTGRES_PORT=5433
+CASDOOR_CLIENT_ID=ushadow
+CASDOOR_CLIENT_SECRET=test-casdoor-secret
 ```
-
-These are automatically loaded by:
-- `make` commands (via export in Makefile)
-- VSCode launch configurations (via `env` in launch.json)
-- Test scripts (via `source` in setup scripts)
 
 ## Container Management
 
 ```bash
 make start          # Start test containers (or reuse if healthy)
-make stop           # Stop containers (saves logs)
+make stop           # Stop containers
 make restart        # Restart containers
 make rebuild        # Fresh rebuild with volume cleanup
 make status         # Show container status
-make logs           # View logs (SERVICE=keycloak-test)
+make logs           # View logs (SERVICE=casdoor-test)
 make clean          # Stop containers and remove volumes
 ```
-
-**Logs are automatically saved** when stopping containers to `logs/YYYY-MM-DD_HH-MM-SS/`.
 
 ## Troubleshooting
 
@@ -153,87 +136,69 @@ make clean           # Full cleanup
 make start           # Start fresh
 ```
 
-### Tests Can't Connect to Keycloak
+### Tests Can't Connect to Backend
 
 ```bash
-# Check if Keycloak is running and healthy
-curl http://localhost:8181/realms/master
+# Check if backend is healthy
+curl http://localhost:8200/health
 
 # Check container logs
-make logs SERVICE=keycloak-test
+make logs SERVICE=backend-test
 
 # Restart containers
 make restart
 ```
 
-### Port Conflicts
+### Casdoor Auth Failures
 
-If ports are already in use:
+```bash
+# Check Casdoor health
+curl http://localhost:8282/api/health
+
+# Check Casdoor logs (JWT/JWKS issues)
+make logs SERVICE=casdoor-test
+
+# Re-provision test environment (idempotent)
+cd robot_tests && python -m ushadow_casdoor.provision --env-file .env.test --config-dir ../config/casdoor
+```
+
+### Port Conflicts
 
 ```bash
 # Find what's using the port
-lsof -i :8181
+lsof -i :8282
 
-# Stop the conflicting service or change TEST_KEYCLOAK_PORT in .env.test
+# Change port in .env.test and docker-compose-test.yml if needed
 ```
-
-### VSCode Tests Not Running
-
-1. Check Robot Framework extension is installed
-2. Verify `.vscode/settings.json` has `robot.variables` configured
-3. Check test containers are running: `make status`
-4. View test output in VSCode terminal
-
-## Development Workflow
-
-**Recommended workflow for iterating on tests:**
-
-1. Start containers once: `make start`
-2. Edit test files in VSCode
-3. Run tests from VSCode (F5 or codelens)
-4. View results in VSCode terminal
-5. Keep containers running between test runs
-6. Only rebuild when needed: `make rebuild`
-
-**For CI/CD:**
-
-```bash
-# Clean run (suitable for CI)
-make clean
-make test
-```
-
-## Test Isolation
-
-Each test run uses:
-- ✅ Isolated test database (`test_db` in MongoDB)
-- ✅ Separate Keycloak instance with test realm
-- ✅ Independent Redis instance
-- ✅ No interference with development environment
 
 ## Architecture
 
 ```
 robot_tests/
-├── .env.test                    # Test environment variables
-├── docker-compose-test.yml      # Test service definitions
-├── setup-test-containers.sh     # Container startup script
-├── teardown-test-containers.sh  # Container cleanup script
-├── Makefile                     # Test commands
-├── api/                         # API test suites
-│   └── keycloak_registration.robot
-└── resources/                   # Reusable keywords
-    └── auth_keywords.robot
+├── .env.test                        # Test environment variables
+├── docker-compose-test.yml          # Test service definitions
+├── Makefile                         # Test commands
+├── requirements.txt                 # Python dependencies (inc. ushadow-sdk)
+├── api/                             # API test suites
+│   ├── api_settings_hierarchy.robot
+│   ├── api_settings_deployment.robot
+│   ├── service_env_deployment.robot
+│   ├── service_configs_deployment.robot
+│   └── api_tailscale.robot
+└── resources/                       # Reusable keywords and libraries
+    ├── auth_keywords.robot          # Authenticated session creation (Casdoor ROPC JWT)
+    ├── EnvConfig.py                 # URL helpers
+    └── setup/
+        ├── init.py                  # Provisions test Casdoor (casdoor-provision via ushadow-sdk)
+        ├── suite_setup.robot        # Standard Suite Setup/Teardown
+        ├── test_env.py              # Variables file (ports, URLs, credentials)
+        └── suppress_warnings.py
 ```
 
-Tests automatically use test environment via:
-1. Environment variables in `.env.test`
-2. Robot Framework variables (e.g., `${KEYCLOAK_PORT}`)
-3. Default values that prefer test ports
+## Test Isolation
 
-## Next Steps
-
-- [ ] Add test backend container to `docker-compose-test.yml`
-- [ ] Create more test suites in `api/`
-- [ ] Add mobile tests in `mobile/`
-- [ ] Add feature tests in `features/`
+Each test run uses:
+- Isolated MongoDB database (`ushadow_test`)
+- Separate Casdoor instance on port 8282
+- Independent Redis instance on port 6480
+- No interference with development environment

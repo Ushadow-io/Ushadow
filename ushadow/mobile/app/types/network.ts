@@ -49,7 +49,7 @@ export interface LeaderInfo {
   // API URLs for specific services
   ushadow_api_url: string;
   chronicle_api_url?: string;
-  keycloak_url?: string;  // Keycloak authentication URL (e.g., "http://hostname:8081")
+  auth_url?: string;  // Authentication URL (e.g., "http://hostname:8082")
   // WebSocket streaming URLs
   ws_pcm_url: string;
   ws_omi_url: string;

@@ -24,7 +24,6 @@ class MastodonConnectRequest(BaseModel):
 from src.services.auth import get_current_user
 from src.services.bluesky_service import BlueskyService, get_bluesky_service
 from src.services.feed_service import FeedService
-from src.utils.auth_helpers import get_user_email
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ async def list_sources(
     current_user=Depends(get_current_user),
 ):
     """List configured post sources."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     sources = await service.list_sources(user_id)
     return {"sources": sources}
 
@@ -100,7 +99,7 @@ async def mastodon_connect(
     with the access token. Future refreshes will pull from the authenticated
     home timeline instead of public hashtag timelines.
     """
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     try:
         source = await service.connect_mastodon(
             user_id=user_id,
@@ -145,7 +144,7 @@ async def add_source(
             status_code=422, detail=f"Unknown platform_type: {data.platform_type}"
         )
 
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     source = await service.add_source(user_id, data)
     return source
 
@@ -157,7 +156,7 @@ async def remove_source(
     current_user=Depends(get_current_user),
 ):
     """Remove a post source."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     removed = await service.remove_source(user_id, source_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -175,7 +174,7 @@ async def get_interests(
     current_user=Depends(get_current_user),
 ):
     """View interests extracted from your stored memories."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     interests = await service.get_interests(user_id)
     return {"interests": [i.model_dump() for i in interests]}
 
@@ -198,7 +197,7 @@ async def get_feed(
     current_user=Depends(get_current_user),
 ):
     """Get ranked feed of posts, sorted by relevance to your interests."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     return await service.get_feed(
         user_id, page, page_size, interest, show_seen, platform_type
     )
@@ -213,7 +212,7 @@ async def refresh_feed(
     current_user=Depends(get_current_user),
 ):
     """Trigger a feed refresh, optionally scoped to one platform."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     result = await service.refresh(user_id, platform_type)
     return result
 
@@ -230,7 +229,7 @@ async def mark_post_seen(
     current_user=Depends(get_current_user),
 ):
     """Mark a specific post as seen."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     ok = await service.mark_post_seen(user_id, post_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -244,7 +243,7 @@ async def bookmark_post(
     current_user=Depends(get_current_user),
 ):
     """Toggle bookmark on a specific post."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     ok = await service.bookmark_post(user_id, post_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -263,7 +262,7 @@ async def bluesky_create_post(
     current_user=Depends(get_current_user),
 ):
     """Publish a new post to Bluesky from a bluesky_timeline source."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     try:
         result = await bsky.create_post(data.source_id, user_id, data.text)
     except ValueError as e:
@@ -279,7 +278,7 @@ async def bluesky_reply(
     current_user=Depends(get_current_user),
 ):
     """Reply to a Bluesky post stored in the feed (requires post CID)."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     try:
         result = await bsky.reply_to_post(data.source_id, user_id, data.text, post_id)
     except ValueError as e:
@@ -298,5 +297,5 @@ async def get_stats(
     current_user=Depends(get_current_user),
 ):
     """Get feed statistics."""
-    user_id = get_user_email(current_user)
+    user_id = current_user.email
     return await service.get_stats(user_id)

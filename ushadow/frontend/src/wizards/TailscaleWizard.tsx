@@ -100,8 +100,8 @@ export default function TailscaleWizard() {
     loading: boolean
   }>({ updated: false, loading: false })
 
-  // Keycloak registration status
-  const [keycloakStatus, setKeycloakStatus] = useState<{
+  // Casdoor registration status
+  const [authStatus, setAuthStatus] = useState<{
     registered: boolean
     message?: string
     checked: boolean
@@ -134,18 +134,18 @@ export default function TailscaleWizard() {
   }, [wizard.currentStep.id])
 
   // ============================================================================
-  // Provision Step: Check Tailnet Settings & Register with Keycloak
+  // Provision Step: Check Tailnet Settings & Register with Casdoor
   // ============================================================================
 
   useEffect(() => {
     if (wizard.currentStep.id === 'provision' && containerStatus?.authenticated) {
       checkTailnetSettings()
-      registerWithKeycloak()
+      registerWithCasdoor()
     }
   }, [wizard.currentStep.id, containerStatus?.authenticated])
 
-  const registerWithKeycloak = async () => {
-    // Register Keycloak callback URLs as soon as we land on provision page
+  const registerWithCasdoor = async () => {
+    // Register Casdoor callback URLs as soon as we land on provision page
     try {
       let hostname = config.hostname
       if (!hostname) {
@@ -155,20 +155,20 @@ export default function TailscaleWizard() {
           hostname = statusResponse.data.hostname
           setConfig(prev => ({ ...prev, hostname }))
         } else {
-          // No hostname yet, skip Keycloak registration
+          // No hostname yet, skip Casdoor registration
           return
         }
       }
 
-      // Call configure-serve to register with Keycloak and configure routes
+      // Call configure-serve to register with Casdoor and configure routes
       // This is idempotent and safe to call multiple times
       const finalConfig = { ...config, hostname }
       const serveResponse = await tailscaleApi.configureServe(finalConfig)
 
-      // Capture Keycloak registration status
-      setKeycloakStatus({
-        registered: serveResponse.data.keycloak_registered ?? false,
-        message: serveResponse.data.keycloak_message,
+      // Capture Casdoor registration status
+      setAuthStatus({
+        registered: serveResponse.data.casdoor_registered ?? false,
+        message: serveResponse.data.casdoor_message,
         checked: true
       })
 
@@ -177,11 +177,11 @@ export default function TailscaleWizard() {
         setConfiguredRoutes(serveResponse.data.routes)
       }
 
-      console.log('Keycloak registration completed:', serveResponse.data)
+      console.log('Casdoor registration completed:', serveResponse.data)
     } catch (err) {
       // Non-critical error - just log it
-      console.log('Keycloak registration failed (non-critical):', err)
-      setKeycloakStatus({
+      console.log('Casdoor registration failed (non-critical):', err)
+      setAuthStatus({
         registered: false,
         message: 'Failed to connect to backend',
         checked: true
@@ -200,7 +200,7 @@ export default function TailscaleWizard() {
   }
 
   // ============================================================================
-  // Complete Step: Update CORS origins and Keycloak settings
+  // Complete Step: Update CORS origins and auth settings
   // ============================================================================
 
   useEffect(() => {
@@ -237,8 +237,8 @@ export default function TailscaleWizard() {
       const response = await tailscaleApi.updateCorsOrigins(config.hostname)
       console.log('[TailscaleWizard] CORS update response:', response.data)
 
-      // Note: Keycloak URL is now determined dynamically based on origin
-      // (see auth/config.ts getKeycloakUrl()) so no settings update needed
+      // Note: Auth URL is now determined dynamically based on origin
+      // (see auth/config.ts) so no settings update needed
 
       // Success - update UI state
       setCorsStatus({
@@ -656,10 +656,10 @@ export default function TailscaleWizard() {
         setConfiguredRoutes(serveResponse.data.routes)
       }
 
-      // Capture Keycloak registration status
-      setKeycloakStatus({
-        registered: serveResponse.data.keycloak_registered ?? false,
-        message: serveResponse.data.keycloak_message,
+      // Capture Casdoor registration status
+      setAuthStatus({
+        registered: serveResponse.data.casdoor_registered ?? false,
+        message: serveResponse.data.casdoor_message,
         checked: true
       })
 
@@ -1281,17 +1281,17 @@ export default function TailscaleWizard() {
                 </div>
               </div>
 
-              {/* Keycloak Registration Status */}
-              {keycloakStatus.checked ? (
+              {/* Casdoor Registration Status */}
+              {authStatus.checked ? (
                 <div
                   className={`p-4 rounded-lg flex items-start gap-3 ${
-                    keycloakStatus.registered
+                    authStatus.registered
                       ? 'bg-green-50 dark:bg-green-900/20'
                       : 'bg-yellow-50 dark:bg-yellow-900/20'
                   }`}
-                  data-testid="keycloak-status"
+                  data-testid="casdoor-status"
                 >
-                  {keycloakStatus.registered ? (
+                  {authStatus.registered ? (
                     <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
                   ) : (
                     <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
@@ -1299,32 +1299,32 @@ export default function TailscaleWizard() {
                   <div>
                     <p
                       className={`text-sm font-semibold ${
-                        keycloakStatus.registered
+                        authStatus.registered
                           ? 'text-green-800 dark:text-green-200'
                           : 'text-yellow-800 dark:text-yellow-200'
                       }`}
                     >
-                      {keycloakStatus.registered ? 'Keycloak OAuth Configured' : 'Keycloak Configuration Skipped'}
+                      {authStatus.registered ? 'Casdoor OAuth Configured' : 'Casdoor Configuration Skipped'}
                     </p>
                     <p
                       className={`text-sm mt-1 ${
-                        keycloakStatus.registered
+                        authStatus.registered
                           ? 'text-green-700 dark:text-green-300'
                           : 'text-yellow-700 dark:text-yellow-300'
                       }`}
                     >
-                      {keycloakStatus.message || (keycloakStatus.registered
+                      {authStatus.message || (authStatus.registered
                         ? 'OAuth login enabled for Tailscale domain'
-                        : 'OAuth login may require backend restart or manual Keycloak configuration')}
+                        : 'OAuth login may require backend restart or manual Casdoor configuration')}
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className="p-4 bg-gray-50 dark:bg-gray-900/20 rounded-lg flex items-start gap-3" data-testid="keycloak-loading">
+                <div className="p-4 bg-gray-50 dark:bg-gray-900/20 rounded-lg flex items-start gap-3" data-testid="casdoor-loading">
                   <Loader2 className="w-5 h-5 text-gray-600 dark:text-gray-400 flex-shrink-0 mt-0.5 animate-spin" />
                   <div>
                     <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
-                      Checking Keycloak Configuration...
+                      Checking Casdoor Configuration...
                     </p>
                     <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
                       Registering OAuth callback URLs for Tailscale domain
@@ -1352,7 +1352,7 @@ export default function TailscaleWizard() {
             <ul className="text-sm text-primary-800 dark:text-primary-200 mt-2 space-y-1 ml-4 list-disc">
               <li>Provision SSL certificates from Let's Encrypt</li>
               <li>Configure routing via Tailscale Serve</li>
-              <li>Register OAuth callback URLs with Keycloak (if enabled)</li>
+              <li>Register OAuth callback URLs with Casdoor (if enabled)</li>
             </ul>
           </div>
         </div>

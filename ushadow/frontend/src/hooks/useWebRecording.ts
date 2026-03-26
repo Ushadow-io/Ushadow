@@ -314,7 +314,7 @@ export const useWebRecording = (): WebRecordingReturn => {
         connectionAttempts: prev.connectionAttempts + 1
       }))
 
-      // Get auth token - prefer Keycloak token, fallback to legacy token
+      // Get auth token - prefer Casdoor token, fallback to legacy token
       // This matches the pattern used in api.ts request interceptor
       const kcToken = localStorage.getItem('kc_access_token')
       const legacyToken = localStorage.getItem(getStorageKey('token'))

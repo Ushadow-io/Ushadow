@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
 import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
-import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
+import { useCasdoorAuth } from '../../contexts/CasdoorAuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useFeatureFlags } from '../../contexts/FeatureFlagsContext'
 import { useWizard } from '../../contexts/WizardContext'
@@ -29,9 +29,9 @@ export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user: legacyUser, logout: legacyLogout, isAdmin: legacyIsAdmin } = useAuth()
-  const { isAuthenticated: kcAuthenticated, user: kcUser, logout: kcLogout } = useKeycloakAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, logout: kcLogout } = useCasdoorAuth()
 
-  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  // Use Casdoor user if authenticated via Casdoor, otherwise use legacy user
   const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const isAdmin = kcAuthenticated && kcUser ? kcUser.is_superuser : legacyIsAdmin
   const { isDark, toggleTheme } = useTheme()
@@ -49,7 +49,7 @@ export default function Layout() {
   // Unified logout handler that works for both auth methods
   const handleLogout = () => {
     if (kcAuthenticated) {
-      // User is authenticated via Keycloak - use Keycloak logout
+      // User is authenticated via Casdoor
       kcLogout()
     } else {
       // User is authenticated via legacy JWT - clear localStorage only
@@ -73,10 +73,10 @@ export default function Layout() {
       isFirstTime: isFirstTimeUser(),
     })
 
-    // Skip wizard redirect for Keycloak users - they're already authenticated via SSO
+    // Skip wizard redirect for Casdoor users - they're already authenticated via SSO
     // and don't need the setup wizard
     if (kcAuthenticated) {
-      console.log('[LAYOUT] ✅ Skipping wizard redirect - Keycloak user')
+      console.log('[LAYOUT] ✅ Skipping wizard redirect - Casdoor user')
       return
     }
 

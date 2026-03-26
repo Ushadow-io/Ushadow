@@ -38,7 +38,7 @@ import {
 } from '../_utils/authStorage';
 import { getActiveUnode } from '../_utils/unodeStorage';
 import { ConnectionState, createInitialConnectionState } from '../types/connectionLog';
-import { logoutFromKeycloak } from '../services/keycloakAuth';
+import { logoutFromCasdoor } from '../services/casdoorAuth';
 
 export default function HomeScreen() {
   // Auth state
@@ -51,7 +51,7 @@ export default function HomeScreen() {
 
   // UI state
   const [showLogViewer, setShowLogViewer] = useState(false);
-  const [autoStartKeycloak, setAutoStartKeycloak] = useState(false);
+  const [autoStartAuth, setAutoStartAuth] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     createInitialConnectionState()
   );
@@ -75,7 +75,7 @@ export default function HomeScreen() {
           logEvent('server', 'connected', 'Authenticated session restored', info?.email);
         }
 
-        // Load current unode hostname and API URL for Keycloak config
+        // Load current unode hostname and API URL for auth config
         const activeUnode = await getActiveUnode();
         const apiUrl = await getApiUrl();
 
@@ -142,7 +142,7 @@ export default function HomeScreen() {
               // Populate connection info from the freshly scanned unode
               setCurrentApiUrl(activeUnode.apiUrl);
               setCurrentHostname(activeUnode.hostname || activeUnode.name);
-              setAutoStartKeycloak(true);
+              setAutoStartAuth(true);
               setShowLoginScreen(true);
             }
           }
@@ -160,7 +160,7 @@ export default function HomeScreen() {
       const info = await getAuthInfo();
       setAuthInfo(info);
       setShowLoginScreen(false);
-      setAutoStartKeycloak(false);
+      setAutoStartAuth(false);
       setConnectionState((prev) => ({ ...prev, server: 'connected' }));
       logEvent('server', 'connected', 'Login successful', info?.email);
     },
@@ -168,14 +168,14 @@ export default function HomeScreen() {
   );
 
   const handleLogout = useCallback(async () => {
-    // Logout from Keycloak session first (if available)
+    // Logout from SSO session first (if available)
     if (currentApiUrl) {
       try {
         const idToken = await getIdToken();
         console.log('[Home] Logging out with ID token:', idToken ? 'present' : 'missing');
-        await logoutFromKeycloak(currentApiUrl, idToken || undefined, currentHostname);
+        await logoutFromCasdoor(currentApiUrl, idToken || undefined, currentHostname);
       } catch (error) {
-        console.warn('[Home] Keycloak logout failed, continuing with local logout:', error);
+        console.warn('[Home] SSO logout failed, continuing with local logout:', error);
       }
     }
 
@@ -277,11 +277,11 @@ export default function HomeScreen() {
       {/* Login Screen Modal */}
       <LoginScreen
         visible={showLoginScreen}
-        onClose={() => { setShowLoginScreen(false); setAutoStartKeycloak(false); }}
+        onClose={() => { setShowLoginScreen(false); setAutoStartAuth(false); }}
         onLoginSuccess={handleLoginSuccess}
         initialApiUrl={currentApiUrl}
         hostname={currentHostname}
-        autoStartKeycloak={autoStartKeycloak}
+        autoStartAuth={autoStartAuth}
       />
 
       {/* Connection Log Viewer Modal */}

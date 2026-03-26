@@ -98,7 +98,7 @@ export default function ChatPage() {
         content: m.content,
       }))
 
-      // Get token from storage (Keycloak in sessionStorage, or legacy in localStorage)
+      // Get token from storage (Casdoor/OIDC in localStorage, or legacy token)
       const kcToken = sessionStorage.getItem('kc_access_token')
       const legacyToken = localStorage.getItem(getStorageKey('token'))
       const token = kcToken || legacyToken

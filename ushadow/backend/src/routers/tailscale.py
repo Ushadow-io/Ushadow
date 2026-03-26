@@ -23,7 +23,7 @@ from src.models.user import User
 from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
 from src.services.tailscale_manager import get_tailscale_manager
-from src.services.keycloak_startup import register_current_environment
+from src.services.casdoor_client import register_redirect_uri as _casdoor_register_redirect_uri, get_tailscale_hostname as _get_casdoor_tailscale_hostname
 
 # UNodeCapabilities moved to /api/unodes/leader/info endpoint
 import logging
@@ -416,7 +416,7 @@ async def generate_serve_config(config: TailscaleConfig) -> Dict[str, str]:
         f"tailscale serve https / http://localhost:{frontend_port}",
         f"tailscale serve https /api http://localhost:{backend_port}",
         f"tailscale serve https /auth http://localhost:{backend_port}",
-        f"tailscale serve https /keycloak http://localhost:8081",
+        f"tailscale serve https /sso http://localhost:8000",
         "",
         "# To view current configuration:",
         "tailscale serve status",
@@ -723,33 +723,26 @@ async def get_mobile_connection_qr(
         # Use unode hostname, not Tailscale hostname
         api_url = f"https://{status.hostname}/api/unodes/{leader_unode.hostname}/info"
 
-        # Auto-register mobile redirect URIs in Keycloak
-        from src.services.keycloak_admin import get_keycloak_admin
-
+        # Auto-register mobile redirect URIs in Casdoor
         try:
-            keycloak_admin = get_keycloak_admin()
+            from src.services.casdoor_client import register_redirect_uri as _register_uri
             mobile_uris = [
                 "ushadow://*",  # Production mobile app
                 "exp://localhost:8081/--/oauth/callback",  # Expo Go development
                 "exp://*",  # Expo Go wildcard
             ]
-            await keycloak_admin.update_client_redirect_uris(
-                client_id="ushadow-frontend",
-                redirect_uris=mobile_uris,
-                merge=True
-            )
-            logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Keycloak")
+            for uri in mobile_uris:
+                _register_uri(uri)
+            logger.info("[Mobile-QR] Auto-registered mobile redirect URIs in Casdoor")
         except Exception as e:
             logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
             # Non-fatal - continue with QR generation
 
         # Generate auth token for mobile app (valid for ushadow and chronicle)
         # Both services now share the same database (ushadow-blue) so user IDs match
-        from src.utils.auth_helpers import get_user_id, get_user_email
-
         auth_token = generate_jwt_for_service(
-            user_id=get_user_id(current_user),
-            user_email=get_user_email(current_user),
+            user_id=str(current_user.id),
+            user_email=current_user.email,
             audiences=["ushadow", "chronicle"]
         )
 
@@ -1382,7 +1375,7 @@ async def configure_tailscale_serve(
     and WebSocket routes /ws_pcm and /ws_omi direct to Chronicle.
     Also saves the Tailscale configuration to disk.
 
-    Additionally registers the Tailscale hostname with Keycloak to enable
+    Additionally registers the Tailscale hostname with Casdoor to enable
     OAuth callbacks from the Tailscale domain.
     """
     try:
@@ -1412,18 +1405,25 @@ async def configure_tailscale_serve(
         # Get the current serve status to return actual routes
         status = manager.get_serve_status() or ""
 
-        # Register Tailscale hostname with Keycloak for OAuth callbacks
-        # Reuse the same registration logic that runs on backend startup
-        keycloak_success = False
-        keycloak_message = "Keycloak registration skipped"
+        # Register Tailscale hostname with Casdoor for OAuth callbacks
+        casdoor_success = False
+        casdoor_message = "Casdoor registration skipped"
         try:
-            await register_current_environment()
-            keycloak_success = True
-            keycloak_message = f"OAuth callbacks registered for {config.hostname}"
-            logger.info(f"[TAILSCALE] ✓ Registered Keycloak URIs for {config.hostname}")
+            import os
+            port_offset = int(os.getenv("PORT_OFFSET", "10"))
+            webui_port = 3000 + port_offset
+            tailscale_hostname = _get_casdoor_tailscale_hostname()
+            if tailscale_hostname:
+                uri = f"https://{tailscale_hostname}/oauth/callback"
+                _casdoor_register_redirect_uri(uri)
+                casdoor_success = True
+                casdoor_message = f"OAuth callback registered: {uri}"
+                logger.info(f"[TAILSCALE] ✓ Registered Casdoor redirect URI: {uri}")
+            else:
+                casdoor_message = "Tailscale hostname not available"
         except Exception as e:
-            logger.warning(f"[TAILSCALE] Failed to register Keycloak URIs: {e}")
-            keycloak_message = f"Failed to register OAuth callback URLs: {str(e)}"
+            logger.warning(f"[TAILSCALE] Failed to register Casdoor redirect URI: {e}")
+            casdoor_message = f"Failed to register OAuth callback URLs: {str(e)}"
 
         if success:
             return {
@@ -1431,16 +1431,16 @@ async def configure_tailscale_serve(
                 "message": "Tailscale serve configured successfully with base routes",
                 "routes": status,
                 "hostname": config.hostname,
-                "keycloak_registered": keycloak_success,
-                "keycloak_message": keycloak_message
+                "casdoor_registered": casdoor_success,
+                "casdoor_message": casdoor_message
             }
         else:
             return {
                 "status": "partial",
                 "message": "Some routes may have failed to configure",
                 "routes": status,
-                "keycloak_registered": keycloak_success,
-                "keycloak_message": keycloak_message
+                "casdoor_registered": casdoor_success,
+                "casdoor_message": casdoor_message
             }
 
     except Exception as e:

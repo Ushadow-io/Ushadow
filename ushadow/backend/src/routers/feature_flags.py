@@ -68,7 +68,7 @@ async def check_feature_flag(flag_name: str, user=Depends(get_current_user)):
             "error": "Feature flag service not initialized"
         }
 
-    user_id = str(user.get("id")) if user and isinstance(user, dict) else None
+    user_id = str(user.id) if user else None
     is_enabled = service.is_enabled(flag_name, context={"userId": user_id} if user_id else None)
 
     return {

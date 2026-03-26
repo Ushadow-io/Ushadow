@@ -1064,7 +1064,7 @@ class KubernetesManager:
                 "postgres": {"names": ["postgres", "postgresql"], "port": 5432},
                 "qdrant": {"names": ["qdrant"], "port": 6333},
                 "neo4j": {"names": ["neo4j"], "port": 7687},
-                "keycloak": {"names": ["keycloak"], "port": 8080}
+                "casdoor": {"names": ["casdoor"], "port": 8000}
             }
 
             # Common namespaces where infrastructure might be deployed
@@ -1318,25 +1318,19 @@ class KubernetesManager:
             "# Auto-generated from environment variables": None,
         }
 
-        # Map Keycloak env vars to config structure
-        keycloak_config = {}
-        if 'KEYCLOAK_ENABLED' in env_vars:
-            keycloak_config['enabled'] = env_vars['KEYCLOAK_ENABLED'].lower() in ('true', '1', 'yes')
-        if 'KEYCLOAK_PUBLIC_URL' in env_vars:
-            keycloak_config['public_url'] = env_vars['KEYCLOAK_PUBLIC_URL']
-        if 'KEYCLOAK_URL' in env_vars:
-            keycloak_config['url'] = env_vars['KEYCLOAK_URL']
-        if 'KEYCLOAK_REALM' in env_vars:
-            keycloak_config['realm'] = env_vars['KEYCLOAK_REALM']
-        if 'KEYCLOAK_FRONTEND_CLIENT_ID' in env_vars:
-            keycloak_config['frontend_client_id'] = env_vars['KEYCLOAK_FRONTEND_CLIENT_ID']
-        if 'KEYCLOAK_BACKEND_CLIENT_ID' in env_vars:
-            keycloak_config['backend_client_id'] = env_vars['KEYCLOAK_BACKEND_CLIENT_ID']
-        if 'KEYCLOAK_ADMIN_USER' in env_vars:
-            keycloak_config['admin_user'] = env_vars['KEYCLOAK_ADMIN_USER']
+        # Map Casdoor env vars to config structure
+        casdoor_config = {}
+        if 'CASDOOR_ENDPOINT' in env_vars:
+            casdoor_config['public_url'] = env_vars['CASDOOR_ENDPOINT']
+        if 'CASDOOR_URL' in env_vars:
+            casdoor_config['url'] = env_vars['CASDOOR_URL']
+        if 'CASDOOR_ORGANIZATION' in env_vars:
+            casdoor_config['organization'] = env_vars['CASDOOR_ORGANIZATION']
+        if 'CASDOOR_CLIENT_ID' in env_vars:
+            casdoor_config['client_id'] = env_vars['CASDOOR_CLIENT_ID']
 
-        if keycloak_config:
-            config['keycloak'] = keycloak_config
+        if casdoor_config:
+            config['casdoor'] = casdoor_config
 
         # Map MongoDB env vars to config structure
         mongodb_config = {}

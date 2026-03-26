@@ -197,3 +197,5 @@ config/service_configs.yaml
 config/wiring.yaml
 ushadow/backend/src/config/service_configs.yaml
 ushadow/backend/src/config/wiring.yaml
+config/casdoor/app.conf
+config/instances.yaml

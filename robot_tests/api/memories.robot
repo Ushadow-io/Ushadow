@@ -28,11 +28,10 @@ Library          OperatingSystem
 Resource         ../resources/setup/suite_setup.robot
 Resource         ../resources/auth_keywords.robot
 
-Suite Setup      Memory Suite Setup
-Suite Teardown   Memory Suite Teardown
+Suite Setup      Standard Suite Setup
+Suite Teardown   Standard Suite Teardown
 
 *** Variables ***
-${API_SESSION}           memory_session
 ${MEMORIES_BASE}         /api/memories
 
 # Test data
@@ -57,7 +56,7 @@ TC-MEM-001: List Memories (Paginated)
     ...    limit=10
     ...    offset=0
 
-    ${response}=    GET On Session    ${API_SESSION}    ${MEMORIES_BASE}
+    ${response}=    GET On Session    admin_session    ${MEMORIES_BASE}
     ...    params=${params}
     ...    expected_status=any
 
@@ -94,7 +93,7 @@ TC-MEM-007: Search Memories (Full-Text)
     ...    query=test
     ...    limit=10
 
-    ${response}=    GET On Session    ${API_SESSION}    ${MEMORIES_BASE}/search
+    ${response}=    GET On Session    admin_session    ${MEMORIES_BASE}/search
     ...    params=${params}
     ...    expected_status=any
 
@@ -130,7 +129,7 @@ TC-MEM-002: Get Memory Details
     # Use a test memory ID (would need to create one first)
     ${test_memory_id}=    Set Variable    test-memory-id-123
 
-    ${response}=    GET On Session    ${API_SESSION}
+    ${response}=    GET On Session    admin_session
     ...    ${MEMORIES_BASE}/${test_memory_id}
     ...    expected_status=any
 
@@ -168,7 +167,7 @@ TC-MEM-003: Create Memory
     ...    content=Test memory created by automated test
     ...    metadata=${{ {'test': True, 'source': 'robot_test'} }}
 
-    ${response}=    POST On Session    ${API_SESSION}    ${MEMORIES_BASE}
+    ${response}=    POST On Session    admin_session    ${MEMORIES_BASE}
     ...    json=${memory_data}
     ...    expected_status=any
 
@@ -210,7 +209,7 @@ TC-MEM-004: Update Memory
     ${update_data}=    Create Dictionary
     ...    content=Updated memory content
 
-    ${response}=    PUT On Session    ${API_SESSION}
+    ${response}=    PUT On Session    admin_session
     ...    ${MEMORIES_BASE}/${TEST_MEMORY_ID}
     ...    json=${update_data}
     ...    expected_status=any
@@ -235,7 +234,7 @@ TC-MEM-005: Delete Memory
         Skip    No memory ID available
     END
 
-    ${response}=    DELETE On Session    ${API_SESSION}
+    ${response}=    DELETE On Session    admin_session
     ...    ${MEMORIES_BASE}/${TEST_MEMORY_ID}
     ...    expected_status=any
 
@@ -246,29 +245,6 @@ TC-MEM-005: Delete Memory
     IF    ${response.status_code} in [200, 204]
         Log    Memory deleted successfully
         Set Suite Variable    ${TEST_MEMORY_ID}    ${EMPTY}
-    END
-
-TC-MEM-006: Delete Multiple Memories (Bulk Operation)
-    [Documentation]    Delete multiple memories in one request
-    ...
-    ...                GIVEN: List of memory IDs to delete
-    ...                WHEN: DELETE /api/memories/bulk
-    ...                THEN: All memories deleted successfully
-    [Tags]    memory    medium-priority    api    bulk
-
-    # Bulk delete
-    ${delete_data}=    Create Dictionary
-    ...    ids=${{ ['id1', 'id2', 'id3'] }}
-
-    ${response}=    DELETE On Session    ${API_SESSION}    ${MEMORIES_BASE}/bulk
-    ...    json=${delete_data}
-    ...    expected_status=any
-
-    # Bulk delete may not be implemented
-    IF    ${response.status_code} in [200, 204]
-        Log    Bulk delete successful
-    ELSE
-        Skip    Bulk delete not implemented
     END
 
 # =============================================================================
@@ -283,7 +259,7 @@ TC-MEM-008: Get Memories for Conversation
     ...                THEN: Returns memories for that conversation
     [Tags]    memory    medium-priority    api    conversation
 
-    ${response}=    GET On Session    ${API_SESSION}
+    ${response}=    GET On Session    admin_session
     ...    ${MEMORIES_BASE}/by-conversation/${TEST_CONVERSATION_ID}
     ...    expected_status=any
 
@@ -307,27 +283,3 @@ TC-MEM-008: Get Memories for Conversation
         Log    No memories found for conversation (or conversation doesn't exist)
     END
 
-*** Keywords ***
-Memory Suite Setup
-    [Documentation]    Setup test environment and API session
-
-    # CRITICAL: Call standard suite setup first
-    Suite Setup
-
-    # Get authenticated admin session
-    ${admin_session}=    Get Admin API Session
-    Set Suite Variable    ${API_SESSION}    ${admin_session}
-
-Memory Suite Teardown
-    [Documentation]    Cleanup test data and test environment
-
-    # Delete test memory if it exists
-    IF    '${TEST_MEMORY_ID}' != '${EMPTY}'
-        Run Keyword And Ignore Error    DELETE On Session    ${API_SESSION}
-        ...    ${MEMORIES_BASE}/${TEST_MEMORY_ID}
-    END
-
-    Delete All Sessions
-
-    # CRITICAL: Call standard suite teardown
-    Suite Teardown

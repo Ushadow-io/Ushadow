@@ -75,10 +75,10 @@ class User(BeanieBaseUser, Document):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Keycloak integration field
-    keycloak_id: Optional[str] = Field(
+    # OIDC subject claim — the stable external identity anchor
+    oidc_sub: Optional[str] = Field(
         default=None,
-        description="Keycloak user UUID (sub claim) for federated users"
+        description="OIDC sub claim (Casdoor user UUID)"
     )
 
     class Settings:

@@ -1,0 +1,4 @@
+# Casdoor Group Definitions
+# Apply with: make casdoor-provision
+
+groups: []

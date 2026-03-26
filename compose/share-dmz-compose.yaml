@@ -26,11 +26,11 @@ services:
       # Main ushadow backend URL (over Tailnet)
       MAIN_BACKEND_URL: ${MAIN_BACKEND_URL:-http://ushadow-orange-backend:8000}
 
-      # Keycloak (for authentication)
-      KEYCLOAK_SERVER_URL: ${KEYCLOAK_SERVER_URL}
-      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-ushadow}
-      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_DMZ_CLIENT_ID:-ushadow-dmz}
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_DMZ_CLIENT_SECRET}
+      # Casdoor (for authentication)
+      CASDOOR_URL: ${CASDOOR_URL:-http://casdoor:8000}
+      CASDOOR_ENDPOINT: ${CASDOOR_ENDPOINT:-http://localhost:8082}
+      CASDOOR_CLIENT_ID: ${CASDOOR_DMZ_CLIENT_ID:-ushadow-dmz}
+      CASDOOR_CLIENT_SECRET: ${CASDOOR_DMZ_CLIENT_SECRET:-}
 
       # DMZ mode (only enable share endpoints)
       DMZ_MODE: "true"
@@ -60,9 +60,8 @@ services:
       - "5174:5173"
     environment:
       VITE_API_URL: http://share-dmz-backend:8000
-      VITE_KEYCLOAK_URL: ${KEYCLOAK_SERVER_URL}
-      VITE_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-ushadow}
-      VITE_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_DMZ_CLIENT_ID:-ushadow-dmz}
+      VITE_CASDOOR_URL: ${CASDOOR_ENDPOINT:-http://localhost:8082}
+      VITE_CASDOOR_CLIENT_ID: ${CASDOOR_DMZ_CLIENT_ID:-ushadow-dmz}
       VITE_DMZ_MODE: "true"
     networks:
       - ushadow-network
@@ -135,6 +134,6 @@ x-ushadow:
     zone: public
     funnel: enabled
   requires:
-    - keycloak
+    - casdoor
     - mongodb
   provides: public-share-access

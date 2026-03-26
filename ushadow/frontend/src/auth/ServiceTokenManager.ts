@@ -1,8 +1,8 @@
 /**
  * Service Token Manager
- * 
- * Manages Chronicle-compatible JWT tokens generated from Keycloak tokens.
- * This bridges Keycloak OIDC authentication with legacy JWT-based services.
+ *
+ * Manages Chronicle-compatible JWT tokens generated from Casdoor tokens.
+ * This bridges Casdoor OIDC authentication with legacy JWT-based services.
  */
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
@@ -14,21 +14,21 @@ export interface ServiceTokenResponse {
 }
 
 /**
- * Exchange a Keycloak token for a Chronicle-compatible service token.
- * 
- * @param keycloakToken - The Keycloak access token from sessionStorage
+ * Exchange a Casdoor token for a Chronicle-compatible service token.
+ *
+ * @param accessToken - The Casdoor access token from localStorage
  * @param audiences - Services this token should be valid for (default: ["ushadow", "chronicle"])
  * @returns Service token that Chronicle and other services can validate
  */
 export async function getServiceToken(
-  keycloakToken: string,
+  accessToken: string,
   audiences?: string[]
 ): Promise<string> {
   const response = await fetch(`${BACKEND_URL}/api/auth/token/service-token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${keycloakToken}`
+      'Authorization': `Bearer ${accessToken}`
     },
     body: JSON.stringify({ audiences })
   })
@@ -44,16 +44,16 @@ export async function getServiceToken(
 
 /**
  * Get a Chronicle-compatible token for the current user.
- * Automatically retrieves the Keycloak token from local storage.
+ * Automatically retrieves the Casdoor token from local storage.
  *
  * @returns Service token ready to use with Chronicle WebSocket
  */
 export async function getChronicleToken(): Promise<string> {
-  const keycloakToken = localStorage.getItem('kc_access_token')
+  const accessToken = localStorage.getItem('kc_access_token')
 
-  if (!keycloakToken) {
-    throw new Error('No Keycloak token found. Please log in first.')
+  if (!accessToken) {
+    throw new Error('No access token found. Please log in first.')
   }
 
-  return getServiceToken(keycloakToken, ['ushadow', 'chronicle'])
+  return getServiceToken(accessToken, ['ushadow', 'chronicle'])
 }

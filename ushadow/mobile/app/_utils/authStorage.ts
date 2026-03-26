@@ -37,14 +37,11 @@ async function validateToken(token: string): Promise<boolean> {
       return false;
     }
 
-    // Check required claims for Keycloak tokens
-    if (payload.iss && payload.iss.includes('/realms/')) {
-      // It's a Keycloak token - validate required claims
-      if (!payload.sub || !payload.email) {
-        console.warn('[AuthStorage] Keycloak token missing required claims (sub/email)');
-        await clearAuthToken();
-        return false;
-      }
+    // Validate required JWT claims
+    if (!payload.sub || !payload.email) {
+      console.warn('[AuthStorage] Token missing required claims (sub/email)');
+      await clearAuthToken();
+      return false;
     }
 
     return true;
@@ -90,10 +87,9 @@ async function attemptTokenRefresh(): Promise<string | null> {
       return null;
     }
 
-    // Import the Keycloak refresh function
-    const { refreshKeycloakToken } = await import('../services/keycloakAuth');
+    const { refreshCasdoorToken } = await import('../services/casdoorAuth');
 
-    const tokens = await refreshKeycloakToken(apiUrl, refreshToken);
+    const tokens = await refreshCasdoorToken(apiUrl, refreshToken);
 
     if (!tokens || !tokens.access_token) {
       console.error('[AuthStorage] Token refresh failed');
@@ -206,7 +202,7 @@ export async function clearAuthToken(): Promise<void> {
 }
 
 /**
- * Store the ID token (for Keycloak logout)
+ * Store the ID token (for SSO logout)
  */
 export async function saveIdToken(idToken: string): Promise<void> {
   try {
@@ -394,7 +390,7 @@ export async function getEffectiveServerUrl(): Promise<string> {
 
 /**
  * Handle 401 Unauthorized responses by clearing auth tokens.
- * This forces the user to re-authenticate with Keycloak.
+ * This forces the user to re-authenticate.
  *
  * Usage: if (response.status === 401) handleUnauthorized();
  */

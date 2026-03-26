@@ -5,46 +5,81 @@
 name: ushadow-test
 
 services:
-  # Test Keycloak instance - isolated from development
-  keycloak-test:
-    image: quay.io/keycloak/keycloak:26.0
-    command: start-dev --import-realm
+  # Test Casdoor instance - isolated from development
+  casdoor-test:
+    image: casbin/casdoor:v1.813.0  # pin to avoid silent breakage from :latest
     ports:
-      - "8181:8080"  # Avoid conflict with dev Keycloak on 8081
-    environment:
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
-      - KC_HEALTH_ENABLED=true
-      - KC_DB=postgres
-      - KC_DB_URL=jdbc:postgresql://keycloak-db-test:5432/keycloak
-      - KC_DB_USERNAME=keycloak
-      - KC_DB_PASSWORD=keycloak
+      - "8282:8000"  # Avoid conflict with dev Casdoor on 8082
     volumes:
-      - ../config/keycloak/realms:/opt/keycloak/data/import:ro
+      - ./config/casdoor:/conf
     depends_on:
-      keycloak-db-test:
+      casdoor-db-test:
         condition: service_healthy
-    # Note: Health check disabled - Keycloak container doesn't have curl
-    # Tests will wait for Keycloak to be ready before running
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
     restart: unless-stopped
 
-  # Test Keycloak database
-  keycloak-db-test:
+  # Test Casdoor database
+  casdoor-db-test:
     image: postgres:16-alpine
     ports:
       - "5433:5432"  # Avoid conflict with dev postgres
     environment:
-      - POSTGRES_DB=keycloak
-      - POSTGRES_USER=keycloak
-      - POSTGRES_PASSWORD=keycloak
+      - POSTGRES_DB=casdoor
+      - POSTGRES_USER=casdoor
+      - POSTGRES_PASSWORD=casdoor
     volumes:
-      - keycloak_test_db:/var/lib/postgresql/data
+      - casdoor_test_db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      test: ["CMD-SHELL", "pg_isready -U casdoor -d casdoor"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+    restart: unless-stopped
+
+  # Test Ushadow Backend
+  backend-test:
+    build:
+      context: ..  # project root
+      dockerfile: ushadow/backend/Dockerfile
+    ports:
+      - "8200:8000"  # Avoid conflict with dev backend
+    environment:
+      - BACKEND_PORT=8200
+      - MONGODB_URI=mongodb://mongo-test:27017
+      - MONGODB_DATABASE=ushadow_test
+      - REDIS_URL=redis://redis-test:6379/0
+      - CASDOOR_URL=http://casdoor-test:8000
+      - CASDOOR_EXTERNAL_URL=http://localhost:8282
+      - CASDOOR_CLIENT_ID=ushadow
+      - CASDOOR_CLIENT_SECRET=test-casdoor-secret
+      - CASDOOR_ORG_NAME=ushadow
+      - CASDOOR_ADMIN_USER=built-in/admin
+      - CASDOOR_ADMIN_PASSWORD=123
+      - AUTH_SECRET_KEY=test-auth-secret-key-for-robot-tests-only
+      - TAILSCALE_CONTAINER=  # disabled in test env
+    volumes:
+      - ../ushadow/backend:/app
+      - ../config:/config
+      - /app/.venv  # preserve image venv, don't overlay with host
+    depends_on:
+      mongo-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      casdoor-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
     restart: unless-stopped
 
   # Test MongoDB
@@ -78,7 +113,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  keycloak_test_db:
+  casdoor_test_db:
   mongo_test_data:
   redis_test_data:
 

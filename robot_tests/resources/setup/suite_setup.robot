@@ -16,12 +16,16 @@ Documentation    Flexible setup keywords for test environments
 ...              - TEST_MODE=prod robot robot_tests/  # Prod mode (CI/CD, fresh env)
 
 Library          RequestsLibrary
+Library          REST             ${BACKEND_URL}    ssl_verify=false
 Library          Collections
 Library          OperatingSystem
 Library          String
 Library          Process
+Library          init.py
 Variables        test_env.py
 Variables        suppress_warnings.py    # Suppress urllib3 warnings during startup
+
+Resource         ../auth_keywords.robot
 
 *** Keywords ***
 
@@ -40,13 +44,18 @@ Suite Setup
     ...    ELSE                                     Dev Mode Setup
 
 Standard Suite Setup
-    [Documentation]    Standard test suite setup - alias for Suite Setup
-    ...                Used by most test files for consistency with oldtests pattern
+    [Documentation]    Standard test suite setup for all API test suites.
+    ...                1. Start/verify test containers (dev or prod mode)
+    ...                2. Set REST library auth headers (Bearer token from Casdoor)
+    ...                3. Create admin_session for RequestsLibrary calls
     Suite Setup
+    Setup REST Auth Headers
+    Get Admin API Session
 
 Standard Suite Teardown
-    [Documentation]    Standard test suite teardown - alias for Suite Teardown
-    ...                Used by most test files for consistency with oldtests pattern
+    [Documentation]    Standard test suite teardown for all API test suites.
+    ...                Closes all HTTP sessions then runs container teardown.
+    Delete All Sessions
     Suite Teardown
 
 Dev Mode Setup
@@ -65,6 +74,7 @@ Dev Mode Setup
         Clear Test Data
     END
 
+    Provision Test Environment
     Log To Console    ✓ Dev environment ready!
 
 Dev Mode Setup With Rebuild
@@ -75,6 +85,7 @@ Dev Mode Setup With Rebuild
 
     Log To Console    Clearing test data...
     Clear Test Data
+    Provision Test Environment
     Log To Console    ✓ Dev environment ready!
 
 Prod Mode Setup
@@ -87,6 +98,7 @@ Prod Mode Setup
     Log To Console    Building and starting fresh containers...
     Start Test Containers    build=${True}
 
+    Provision Test Environment
     Log To Console    ✓ Prod environment ready!
 
 Start Test Containers
@@ -111,7 +123,7 @@ Start Test Containers
             Log To Console    Docker compose failed:\n${result.stdout}
         END
     ELSE
-        Log To Console    Starting all containers (this may take ~30s)...
+        Log To Console    Starting all containers (first run may take ~5min to build backend image)...
         ${result}=    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d
         ...    shell=False    stdout=${TEMPDIR}/docker-up.log    stderr=STDOUT
         # Only show output on error
@@ -121,10 +133,10 @@ Start Test Containers
     END
 
     Log To Console    Waiting for all services to be ready...
-    Log To Console    → Checking Keycloak...
-    Wait Until Keyword Succeeds    90s    5s    Check Keycloak Ready    ${KEYCLOAK_URL}
+    Log To Console    → Checking Casdoor...
+    Wait Until Keyword Succeeds    120s    5s    Check Casdoor Ready    ${CASDOOR_URL}
     Log To Console    → Checking Backend...
-    Wait Until Keyword Succeeds    90s    5s    Check Backend Ready    ${BACKEND_URL}
+    Wait Until Keyword Succeeds    300s    5s    Check Backend Ready    ${BACKEND_URL}
     Log To Console    ✓ All test containers ready!
 
 Stop Test Containers
@@ -133,41 +145,41 @@ Stop Test Containers
 
     IF    ${remove_volumes}
         Log To Console    Stopping containers and removing volumes...
-        Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    down    -v    shell=True
+        Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    down    -v    shell=False
     ELSE
         Log To Console    Stopping containers...
-        Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    down    shell=True
+        Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    down    shell=False
     END
 
 Rebuild Test Containers
     [Documentation]    Rebuild and restart test containers
     Log To Console    Rebuilding containers with latest code (this may take ~60s)...
     ${result}=    Run Process    docker    compose    -f    ${DOCKER_COMPOSE_FILE}    up    -d    --build
-    ...    shell=True    stdout=${TEMPDIR}/docker-rebuild.log    stderr=STDOUT
+    ...    shell=False    stdout=${TEMPDIR}/docker-rebuild.log    stderr=STDOUT
     # Only show output on error
     IF    ${result.rc} != 0
         Log To Console    Docker compose failed:\n${result.stdout}
     END
 
     Log To Console    Waiting for services to be ready...
-    Log To Console    → Checking Keycloak...
-    Wait Until Keyword Succeeds    90s    5s    Check Keycloak Ready    ${KEYCLOAK_URL}
+    Log To Console    → Checking Casdoor...
+    Wait Until Keyword Succeeds    120s    5s    Check Casdoor Ready    ${CASDOOR_URL}
     Log To Console    → Checking Backend...
-    Wait Until Keyword Succeeds    60s    5s    Check Backend Ready    ${BACKEND_URL}
+    Wait Until Keyword Succeeds    300s    5s    Check Backend Ready    ${BACKEND_URL}
     Log To Console    ✓ All containers rebuilt and ready!
 
 Check All Services Ready
     [Documentation]    Check if all required test services are ready
-    ...                Returns success only if Keycloak AND Backend are both healthy
+    ...                Returns success only if Casdoor AND Backend are both healthy
 
-    # Check Keycloak
-    Log To Console    → Checking Keycloak (${KEYCLOAK_URL})...
-    ${keycloak_ok}=    Run Keyword And Return Status    Check Keycloak Ready    ${KEYCLOAK_URL}
-    IF    not ${keycloak_ok}
-        Log To Console    ✗ Keycloak not ready
+    # Check Casdoor
+    Log To Console    → Checking Casdoor (${CASDOOR_URL})...
+    ${casdoor_ok}=    Run Keyword And Return Status    Check Casdoor Ready    ${CASDOOR_URL}
+    IF    not ${casdoor_ok}
+        Log To Console    ✗ Casdoor not ready
         RETURN    ${False}
     END
-    Log To Console    ✓ Keycloak ready
+    Log To Console    ✓ Casdoor ready
 
     # Check Backend
     Log To Console    → Checking Backend (${BACKEND_URL})...
@@ -181,12 +193,12 @@ Check All Services Ready
     # All services ready
     RETURN    ${True}
 
-Check Keycloak Ready
-    [Documentation]    Check if Keycloak is ready
-    [Arguments]    ${keycloak_url}=${KEYCLOAK_URL}
+Check Casdoor Ready
+    [Documentation]    Check if Casdoor is ready via health endpoint
+    [Arguments]    ${casdoor_url}=${CASDOOR_URL}
 
-    Create Session    keycloak_check    ${keycloak_url}    verify=False    timeout=5
-    ${response}=    GET On Session    keycloak_check    /realms/master    expected_status=any
+    Create Session    casdoor_check    ${casdoor_url}    verify=False    timeout=5
+    ${response}=    GET On Session    casdoor_check    /api/health    expected_status=any
     Delete All Sessions
     Should Be Equal As Integers    ${response.status_code}    200
 
@@ -206,7 +218,7 @@ Clear Test Data
     # Clear MongoDB test database
     TRY
         ${result}=    Run Process    docker    exec    ${MONGO_CONTAINER}
-        ...    mongosh    --eval    db.dropDatabase()    test_db    shell=True
+        ...    mongosh    --eval    db.dropDatabase()    ushadow_test    shell=True
         Log To Console    ✓ MongoDB test database cleared
     EXCEPT
         Log To Console    ⚠ Could not clear MongoDB (container may not be running)
@@ -239,3 +251,21 @@ Prod Mode Teardown
     Log To Console    \n=== Prod Mode Teardown (CI/CD) ===
     Stop Test Containers    remove_volumes=${True}
     Log To Console    ✓ Cleanup complete
+
+# Note: test environment provisioning is handled by Provision Test Environment (init.py)
+# which runs casdoor-db-setup and casdoor-provision against .env.test.
+# MongoDB user records are auto-created on first login via _get_or_create_user in auth.py.
+Check Environment Variables
+    [Documentation]    Check required environment variables and return missing ones
+    [Arguments]    @{required_vars}
+
+    @{missing_vars}=    Create List
+    FOR    ${var}    IN    @{required_vars}
+        ${value}=    Get Environment Variable    ${var}    ${EMPTY}
+        IF    '${value}' == '${EMPTY}'
+            Append To List    ${missing_vars}    ${var}
+        ELSE
+            Log    Environment variable ${var} is set    DEBUG
+        END
+    END
+    RETURN    ${missing_vars}

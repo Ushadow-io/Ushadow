@@ -391,7 +391,7 @@ class LeaderInfoResponse(BaseModel):
     # API URLs for specific services
     ushadow_api_url: str  # Main ushadow backend API
     chronicle_api_url: Optional[str] = None  # Chronicle/OMI backend API (if running)
-    keycloak_url: Optional[str] = None  # Keycloak authentication URL
+    auth_url: Optional[str] = None  # Casdoor auth provider URL (for mobile app)
 
     # Streaming URLs (only available when Chronicle service is running)
     ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
@@ -518,9 +518,11 @@ async def get_leader_info():
                 ws_omi_url=service_ws_omi_url,
             ))
 
-    # Build Keycloak URL for mobile devices (exposed on port 8081)
-    # Use HOST's Tailscale IP (leader's IP, not container's IP)
-    keycloak_url = f"http://{leader.tailscale_ip}:8081"
+    # Casdoor URL for mobile devices — use Tailscale HTTPS if available, else local port
+    if tailscale_hostname:
+        auth_url = f"https://{tailscale_hostname}/sso"
+    else:
+        auth_url = f"http://{leader.tailscale_ip}:8082"
 
     return LeaderInfoResponse(
         hostname=leader.hostname,
@@ -532,7 +534,7 @@ async def get_leader_info():
         api_port=api_port,
         ushadow_api_url=ushadow_api_url,
         chronicle_api_url=chronicle_api_url,
-        keycloak_url=keycloak_url,
+        auth_url=auth_url,
         ws_pcm_url=ws_pcm_url,
         ws_omi_url=ws_omi_url,
         unodes=unodes,
@@ -541,14 +543,14 @@ async def get_leader_info():
 
 
 class UNodeInfoResponse(BaseModel):
-    """Public unode information including Keycloak configuration."""
+    """Public unode information including auth configuration."""
     hostname: str
     envname: Optional[str]
     role: UNodeRole
     status: UNodeStatus
     tailscale_ip: str
     api_url: str
-    keycloak_config: Optional[dict] = None
+    auth_config: Optional[dict] = None
 
 
 @router.get("/{hostname}/info", response_model=UNodeInfoResponse)
@@ -558,9 +560,9 @@ async def get_unode_info(hostname: str):
 
     This endpoint does NOT require authentication and is used by:
     - Mobile apps after scanning QR code
-    - External tools that need to discover Keycloak config
+    - External tools that need to discover auth config
 
-    Returns unode details including Keycloak configuration.
+    Returns unode details including Casdoor configuration.
     """
     unode_manager = await get_unode_manager()
     unode = await unode_manager.get_unode(hostname)
@@ -573,22 +575,21 @@ async def get_unode_info(hostname: str):
     port = os.getenv("BACKEND_PORT", "8000")
     api_url = f"http://{unode.tailscale_ip}:{port}"
 
-    # Get Keycloak configuration
-    from src.config.keycloak_settings import get_keycloak_config
+    # Get Casdoor configuration
+    from src.config.casdoor_settings import get_casdoor_config
 
-    kc_config = get_keycloak_config()
+    casdoor_cfg = get_casdoor_config()
 
-    # Mobile URL: explicit override > auto-derived from Tailscale IP + KC port
-    kc_port = os.getenv("KC_PORT", "8081")
-    mobile_url = kc_config.get("mobile_url") or f"http://{unode.tailscale_ip}:{kc_port}"
+    # Mobile URL: explicit override > auto-derived from Tailscale IP + Casdoor port
+    casdoor_port = os.getenv("CASDOOR_PORT", "8082")
+    mobile_url = casdoor_cfg.get("mobile_url") or f"http://{unode.tailscale_ip}:{casdoor_port}"
 
-    keycloak_config = {
-        "enabled": True,  # If this endpoint is reached, Keycloak is configured
-        "public_url": kc_config.get("public_url"),
+    auth_config = {
+        "provider": "casdoor",
+        "public_url": casdoor_cfg.get("public_url"),
         "mobile_url": mobile_url,
-        "realm": kc_config.get("realm"),
-        "frontend_client_id": kc_config.get("frontend_client_id"),
-        "mobile_client_id": "ushadow-mobile",  # Dedicated mobile client
+        "organization": casdoor_cfg.get("organization"),
+        "client_id": casdoor_cfg.get("client_id"),
     }
 
     return UNodeInfoResponse(
@@ -598,7 +599,7 @@ async def get_unode_info(hostname: str):
         status=unode.status,
         tailscale_ip=unode.tailscale_ip,
         api_url=api_url,
-        keycloak_config=keycloak_config,
+        auth_config=auth_config,
     )
 
 
@@ -629,9 +630,8 @@ async def create_join_token(
     Returns the token and a one-liner join command.
     """
     unode_manager = await get_unode_manager()
-    from src.utils.auth_helpers import get_user_id
     response = await unode_manager.create_join_token(
-        user_id=get_user_id(current_user),
+        user_id=str(current_user.id),
         request=request
     )
 
@@ -901,8 +901,7 @@ async def create_public_unode(
         # Step 1: Create join token
         unode_manager = await get_unode_manager()
 
-        # Handle both dict (Keycloak) and User object
-        user_email = current_user.get('email') if isinstance(current_user, dict) else current_user.email
+        user_email = current_user.email
 
         token_data = await unode_manager.create_join_token(
             user_id=user_email,

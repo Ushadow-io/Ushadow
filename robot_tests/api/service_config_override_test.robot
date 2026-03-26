@@ -10,14 +10,18 @@ Documentation    Test that service configuration overrides are written and used 
 Library          RequestsLibrary
 Library          Collections
 Library          OperatingSystem
+
+Resource         ../resources/setup/suite_setup.robot
 Resource         ../resources/api_keywords.robot
 
-Suite Setup      Suite Setup
-Suite Teardown   Suite Teardown
+Variables        ../resources/setup/test_env.py
+
+Suite Setup      Run Keywords    Standard Suite Setup    AND    Backup Config Files    ${OVERRIDES_FILE}
+Suite Teardown   Run Keywords    Restore Config Files    ${OVERRIDES_FILE}    AND    Standard Suite Teardown
 
 *** Variables ***
 ${SERVICE_ID}         chronicle
-${CONFIG_DIR}         /Users/stu/repos/worktrees/ushadow/green/config
+${CONFIG_DIR}         ${CURDIR}/../../config
 ${OVERRIDES_FILE}     ${CONFIG_DIR}/config.overrides.yaml
 ${TEST_MODEL_NAME}    gpt-4-test-model
 
@@ -67,31 +71,5 @@ Service Config Override Write And Use Test
     Log    Step 4: Verified config is available for service startup
     Log    If service starts, it will receive llm_model=${TEST_MODEL_NAME}
 
-    [Teardown]    Test Cleanup
+    [Teardown]    Log    Test completed
 
-*** Keywords ***
-Suite Setup
-    [Documentation]    Setup for test suite
-    Log    Setting up test suite
-
-    # Backup existing overrides file if it exists
-    ${exists}=    Run Keyword And Return Status    File Should Exist    ${OVERRIDES_FILE}
-    Run Keyword If    ${exists}    Copy File    ${OVERRIDES_FILE}    ${OVERRIDES_FILE}.backup
-
-    # Create admin session
-    ${session}=    Get Admin API Session
-    Set Suite Variable    ${admin_session}    ${session}
-
-Suite Teardown
-    [Documentation]    Cleanup after test suite
-    Log    Cleaning up test suite
-
-    # Restore backup if exists
-    ${backup_exists}=    Run Keyword And Return Status    File Should Exist    ${OVERRIDES_FILE}.backup
-    Run Keyword If    ${backup_exists}    Move File    ${OVERRIDES_FILE}.backup    ${OVERRIDES_FILE}
-
-    Delete All Sessions
-
-Test Cleanup
-    [Documentation]    Cleanup after individual test
-    Log    Test completed

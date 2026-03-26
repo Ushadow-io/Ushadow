@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, Query
 
-from src.utils.auth_helpers import get_user_email
 from pydantic import BaseModel
 
 from src.services.auth import get_current_user
@@ -117,7 +116,7 @@ async def get_memory_by_id(
             # Get specific memory by ID
             response = await client.get(
                 f"{openmemory_url}/api/v1/memories/{memory_id}",
-                params={"user_id": get_user_email(current_user), "output_format": "v1.1"}
+                params={"user_id": current_user.email, "output_format": "v1.1"}
             )
 
             if response.status_code == 200:
@@ -126,7 +125,7 @@ async def get_memory_by_id(
                 metadata = data.get("metadata_", {})
                 memory_user_email = metadata.get("chronicle_user_email") or metadata.get("user_email")
 
-                if memory_user_email == get_user_email(current_user) or not memory_user_email:
+                if memory_user_email == current_user.email or not memory_user_email:
                     logger.info(f"[MEMORIES] Found memory in OpenMemory")
                     # OpenMemory uses 'text' field for content
                     content = data.get("text") or data.get("content", "")
@@ -238,7 +237,7 @@ async def get_memories_by_conversation(
         openmemory_memories = await _query_openmemory_by_source_id(
             openmemory_url,
             conversation_id,
-            get_user_email(current_user)  # OpenMemory uses email as user_id
+            current_user.email  # OpenMemory uses email as user_id
         )
         logger.info(f"[MEMORIES] OpenMemory returned {len(openmemory_memories)} memories")
         all_memories.extend(openmemory_memories)
@@ -318,7 +317,7 @@ async def filter_memories(
     """
     try:
         openmemory_url = get_localhost_proxy_url("mem0")
-        user_email = filter_request.user_id or get_user_email(current_user)
+        user_email = filter_request.user_id or current_user.email
 
         logger.info(f"[MEMORIES] Filtering memories for user: {user_email}")
 
@@ -414,7 +413,7 @@ async def get_user_interests(
     """
     try:
         openmemory_url = get_localhost_proxy_url("mem0")
-        user_email = get_user_email(current_user)
+        user_email = current_user.email
 
         logger.info(f"[MEMORIES] Extracting interests for user: {user_email} (last {days_recent} days)")
 

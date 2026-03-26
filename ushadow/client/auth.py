@@ -11,19 +11,11 @@ Usage:
     services = client.list_services()
 """
 
-import json
 import os
 from pathlib import Path
 from typing import Optional, Any
-from urllib.parse import urlencode
 
 import httpx
-
-try:
-    import yaml
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
 
 
 class UshadowClient:
@@ -44,27 +36,28 @@ class UshadowClient:
 
     @classmethod
     def from_env(cls, verbose: bool = False) -> "UshadowClient":
-        """Create client from environment variables and secrets.yaml."""
+        """Create client from environment variables."""
         env_vars = cls._load_env()
-        secrets = cls._load_secrets()
-
-        admin_config = secrets.get("admin", {})
-        email = (
-            admin_config.get("email")
-            or env_vars.get("ADMIN_EMAIL")
-            or os.environ.get("ADMIN_EMAIL", "admin@example.com")
-        )
-        password = (
-            admin_config.get("password")
-            or env_vars.get("ADMIN_PASSWORD")
-            or os.environ.get("ADMIN_PASSWORD")
-        )
 
         port = env_vars.get("BACKEND_PORT", os.environ.get("BACKEND_PORT", "8000"))
         host = env_vars.get("BACKEND_HOST", os.environ.get("BACKEND_HOST", "localhost"))
         base_url = f"http://{host}:{port}"
 
-        return cls(base_url=base_url, email=email, password=password or "", verbose=verbose)
+        # Credentials come from CASDOOR_APP_ADMIN_USER/PASSWORD in .env.
+        # _try_casdoor_direct_grant reads the authoritative values from the
+        # backend settings API (which resolves the same env vars), so these
+        # are only used as a local fallback for the error message.
+        raw_user = (
+            env_vars.get("CASDOOR_APP_ADMIN_USER")
+            or os.environ.get("CASDOOR_APP_ADMIN_USER", "admin")
+        )
+        email = raw_user.split("/")[-1]
+        password = str(
+            env_vars.get("CASDOOR_APP_ADMIN_PASSWORD")
+            or os.environ.get("CASDOOR_APP_ADMIN_PASSWORD", "")
+        )
+
+        return cls(base_url=base_url, email=email, password=password, verbose=verbose)
 
     @staticmethod
     def _load_env() -> dict[str, str]:
@@ -84,18 +77,6 @@ class UshadowClient:
             current = current.parent
         return {}
 
-    @staticmethod
-    def _load_secrets() -> dict:
-        """Load secrets from config/SECRETS/secrets.yaml."""
-        current = Path.cwd()
-        while current != current.parent:
-            secrets_file = current / "config" / "SECRETS" / "secrets.yaml"
-            if secrets_file.exists() and HAS_YAML:
-                with open(secrets_file) as f:
-                    return yaml.safe_load(f) or {}
-            current = current.parent
-        return {}
-
     def _ensure_authenticated(self) -> str:
         """Login if needed, return token."""
         if self._token is not None:
@@ -104,99 +85,88 @@ class UshadowClient:
         if self.verbose:
             print(f"🔐 Logging in as {self.email}...")
 
-        # Try Keycloak direct grant flow first
-        token = self._try_keycloak_direct_grant()
+        token = self._try_casdoor_direct_grant()
         if token:
             self._token = token
             if self.verbose:
-                print("✅ Login successful (Keycloak)")
+                print("✅ Login successful (Casdoor)")
             return self._token
 
-        # Fallback to legacy JWT login
-        try:
-            login_data = urlencode({"username": self.email, "password": self.password})
-            response = httpx.post(
-                f"{self.base_url}/api/auth/jwt/login",
-                content=login_data.encode(),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-            self._token = result["access_token"]
+        raise RuntimeError(
+            f"Authentication failed for {self.email}. "
+            "Check CASDOOR_APP_ADMIN_USER/PASSWORD in .env and that casdoor-provision has been run."
+        )
 
-            if self.verbose:
-                print("✅ Login successful (legacy)")
+    def _try_casdoor_direct_grant(self) -> Optional[str]:
+        """Authenticate via Casdoor Resource Owner Password Credentials grant.
 
-            return self._token
-        except Exception as e:
-            if self.verbose:
-                print(f"❌ Login failed: {e}")
-            raise
-
-    def _try_keycloak_direct_grant(self) -> Optional[str]:
-        """Try to authenticate using Keycloak direct grant (Resource Owner Password Credentials).
-
-        Returns:
-            Access token if successful, None if Keycloak is not available or auth fails
+        Uses the 'password' grant type on the ushadow Casdoor app.
+        Casdoor URL and client_id come from the backend settings API.
+        Client secret comes from CASDOOR_CLIENT_SECRET in .env.
         """
         try:
-            # Get Keycloak configuration from backend
+            # Get Casdoor config from backend settings
             config_response = httpx.get(
-                f"{self.base_url}/api/keycloak/config",
+                f"{self.base_url}/api/settings/config",
                 timeout=5.0,
             )
-
             if config_response.status_code != 200:
                 if self.verbose:
-                    print(f"⚠️  Keycloak config endpoint failed: {config_response.status_code}")
+                    print(f"⚠️  Could not fetch settings: {config_response.status_code}")
                 return None
 
-            kc_config = config_response.json()
+            config = config_response.json()
+            casdoor = config.get("casdoor", {})
+            casdoor_url = casdoor.get("public_url", "http://localhost:8082")
+            client_id = casdoor.get("client_id", "ushadow")
 
-            # Check if Keycloak is enabled
-            if not kc_config.get("enabled"):
-                if self.verbose:
-                    print("⚠️  Keycloak is disabled in backend configuration")
-                return None
+            # Read credentials from .env — backend redacts sensitive values in the API
+            env_vars = self._load_env()
+            client_secret = (
+                env_vars.get("CASDOOR_CLIENT_SECRET")
+                or os.environ.get("CASDOOR_CLIENT_SECRET", "")
+            )
+            username = (
+                env_vars.get("CASDOOR_APP_ADMIN_USER")
+                or os.environ.get("CASDOOR_APP_ADMIN_USER", self.email)
+            ).split("/")[-1]
+            password = str(
+                env_vars.get("CASDOOR_APP_ADMIN_PASSWORD")
+                or os.environ.get("CASDOOR_APP_ADMIN_PASSWORD", "")
+                or self.password
+            )
 
-            # Build token endpoint URL
-            keycloak_url = kc_config.get("public_url", "http://localhost:8081")
-            realm = kc_config.get("realm", "ushadow")
-            token_url = f"{keycloak_url}/realms/{realm}/protocol/openid-connect/token"
+            token_url = f"{casdoor_url}/api/login/oauth/access_token"
 
             if self.verbose:
-                print(f"🔐 Attempting Keycloak authentication: {token_url}")
-                print(f"   User: {self.email}, Realm: {realm}")
+                print(f"🔐 Casdoor ROPC: {token_url} (client_id={client_id})")
 
-            # Use direct grant flow (Resource Owner Password Credentials)
-            token_response = httpx.post(
+            response = httpx.post(
                 token_url,
-                data={
+                json={
                     "grant_type": "password",
-                    "client_id": "ushadow-cli",  # Dedicated CLI client with direct grant enabled
-                    "username": self.email,
-                    "password": self.password,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "username": username,
+                    "password": password,
                 },
                 timeout=10.0,
             )
 
-            if token_response.status_code != 200:
+            if response.status_code != 200:
                 if self.verbose:
                     try:
-                        error_detail = token_response.json()
-                        error_msg = error_detail.get("error_description") or error_detail.get("error")
-                        print(f"⚠️  Keycloak auth failed ({token_response.status_code}): {error_msg}")
+                        err = response.json()
+                        print(f"⚠️  Casdoor auth failed ({response.status_code}): {err.get('error_description') or err.get('error') or err}")
                     except Exception:
-                        print(f"⚠️  Keycloak auth failed: {token_response.status_code} - {token_response.text[:200]}")
+                        print(f"⚠️  Casdoor auth failed: {response.status_code} - {response.text[:200]}")
                 return None
 
-            tokens = token_response.json()
-            return tokens.get("access_token")
+            return response.json().get("access_token")
 
         except Exception as e:
             if self.verbose:
-                print(f"⚠️  Keycloak not available: {e.__class__.__name__}: {e}")
+                print(f"⚠️  Casdoor not available: {e.__class__.__name__}: {e}")
             return None
 
     def _request(

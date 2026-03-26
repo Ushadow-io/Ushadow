@@ -1,0 +1,29 @@
+appname = casdoor
+httpport = 8000
+runmode = dev
+SessionOn = true
+copyrequestbody = true
+
+; Database — PostgreSQL (shared infra postgres instance, casdoor schema)
+driverName = postgres
+dataSourceName = "user=${CASDOOR_PG_USER} password=${CASDOOR_PG_PASSWORD} host=${CASDOOR_PG_HOST} port=5432 sslmode=disable dbname=${CASDOOR_PG_DB}"
+dbName = ${CASDOOR_PG_DB}
+tableNamePrefix =
+showSql = false
+
+; Optional Redis session store (leave empty to use in-memory)
+redisEndpoint =
+
+; Storage & misc
+defaultStorageProvider =
+isCloudIntranet = false
+authState = "casdoor"
+socks5Proxy = ""
+verificationCodeTimeout = 10
+initScore = 2000
+logPostOnly = false
+
+; origin: browser-visible base URL — used as JWT iss claim and for CORS/redirect_uri validation.
+; Must match CASDOOR_EXTERNAL_URL so backend JWT validation succeeds.
+origin = ${CASDOOR_EXTERNAL_URL}
+staticBaseUrl = "https://cdn.casbin.org"

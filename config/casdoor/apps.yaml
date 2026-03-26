@@ -1,0 +1,43 @@
+# Casdoor Application Definitions
+# Apply with: make casdoor-provision
+
+apps:
+  - name: ushadow
+    displayName: "Ushadow"
+    description: "Ushadow — web, mobile, and CLI"
+    clientId: ushadow
+    clientSecret: "${CASDOOR_CLIENT_SECRET}"
+    tokenFormat: JWT
+    expireInHours: 168
+    refreshExpireInHours: 720
+    grantTypes:
+      - authorization_code
+      - refresh_token
+      - password
+    redirectUris:
+      - "http://localhost:*/oauth/callback"
+      - "https://*.ts.net/oauth/callback"
+      - tauri://oauth-callback
+      - ushadow://oauth/callback
+      - "exp://*/--/oauth/callback"
+      - "exp://localhost:*/--/oauth/callback"
+    enablePassword: true
+    enableSignUp: true
+    providers: []
+    enableSignIn: true
+    enableSignOut: true
+    enableCaptcha: false
+    language: en
+    signinMethods:
+      - {name: "Password", displayName: "Password", rule: "All"}
+    # Logo: served from the frontend — AUTH_URL is substituted by the provisioner
+    logo: "${AUTH_URL}/logo.png"
+    signupItems:
+      - {name: "ID",              visible: false, required: true,  prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "Random"}
+      - {name: "Username",        visible: true,  required: true,  prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "None"}
+      - {name: "Display name",    visible: true,  required: false, prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "None"}
+      - {name: "Password",        visible: true,  required: true,  prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "None"}
+      - {name: "Confirm password",visible: true,  required: true,  prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "None"}
+      - {name: "Email",           visible: true,  required: false, prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "No verification"}
+      - {name: "Phone",           visible: false, required: false, prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "None"}
+      - {name: "Agreement",       visible: false, required: false, prompted: false, type: "", customCss: "", label: "", placeholder: "", options: null, regex: "", rule: "None"}

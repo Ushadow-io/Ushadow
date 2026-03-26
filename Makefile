@@ -8,7 +8,9 @@
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
         ushadow-push ushadow-push-local chronicle-push mycelia-push openmemory-push \
-        release env-sync env-sync-apply env-info
+        release env-sync env-sync-apply env-info \
+        \
+        infra-up infra-down infra-logs
 
 # Read .env for display purposes only (actual logic is in run.py)
 -include .env
@@ -96,11 +98,6 @@ help:
 	@echo "  make k8s-show-dns                    - Show current DNS mappings"
 	@echo "  make k8s-test-dns                    - Test DNS resolution"
 	@echo ""
-	@echo "Keycloak realm management:"
-	@echo "  make keycloak-delete-realm - Delete the ushadow realm"
-	@echo "  make keycloak-create-realm - Create realm from realm-export.json"
-	@echo "  make keycloak-reset-realm  - Delete and recreate realm"
-	@echo "  make keycloak-fresh-start  - Complete fresh setup (stop, clear DB, restart, import)"
 	@echo ""
 	@echo "Launcher release:"
 	@echo "  make release VERSION=x.y.z [PLATFORMS=all] [DRAFT=true]"
@@ -566,77 +563,3 @@ release:
 	@echo "   View progress: gh run list --workflow=launcher-release.yml"
 	@echo "   Or visit: https://github.com/$$(git config --get remote.origin.url | sed 's/.*github.com[:/]\(.*\)\.git/\1/')/actions"
 
-# Keycloak realm management
-keycloak-delete-realm:
-	@echo "🗑️  Deleting Keycloak realm 'ushadow'..."
-	@docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
-		--server http://localhost:8080 \
-		--realm master \
-		--user admin \
-		--password admin > /dev/null 2>&1 || \
-		(echo "⚠️  Keycloak not running" && exit 1)
-	@docker exec keycloak /opt/keycloak/bin/kcadm.sh delete realms/ushadow 2>/dev/null || \
-		(echo "⚠️  Realm doesn't exist" && exit 1)
-	@echo "✅ Realm deleted"
-
-keycloak-create-realm:
-	@echo "📦 Creating Keycloak realm 'ushadow' from realm-export.json..."
-	@if [ ! -f config/keycloak/realm-export.json ]; then \
-		echo "❌ Error: config/keycloak/realm-export.json not found"; \
-		exit 1; \
-	fi
-	@docker cp config/keycloak/realm-export.json keycloak:/tmp/realm-import.json
-	@docker exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
-		--server http://localhost:8080 \
-		--realm master \
-		--user admin \
-		--password admin
-	@docker exec keycloak /opt/keycloak/bin/kcadm.sh create realms \
-		-f /tmp/realm-import.json
-	@echo "✅ Realm created and configured"
-
-keycloak-reset-realm: keycloak-delete-realm keycloak-create-realm
-	@echo "✅ Realm reset complete"
-
-keycloak-fresh-start:
-	@echo "🔄 Starting fresh Keycloak setup..."
-	@echo "1. Stopping Keycloak..."
-	@docker stop keycloak 2>/dev/null || true
-	@docker rm keycloak 2>/dev/null || true
-	@echo "2. Clearing Keycloak database..."
-	@docker exec postgres psql -U ushadow -d ushadow -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
-		echo "⚠️  Database already clean or Postgres not running"
-	@echo "3. Starting Keycloak (realm will import automatically)..."
-	@docker-compose -f compose/docker-compose.infra.yml --profile infra up -d keycloak
-	@echo "4. Waiting for Keycloak health check..."
-	@for i in {1..60}; do \
-		printf "   Checking health (attempt $$i/60)...\r"; \
-		if curl -sf http://localhost:$${KEYCLOAK_MGMT_PORT:-9000}/health/ready > /dev/null 2>&1; then \
-			echo "\n   ✅ Keycloak is healthy                    "; \
-			break; \
-		fi; \
-		if [ $$i -eq 60 ]; then \
-			echo "\n   ⚠️  Keycloak health check timeout - check logs: docker logs keycloak"; \
-			exit 1; \
-		fi; \
-		sleep 2; \
-	done
-	@echo "5. Waiting for realm import to complete..."
-	@for i in {1..30}; do \
-		printf "   Checking realm (attempt $$i/30)...\r"; \
-		if curl -sf http://localhost:$${KEYCLOAK_PORT:-8081}/realms/ushadow > /dev/null 2>&1; then \
-			echo "\n   ✅ Realm 'ushadow' is ready                    "; \
-			break; \
-		fi; \
-		if [ $$i -eq 30 ]; then \
-			echo "\n   ⚠️  Realm import timeout - check logs: docker logs keycloak"; \
-		fi; \
-		sleep 2; \
-	done
-	@echo "6. Restarting backend..."
-	@docker ps --format "{{.Names}}" | grep -E "^ushadow-.*-backend$$" | grep -v chronicle | grep -v mycelia | head -1 | xargs -r docker restart
-	@echo "✅ Backend restarted"
-	@echo "✅ Fresh Keycloak setup complete"
-	@echo "   Admin console: http://localhost:$${KEYCLOAK_PORT:-8081}"
-	@echo "   Username: admin"
-	@echo "   Password: admin"

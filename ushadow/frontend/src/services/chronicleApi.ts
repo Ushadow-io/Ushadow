@@ -401,7 +401,7 @@ export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promis
 export async function getChronicleAudioUrl(conversationId: string, cropped: boolean = true): Promise<string> {
   const proxyUrl = await getChronicleProxyUrl()
 
-  // Get auth token - prefer Keycloak token, fallback to legacy token
+  // Get auth token - prefer Casdoor token, fallback to legacy token
   const kcToken = localStorage.getItem('kc_access_token')
   const legacyToken = localStorage.getItem(getStorageKey('token'))
   const token = kcToken || legacyToken || ''

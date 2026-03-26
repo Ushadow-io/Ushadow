@@ -41,13 +41,10 @@ services:
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 
-      # ── Keycloak URLs (both change per environment) ───────────────────────
-      # Internal URL: backend→Keycloak admin API (K8s FQDN)
-      - KC_URL=${KC_URL}
-      # Public URL: browser OAuth redirects and token issuer
-      - KC_HOSTNAME_URL=${KC_HOSTNAME_URL}
-      # ── Keycloak Credentials ──────────────────────────────────────────────
-      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      # ── Casdoor ───────────────────────────────────────────────────────────
+      - CASDOOR_URL=${CASDOOR_URL:-http://casdoor:8000}
+      - CASDOOR_ENDPOINT=${CASDOOR_ENDPOINT:-http://localhost:8082}
+      - CASDOOR_ADMIN_PASSWORD=${CASDOOR_ADMIN_PASSWORD:-123}
 
       # ── K8s-specific ──────────────────────────────────────────────────────
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://ushadow-frontend.ushadow.svc.cluster.local}

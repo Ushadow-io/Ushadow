@@ -25,7 +25,7 @@ from src.models.feed import Post, MastodonAppCredential  # Beanie document model
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
 from src.routers import kubernetes, tailscale, unodes, docker, sse
-from src.routers import github_import, audio_relay, memories, share, keycloak_admin, dashboard
+from src.routers import github_import, audio_relay, memories, share, dashboard
 from src.routers import feed
 from src.routers import settings as settings_api
 from src.middleware import setup_middleware
@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI):
     logger.info("✓ Beanie ODM initialized")
     
     # Create admin user if explicitly configured in secrets.yaml
-    from src.services.auth import create_admin_user_if_needed
+    from src.services.user_manager import create_admin_user_if_needed
     await create_admin_user_if_needed()
 
     # Initialize u-node manager
@@ -163,12 +163,24 @@ async def lifespan(app: FastAPI):
     # Start background task for stale u-node checking
     stale_check_task = asyncio.create_task(check_stale_unodes_task())
 
-    # Register current environment with Keycloak (non-blocking)
+    # Register redirect URIs with Casdoor — localhost + Tailscale if available
     try:
-        from src.services.keycloak_startup import register_current_environment
-        await register_current_environment()
+        from src.services.casdoor_client import register_redirect_uri as casdoor_register_uri
+        from src.services.casdoor_client import get_tailscale_hostname
+
+        port_offset = int(os.getenv("PORT_OFFSET", "10"))
+        webui_port = 3000 + port_offset
+        uris = [f"http://localhost:{webui_port}/oauth/callback"]
+
+        tailscale_hostname = get_tailscale_hostname()
+        if tailscale_hostname:
+            uris.append(f"https://{tailscale_hostname}/oauth/callback")
+
+        for uri in uris:
+            casdoor_register_uri(uri)
+            logger.info(f"[CASDOOR-STARTUP] ✓ Registered redirect URI: {uri}")
     except Exception as e:
-        logger.warning(f"Keycloak auto-registration failed (non-critical): {e}")
+        logger.warning(f"[CASDOOR-STARTUP] Redirect URI registration failed (non-critical): {e}")
 
     yield
 
@@ -211,7 +223,6 @@ app.include_router(github_import.router, prefix="/api/github-import", tags=["git
 app.include_router(audio_relay.router, tags=["audio"])
 app.include_router(memories.router, tags=["memories"])
 app.include_router(share.router, tags=["sharing"])
-app.include_router(keycloak_admin.router, prefix="/api/keycloak", tags=["keycloak-admin"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(feed.router, tags=["feed"])
 

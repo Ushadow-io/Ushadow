@@ -436,7 +436,7 @@ class Settings:
                 logger.debug(f"Infrastructure data available: {list(target.infrastructure.keys())}")
 
             # Load default values from docker-compose.infra.yml
-            # This gives us env vars like KC_REALM that have defaults in the compose file
+            # This gives us env vars like CASDOOR_PORT that have defaults in the compose file
             compose_registry = get_compose_registry()
             infrastructure_overrides = {}
 

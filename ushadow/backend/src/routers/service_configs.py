@@ -112,7 +112,7 @@ async def get_template_env_config(
         # Try to find a matching suggestion with a value for auto-mapping.
         # Use env_var_matches_setting which normalizes underscores to dots and
         # requires a direct or suffix match — prevents false positives like
-        # matching WHISPER_SERVER_URL to keycloak.url just because both end in "url".
+        # matching WHISPER_SERVER_URL to casdoor.url just because both end in "url".
         matching_suggestion = None
         for s in suggestions:
             if s.has_value and env_var_matches_setting(env_name, s.path):

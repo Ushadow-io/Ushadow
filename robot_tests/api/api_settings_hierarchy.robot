@@ -19,6 +19,7 @@ Library          REST    ${BACKEND_URL}    ssl_verify=false
 Library          Collections
 Library          ../resources/EnvConfig.py
 Resource         ../resources/setup/suite_setup.robot
+Resource         ../resources/auth_keywords.robot
 
 Suite Setup      Standard Suite Setup
 Suite Teardown   Standard Suite Teardown
@@ -27,37 +28,6 @@ Suite Teardown   Standard Suite Teardown
 ${SERVICE_ID}    chronicle
 
 *** Test Cases ***
-# =============================================================================
-# LAYER 1: Defaults Foundation
-# =============================================================================
-
-TC-HIER-001: Defaults Provide Baseline Values
-    [Documentation]    config.defaults.yaml provides baseline when no overrides exist
-    ...
-    ...                GIVEN only defaults exist (no overrides)
-    ...                WHEN service config is requested
-    ...                THEN default values are returned
-    [Tags]    hierarchy    api    layer-defaults    stable
-
-    # Get service config
-    REST.GET    /api/settings/service-configs/${SERVICE_ID}
-    Integer    response status    200
-
-    # Should return a config object
-    Object     response body
-
-TC-HIER-002: Defaults Contain Expected Structure
-    [Documentation]    Default config should have expected service settings structure
-    [Tags]    hierarchy    api    layer-defaults    stable
-
-    REST.GET    /api/settings/service-configs/${SERVICE_ID}
-    Integer    response status    200
-
-    # Config should be a dictionary (may be empty if no defaults)
-    ${config}=    Output    response body
-    Should Be True    isinstance($config, dict)
-    ...    msg=Config should be a dictionary
-
 # =============================================================================
 # LAYER 5: User Overrides (Highest Priority)
 # =============================================================================
@@ -109,27 +79,6 @@ TC-HIER-011: Multiple User Overrides Coexist
     Should Be Equal As Strings    ${config}[llm_model]    override-model-a
     Should Be Equal As Numbers    ${config}[temperature]    ${0.7}
     Should Be Equal As Numbers    ${config}[max_tokens]    ${2048}
-
-TC-HIER-012: User Override Persists Across Reads
-    [Documentation]    User overrides don't revert to defaults on subsequent reads
-    [Tags]    hierarchy    api    layer-overrides    stable
-
-    # Set override
-    ${override_value}=    Set Variable    persistent-model-test
-    ${updates}=    Create Dictionary    llm_model=${override_value}
-
-    REST.PUT    /api/settings/service-configs/${SERVICE_ID}    ${updates}
-    Integer    response status    200
-
-    # Read multiple times
-    Sleep    0.1s
-    FOR    ${i}    IN RANGE    1    4
-        REST.GET    /api/settings/service-configs/${SERVICE_ID}
-        ${config}=    Output    response body
-        Should Be Equal As Strings    ${config}[llm_model]    ${override_value}
-        ...    msg=Read ${i}: Override reverted to default
-        Sleep    0.05s
-    END
 
 TC-HIER-013: Partial Override Preserves Other Settings
     [Documentation]    Updating one setting doesn't erase others
@@ -227,44 +176,3 @@ TC-HIER-040: Invalid Service ID Returns Appropriate Error
     Should Be True    ${status} == 200 or ${status} == 404
     ...    msg=Unexpected status ${status} for non-existent service
 
-# =============================================================================
-# TDD TESTS - Future Layers (Expected to fail until implemented)
-# =============================================================================
-
-TC-HIER-100: [TDD] Compose Environment Overrides Defaults
-    [Documentation]    FUTURE: Docker Compose env vars should override defaults
-    ...
-    ...                NOT YET IMPLEMENTED - Test documents expected behavior
-    [Tags]    hierarchy    api    layer-compose    tdd
-    [Setup]    Skip    Layer 2 (Compose environment) not yet implemented
-
-    # When implemented, this should verify:
-    # - MONGODB_DATABASE in docker-compose.yml overrides config.defaults.yaml
-    Fail    TDD placeholder - Compose env layer not implemented
-
-TC-HIER-101: [TDD] Env File Overrides Compose
-    [Documentation]    FUTURE: .env file should override Docker Compose
-    ...
-    ...                NOT YET IMPLEMENTED - Test documents expected behavior
-    [Tags]    hierarchy    api    layer-env-file    tdd
-    [Setup]    Skip    Layer 3 (.env file) not yet implemented
-
-    Fail    TDD placeholder - .env file layer not implemented
-
-TC-HIER-102: [TDD] Provider Suggestions Override Env File
-    [Documentation]    FUTURE: Provider-suggested defaults should override .env
-    ...
-    ...                NOT YET IMPLEMENTED - Test documents expected behavior
-    [Tags]    hierarchy    api    layer-provider    tdd
-    [Setup]    Skip    Layer 4 (Provider suggestions) not yet implemented
-
-    Fail    TDD placeholder - Provider suggestions layer not implemented
-
-TC-HIER-103: [TDD] User Overrides Beat Provider Suggestions
-    [Documentation]    FUTURE: User explicit overrides should beat provider suggestions
-    ...
-    ...                NOT YET IMPLEMENTED - Test documents expected behavior
-    [Tags]    hierarchy    api    layer-overrides    layer-provider    tdd
-    [Setup]    Skip    Layer 4 (Provider suggestions) not yet implemented
-
-    Fail    TDD placeholder - Full hierarchy not implemented

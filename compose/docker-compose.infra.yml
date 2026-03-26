@@ -2,7 +2,7 @@
 # Persistent database layer that stays running across app restarts
 #
 # Usage:
-#   docker compose -f compose/docker-compose.infra.yml --profile infra up -d  # Start core (mongo, redis, keycloak)
+#   docker compose -f compose/docker-compose.infra.yml --profile infra up -d  # Start core (mongo, redis, casdoor)
 #   docker compose -f compose/docker-compose.infra.yml --profile llm up -d    # Start Ollama
 #   docker compose -f compose/docker-compose.infra.yml down                   # Stop (keeps data)
 #   docker compose -f compose/docker-compose.infra.yml down -v                # Stop and remove data
@@ -131,7 +131,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-ushadow}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
       - POSTGRES_DB=${POSTGRES_DB:-ushadow}
-      - POSTGRES_MULTIPLE_DATABASES=${POSTGRES_MULTIPLE_DATABASES:-metamcp,openmemory}
+      - POSTGRES_MULTIPLE_DATABASES=${POSTGRES_MULTIPLE_DATABASES:-metamcp,openmemory,casdoor}
 
       # Infrastructure exports - what this service provides to consumers
       - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
@@ -183,42 +183,23 @@ services:
       retries: 5
       start_period: 30s
 
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    container_name: keycloak
+  casdoor:
+    image: casbin/casdoor:latest
+    container_name: casdoor
     profiles: ["infra"]
     ports:
-      - "${KC_PORT:-8081}:8080"
-      - "${KC_MGMT_PORT:-9000}:9000"  # Management
+      - "${CASDOOR_PORT:-8082}:8000"
     environment:
-      # Keycloak internal config (KC_* are Keycloak's native env vars)
-      - KEYCLOAK_ADMIN=${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
-      - KEYCLOAK_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-admin}
-      - KC_DB=postgres
-      - KC_DB_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ushadow}
-      - KC_DB_USERNAME=${POSTGRES_USER:-ushadow}
-      - KC_DB_PASSWORD=${POSTGRES_PASSWORD:-ushadow}
-
-      # Hostname v2 configuration (Keycloak 26+)
-      # KC_HOSTNAME_STRICT=false allows the backend to call via internal http://keycloak:8080.
-      # KC_PROXY_HEADERS=xforwarded lets Keycloak use X-Forwarded-Host/Proto for the issuer,
-      # so the backend can spoof the public hostname on internal calls to match the token issuer.
-      - KC_HOSTNAME_STRICT=false
-      - KC_HTTP_ENABLED=true
-      - KC_HEALTH_ENABLED=true
-      - KC_PROXY_HEADERS=xforwarded
-
-      # Additional Keycloak config
-      - KC_REALM=${KC_REALM:-ushadow}  # Default realm
-      # Fix JVM SIGBUS crash on ARM64 (aarch64) — disables shared perf memory
-      # that causes PerfLongVariant::sample() to segfault in containers (pid=1)
-      - JAVA_OPTS_APPEND=-XX:-UsePerfData -XX:+DisableAttachMechanism
+      - RUNNING_IN_DOCKER=true
+      # Infrastructure exports
+      - CASDOOR_HOST=${CASDOOR_HOST:-casdoor}
+      - CASDOOR_PORT=${CASDOOR_PORT:-8082}
+      - CASDOOR_ENDPOINT=${CASDOOR_ENDPOINT:-http://localhost:8082}
+      # CASDOOR_ORIGIN: browser-visible URL — used as JWT iss claim and for redirect_uri validation.
+      # Must match CASDOOR_EXTERNAL_URL so backend JWT validation succeeds.
+      # - CASDOOR_ORIGIN=${CASDOOR_EXTERNAL_URL:-http://localhost:8082}
     volumes:
-      - ../ushadow/frontend/keycloak-theme:/opt/keycloak/themes/ushadow:ro
-      - ../config/keycloak:/opt/keycloak/data/import:ro
-    command:
-      - start-dev
-      - --import-realm
+      - ../config/casdoor:/conf
     depends_on:
       postgres:
         condition: service_healthy
@@ -226,13 +207,12 @@ services:
       - ushadow-network
       - infra-network
     restart: unless-stopped
-    # JVM startup + DB migration + realm import takes 60-90s on first boot.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 10s
       timeout: 5s
       retries: 8
-      start_period: 90s
+      start_period: 30s
 
   ollama:
     image: ollama/ollama:latest

@@ -84,13 +84,13 @@ def is_secret_key(name: str) -> bool:
     Examples:
         >>> is_secret_key("OPENAI_API_KEY")  # True - ends with KEY
         >>> is_secret_key("ADMIN_PASSWORD")  # True - contains PASSWORD
-        >>> is_secret_key("KEYCLOAK_HOST")   # False - KEY is part of KEYCLOAK
+        >>> is_secret_key("CASDOOR_HOST")    # False - KEY is not a match
         >>> is_secret_key("REDIS_URL")       # False - no sensitive pattern
     """
     name_lower = name.lower()
 
     # Check for patterns as word boundaries or suffixes to avoid false positives
-    # e.g., "keycloak" contains "key" but shouldn't be treated as secret
+    # e.g., "casdoor" contains "door" but shouldn't be treated as secret
     for pattern in SENSITIVE_PATTERNS:
         # Match if:
         # 1. Pattern is at the end: "api_key", "secret", etc.

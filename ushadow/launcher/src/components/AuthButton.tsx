@@ -61,20 +61,22 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
       console.log('[AuthButton] Backend URL:', backendUrl)
 
       // Declare variables at function scope
-      let keycloakUrl: string
+      let casdoorUrl: string
+      let clientId: string
       let port: number
       let callbackUrl: string
 
-      // Fetch Keycloak config from backend (using Tauri HTTP client to bypass CORS)
-      console.log('[AuthButton] Fetching Keycloak config from backend...')
+      // Fetch Casdoor config from backend (using Tauri HTTP client to bypass CORS)
+      console.log('[AuthButton] Fetching Casdoor config from backend...')
       const configResponse = await tauri.httpRequest(`${backendUrl}/api/settings/config`, 'GET')
       console.log('[AuthButton] Config response status:', configResponse.status)
       if (configResponse.status !== 200) {
         throw new Error(`Failed to fetch config from backend: ${configResponse.status} - ${configResponse.body}`)
       }
       const config = JSON.parse(configResponse.body)
-      keycloakUrl = config.keycloak?.public_url || 'http://localhost:8081'
-      console.log('[AuthButton] Using Keycloak URL:', keycloakUrl)
+      casdoorUrl = config.casdoor?.public_url || 'http://localhost:8082'
+      clientId = config.casdoor?.client_id || 'ushadow'
+      console.log('[AuthButton] Using Casdoor URL:', casdoorUrl)
 
       // Start OAuth callback server
       console.log('[AuthButton] Starting OAuth callback server...')
@@ -82,8 +84,8 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
       console.log('[AuthButton] ✓ Callback server running on port:', port)
       console.log('[AuthButton] Callback URL:', callbackUrl)
 
-      // Register callback URL with Keycloak (using Tauri HTTP client to bypass CORS)
-      console.log('[AuthButton] Registering callback URL with Keycloak...')
+      // Register callback URL with backend (which registers with Casdoor)
+      console.log('[AuthButton] Registering callback URL...')
       const registerResponse = await tauri.httpRequest(
         `${backendUrl}/api/auth/register-redirect-uri`,
         'POST',
@@ -107,9 +109,9 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
       localStorage.setItem('oauth_state', state)
       localStorage.setItem('oauth_backend_url', backendUrl)
 
-      // Build Keycloak login URL
-      const authUrl = new URL(`${keycloakUrl}/realms/ushadow/protocol/openid-connect/auth`)
-      authUrl.searchParams.set('client_id', 'ushadow-frontend')
+      // Build Casdoor authorization URL
+      const authUrl = new URL(`${casdoorUrl}/login/oauth/authorize`)
+      authUrl.searchParams.set('client_id', clientId)
       authUrl.searchParams.set('redirect_uri', callbackUrl)
       authUrl.searchParams.set('response_type', 'code')
       authUrl.searchParams.set('scope', 'openid profile email')
@@ -191,15 +193,15 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
     setIsAuthenticated(false)
     setUsername(null)
 
-    // Optionally open Keycloak logout page
+    // Optionally open Casdoor logout page
     if (environment) {
       try {
         const backendUrl = `http://localhost:${environment.backend_port}`
         const configResponse = await tauri.httpRequest(`${backendUrl}/api/settings/config`, 'GET')
         if (configResponse.status === 200) {
           const config = JSON.parse(configResponse.body)
-          const keycloakUrl = config.keycloak?.public_url || 'http://localhost:8081'
-          const logoutUrl = `${keycloakUrl}/realms/ushadow/protocol/openid-connect/logout`
+          const casdoorUrl = config.casdoor?.public_url || 'http://localhost:8082'
+          const logoutUrl = `${casdoorUrl}/login/oauth/logout`
           await tauri.openBrowser(logoutUrl)
         }
       } catch (error) {
@@ -264,7 +266,7 @@ export function AuthButton({ environment, variant = 'header' }: AuthButtonProps)
           data-testid="login-button-centered"
         >
           <LogIn className="w-6 h-6" />
-          Login with Keycloak
+          Login
         </button>
 
         {environment && (

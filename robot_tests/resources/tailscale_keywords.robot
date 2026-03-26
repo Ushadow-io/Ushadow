@@ -6,8 +6,11 @@ Documentation    Reusable keywords for Tailscale testing
 
 Library          Process
 Library          OperatingSystem
+Library          Collections
 Library          EnvConfig.py
 Library          TailscaleAdmin.py
+
+Variables        setup/test_env.py
 
 *** Keywords ***
 Start Test Tailscale Container
