@@ -497,7 +497,7 @@ class ServiceOrchestrator:
             "preferences": dict(preferences) if hasattr(preferences, 'items') else preferences,
         }
 
-    async def get_env_config(self, name: str, deploy_target: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def get_env_config(self, name: str, deploy_target: Optional[str] = None, config_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get environment variable configuration with suggestions.
 
         Uses the new entity-based Settings API (v2) for resolution.
@@ -506,6 +506,9 @@ class ServiceOrchestrator:
             name: Service name
             deploy_target: Optional deployment target (unode hostname or cluster ID)
                           to include deploy_env layer in resolution
+            config_id: Optional ServiceConfig ID — when provided, previously saved
+                       deploy values are included as instance_override so the
+                       deploy dialog pre-fills with the user's last values.
         """
         service = self._find_service(name)
         if not service:
@@ -518,7 +521,7 @@ class ServiceOrchestrator:
         # Get resolutions using new entity-based API
         # Use for_deploy_config if deploy_target is provided (includes deploy_env + infrastructure layers)
         if deploy_target:
-            resolutions = await settings_v2.for_deploy_config(deploy_target, service.service_id)
+            resolutions = await settings_v2.for_deploy_config(deploy_target, service.service_id, config_id=config_id)
         else:
             resolutions = await settings_v2.for_service(service.service_id)
 

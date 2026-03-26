@@ -518,8 +518,13 @@ class KubernetesDeployService:
             logger.info(f"Created service {name} in {namespace}")
         except ApiException as e:
             if e.status == 409:
-                core_api.patch_namespaced_service(name=name, namespace=namespace, body=body)
-                logger.info(f"Updated service {name} in {namespace}")
+                # Delete-and-recreate avoids port merge issues: K8s strategic merge patch
+                # for Service ports uses the port number as the merge key, so changing a
+                # port number via patch adds a port rather than replacing it.
+                core_api.delete_namespaced_service(name=name, namespace=namespace)
+                logger.info(f"Deleted existing service {name}")
+                core_api.create_namespaced_service(namespace=namespace, body=body)
+                logger.info(f"Recreated service {name} in {namespace}")
             else:
                 raise
         return name

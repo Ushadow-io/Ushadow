@@ -23,18 +23,15 @@ providers:
     credentials:
       api_key:
         env_var: OPENAI_API_KEY
-        settings_path: api_keys.openai_api_key
         label: "OpenAI API Key"
         link: "https://platform.openai.com/api-keys"
         required: true
       base_url:
         env_var: OPENAI_BASE_URL
-        settings_path: llm.openai_base_url
         label: "Base URL"
         default: "https://api.openai.com/v1"
       model:
         env_var: OPENAI_MODEL
-        settings_path: llm.openai_model
         label: "Model"
         default: "gpt-4o-mini"
         required: true
@@ -54,18 +51,15 @@ providers:
     credentials:
       api_key:
         env_var: ANTHROPIC_API_KEY
-        settings_path: api_keys.anthropic_api_key
         label: "Anthropic API Key"
         link: "https://console.anthropic.com/settings/keys"
         required: true
       base_url:
         env_var: ANTHROPIC_BASE_URL
-        settings_path: llm.anthropic_base_url
         label: "Base URL"
         default: "https://api.anthropic.com"
       model:
         env_var: ANTHROPIC_MODEL
-        settings_path: llm.anthropic_model
         label: "Model"
         default: "claude-3-5-sonnet-20241022"
 
@@ -102,12 +96,10 @@ providers:
         value: ""
       base_url:
         env_var: OLLAMA_BASE_URL
-        settings_path: llm.ollama_base_url
         label: "Ollama URL"
         required: true
       model:
         env_var: OLLAMA_MODEL
-        settings_path: llm.ollama_model
         label: "Model"
         default: "llama3.1:latest"
 
@@ -126,18 +118,15 @@ providers:
     credentials:
       api_key:
         env_var: OPENAI_API_KEY
-        settings_path: api_keys.openai_compatible_api_key
         label: "API Key (if required)"
         required: false
       base_url:
         env_var: OPENAI_BASE_URL
-        settings_path: llm.openai_compatible_base_url
         label: "Server URL"
         required: true
         default: "http://localhost:8080/v1"
       model:
         env_var: OPENAI_MODEL
-        settings_path: llm.openai_compatible_model
         label: "Model Name"
         required: true
 

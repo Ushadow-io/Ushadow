@@ -32,8 +32,12 @@ providers:
         value: "https://api.deepgram.com/v1"
       language:
         env_var: TRANSCRIPTION_LANGUAGE
-        settings_path: transcription.language
         default: "en"
+      model:
+        env_var: DEEPGRAM_MODEL
+        label: "Model"
+        description: "Deepgram model to use (e.g. nova-2-general, nova-3)"
+        default: "nova-2-general"
 
     ui:
       icon: deepgram
@@ -59,8 +63,12 @@ providers:
         value: "https://api.mistral.ai/v1"
       language:
         env_var: TRANSCRIPTION_LANGUAGE
-        settings_path: transcription.language
         default: "en"
+      model:
+        env_var: MISTRAL_MODEL
+        label: "Model"
+        description: "Mistral transcription model (e.g. voxtral-mini-2507)"
+        default: "voxtral-mini-2507"
 
     ui:
       icon: mistral
@@ -86,24 +94,33 @@ providers:
         port: 9000
       gpu_support: true
 
+    k8s:
+      resources:
+        limits:
+          cpu: "2000m"
+          memory: "3Gi"
+          amd.com/gpu: "1"
+        requests:
+          cpu: "500m"
+          memory: "2Gi"
+      node_selector:
+        amd.com/gpu.family: GC_11_5_0
+
     credentials:
       api_key:
         env_var: WHISPER_API_KEY
         value: ""
       server_url:
         env_var: WHISPER_SERVER_URL
-        settings_path: transcription.whisper_server_url
         label: "Whisper Server URL"
         type: url
         default: "http://faster-whisper:8000"
         required: true
       language:
         env_var: TRANSCRIPTION_LANGUAGE
-        settings_path: transcription.language
         default: "en"
       model:
         env_var: WHISPER_MODEL
-        settings_path: transcription.whisper_model
         label: "Model"
         description: "HuggingFace model name for faster-whisper (e.g. Systran/faster-whisper-base)"
         default: "Systran/faster-whisper-base"
@@ -136,7 +153,6 @@ providers:
         value: ""
       server_url:
         env_var: PARAKEET_SERVER_URL
-        settings_path: transcription.parakeet_server_url
         default: "http://parakeet:8001"
         label: "Parakeet Server URL"
         type: url
@@ -144,6 +160,11 @@ providers:
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         default: "en"
+      model:
+        env_var: PARAKEET_MODEL
+        label: "Model"
+        description: "Parakeet ASR model variant"
+        default: "parakeet-tdt-0.6b-v2"
 
     ui:
       icon: nvidia

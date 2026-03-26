@@ -180,7 +180,8 @@ class Settings:
     async def for_deploy_config(
         self,
         deploy_target: str,
-        service_id: str
+        service_id: str,
+        config_id: Optional[str] = None,
     ) -> Dict[str, Resolution]:
         """
         Get settings preview for a deployment target.
@@ -188,16 +189,19 @@ class Settings:
         Args:
             deploy_target: Target environment (cluster ID, unode hostname, etc.)
             service_id: Service identifier
+            config_id: Optional ServiceConfig ID — when provided, previously saved
+                       deploy values are included as instance_override (layer 7),
+                       so the deploy dialog pre-fills with the user's last values.
 
         Returns:
             Dict mapping env var names to Resolution objects
 
         Resolution layers applied:
             config_default → compose_default → env_file → capability →
-            infrastructure → template_override
+            infrastructure → template_override → instance_override (if config_id)
         """
         env_vars, compose_defaults, capability_values, template_overrides = \
-            await self._load_service_context(service_id)
+            await self._load_service_context(service_id, config_id=config_id)
 
         # Load infrastructure values if deploy_target is a K8s target
         infrastructure_values = await self._load_infrastructure_defaults(
@@ -206,6 +210,9 @@ class Settings:
         )
         infrastructure_overrides = await self._load_infrastructure_overrides(deploy_target)
 
+        # Load saved deploy values from ServiceConfig as instance_overrides (highest priority)
+        instance_overrides = await self._load_service_config_overrides(config_id) if config_id else {}
+
         return await self._resolve_all(
             env_vars=env_vars,
             compose_defaults=compose_defaults,
@@ -213,7 +220,7 @@ class Settings:
             infrastructure_values=infrastructure_values,
             template_overrides=template_overrides,
             infrastructure_overrides=infrastructure_overrides,
-            instance_overrides={},
+            instance_overrides=instance_overrides,
         )
 
     async def for_deployment(
@@ -621,10 +628,49 @@ class Settings:
             logger.warning(f"Failed to load infrastructure for {deploy_target_id}: {e}")
             return {}
 
+    async def _load_service_config_overrides(self, config_id: str) -> Dict[str, str]:
+        """
+        Load env var overrides from a ServiceConfig entry.
+
+        Handles both plain values and { _from_setting: "path" } references,
+        mirroring the logic in _load_deployment_context.
+
+        Args:
+            config_id: ServiceConfig ID (e.g. "chronicle-backend-pink")
+
+        Returns:
+            Dict mapping env var names to their resolved string values.
+        """
+        from src.services.service_config_manager import get_service_config_manager
+
+        config_mgr = get_service_config_manager()
+        service_config = config_mgr.get_service_config(config_id)
+        if not service_config or not service_config.config or not service_config.config.values:
+            return {}
+
+        overrides: Dict[str, str] = {}
+        for env_var, value in service_config.config.values.items():
+            if isinstance(value, dict) and '_from_setting' in value:
+                setting_path = value['_from_setting']
+                resolved = await self._store.get(setting_path)
+                if resolved:
+                    overrides[env_var] = str(resolved)
+            elif value:
+                overrides[env_var] = str(value)
+
+        logger.info(f"[Load] [ServiceConfig Override] Loaded {len(overrides)} overrides from config_id={config_id!r}")
+        return overrides
+
     async def _load_service_context(
-        self, service_id: str
+        self, service_id: str, config_id: Optional[str] = None
     ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str]]:
-        """Load service schema, resolve capabilities, and load template overrides."""
+        """Load service schema, resolve capabilities, and load template overrides.
+
+        Args:
+            service_id: Compose service template ID (e.g. "mycelia-compose:mycelia-backend")
+            config_id: Optional ServiceConfig instance ID. When provided, capability
+                       resolution uses the instance ID so instance-level wiring is honoured.
+        """
         from src.services.compose_registry import get_compose_registry
         from src.services.capability_resolver import CapabilityResolver
 
@@ -645,9 +691,11 @@ class Settings:
         if service.requires:
             try:
                 resolver = CapabilityResolver()
-                # Use resolve_for_instance so wiring is always checked — the service
-                # name doubles as the consumer ID (matches target_config_id in wiring.yaml)
-                capability_values = await resolver.resolve_for_instance(service_id)
+                # If a ServiceConfig instance ID is available use it so instance-level
+                # wiring (stored in service_configs.yaml) is picked up. Fall back to the
+                # template ID which checks wiring.yaml and global selected_providers.
+                capability_id = config_id or service_id
+                capability_values = await resolver.resolve_for_instance(capability_id)
             except Exception as e:
                 logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
 
@@ -781,7 +829,7 @@ class Settings:
                                 logger.warning(f"[Load] [ServiceConfig Override] {env_var}: _from_setting path {setting_path!r} resolved to None")
                     elif value:
                         instance_overrides_from_config[env_var] = str(value)
-                    logger.info(f"[Load] [ServiceConfig Override] {env_var} = {value}")
+                        logger.info(f"[Load] [ServiceConfig Override] {env_var} = {value}")
         else:
             # Not a ServiceConfig - try as direct service_id/template_id
             logger.info(f"[Settings] for_deployment({deployment_id}): Not a ServiceConfig, using as service_id")
@@ -989,7 +1037,10 @@ class Settings:
             # 2. Compose file default
             if env_var in compose_defaults:
                 value = compose_defaults[env_var]
-                if value and str(value).strip():
+                # Skip sentinel/placeholder defaults so higher-specificity layers
+                # (e.g. api_keys.* fuzzy match at layer 1) can provide the real value.
+                _PLACEHOLDER_DEFAULTS = {"none", "null", "", "undefined", "changeme"}
+                if value and str(value).strip() and str(value).strip().lower() not in _PLACEHOLDER_DEFAULTS:
                     results[env_var] = Resolution(
                         value=str(value),
                         source=Source.COMPOSE_DEFAULT,
@@ -1156,9 +1207,12 @@ class Settings:
 
                 value_type = infer_value_type(str_value) if has_value else 'empty'
 
-                # Type compatibility rules
+                # Name match always wins — e.g. MYCELIA_CLIENT_ID → api_keys.mycelia_client_id
                 is_compatible = False
-                if expected_type == 'secret':
+                if env_var_matches_setting(env_var_name, path):
+                    is_compatible = True
+                # Type compatibility rules
+                elif expected_type == 'secret':
                     is_compatible = (value_type == 'secret' or
                                     (value_type == 'empty' and section in ('api_keys', 'security')) or
                                     is_secret_key(path))

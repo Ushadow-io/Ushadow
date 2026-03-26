@@ -376,6 +376,8 @@ class KubernetesManifestBuilder:
         }
         if k8s_volumes:
             pod_spec["volumes"] = k8s_volumes
+        if spec.node_selector:
+            pod_spec["nodeSelector"] = spec.node_selector
 
         selector_labels = {
             "app.kubernetes.io/name": name,
@@ -429,6 +431,48 @@ class KubernetesManifestBuilder:
         spec: KubernetesDeploymentSpec,
         container_ports: List[Dict],
     ) -> Dict:
+        ingress_class = spec.ingress.get("ingressClassName", "nginx")
+        path = spec.ingress.get("path", "/")
+        backend = {
+            "service": {
+                "name": name,
+                "port": {"number": container_ports[0]["port"]},
+            }
+        }
+        http_rule = {
+            "paths": [{
+                "path": path,
+                "pathType": "Prefix",
+                "backend": backend,
+            }]
+        }
+
+        if ingress_class == "tailscale":
+            proxy_group = spec.ingress.get("proxyGroup", "ushadow-proxies")
+            # Tailscale uses the short hostname (before first dot) in TLS hosts
+            host = spec.ingress.get("host", name)
+            short_host = host.split(".")[0]
+            annotations = {
+                "tailscale.com/proxy-group": proxy_group,
+                **spec.annotations,
+            }
+            return {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "Ingress",
+                "metadata": {
+                    "name": f"{name}-ts-ingress",
+                    "namespace": namespace,
+                    "labels": labels,
+                    "annotations": annotations,
+                },
+                "spec": {
+                    "ingressClassName": "tailscale",
+                    "rules": [{"http": http_rule}],
+                    "tls": [{"hosts": [short_host]}],
+                },
+            }
+
+        # nginx (default)
         ingress_annotations = {
             "nginx.ingress.kubernetes.io/ssl-redirect": "false",
             "nginx.ingress.kubernetes.io/proxy-body-size": "50m",
@@ -449,18 +493,7 @@ class KubernetesManifestBuilder:
                 "ingressClassName": "nginx",
                 "rules": [{
                     "host": spec.ingress.get("host", f"{name}.local"),
-                    "http": {
-                        "paths": [{
-                            "path": spec.ingress.get("path", "/"),
-                            "pathType": "Prefix",
-                            "backend": {
-                                "service": {
-                                    "name": name,
-                                    "port": {"number": container_ports[0]["port"]},
-                                }
-                            },
-                        }]
-                    },
+                    "http": http_rule,
                 }],
             },
         }

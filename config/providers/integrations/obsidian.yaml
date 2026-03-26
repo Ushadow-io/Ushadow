@@ -15,7 +15,6 @@ providers:
     credentials:
       source_path:
         env_var: OBSIDIAN_VAULT_PATH
-        settings_path: integrations.obsidian.vault_path
         label: "Vault Path"
         description: "Full path to your Obsidian vault directory"
         type: string
@@ -23,7 +22,6 @@ providers:
 
       sync_interval:
         env_var: OBSIDIAN_SYNC_INTERVAL
-        settings_path: integrations.obsidian.sync_interval
         label: "Auto-Sync Interval (seconds)"
         description: "How often to automatically sync (0 to disable auto-sync)"
         type: integer

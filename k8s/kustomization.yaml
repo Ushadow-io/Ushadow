@@ -18,6 +18,15 @@ resources:
   - certificate.yaml
   # - infra/  # Infrastructure managed separately
 
+# K8s-specific env vars loaded from .env.k8s (gitignored, copy from .env and update for K8s)
+# Provides: KC_HOSTNAME_URL, KC_URL, CORS_ORIGINS, USHADOW_PUBLIC_URL, etc.
+configMapGenerator:
+  - name: backend-k8s-env
+    envs:
+      - .env.k8s
+generatorOptions:
+  disableNameSuffixHash: true
+
 # Add common labels to all resources
 labels:
   - pairs:

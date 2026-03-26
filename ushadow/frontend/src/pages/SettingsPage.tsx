@@ -1,4 +1,4 @@
-import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle, Globe, Wifi, Zap } from 'lucide-react'
+import { Settings, Key, Database, Server, Eye, EyeOff, CheckCircle, Trash2, RefreshCw, AlertTriangle, AlertCircle, Globe, Wifi, Zap, Copy, Check } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { settingsApi, servicesApi } from '../services/api'
 import { JsonTreeViewer } from '../components/JsonTreeViewer'
@@ -35,9 +35,15 @@ export default function SettingsPage() {
   const [provisioningTokens, setProvisioningTokens] = useState(false)
   const [tokenResult, setTokenResult] = useState<{ client_id: string; token_preview: string } | null>(null)
   const [tokenError, setTokenError] = useState<string | null>(null)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [showMyceliaToken, setShowMyceliaToken] = useState(false)
+  const [myceliaCredentials, setMyceliaCredentials] = useState<{ client_id: string; token: string } | null>(null)
 
   useEffect(() => {
     loadConfig()
+    settingsApi.getMyceliaCredentials()
+      .then(r => setMyceliaCredentials(r.data))
+      .catch(() => {/* not provisioned yet */})
   }, [])
 
   const loadConfig = async () => {
@@ -77,10 +83,21 @@ export default function SettingsPage() {
       const response = await servicesApi.provisionMyceliaTokens(force)
       setTokenResult(response.data)
       await loadConfig()
+      settingsApi.getMyceliaCredentials().then(r => setMyceliaCredentials(r.data)).catch(() => {})
     } catch (err: any) {
       setTokenError(err?.response?.data?.detail || 'Failed to provision Mycelia tokens')
     } finally {
       setProvisioningTokens(false)
+    }
+  }
+
+  const copyToClipboard = async (text: string, keyName: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedKey(keyName)
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch {
+      // clipboard unavailable
     }
   }
 
@@ -335,10 +352,49 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {apiKeys.some(k => k.name === 'mycelia_token') && !tokenResult && (
-              <div className="mt-3 flex items-center space-x-2 text-sm text-green-600 dark:text-green-400" data-testid="mycelia-token-present">
-                <CheckCircle className="h-4 w-4" />
-                <span>Credentials already provisioned</span>
+            {myceliaCredentials && !tokenResult && (
+              <div className="mt-4 space-y-3" data-testid="mycelia-token-present">
+                <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Stored credentials</p>
+                <div className="space-y-1" data-testid="mycelia-client-id-row">
+                  <p className="text-xs text-neutral-500">Client ID</p>
+                  <div className="flex items-center space-x-2">
+                    <code className="flex-1 text-sm font-mono bg-neutral-100 dark:bg-neutral-800 px-3 py-1.5 rounded truncate">
+                      {myceliaCredentials.client_id}
+                    </code>
+                    <button
+                      onClick={() => copyToClipboard(myceliaCredentials.client_id, 'mycelia_client_id')}
+                      className="p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 shrink-0"
+                      data-testid="mycelia-copy-client-id"
+                      title="Copy client ID"
+                    >
+                      {copiedKey === 'mycelia_client_id' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1" data-testid="mycelia-token-row">
+                  <p className="text-xs text-neutral-500">Token (API Key)</p>
+                  <div className="flex items-center space-x-2">
+                    <code className="flex-1 text-sm font-mono bg-neutral-100 dark:bg-neutral-800 px-3 py-1.5 rounded break-all">
+                      {showMyceliaToken ? myceliaCredentials.token : '••••••••••••••••••••'}
+                    </code>
+                    <button
+                      onClick={() => setShowMyceliaToken(v => !v)}
+                      className="p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 shrink-0"
+                      data-testid="mycelia-toggle-token"
+                      title="Show/hide token"
+                    >
+                      {showMyceliaToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                    <button
+                      onClick={() => copyToClipboard(myceliaCredentials.token, 'mycelia_token')}
+                      className="p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 shrink-0"
+                      data-testid="mycelia-copy-token"
+                      title="Copy token"
+                    >
+                      {copiedKey === 'mycelia_token' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -348,9 +404,9 @@ export default function SettingsPage() {
               Saved API Keys
             </h3>
 
-            {apiKeys.length > 0 ? (
+            {apiKeys.filter(k => !['mycelia_token', 'mycelia_client_id'].includes(k.name)).length > 0 ? (
               <div className="space-y-3">
-                {apiKeys.map((key) => (
+                {apiKeys.filter(k => !['mycelia_token', 'mycelia_client_id'].includes(k.name)).map((key) => (
                   <div
                     key={key.name}
                     className="flex items-center justify-between p-4 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg"
@@ -385,7 +441,7 @@ export default function SettingsPage() {
             ) : (
               <div className="text-center py-8 text-neutral-500">
                 <Key className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                <p>No API keys saved yet</p>
+                <p>No other API keys saved</p>
                 <p className="text-sm mt-1">Configure services on the Services page to add API keys</p>
               </div>
             )}

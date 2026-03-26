@@ -54,6 +54,10 @@ class KubernetesCluster(BaseModel):
         False,
         description="Whether Tailscale MagicDNS is configured"
     )
+    tailscale_proxy_group: Optional[str] = Field(
+        None,
+        description="Tailscale ProxyGroup name to annotate ingresses with (e.g. 'ushadow-proxies')"
+    )
 
     def to_unode(self, env_name: str, public_url: Optional[str] = None) -> Any:
         """Return a UNode view of this cluster for unified node handling."""
@@ -169,6 +173,7 @@ class KubernetesClusterUpdate(BaseModel):
     ingress_class: Optional[str] = None
     ingress_enabled_by_default: Optional[bool] = None
     tailscale_magicdns_enabled: Optional[bool] = None
+    tailscale_proxy_group: Optional[str] = None
 
 
 class KubernetesDeploymentSpec(BaseModel):
@@ -215,6 +220,12 @@ class KubernetesDeploymentSpec(BaseModel):
     dns_policy: Optional[str] = Field(
         None,
         description="DNS policy for pod (ClusterFirst, Default, ClusterFirstWithHostNet, None). Default: ClusterFirst"
+    )
+
+    # Scheduling
+    node_selector: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Node selector labels to constrain pod scheduling (e.g. {'amd.com/gpu.product-name': 'Radeon_8060S_Graphics'})"
     )
 
     # Advanced options

@@ -49,14 +49,12 @@ providers:
     config:
       enable_graph:
         env_var: ENABLE_GRAPH_MEMORY
-        settings_path: service_preferences.openmemory.enable_graph
         label: "Enable Graph Memory"
         description: "Use Neo4j for relationship tracking"
         type: boolean
         default: false
       neo4j_password:
         env_var: NEO4J_PASSWORD
-        settings_path: service_preferences.openmemory.neo4j_password
         label: "Neo4j Password"
         type: secret
         required_if: "enable_graph == true"
@@ -130,7 +128,6 @@ providers:
         value: "https://api.mem0.ai"
       api_key:
         env_var: MEM0_API_KEY
-        settings_path: api_keys.mem0_api_key
         label: "Mem0 API Key"
         link: "https://app.mem0.ai/dashboard/api-keys"
         required: true

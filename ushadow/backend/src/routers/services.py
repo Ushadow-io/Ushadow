@@ -793,6 +793,9 @@ async def proxy_service_request(
 
     # Remove host header (will be set by httpx)
     headers.pop("host", None)
+    # Strip conditional cache headers — proxy has no cache to serve 304 content from
+    for h in ["if-none-match", "if-modified-since", "if-unmodified-since", "if-match", "if-range"]:
+        headers.pop(h, None)
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -1069,6 +1072,7 @@ async def get_service_config(
 async def get_env_config(
     name: str,
     deploy_target: Optional[str] = None,
+    config_id: Optional[str] = None,
     orchestrator: ServiceOrchestrator = Depends(get_orchestrator)
 ) -> Dict[str, Any]:
     """
@@ -1080,8 +1084,11 @@ async def get_env_config(
         name: Service name
         deploy_target: Optional deployment target (unode hostname or cluster ID)
                       to include deploy_env layer in resolution
+        config_id: Optional ServiceConfig ID — when provided, previously saved
+                   deploy values are included so the deploy dialog pre-fills
+                   with the user's last values for this target.
     """
-    result = await orchestrator.get_env_config(name, deploy_target=deploy_target)
+    result = await orchestrator.get_env_config(name, deploy_target=deploy_target, config_id=config_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Service '{name}' not found")
     return result

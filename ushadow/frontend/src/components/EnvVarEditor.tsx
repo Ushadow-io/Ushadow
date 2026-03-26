@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Lock, KeyRound, Link } from 'lucide-react'
+import { Lock, KeyRound, Link, Pencil } from 'lucide-react'
 import { EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface EnvVarEditorProps {
@@ -151,7 +151,7 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
               <Pencil className="w-3 h-3" />
             </button>
             <span className="text-xs text-neutral-700 dark:text-neutral-300 truncate font-mono" title={config.value}>
-              {isSecret ? '•'.repeat(Math.min(config.value.length, 20)) : config.value}
+              {isSecret ? '•'.repeat(Math.min((config.value || '').length, 20)) : config.value}
             </span>
             <span className={`ml-auto px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
               config.source === 'env_file' ? 'bg-green-600/20 text-green-600 dark:text-green-400' :

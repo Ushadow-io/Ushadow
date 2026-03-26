@@ -126,6 +126,10 @@ class DiscoveredService:
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all)
 
+    # Install hook
+    setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
+    k8s_resources: Optional[Dict[str, Any]] = None  # K8s resource limits/requests override
+
     # YAML provider this compose service implements (links to provider registry)
     provider_id: Optional[str] = None
 
@@ -294,6 +298,8 @@ class ComposeServiceRegistry:
                 infra_services=service.infra_services,
                 route_path=service.route_path,
                 wizard=service.wizard,
+                setup_script=service.setup_script,
+                k8s_resources=service.k8s_resources,
                 exposes=service.exposes,
                 tags=service.tags,
                 environments=service.environments,

@@ -1,5 +1,6 @@
 # ushadow Frontend Dockerfile
 # React + Vite Dashboard
+# rebuild: 2026-03-17
 
 FROM node:20-alpine AS builder
 
@@ -29,6 +30,7 @@ RUN npm run build
 
 # Production stage
 FROM nginx:alpine
+LABEL org.opencontainers.image.revision="force-rebuild-20260317"
 
 # Copy built assets from builder
 COPY --from=builder /app/dist /usr/share/nginx/html

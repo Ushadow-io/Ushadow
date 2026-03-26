@@ -70,6 +70,23 @@ async def get_config():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/mycelia-credentials")
+async def get_mycelia_credentials():
+    """Return the stored Mycelia client_id and token unmasked for UI display."""
+    try:
+        settings = get_settings()
+        client_id = await settings.get("api_keys.mycelia_client_id")
+        token = await settings.get("api_keys.mycelia_token")
+        if not client_id or not token:
+            raise HTTPException(status_code=404, detail="Mycelia credentials not yet provisioned")
+        return {"client_id": str(client_id), "token": str(token)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Mycelia credentials: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/config")
 async def update_config(updates: Dict[str, Any]):
     """Update configuration values."""

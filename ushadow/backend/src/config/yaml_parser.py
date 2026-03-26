@@ -139,6 +139,7 @@ class ComposeService:
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
     wizard: Optional[str] = None  # Setup wizard ID
     setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
+    k8s_resources: Optional[Dict[str, Any]] = None  # K8s resource limits/requests override
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # URLs this service exposes (audio intake, http api, etc.)
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all envs)
@@ -302,6 +303,7 @@ class ComposeParser(BaseYAMLParser):
         environments = service_meta.get("environments", [])  # Environments where visible (empty = all)
         capability_env_mappings = service_meta.get("capability_env_mappings", {})  # capability -> {key -> ENV_VAR}
         provider_id = service_meta.get("provider_id")  # YAML provider this compose service implements
+        k8s_resources = service_meta.get("k8s_resources")  # K8s resource limits/requests override
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
@@ -329,6 +331,7 @@ class ComposeParser(BaseYAMLParser):
             route_path=route_path,
             wizard=wizard,
             setup_script=setup_script,
+            k8s_resources=k8s_resources,
             exposes=exposes,
             tags=tags,
             environments=environments,

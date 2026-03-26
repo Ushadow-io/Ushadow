@@ -49,6 +49,9 @@ capabilities:
       language:
         type: string
         description: "Target language code (e.g., en, es, fr)"
+      model:
+        type: string
+        description: "Model identifier to use for transcription"
 
   # ==========================================================================
   # Memory Capability

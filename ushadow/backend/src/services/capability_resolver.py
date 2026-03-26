@@ -444,12 +444,39 @@ class CapabilityResolver:
                     )
                     return compose_provider, provider_config
 
+            # 1b. Wiring may point directly to a YAML provider ID (no ServiceConfig instance).
+            # get_provider_for_capability silently drops wiring when source_config_id isn't a
+            # ServiceConfig, so we check the raw wiring here as a fallback.
+            for wiring in service_config_manager.list_wiring():
+                if (wiring.target_config_id == consumer_config_id and
+                        wiring.target_capability == capability):
+                    provider = self._provider_registry.get_provider(wiring.source_config_id)
+                    if provider:
+                        logger.info(
+                            f"Using wired YAML provider '{wiring.source_config_id}' "
+                            f"for {capability} (consumer={consumer_config_id})"
+                        )
+                        return provider, None
+                    # Also try compose service backed by a YAML provider
+                    compose_provider = self._get_provider_for_compose_service(wiring.source_config_id)
+                    if compose_provider:
+                        logger.info(
+                            f"Using wired compose service '{wiring.source_config_id}' "
+                            f"backed by YAML provider '{compose_provider.id}' "
+                            f"for {capability} (consumer={consumer_config_id})"
+                        )
+                        return compose_provider, None
+
         # 2. Try to get explicit selection from settings
         selected = await self._settings.get(f"selected_providers.{capability}")
         if selected:
             provider = self._provider_registry.get_provider(selected)
             if provider:
-                return provider, None
+                # Look up ServiceConfig for this provider so user-configured values
+                # (e.g. a custom server_url) take priority over template defaults.
+                from src.services.service_config_manager import get_service_config_manager
+                provider_config = get_service_config_manager().get_service_config_by_template(provider.id)
+                return provider, provider_config
             logger.warning(f"Selected provider '{selected}' not found for {capability}")
 
         # 3. Fall back to default based on wizard mode
@@ -462,7 +489,9 @@ class CapabilityResolver:
                 f"Using default provider '{default_provider.id}' for {capability} "
                 f"(mode={mode})"
             )
-            return default_provider, None
+            from src.services.service_config_manager import get_service_config_manager
+            provider_config = get_service_config_manager().get_service_config_by_template(default_provider.id)
+            return default_provider, provider_config
 
         return None, None
 

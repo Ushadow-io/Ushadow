@@ -153,12 +153,43 @@ export const myceliaApi = {
 
   getStatus: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/health`),
 
-  // Conversations
-  getConversations: (params?: { limit?: number; skip?: number; start?: string; end?: string }) =>
-    api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations`, { params }),
+  // Conversations — queried from the objects resource (isConversation: true)
+  getConversations: async (params?: { limit?: number; skip?: number }) => {
+    const response = await api.post(`/api/services/${MYCELIA_SERVICE}/proxy/api/resource/objects`, {
+      action: 'list',
+      filters: { isConversation: true },
+      options: {
+        sort: { createdAt: -1 },
+        limit: params?.limit ?? 25,
+        skip: params?.skip ?? 0,
+      },
+    })
+    const docs: any[] = Array.isArray(response.data) ? response.data : []
+    const conversations = docs.map((doc: any) => {
+      const timeRange = doc.timeRanges?.[0]
+      const durationSeconds = timeRange?.start && timeRange?.end
+        ? Math.round((new Date(timeRange.end).getTime() - new Date(timeRange.start).getTime()) / 1000)
+        : undefined
+      const summaries: any[] = doc.summaries ?? []
+      const llmSummary = summaries.filter((s: any) => s.type === 'llm').pop()
+      return {
+        conversation_id: doc._id?.$oid ?? doc._id,
+        audio_uuid: doc.metadata?.extractedWith?.chunkId ?? doc._id?.$oid ?? doc._id,
+        title: doc.name ?? 'Untitled',
+        summary: llmSummary?.text ?? doc.description,
+        created_at: doc.createdAt?.$date ?? doc.createdAt,
+        client_id: 'mycelia',
+        duration_seconds: durationSeconds,
+        has_memory: summaries.length > 0,
+        icon: doc.icon,
+      }
+    })
+    return { data: { conversations, count: conversations.length } }
+  },
+
+  // Single conversation by ID — uses mycelia's ConversationService (includes transcript segments)
   getConversation: (id: string) =>
     api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/${id}`),
-  getConversationStats: () => api.get(`/api/services/${MYCELIA_SERVICE}/proxy/data/conversations/stats`),
 
   // Audio Timeline Data
   getAudioItems: (params: { start: string; end: string; resolution?: string }) =>
@@ -202,6 +233,9 @@ export const settingsApi = {
 
   /** Get unmasked secret value by path (server-side only) */
   getSecret: (keyPath: string) => api.get<{ value: string }>(`/api/settings/secret/${keyPath}`),
+
+  /** Get unmasked Mycelia client_id and token for UI display */
+  getMyceliaCredentials: () => api.get<{ client_id: string; token: string }>('/api/settings/mycelia-credentials'),
 
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),
@@ -314,14 +348,20 @@ export const servicesApi = {
   getConfig: (name: string) => api.get(`/api/services/${name}/config`),
 
   /** Get environment variable configuration with suggestions */
-  getEnvConfig: (name: string, deployTarget?: string) => api.get<{
-    service_id: string
-    service_name: string
-    compose_file: string
-    requires: string[]
-    required_env_vars: EnvVarInfo[]
-    optional_env_vars: EnvVarInfo[]
-  }>(`/api/services/${name}/env${deployTarget ? `?deploy_target=${encodeURIComponent(deployTarget)}` : ''}`),
+  getEnvConfig: (name: string, deployTarget?: string, configId?: string) => {
+    const params = new URLSearchParams()
+    if (deployTarget) params.set('deploy_target', deployTarget)
+    if (configId) params.set('config_id', configId)
+    const qs = params.toString()
+    return api.get<{
+      service_id: string
+      service_name: string
+      compose_file: string
+      requires: string[]
+      required_env_vars: EnvVarInfo[]
+      optional_env_vars: EnvVarInfo[]
+    }>(`/api/services/${name}/env${qs ? `?${qs}` : ''}`)
+  },
 
   /** Save environment variable configuration */
   updateEnvConfig: (name: string, envVars: EnvVarConfig[]) =>

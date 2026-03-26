@@ -218,6 +218,7 @@ class ProviderRegistry:
             description=data.get('description'),
             env_maps=env_maps,
             docker=docker_config,
+            k8s=data.get('k8s'),
             icon=ui_data.get('icon'),
             tags=ui_data.get('tags', []),
             uses=data.get('uses', []),

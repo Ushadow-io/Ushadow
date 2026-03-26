@@ -69,6 +69,7 @@ build_and_push() {
     info "---------------------------------------------"
 
     docker buildx build \
+        --builder "$BUILDER_NAME" \
         --platform "$PLATFORMS" \
         --tag "$full_image" \
         --file "$dockerfile" \

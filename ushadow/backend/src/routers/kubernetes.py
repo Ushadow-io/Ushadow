@@ -16,6 +16,7 @@ from src.models.kubernetes import (
 )
 from src.services.kubernetes import get_kubernetes_manager
 from src.services.compose_registry import get_compose_registry
+from src.services.provider_registry import get_provider_registry
 from src.services.auth import get_current_user
 from src.models.user import User
 
@@ -70,6 +71,72 @@ async def list_clusters(
     """List all registered Kubernetes clusters."""
     k8s_manager = await get_kubernetes_manager()
     return await k8s_manager.list_clusters()
+
+
+@router.get("/services/available")
+async def get_available_services(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get list of all available services from compose registry.
+
+    Returns discovered services that can be deployed to Kubernetes.
+    """
+    registry = get_compose_registry()
+    services = registry.get_services()
+
+    # Convert to serializable format
+    return {
+        "services": [
+            {
+                "service_id": svc.service_id,
+                "service_name": svc.service_name,
+                "display_name": svc.display_name or svc.service_name,
+                "description": svc.description,
+                "image": svc.image,
+                "requires": svc.requires,
+                "namespace": svc.namespace,
+            }
+            for svc in services
+        ]
+    }
+
+
+@router.get("/services/infra")
+async def get_infra_services(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get list of infrastructure services.
+
+    Returns services identified as infrastructure (databases, caches, etc.).
+    """
+    registry = get_compose_registry()
+    services = registry.get_services()
+
+    # Filter for infrastructure services
+    # Infrastructure typically doesn't have 'requires' (it's what others require)
+    # Or it's in the infra namespace/has infra in the name
+    infra_services = [
+        svc for svc in services
+        if (not svc.requires or  # No dependencies = infrastructure
+            "infra" in svc.namespace.lower() if svc.namespace else False or
+            any(name in svc.service_name.lower()
+                for name in ["mongo", "redis", "postgres", "qdrant", "neo4j"]))
+    ]
+
+    return {
+        "services": [
+            {
+                "service_id": svc.service_id,
+                "service_name": svc.service_name,
+                "display_name": svc.display_name or svc.service_name,
+                "type": svc.service_name.split("-")[0] if "-" in svc.service_name else svc.service_name,
+                "image": svc.image,
+            }
+            for svc in infra_services
+        ]
+    }
 
 
 @router.get("/{cluster_id}", response_model=KubernetesCluster)
@@ -151,72 +218,6 @@ async def update_cluster(
         raise HTTPException(status_code=404, detail="Cluster not found")
 
     return updated_cluster
-
-
-@router.get("/services/available")
-async def get_available_services(
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get list of all available services from compose registry.
-
-    Returns discovered services that can be deployed to Kubernetes.
-    """
-    registry = get_compose_registry()
-    services = registry.get_services()
-
-    # Convert to serializable format
-    return {
-        "services": [
-            {
-                "service_id": svc.service_id,
-                "service_name": svc.service_name,
-                "display_name": svc.display_name or svc.service_name,
-                "description": svc.description,
-                "image": svc.image,
-                "requires": svc.requires,
-                "namespace": svc.namespace,
-            }
-            for svc in services
-        ]
-    }
-
-
-@router.get("/services/infra")
-async def get_infra_services(
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get list of infrastructure services.
-
-    Returns services identified as infrastructure (databases, caches, etc.).
-    """
-    registry = get_compose_registry()
-    services = registry.get_services()
-
-    # Filter for infrastructure services
-    # Infrastructure typically doesn't have 'requires' (it's what others require)
-    # Or it's in the infra namespace/has infra in the name
-    infra_services = [
-        svc for svc in services
-        if (not svc.requires or  # No dependencies = infrastructure
-            "infra" in svc.namespace.lower() if svc.namespace else False or
-            any(name in svc.service_name.lower()
-                for name in ["mongo", "redis", "postgres", "qdrant", "neo4j"]))
-    ]
-
-    return {
-        "services": [
-            {
-                "service_id": svc.service_id,
-                "service_name": svc.service_name,
-                "display_name": svc.display_name or svc.service_name,
-                "type": svc.service_name.split("-")[0] if "-" in svc.service_name else svc.service_name,
-                "image": svc.image,
-            }
-            for svc in infra_services
-        ]
-    }
 
 
 @router.post("/{cluster_id}/scan-infra")
@@ -393,6 +394,26 @@ async def deploy_service_to_cluster(
     # Auto-populate k8s_spec with cluster ingress defaults
     k8s_spec = request.k8s_spec or KubernetesDeploymentSpec()
 
+    # Apply service-defined k8s defaults if not overridden by request
+    compose_service = get_compose_registry().get_service(request.service_id)
+    provider = get_provider_registry().get_provider(request.service_id)
+
+    if k8s_spec.resources is None:
+        # 1. Check compose service x-ushadow k8s_resources
+        if compose_service and compose_service.k8s_resources:
+            k8s_spec.resources = compose_service.k8s_resources
+            logger.info(f"Applied compose k8s resource defaults for {request.service_id}: {k8s_spec.resources}")
+        elif provider and provider.k8s and provider.k8s.get("resources"):
+            # 2. Fall back to provider k8s.resources
+            k8s_spec.resources = provider.k8s["resources"]
+            logger.info(f"Applied provider k8s resource defaults for {request.service_id}: {k8s_spec.resources}")
+
+    if not k8s_spec.node_selector:
+        # Apply node_selector from provider k8s config
+        if provider and provider.k8s and provider.k8s.get("node_selector"):
+            k8s_spec.node_selector = provider.k8s["node_selector"]
+            logger.info(f"Applied provider node_selector for {request.service_id}: {k8s_spec.node_selector}")
+
     # Auto-configure ingress if cluster has ingress configured
     if cluster.ingress_domain:
         if k8s_spec.ingress is None:
@@ -406,22 +427,26 @@ async def deploy_service_to_cluster(
                     "enabled": True,
                     "host": hostname,
                     "path": "/",
-                    "ingressClassName": cluster.ingress_class
+                    "ingressClassName": cluster.ingress_class,
                 }
+                if cluster.ingress_class == "tailscale":
+                    k8s_spec.ingress["proxyGroup"] = cluster.tailscale_proxy_group or "ushadow-proxies"
                 logger.info(f"✓ Auto-configured ingress: {hostname}")
         elif k8s_spec.ingress.get("enabled") and not k8s_spec.ingress.get("host"):
             # Frontend enabled ingress but no hostname - auto-generate
             service_name = resolved_service.name.lower().replace(" ", "-").replace("_", "-")
             k8s_spec.ingress["host"] = f"{service_name}.{cluster.ingress_domain}"
             k8s_spec.ingress["ingressClassName"] = cluster.ingress_class
+            if cluster.ingress_class == "tailscale" and "proxyGroup" not in k8s_spec.ingress:
+                k8s_spec.ingress["proxyGroup"] = cluster.tailscale_proxy_group or "ushadow-proxies"
             logger.info(f"✓ Auto-generated ingress hostname: {k8s_spec.ingress['host']}")
 
     # Add node selector if node_name specified
     if request.node_name:
         # Add node selector to ensure pod runs on specific node
-        if not k8s_spec.labels:
-            k8s_spec.labels = {}
-        k8s_spec.labels["kubernetes.io/hostname"] = request.node_name
+        if not k8s_spec.node_selector:
+            k8s_spec.node_selector = {}
+        k8s_spec.node_selector["kubernetes.io/hostname"] = request.node_name
         logger.info(f"Targeting node: {request.node_name}")
 
     # Deploy

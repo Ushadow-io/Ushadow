@@ -18,7 +18,6 @@ spec:
         - env:
             - name: NODE_ENV
               value: production
-            - name: VITE_ENV_NAME
           image: registry.temp.skaffold/ushadow-frontend
           name: ushadow-webui
           ports:

@@ -333,6 +333,14 @@ class ServiceConfigManager:
         self._ensure_loaded()
         return self._service_configs.get(config_id)
 
+    def get_service_config_by_template(self, template_id: str) -> Optional[ServiceConfig]:
+        """Find the first ServiceConfig whose template_id matches (e.g. a provider config)."""
+        self._ensure_loaded()
+        for config in self._service_configs.values():
+            if config.template_id == template_id:
+                return config
+        return None
+
     def get_config_overrides(self, config_id: str) -> Dict[str, Any]:
         """Get the config values for this instance, excluding interpolations.
 

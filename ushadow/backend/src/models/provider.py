@@ -91,6 +91,9 @@ class Provider(BaseModel):
     # Docker config (for local providers)
     docker: Optional[DockerConfig] = None
 
+    # Kubernetes overrides (resources, etc.) for local providers deployed to K8s
+    k8s: Optional[Dict[str, Any]] = None
+
     # UI metadata (inlined)
     icon: Optional[str] = None
     tags: List[str] = Field(default_factory=list)

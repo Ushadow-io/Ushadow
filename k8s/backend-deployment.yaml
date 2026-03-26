@@ -15,43 +15,15 @@ spec:
         io.kompose.service: backend
     spec:
       containers:
-        - env:
-            - name: MONGODB_URI
-              valueFrom:
-                secretKeyRef:
-                  name: ushadow-secret
-                  key: MONGODB_URI
-                  optional: true
-            # ── Keycloak URLs ───────────────────────────────────────────────
-            # Internal: backend→Keycloak admin API (K8s FQDN)
-            - name: KC_URL
-              value: http://keycloak.root.svc.cluster.local:8080
-            # Public: browser OAuth redirects and token issuer
-            - name: KC_HOSTNAME_URL
-              value: https://keycloak.spangled-kettle.ts.net
-            # Public frontend URL for CORS (browser→backend and Keycloak webOrigins)
-            - name: CORS_ORIGINS
-              value: https://ushadow.chakra,https://ushadow.spangled-kettle.ts.net,https://ush.spangled-kettle.ts.net
-            # ── Credentials ─────────────────────────────────────────────────
-            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ushadow-secret
-                  key: KEYCLOAK_ADMIN_PASSWORD
-                  optional: true
-            # ── Cluster identity ─────────────────────────────────────────────
-            # USHADOW_CLUSTER_NAME: must match the cluster name (or cluster_id)
-            # registered in the ushadow UI. Used by the mobile QR endpoint to
-            # auto-detect the current deploy target.
-            - name: USHADOW_CLUSTER_NAME
-              value: k8s
-            # USHADOW_PUBLIC_URL: the public-facing base URL for this ushadow
-            # installation (what the mobile app uses to reach the API).
-            # Must be reachable from mobile devices - typically the ingress host.
-            - name: USHADOW_PUBLIC_URL
-              value: https://ush.spangled-kettle.ts.net
-            - name: CONFIG_DIR
-              value: /config
+        - envFrom:
+            # K8s env vars sourced from .env.k8s (KC_HOSTNAME_URL, CORS_ORIGINS, etc.)
+            - configMapRef:
+                name: backend-k8s-env
+            # Secrets (MONGODB_URI, KEYCLOAK_ADMIN_PASSWORD) — apply once manually:
+            #   kubectl apply -f k8s/secret.yaml
+            - secretRef:
+                name: ushadow-secret
+                optional: true
           image: registry.temp.skaffold/ushadow-backend
           name: ushadow-backend
           ports:
@@ -62,6 +34,11 @@ spec:
               mountPath: /config
             - name: data
               mountPath: /app/data
+      tolerations:
+        - key: "gpu"
+          operator: "Equal"
+          value: "amd"
+          effect: "NoSchedule"
       volumes:
         - name: config
           persistentVolumeClaim:

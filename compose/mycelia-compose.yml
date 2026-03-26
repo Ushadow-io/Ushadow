@@ -6,7 +6,7 @@
 #
 # Access:
 #   - Web UI: http://localhost:${MYCELIA_FRONTEND_PORT:-8080}
-#   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-8888}
+#   - Backend API: http://localhost:${MYCELIA_BACKEND_PORT:-5173}
 #
 # Image Strategy:
 #   - Submodule checked out: Builds from local source (./mycelia)
@@ -37,18 +37,18 @@ x-ushadow:
       - name: audio_intake
         type: audio
         path: /ws/audio
-        port: 8888
+        port: 5173
         metadata:
           protocol: wyoming
           formats: [pcm, opus]  # Unified endpoint auto-detects format
       - name: http_api
         type: http
         path: /
-        port: 8888
+        port: 5173
       - name: health
         type: health
         path: /health
-        port: 8888
+        port: 5173
   mycelia-frontend:
     display_name: "Mycelia Frontend"
     description: "Mycelia web interface"
@@ -67,7 +67,9 @@ services:
     ports:
       - "${MYCELIA_FRONTEND_PORT:-8080}:8080"
     environment:
-      - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:8888}
+      - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:5173}
+      # Internal cluster URL used by nginx proxy — always cluster DNS, never external Tailscale URL
+      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://mycelia-backend:5173}
       - MYCELIA_TOKEN=${MYCELIA_TOKEN:-none}
       - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-none}
     networks:
@@ -89,11 +91,11 @@ services:
     command: deno run -A server.ts serve
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
     ports:
-      - "${MYCELIA_BACKEND_PORT:-8888}:8888"
+      - "${MYCELIA_BACKEND_PORT:-5173}:5173"
     environment:
       # Application URLs
-      - MYCELIA_URL=${MYCELIA_URL:-http://localhost:8888}
-      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://localhost:8888}
+      - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:5173}
+      - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://mycelia-backend:5173}
       - MYCELIA_FRONTEND_HOST=${MYCELIA_FRONTEND_HOST:-http://mycelia-frontend:8080}
 
       # Authentication - optional at startup, set by mycelia startup script after first boot
@@ -145,7 +147,7 @@ services:
     networks:
       - ushadow-network
     healthcheck:
-      test: ["CMD", "deno", "eval", "const res = await fetch('http://localhost:8888/health'); Deno.exit(res.ok ? 0 : 1);"]
+      test: ["CMD", "deno", "eval", "const res = await fetch('http://localhost:5173/health'); Deno.exit(res.ok ? 0 : 1);"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -168,7 +170,7 @@ services:
     pull_policy: missing
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-python-worker
     environment:
-      - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:8888}
+      - MYCELIA_URL=${MYCELIA_URL:-http://mycelia-backend:5173}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
     volumes:
       - mycelia_worker_data:/root/.cache

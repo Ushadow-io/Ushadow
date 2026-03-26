@@ -139,41 +139,29 @@ export default function DeployToK8sModal({ isOpen, onClose, cluster: initialClus
 
     try {
       console.log('📦 Selected service:', service.service_id)
-      console.log('🔧 Current infraServices state:', infraServices)
 
-      // Load environment variable schema — pass the cluster's deployment_target_id so the
-      // backend resolves infrastructure values (mongo, redis, etc.) for this specific cluster.
+      // Build instanceId for this service+cluster combination
+      const sanitizedServiceId = service.service_id.replace(/[^a-z0-9-]/g, '-')
+      const clusterName = selectedCluster?.name.toLowerCase().replace(/[^a-z0-9-]/g, '-') ?? ''
+      const instanceId = `${sanitizedServiceId}-${clusterName}`
+
+      // Load environment variable schema — pass deploy_target and config_id so the backend
+      // resolves infrastructure values AND includes previously saved deploy values
+      // (instance_override layer) in a single call, per the settings resolution hierarchy.
       const deployTargetId = selectedCluster?.deployment_target_id
-      const envResponse = await servicesApi.getEnvConfig(service.service_id, deployTargetId)
+      const envResponse = await servicesApi.getEnvConfig(service.service_id, deployTargetId, instanceId)
       const envData = envResponse.data
 
       const allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
       setEnvVars(allEnvVars)
 
-      // Use backend-resolved values as a baseline, then overlay any previously saved
-      // ServiceConfig overrides so re-deploying preserves user-modified values.
-      const sanitizedServiceId = service.service_id.replace(/[^a-z0-9-]/g, '-')
-      const clusterName = selectedCluster?.name.toLowerCase().replace(/[^a-z0-9-]/g, '-') ?? ''
-      const instanceId = `${sanitizedServiceId}-${clusterName}`
-
-      let savedOverrides: Record<string, any> = {}
-      try {
-        const existingConfig = await svcConfigsApi.getServiceConfig(instanceId)
-        savedOverrides = existingConfig.data?.config?.values ?? {}
-      } catch {
-        // No existing ServiceConfig — first deploy, no overrides to load
-      }
-
       const initialConfigs: Record<string, EnvVarConfig> = {}
       allEnvVars.forEach(envVar => {
-        const savedValue = savedOverrides[envVar.name]
         initialConfigs[envVar.name] = {
           name: envVar.name,
-          source: savedValue ? 'override' : ((envVar.source as EnvVarConfig['source']) || 'default'),
-          setting_path: typeof savedValue === 'object' && savedValue?._from_setting
-            ? savedValue._from_setting
-            : envVar.setting_path,
-          value: typeof savedValue === 'string' ? savedValue : (envVar.resolved_value || envVar.value || ''),
+          source: (envVar.source as EnvVarConfig['source']) || 'default',
+          setting_path: envVar.setting_path,
+          value: envVar.resolved_value || envVar.value || '',
           new_setting_path: undefined,
         }
       })

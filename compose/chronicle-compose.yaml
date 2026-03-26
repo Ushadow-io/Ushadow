@@ -40,6 +40,13 @@ x-ushadow:
     display_name: "Chronicle Workers"
     description: "Background workers for Chronicle (transcription, memory, audio processing)"
     requires: [llm, transcription]
+    k8s_resources:
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+      requests:
+        cpu: "100m"
+        memory: "2Gi"
   chronicle-webui:
     display_name: "Chronicle Web UI"
     description: "Web interface for Chronicle voice journal"
