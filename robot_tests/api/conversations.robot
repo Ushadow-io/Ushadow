@@ -28,13 +28,10 @@ Resource         ../resources/auth_keywords.robot
 # Import centralized test configuration
 Variables        ../resources/setup/test_env.py
 
-Suite Setup      Conversation Suite Setup
-Suite Teardown   Conversation Suite Teardown
+Suite Setup      Standard Suite Setup
+Suite Teardown   Standard Suite Teardown
 
 *** Variables ***
-# Session names
-${API_SESSION}              conversation_session
-
 # API endpoints
 ${CONVERSATIONS_BASE}       /api/chronicle/conversations
 
@@ -48,13 +45,13 @@ ${TEST_CONVERSATION_ID}     ${EMPTY}
 
 TC-CONV-001: List Conversations
     [Documentation]    List all conversations for current user
-    ..
+    ...
     ...                GIVEN: User has conversations in Chronicle
     ...                WHEN: GET /api/chronicle/conversations
     ...                THEN: Returns paginated list of conversations
     [Tags]    conversation    high-priority    api
 
-    ${response}=    GET On Session    ${API_SESSION}    ${CONVERSATIONS_BASE}
+    ${response}=    GET On Session    admin_session    ${CONVERSATIONS_BASE}
     ...    expected_status=any
 
     # Should succeed or return empty list
@@ -87,11 +84,13 @@ TC-CONV-001: List Conversations
 
 # =============================================================================
 # Section 8.2: Create & Retrieve Conversations
+# NOTE: TC-CONV-003 intentionally runs before TC-CONV-002 — creation must
+#       succeed first to populate TEST_CONVERSATION_ID for the get test.
 # =============================================================================
 
 TC-CONV-003: Create Conversation
     [Documentation]    Create a new conversation
-    ..
+    ...
     ...                GIVEN: Valid conversation data
     ...                WHEN: POST /api/chronicle/conversations
     ...                THEN: Conversation created successfully
@@ -103,7 +102,7 @@ TC-CONV-003: Create Conversation
     ...    description=Automated test conversation
     ...    user_email=${TEST_USER_EMAIL}
 
-    ${response}=    POST On Session    ${API_SESSION}    ${CONVERSATIONS_BASE}
+    ${response}=    POST On Session    admin_session    ${CONVERSATIONS_BASE}
     ...    json=${conversation_data}
     ...    expected_status=any
 
@@ -131,7 +130,7 @@ TC-CONV-003: Create Conversation
 
 TC-CONV-002: Get Conversation Details
     [Documentation]    Get detailed information about a conversation
-    ..
+    ...
     ...                GIVEN: Valid conversation ID
     ...                WHEN: GET /api/chronicle/conversations/{id}
     ...                THEN: Returns conversation with messages
@@ -142,7 +141,7 @@ TC-CONV-002: Get Conversation Details
         Skip    No conversation ID available (creation may have failed)
     END
 
-    ${response}=    GET On Session    ${API_SESSION}
+    ${response}=    GET On Session    admin_session
     ...    ${CONVERSATIONS_BASE}/${TEST_CONVERSATION_ID}
     ...    expected_status=any
 
@@ -169,7 +168,7 @@ TC-CONV-002: Get Conversation Details
 
 TC-CONV-004: Update Conversation
     [Documentation]    Update conversation title or metadata
-    ..
+    ...
     ...                GIVEN: Existing conversation ID
     ...                WHEN: PUT/PATCH /api/chronicle/conversations/{id}
     ...                THEN: Conversation updated successfully
@@ -183,7 +182,7 @@ TC-CONV-004: Update Conversation
     ${update_data}=    Create Dictionary
     ...    title=Updated Test Conversation
 
-    ${response}=    PUT On Session    ${API_SESSION}
+    ${response}=    PUT On Session    admin_session
     ...    ${CONVERSATIONS_BASE}/${TEST_CONVERSATION_ID}
     ...    json=${update_data}
     ...    expected_status=any
@@ -199,7 +198,7 @@ TC-CONV-004: Update Conversation
 
 TC-CONV-005: Delete Conversation
     [Documentation]    Delete a conversation
-    ..
+    ...
     ...                GIVEN: Existing conversation ID
     ...                WHEN: DELETE /api/chronicle/conversations/{id}
     ...                THEN: Conversation deleted successfully
@@ -210,7 +209,7 @@ TC-CONV-005: Delete Conversation
         Skip    No conversation ID available
     END
 
-    ${response}=    DELETE On Session    ${API_SESSION}
+    ${response}=    DELETE On Session    admin_session
     ...    ${CONVERSATIONS_BASE}/${TEST_CONVERSATION_ID}
     ...    expected_status=any
 
@@ -224,27 +223,3 @@ TC-CONV-005: Delete Conversation
         Log    Delete not supported or conversation not found
     END
 
-*** Keywords ***
-Conversation Suite Setup
-    [Documentation]    Setup test environment and API session
-
-    # CRITICAL: Call standard suite setup first
-    Suite Setup
-
-    # Get authenticated admin session
-    ${admin_session}=    Get Admin API Session
-    Set Suite Variable    ${API_SESSION}    ${admin_session}
-
-Conversation Suite Teardown
-    [Documentation]    Cleanup test data and test environment
-
-    # Delete test conversation if it exists
-    IF    '${TEST_CONVERSATION_ID}' != '${EMPTY}'
-        Run Keyword And Ignore Error    DELETE On Session    ${API_SESSION}
-        ...    ${CONVERSATIONS_BASE}/${TEST_CONVERSATION_ID}
-    END
-
-    Delete All Sessions
-
-    # CRITICAL: Call standard suite teardown
-    Suite Teardown

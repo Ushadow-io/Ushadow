@@ -2,7 +2,7 @@
 """
 Setup utilities for Ushadow quickstart script.
 Provides port checking, Redis database validation, secrets management,
-and other setup helpers.
+Casdoor provisioning, and other setup helpers.
 """
 
 import sys
@@ -412,24 +412,13 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
             'chronicle': {'api_key': ''}
         }
 
-    # Ensure keycloak section exists with admin credentials
-    if 'keycloak' not in data:
-        data['keycloak'] = {}
-
-    # Set Keycloak admin credentials (separate from Ushadow admin)
-    # These match KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD in .env
-    if not data['keycloak'].get('admin_user'):
-        data['keycloak']['admin_user'] = os.getenv('KC_BOOTSTRAP_ADMIN_USERNAME', 'admin')
+    # Ensure casdoor section exists with client_secret and admin credentials
+    if 'casdoor' not in data:
+        data['casdoor'] = {}
         created_new = True
 
-    if not data['keycloak'].get('admin_password'):
-        data['keycloak']['admin_password'] = os.getenv('KC_BOOTSTRAP_ADMIN_PASSWORD', 'admin')
-        created_new = True
-
-    # Only store backend_client_secret if provided (optional for public clients)
-    keycloak_client_secret = os.getenv('KC_CLIENT_SECRET', '')
-    if keycloak_client_secret:
-        data['keycloak']['backend_client_secret'] = keycloak_client_secret
+    if not data['casdoor'].get('client_secret'):
+        data['casdoor']['client_secret'] = secrets.token_urlsafe(32)
         created_new = True
 
     # Write back to file
@@ -538,3 +527,39 @@ if __name__ == '__main__':
         except Exception as e:
             print(json.dumps({'success': False, 'error': str(e)}))
             sys.exit(1)
+
+
+def provision_casdoor(env_file: Path, config_dir: Path, backend_dir: Path) -> tuple[bool, str]:
+    """Run casdoor-provision against the given env file.
+
+    Uses ``uv run --directory backend casdoor-provision`` so it always runs in
+    the backend venv where the ushadow-sdk is installed.  All provisioning
+    parameters (CASDOOR_EXTERNAL_URL, CASDOOR_PG_CONTAINER, …) are read from
+    *env_file* by the SDK itself.
+
+    Paths are resolved to absolute so they remain valid after ``uv run``
+    changes cwd to the backend directory.
+
+    Returns:
+        (success, message) — message contains last few lines of output on
+        failure, or empty string on success.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "uv", "run",
+                "--directory", str(backend_dir.resolve()),
+                "casdoor-provision",
+                "--env-file", str(env_file.resolve()),
+                "--config-dir", str(config_dir.resolve()),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            return True, ""
+        tail = "\n".join((result.stderr or result.stdout or "").strip().splitlines()[-5:])
+        return False, tail
+    except Exception as e:
+        return False, str(e)

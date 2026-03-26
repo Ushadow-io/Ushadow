@@ -410,8 +410,9 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
       const resp = await tauri.httpRequest(`http://localhost:${environment.backend_port}/api/settings/config`, 'GET')
       if (resp.status === 200) {
         const config = JSON.parse(resp.body)
-        const kcUrl = config.keycloak?.public_url || 'http://localhost:8081'
-        const registerUrl = `${kcUrl}/realms/ushadow/protocol/openid-connect/registrations?client_id=ushadow-frontend&response_type=code&scope=openid`
+        const casdoorUrl = config.casdoor?.public_url || 'http://localhost:8082'
+        const clientId = config.casdoor?.client_id || 'ushadow'
+        const registerUrl = `${casdoorUrl}/login/oauth/authorize?client_id=${clientId}&response_type=code&scope=openid&signup=1`
         await tauri.openBrowser(registerUrl)
       }
     } catch (e) {
@@ -595,7 +596,7 @@ function BrowserView({ environment, onClose, onStop, isLoading, loadingAction, t
             <p className="text-sm text-text-muted">This may take a moment</p>
           </div>
         ) : !isAuthenticated ? (
-          /* Native auth screen — replaces Keycloak login page in iframe */
+          /* Native auth screen */
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 gap-5" data-testid="browser-view-auth-screen">
             <div className="w-14 h-14 rounded-full bg-primary-500/10 flex items-center justify-center">
               <LogIn className="w-7 h-7 text-primary-400" />

@@ -54,9 +54,9 @@ export function EmbeddedView({ url, envName, envColor, envPath, backendPort, onC
     // Notify the iframe to check for tokens (in case user logged in before opening this view)
     const iframe = document.getElementById('embedded-iframe') as HTMLIFrameElement
     if (iframe && iframe.contentWindow) {
-      console.log('[EmbeddedView] Sending KC_TOKENS_UPDATED to newly loaded iframe')
+      console.log('[EmbeddedView] Sending AUTH_TOKENS_UPDATED to newly loaded iframe')
       iframe.contentWindow.postMessage(
-        { type: 'KC_TOKENS_UPDATED' },
+        { type: 'AUTH_TOKENS_UPDATED' },
         '*'
       )
     }
@@ -99,8 +99,9 @@ export function EmbeddedView({ url, envName, envColor, envPath, backendPort, onC
       const resp = await tauri.httpRequest(`http://localhost:${backendPort}/api/settings/config`, 'GET')
       if (resp.status === 200) {
         const config = JSON.parse(resp.body)
-        const kcUrl = config.keycloak?.public_url || 'http://localhost:8081'
-        const registerUrl = `${kcUrl}/realms/ushadow/protocol/openid-connect/registrations?client_id=ushadow-frontend&response_type=code&scope=openid`
+        const casdoorUrl = config.casdoor?.public_url || 'http://localhost:8082'
+        const clientId = config.casdoor?.client_id || 'ushadow'
+        const registerUrl = `${casdoorUrl}/login/oauth/authorize?client_id=${clientId}&response_type=code&scope=openid&signup=1`
         await tauri.openBrowser(registerUrl)
       }
     } catch (e) {

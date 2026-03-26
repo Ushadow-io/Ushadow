@@ -339,7 +339,7 @@ export default function UNodeDetailsPage() {
     setShowScanner(true);
   };
 
-  // Reconnect to an existing unode (fetch fresh details with Keycloak auth)
+  // Reconnect to an existing unode (fetch fresh details with auth token)
   const handleReconnect = async (unodeId: string) => {
     try {
       const node = unodes.find(n => n.id === unodeId);
@@ -350,10 +350,10 @@ export default function UNodeDetailsPage() {
 
       console.log('[UNodeDetails] Reconnecting to unode:', node.hostname);
 
-      // Fetch fresh unode details from API using Keycloak auth
+      // Fetch fresh unode details from API using auth token
       const token = await getAuthToken();
       if (!token) {
-        Alert.alert('Not Authenticated', 'Please login with Keycloak first');
+        Alert.alert('Not Authenticated', 'Please sign in first');
         router.replace('/');
         return;
       }
@@ -431,7 +431,7 @@ export default function UNodeDetailsPage() {
       chronicleApiUrl: result.leader.chronicleApiUrl,
       streamUrl: result.leader.streamUrl,
       tailscaleIp: new URL(baseApiUrl).hostname,
-      // Don't save QR code token - user will login with Keycloak
+      // Do not save QR code token - user will log in via SSO
       authToken: undefined,
     });
 
@@ -440,11 +440,11 @@ export default function UNodeDetailsPage() {
 
     setRescanNodeId(null);
 
-    // Clear any existing auth token to force Keycloak login
+    // Clear any existing auth token to force re-login
     await clearAuthToken();
-    console.log('[UNodeDetails] Cleared old token, navigate to home for Keycloak login');
+    console.log('[UNodeDetails] Cleared old token, navigate to home for login');
 
-    // Navigate back to the main page - will prompt for Keycloak login
+    // Navigate back to the main page — will prompt for login
     router.replace('/');
   };
 
@@ -461,7 +461,7 @@ export default function UNodeDetailsPage() {
       chronicleApiUrl,
       streamUrl,
       tailscaleIp: new URL(baseApiUrl).hostname,
-      // Don't save QR code token - user will login with Keycloak
+      // Do not save QR code token - user will log in via SSO
       authToken: undefined,
     });
 
@@ -473,9 +473,9 @@ export default function UNodeDetailsPage() {
     setShowDiscoveryModal(false);
 
     // Clear any stale auth token so home screen detects unauthenticated state
-    // and auto-shows the Keycloak login for the newly-scanned environment.
+    // and auto-shows the login screen for the newly-scanned environment.
     await clearAuthToken();
-    console.log('[UNodeDetails] UNode added, navigating home for Keycloak login');
+    console.log('[UNodeDetails] UNode added, navigating home for login');
     router.replace('/');
   };
 

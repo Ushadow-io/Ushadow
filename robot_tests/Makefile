@@ -9,7 +9,7 @@
 # Full Test Run:
 #   make test           # Start containers + run tests (recommended)
 
-.PHONY: start stop restart rebuild status logs test test-quick test-keycloak lint clean help
+.PHONY: start stop restart rebuild status logs test test-quick lint clean help
 
 # Default target
 help:
@@ -22,12 +22,11 @@ help:
 	@echo "  make restart        Restart containers"
 	@echo "  make rebuild        Fresh rebuild with volume cleanup"
 	@echo "  make status         Show container status"
-	@echo "  make logs           View logs (SERVICE=keycloak-test)"
+	@echo "  make logs           View logs (SERVICE=casdoor-test)"
 	@echo ""
 	@echo "Test Execution:"
 	@echo "  make test           Start containers + run all tests"
 	@echo "  make test-quick     Run tests (assumes containers running)"
-	@echo "  make test-keycloak  Run only Keycloak tests"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  make lint           Verify tests follow standard setup pattern"
@@ -37,7 +36,7 @@ help:
 	@echo ""
 	@echo "Test Environment Ports:"
 	@echo "  Backend:  http://localhost:8200"
-	@echo "  Keycloak: http://localhost:8181 (admin/admin)"
+	@echo "  Casdoor:  http://localhost:8282"
 	@echo "  MongoDB:  localhost:27118"
 	@echo "  Redis:    localhost:6480"
 
@@ -66,7 +65,7 @@ status:
 	@docker compose -f docker-compose-test.yml ps
 
 logs:
-	@docker compose -f docker-compose-test.yml logs $(SERVICE)
+	@docker compose -f docker-compose-test.yml logs $(if $(SERVICE),$(SERVICE),)
 
 # Test Execution
 test: test-dev
@@ -86,10 +85,6 @@ test-prod:
 test-quick:
 	@echo "Running Robot Framework tests (requires containers already running)..."
 	@export $$(cat .env.test | grep -v '^#' | xargs) && robot --outputdir results api/
-
-test-keycloak:
-	@echo "Running Keycloak tests..."
-	@robot --outputdir results api/keycloak_registration.robot
 
 # Linting
 lint:

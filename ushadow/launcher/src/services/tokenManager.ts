@@ -1,15 +1,15 @@
 /**
  * Token Manager for Launcher
  *
- * Manages OAuth tokens (Keycloak) in the launcher's localStorage.
+ * Manages OAuth tokens in the launcher's localStorage.
  * Tokens are shared across all environment iframes via postMessage API.
  */
 
-const TOKEN_KEY = 'kc_access_token'
-const REFRESH_TOKEN_KEY = 'kc_refresh_token'
-const ID_TOKEN_KEY = 'kc_id_token'
-const EXPIRES_AT_KEY = 'kc_expires_at'
-const REFRESH_EXPIRES_AT_KEY = 'kc_refresh_expires_at'
+const TOKEN_KEY = 'auth_access_token'
+const REFRESH_TOKEN_KEY = 'auth_refresh_token'
+const ID_TOKEN_KEY = 'auth_id_token'
+const EXPIRES_AT_KEY = 'auth_expires_at'
+const REFRESH_EXPIRES_AT_KEY = 'auth_refresh_expires_at'
 
 interface TokenResponse {
   access_token: string

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { useKeycloakAuth } from '../../contexts/KeycloakAuthContext'
+import { useCasdoorAuth } from '../../contexts/CasdoorAuthContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -8,8 +8,7 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
-  // ONLY use Keycloak auth (legacy auth disabled)
-  const { isAuthenticated, isLoading } = useKeycloakAuth()
+  const { isAuthenticated, isLoading } = useCasdoorAuth()
   const location = useLocation()
 
   if (isLoading) {
@@ -20,7 +19,7 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     )
   }
 
-  console.log('[ProtectedRoute] Keycloak auth check:', {
+  console.log('[ProtectedRoute] Auth check:', {
     pathname: location.pathname,
     isAuthenticated,
     willRedirect: !isAuthenticated
@@ -32,7 +31,7 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
     return <Navigate to="/login" state={{ from: location.pathname }} replace />
   }
 
-  // TODO: Implement Keycloak role-based admin check if needed
+  // TODO: Implement role-based admin check if needed
   if (adminOnly) {
     return (
       <div className="min-h-screen bg-neutral-50 dark:bg-neutral-900 flex items-center justify-center">
@@ -41,7 +40,7 @@ export default function ProtectedRoute({ children, adminOnly = false }: Protecte
             Access Denied
           </h1>
           <p className="text-neutral-600 dark:text-neutral-400">
-            Admin-only feature (Keycloak role check not yet implemented)
+            Admin-only feature (role check not yet implemented)
           </p>
         </div>
       </div>

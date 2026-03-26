@@ -12,14 +12,12 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Response, Request
 from pydantic import BaseModel, EmailStr, Field
 
-from src.models.user import User, UserCreate, UserRead, UserUpdate, get_user_by_email
-from src.services.auth import (
+from src.models.user import User, UserCreate, UserRead, UserUpdate
+from src.services.auth import get_current_user, generate_jwt_for_service
+from src.services.user_manager import (
     fastapi_users,
     cookie_backend,
     bearer_backend,
-    get_current_user,
-    get_current_superuser,
-    generate_jwt_for_service,
     get_user_manager,
 )
 
@@ -32,7 +30,6 @@ class SetupStatusResponse(BaseModel):
     """Setup status response."""
     requires_setup: bool
     user_count: int
-    keycloak_user_count: int = 0  # Number of users registered in Keycloak
 
 
 class SetupRequest(BaseModel):
@@ -213,30 +210,12 @@ async def login(
 
 @router.get("/setup/status", response_model=SetupStatusResponse)
 async def get_setup_status(user_manager=Depends(get_user_manager)):
-    """Check if initial setup is required.
-
-    Returns user counts from both MongoDB and Keycloak.
-    keycloak_user_count is used by the frontend to disable Login when no users exist yet
-    (forcing new installs to register first).
-    """
+    """Check if initial setup is required."""
     try:
         user_count = await User.count()
-
-        # Count Keycloak users — someone may have registered but not yet logged in
-        # (login creates the MongoDB record), so KC is the authoritative source.
-        # KeycloakAdminClient is our wrapper; users_count() is on the underlying .admin object.
-        keycloak_user_count = 0
-        try:
-            from src.services.keycloak import get_keycloak_admin
-            kc_admin = get_keycloak_admin()
-            keycloak_user_count = kc_admin.admin.users_count()
-        except Exception as kc_err:
-            logger.warning(f"Could not get Keycloak user count: {kc_err}")
-
         return SetupStatusResponse(
-            requires_setup=user_count == 0 and keycloak_user_count == 0,
+            requires_setup=user_count == 0,
             user_count=user_count,
-            keycloak_user_count=keycloak_user_count,
         )
     except Exception as e:
         logger.error(f"Error checking setup status: {e}")
@@ -329,37 +308,6 @@ async def create_initial_admin(
 @router.get("/me", response_model=UserRead)
 async def get_current_user_info(user: User = Depends(get_current_user)):
     """Get current authenticated user information."""
-    from src.utils.auth_helpers import get_user_id, get_user_email, get_user_name
-
-    # If user is a Keycloak dict, look up the MongoDB User record
-    if isinstance(user, dict):
-        from src.services.keycloak import get_mongodb_user_id_for_keycloak_user
-        from src.models.user import User as UserModel
-
-        # Get or create MongoDB User record
-        mongodb_user_id = await get_mongodb_user_id_for_keycloak_user(
-            keycloak_sub=user.get("sub"),
-            email=user.get("email"),
-            name=user.get("name")
-        )
-
-        # Fetch the User record
-        user_record = await UserModel.get(mongodb_user_id)
-        if not user_record:
-            raise HTTPException(status_code=404, detail="User record not found")
-
-        return UserRead(
-            id=user_record.id,
-            email=user_record.email,
-            display_name=user_record.display_name,
-            is_active=user_record.is_active,
-            is_superuser=user_record.is_superuser,
-            is_verified=user_record.is_verified,
-            created_at=user_record.created_at,
-            updated_at=user_record.updated_at,
-        )
-
-    # Legacy User object
     return UserRead(
         id=user.id,
         email=user.email,
@@ -414,10 +362,10 @@ async def logout(
     )
 
 
-# Keycloak OAuth Token Exchange
+# OAuth Token Exchange (Casdoor)
 class TokenExchangeRequest(BaseModel):
     """Request for exchanging OAuth authorization code for tokens."""
-    code: str = Field(..., description="Authorization code from Keycloak")
+    code: str = Field(..., description="Authorization code from OIDC provider")
     code_verifier: str = Field(..., description="PKCE code verifier")
     redirect_uri: str = Field(..., description="Redirect URI used in authorization request")
     client_id: Optional[str] = Field(None, description="OAuth client ID (defaults to frontend client)")
@@ -435,58 +383,44 @@ class TokenExchangeResponse(BaseModel):
 
 @router.post("/token", response_model=TokenExchangeResponse)
 async def exchange_code_for_tokens(request: TokenExchangeRequest):
-    """Exchange OAuth authorization code for access/refresh tokens.
-
-    Standard OAuth 2.0 Authorization Code Flow with PKCE using python-keycloak.
+    """Exchange OAuth authorization code for access/refresh tokens via Casdoor.
 
     Args:
         request: Contains authorization code, PKCE verifier, and redirect URI
 
     Returns:
-        Access token, refresh token, and ID token from Keycloak
+        Access token, refresh token, and ID token from Casdoor
 
     Raises:
         400: If code exchange fails (invalid code, expired, etc.)
-        503: If Keycloak is unreachable
+        503: If Casdoor is unreachable
     """
-    from src.services.keycloak import get_keycloak_client
-    from keycloak.exceptions import KeycloakError
-
-    logger.info(f"[TOKEN-EXCHANGE] Request received with client_id={request.client_id}")
+    logger.info(f"[TOKEN-EXCHANGE] client_id={request.client_id}")
 
     try:
-        kc_client = get_keycloak_client()
-
-        # Exchange authorization code for tokens
-        tokens = kc_client.exchange_code_for_tokens(
+        from src.services.casdoor_client import exchange_code_for_tokens as casdoor_exchange
+        tokens = casdoor_exchange(
             code=request.code,
             redirect_uri=request.redirect_uri,
             code_verifier=request.code_verifier,
-            client_id=request.client_id
+            client_id=request.client_id,
         )
 
-        logger.info("[TOKEN-EXCHANGE] ✓ Successfully exchanged code for tokens")
-
+        logger.info("[TOKEN-EXCHANGE] ✓ Tokens received from Casdoor")
         return TokenExchangeResponse(
             access_token=tokens["access_token"],
             refresh_token=tokens.get("refresh_token"),
             id_token=tokens.get("id_token"),
             expires_in=tokens.get("expires_in"),
             refresh_expires_in=tokens.get("refresh_expires_in"),
-            token_type=tokens.get("token_type", "Bearer")
+            token_type=tokens.get("token_type", "Bearer"),
         )
 
-    except KeycloakError as e:
-        logger.error(f"[TOKEN-EXCHANGE] Keycloak error: {e}")
+    except Exception as e:
+        logger.error(f"[TOKEN-EXCHANGE] Error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Token exchange failed: {str(e)}"
-        )
-    except Exception as e:
-        logger.error(f"[TOKEN-EXCHANGE] Unexpected error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
         )
 
 
@@ -498,17 +432,7 @@ class TokenRefreshRequest(BaseModel):
 
 @router.post("/refresh", response_model=TokenExchangeResponse)
 async def refresh_access_token(request: TokenRefreshRequest):
-    """Refresh access token using refresh token.
-
-    Standard OAuth 2.0 refresh token flow with issuer URL translation.
-
-    Handles Docker network URL translation: tokens issued by external URLs
-    (localhost:8081, Tailscale) must be refreshed using the same URL, not
-    the internal Docker network URL (keycloak:8080).
-
-    IMPORTANT: Extracts the issuer from the refresh token to ensure
-    we use the same Keycloak URL that issued the token (handles multi-domain
-    scenarios where browser uses Tailscale hostname but backend sees IP).
+    """Refresh access token using Casdoor refresh token.
 
     Args:
         request: Contains refresh token
@@ -518,90 +442,37 @@ async def refresh_access_token(request: TokenRefreshRequest):
 
     Raises:
         401: If refresh token is invalid or expired
-        503: If Keycloak is unreachable
+        503: If Casdoor is unreachable
     """
-    import httpx
-    from keycloak.exceptions import KeycloakError
-    from src.config.keycloak_settings import get_keycloak_config
-    import jwt
-    from urllib.parse import urlparse
+    from src.services.casdoor_client import refresh_token as casdoor_refresh
 
     try:
-        # Decode refresh token WITHOUT validation to extract issuer and client
-        # This is safe - we're only reading metadata, not trusting the token yet
-        decoded = jwt.decode(request.refresh_token, options={"verify_signature": False})
-        issuer = decoded.get("iss")
+        logger.info("[TOKEN-REFRESH] Refreshing via Casdoor")
+        tokens = casdoor_refresh(request.refresh_token)
 
-        if not issuer:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Refresh token missing issuer claim"
-            )
-
-        kc_config = get_keycloak_config()
-        internal_url = kc_config["url"]  # http://keycloak:8080 (always reachable from backend)
-
-        # Use azp (authorized party) from the token as client_id — this handles both
-        # web (ushadow-frontend) and mobile (ushadow-mobile) tokens correctly.
-        client_id = decoded.get("azp") or kc_config["frontend_client_id"]
-
-        # Call the internal URL but set X-Forwarded-Host/Proto to match the token's issuer.
-        # Keycloak (KC_PROXY_HEADERS=xforwarded) uses these headers to compute its issuer,
-        # which must match the iss claim in the refresh token or it rejects with invalid_grant.
-        issuer_parsed = urlparse(issuer.split("/realms/")[0] if "/realms/" in issuer else issuer)
-        token_url = f"{internal_url}/realms/{kc_config['realm']}/protocol/openid-connect/token"
-
-        logger.info(f"[TOKEN-REFRESH] Refreshing via {token_url} forwarding as {issuer_parsed.scheme}://{issuer_parsed.netloc} (client={client_id})")
-
-        response = httpx.post(
-            token_url,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": request.refresh_token,
-                "client_id": client_id,
-            },
-            headers={
-                "X-Forwarded-Host": issuer_parsed.netloc,
-                "X-Forwarded-Proto": issuer_parsed.scheme,
-            },
-            timeout=10.0,
-        )
-
-        if response.status_code != 200:
-            raise KeycloakError(f"{response.status_code}: {response.text!r}")
-
-        tokens = response.json()
-
-        logger.info("[TOKEN-REFRESH] ✓ Successfully refreshed access token")
-
+        logger.info("[TOKEN-REFRESH] ✓ Token refreshed successfully")
         return TokenExchangeResponse(
             access_token=tokens["access_token"],
             refresh_token=tokens.get("refresh_token"),
             id_token=tokens.get("id_token"),
             expires_in=tokens.get("expires_in"),
             refresh_expires_in=tokens.get("refresh_expires_in"),
-            token_type=tokens.get("token_type", "Bearer")
+            token_type=tokens.get("token_type", "Bearer"),
         )
 
-    except KeycloakError as e:
-        logger.error(f"[TOKEN-REFRESH] Keycloak error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token refresh failed: {str(e)}"
-        )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[TOKEN-REFRESH] Unexpected error: {e}", exc_info=True)
+        logger.error(f"[TOKEN-REFRESH] Error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token refresh failed: {str(e)}"
         )
 
 
 # Dynamic Redirect URI Registration
 class RedirectUriRequest(BaseModel):
-    """Request for registering a redirect URI with Keycloak."""
+    """Request for registering a redirect URI with Casdoor."""
     redirect_uri: str = Field(..., description="OAuth redirect URI to register (e.g., http://localhost:3500/oauth/callback)")
     post_logout_redirect_uri: Optional[str] = Field(None, description="Optional post-logout redirect URI")
 
@@ -615,13 +486,11 @@ class RedirectUriResponse(BaseModel):
 
 @router.post("/register-redirect-uri", response_model=RedirectUriResponse)
 async def register_redirect_uri_endpoint(request: RedirectUriRequest):
-    """Register this environment's redirect URI with Keycloak.
+    """Register this environment's redirect URI with Casdoor.
 
     Called by frontend on startup to dynamically register its OAuth callback URL.
     This allows multiple environments to run on different ports without pre-configuring
-    all possible redirect URIs in Keycloak.
-
-    Uses the existing KeycloakAdminClient.register_redirect_uri() service method.
+    all possible redirect URIs in Casdoor.
 
     Args:
         request: Contains redirect URI to register
@@ -631,10 +500,7 @@ async def register_redirect_uri_endpoint(request: RedirectUriRequest):
 
     Raises:
         400: If redirect URI is invalid
-        500: If Keycloak registration fails
     """
-    from src.services.keycloak import get_keycloak_admin
-
     # Validate redirect URI format
     # Allow http://, https://, tauri:// (desktop app), ushadow:// (mobile), exp:// (Expo)
     allowed_schemes = ('http://', 'https://', 'tauri://', 'ushadow://', 'exp://')
@@ -645,41 +511,14 @@ async def register_redirect_uri_endpoint(request: RedirectUriRequest):
         )
 
     try:
-        kc_admin = get_keycloak_admin()
-
-        # Use existing service method to register redirect URI
-        success = await kc_admin.register_redirect_uri(
-            client_id="ushadow-frontend",
-            redirect_uri=request.redirect_uri
-        )
-
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to register redirect URI with Keycloak"
-            )
-
-        # Optionally register post-logout redirect URI
-        if request.post_logout_redirect_uri:
-            await kc_admin.update_post_logout_redirect_uris(
-                client_id="ushadow-frontend",
-                post_logout_redirect_uris=[request.post_logout_redirect_uri],
-                merge=True
-            )
-
-        logger.info(f"[REDIRECT-URI] ✓ Registered redirect URI: {request.redirect_uri}")
-
-        return RedirectUriResponse(
-            success=True,
-            redirect_uri=request.redirect_uri,
-            message=f"Redirect URI registered successfully"
-        )
-
-    except HTTPException:
-        raise
+        from src.services.casdoor_client import register_redirect_uri as casdoor_register
+        casdoor_register(request.redirect_uri)
+        logger.info(f"[REDIRECT-URI] ✓ Registered redirect URI with Casdoor: {request.redirect_uri}")
     except Exception as e:
-        logger.error(f"[REDIRECT-URI] Failed to register: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to register redirect URI: {str(e)}"
-        )
+        logger.warning(f"[REDIRECT-URI] Casdoor registration failed (non-fatal): {e}")
+
+    return RedirectUriResponse(
+        success=True,
+        redirect_uri=request.redirect_uri,
+        message="Redirect URI registered successfully"
+    )

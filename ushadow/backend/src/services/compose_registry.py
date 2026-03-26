@@ -125,6 +125,7 @@ class DiscoveredService:
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # Exposed URLs from x-ushadow
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all)
+    setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
 
     # Install hook
     setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
@@ -303,6 +304,7 @@ class ComposeServiceRegistry:
                 exposes=service.exposes,
                 tags=service.tags,
                 environments=service.environments,
+                setup_script=service.setup_script,
                 provider_id=service.provider_id,
                 capability_env_mappings=service.capability_env_mappings,
                 required_env_vars=service.required_env_vars,

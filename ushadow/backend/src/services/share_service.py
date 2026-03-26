@@ -1,19 +1,19 @@
 """Share service for conversation and resource sharing.
 
 Implements business logic for creating, validating, and managing share tokens
-with Keycloak Fine-Grained Authorization (FGA) integration.
+with fine-grained access control policies.
 """
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from beanie import PydanticObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ..models.share import (
-    KeycloakPolicy,
+    SharePolicy,
     ResourceType,
     ShareAccessLog,
     SharePermission,
@@ -22,7 +22,6 @@ from ..models.share import (
     ShareTokenResponse,
 )
 from ..models.user import User
-from ..utils.auth_helpers import get_user_id, get_user_email, is_superuser
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ logger = logging.getLogger(__name__)
 class ShareService:
     """Service for managing share tokens and access control.
 
-    Coordinates share token creation, validation, and Keycloak FGA integration.
+    Coordinates share token creation, validation, and access control.
     Implements business rules for expiration, view limits, and permission checking.
     """
 
@@ -47,13 +46,13 @@ class ShareService:
     async def create_share_token(
         self,
         data: ShareTokenCreate,
-        created_by: Union[User, dict],
+        created_by: User,
     ) -> ShareToken:
         """Create a new share token.
 
         Args:
             data: Share token creation parameters
-            created_by: User creating the share (User object or Keycloak dict)
+            created_by: User creating the share (User object or auth dict)
 
         Returns:
             Created share token
@@ -72,15 +71,15 @@ class ShareService:
         if data.expires_in_days:
             expires_at = datetime.utcnow() + timedelta(days=data.expires_in_days)
 
-        # Build Keycloak-compatible policies
-        policies = self._build_keycloak_policies(
+        # Build access control policies
+        policies = self._build_access_policies(
             resource_type=data.resource_type.value,
             resource_id=data.resource_id,
             permissions=[p.value for p in data.permissions],
         )
 
         # Create share token
-        user_id = get_user_id(created_by)
+        user_id = str(created_by.id)
         share_token = ShareToken(
             token=str(uuid4()),
             resource_type=data.resource_type.value,
@@ -97,12 +96,12 @@ class ShareService:
 
         await share_token.insert()
 
-        # TODO: Register with Keycloak FGA if enabled
-        # await self._register_with_keycloak(share_token)
+        # TODO: Register with FGA if enabled
+        # await self._register_with_fga(share_token)
 
         logger.info(
             f"Created share token {share_token.token} for {data.resource_type}:{data.resource_id} "
-            f"by user {get_user_email(created_by)}"
+            f"by user {created_by.email}"
         )
 
         return share_token
@@ -174,12 +173,12 @@ class ShareService:
             f"by {user_identifier} (view {share_token.view_count})"
         )
 
-    async def revoke_share_token(self, token: str, user: Union[User, dict]) -> bool:
+    async def revoke_share_token(self, token: str, user: User) -> bool:
         """Revoke a share token.
 
         Args:
             token: Share token to revoke
-            user: User attempting to revoke (User object or Keycloak dict)
+            user: User attempting to revoke (User object or auth dict)
 
         Returns:
             True if revoked, False if not found or permission denied
@@ -192,29 +191,28 @@ class ShareService:
             return False
 
         # Verify user can revoke (must be creator or admin)
-        user_id = get_user_id(user)
-        if str(share_token.created_by) != user_id and not is_superuser(user):
+        if str(share_token.created_by) != str(user.id) and not user.is_superuser:
             raise ValueError("Only the creator or admin can revoke share tokens")
 
-        # TODO: Unregister from Keycloak FGA if enabled
-        # await self._unregister_from_keycloak(share_token)
+        # TODO: Unregister from FGA if enabled
+        # await self._unregister_from_fga(share_token)
 
         await share_token.delete()
-        logger.info(f"Revoked share token {token} by user {get_user_email(user)}")
+        logger.info(f"Revoked share token {token} by user {user.email}")
         return True
 
     async def list_shares_for_resource(
         self,
         resource_type: str,
         resource_id: str,
-        user: Union[User, dict],
+        user: User,
     ) -> List[ShareToken]:
         """List all share tokens for a resource.
 
         Args:
             resource_type: Type of resource
             resource_id: ID of resource
-            user: User requesting list (User object or Keycloak dict)
+            user: User requesting list (User object or auth dict)
 
         Returns:
             List of share tokens
@@ -230,13 +228,13 @@ class ShareService:
     async def get_share_access_logs(
         self,
         token: str,
-        user: Union[User, dict],
+        user: User,
     ) -> List[ShareAccessLog]:
         """Get access logs for a share token.
 
         Args:
             token: Share token
-            user: User requesting logs (User object or Keycloak dict)
+            user: User requesting logs (User object or auth dict)
 
         Returns:
             List of access log entries
@@ -249,8 +247,7 @@ class ShareService:
             raise ValueError("Share token not found")
 
         # Verify permission
-        user_id = get_user_id(user)
-        if str(share_token.created_by) != user_id and not is_superuser(user):
+        if str(share_token.created_by) != str(user.id) and not user.is_superuser:
             raise ValueError("Only the creator or admin can view access logs")
 
         return [ShareAccessLog(**log) for log in share_token.access_log]
@@ -280,13 +277,13 @@ class ShareService:
 
     # Private helper methods
 
-    def _build_keycloak_policies(
+    def _build_access_policies(
         self,
         resource_type: str,
         resource_id: str,
         permissions: List[str],
-    ) -> List[KeycloakPolicy]:
-        """Build Keycloak FGA policies from permissions.
+    ) -> List[SharePolicy]:
+        """Build access control policies from permissions.
 
         Args:
             resource_type: Type of resource
@@ -294,13 +291,13 @@ class ShareService:
             permissions: List of permission strings (read, write, etc.)
 
         Returns:
-            List of Keycloak-compatible policies
+            List of access control policies
         """
         # Resource identifier format: "type:id" (e.g., "conversation:123")
         resource = f"{resource_type}:{resource_id}"
 
         return [
-            KeycloakPolicy(
+            SharePolicy(
                 resource=resource,
                 action=permission,
                 effect="allow",
@@ -361,7 +358,7 @@ class ShareService:
 
     async def _validate_user_can_share(
         self,
-        user: Union[User, dict],
+        user: User,
         resource_type: ResourceType,
         resource_id: str,
     ):
@@ -372,11 +369,11 @@ class ShareService:
         who can see a resource are allowed to share it.
 
         Args:
-            user: User attempting to share (User object or Keycloak dict)
+            user: User attempting to share (User object or auth dict)
             resource_type: Type of resource
             resource_id: ID of resource
         """
-        user_email = get_user_email(user)
+        user_email = user.email
         logger.debug(
             f"User {user_email} sharing {resource_type}:{resource_id} - "
             f"access already verified at view level"
@@ -433,26 +430,26 @@ class ShareService:
         )
         return True  # Fail open until implemented
 
-    async def _register_with_keycloak(self, share_token: ShareToken):
-        """Register share token with Keycloak FGA.
+    async def _register_with_fga(self, share_token: ShareToken):
+        """Register share token with FGA provider.
 
         Args:
             share_token: Share token to register
         """
-        # TODO: Implement Keycloak FGA registration
+        # TODO: Implement FGA registration
         # This should:
-        # 1. Create Keycloak resource for the shared item
-        # 2. Create Keycloak authorization policies
-        # 3. Store keycloak_policy_id and keycloak_resource_id on share_token
-        logger.debug(f"Keycloak FGA registration for token {share_token.token}")
+        # 1. Create a resource for the shared item
+        # 2. Create authorization policies
+        # 3. Store policy_id and resource_id on share_token
+        logger.debug(f"FGA registration for token {share_token.token}")
 
-    async def _unregister_from_keycloak(self, share_token: ShareToken):
-        """Unregister share token from Keycloak FGA.
+    async def _unregister_from_fga(self, share_token: ShareToken):
+        """Unregister share token from FGA provider.
 
         Args:
             share_token: Share token to unregister
         """
-        # TODO: Implement Keycloak FGA cleanup
-        # This should delete the Keycloak resource and policies
-        if share_token.keycloak_policy_id:
-            logger.debug(f"Keycloak FGA cleanup for policy {share_token.keycloak_policy_id}")
+        # TODO: Implement FGA cleanup
+        # This should delete the resource and policies
+        if share_token.fga_policy_id:
+            logger.debug(f"FGA cleanup for policy {share_token.fga_policy_id}")

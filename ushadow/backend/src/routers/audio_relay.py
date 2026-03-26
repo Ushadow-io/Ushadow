@@ -258,8 +258,8 @@ async def audio_relay_websocket(
         await websocket.close(code=1011, reason=f"Error parsing parameters: {e}")
         return
 
-    # Bridge Keycloak token to service token so Chronicle/Mycelia can validate it
-    # (Chronicle and Mycelia use AUTH_SECRET_KEY HMAC tokens, not Keycloak JWT)
+    # Bridge auth token to service token so Chronicle/Mycelia can validate it
+    # (Chronicle and Mycelia use AUTH_SECRET_KEY HMAC tokens, not Casdoor JWT)
     from src.services.token_bridge import bridge_to_service_token
     service_token = await bridge_to_service_token(token, audiences=["ushadow", "chronicle"])
     if not service_token:

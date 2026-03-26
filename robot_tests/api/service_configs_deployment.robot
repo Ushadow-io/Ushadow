@@ -32,15 +32,13 @@ Library          OperatingSystem
 Library          ../resources/EnvConfig.py
 
 Resource         ../resources/setup/suite_setup.robot
+Resource         ../resources/auth_keywords.robot
 
 Suite Setup      Standard Suite Setup
-Suite Teardown   Standard Suite Teardown
-
-
+Suite Teardown   Run Keywords    Cleanup Deployed Test Configs    AND    Standard Suite Teardown
 
 *** Variables ***
-${API_SESSION}           service_config_session
-${SERVICE_CONFIG_BASE}   /api/service-configs
+${SERVICE_CONFIG_BASE}   /api/svc-configs
 ${DEPLOYMENTS_BASE}      /api/deployments
 
 # Test data
@@ -58,19 +56,21 @@ TC-CFG-001: Create Service Config from Template
     [Documentation]    Create a service config from template with configuration
     ...
     ...                GIVEN: Service template available (openmemory)
-    ...                WHEN: POST /api/service-configs with template and config
+    ...                WHEN: POST /api/svc-configs with template and config
     ...                THEN: Service config created with status PENDING
     [Tags]    service-config    high-priority    api
 
     # Prepare config data
+    # id: slug identifier (used as key in the system)
+    # name: human-readable display name
+    # config: flat dict of env var overrides (empty = use template defaults)
     ${config_data}=    Create Dictionary
-    ...    template_name=${TEST_SERVICE_NAME}
+    ...    id=${TEST_CONFIG_NAME}
+    ...    template_id=${TEST_SERVICE_NAME}
     ...    name=${TEST_CONFIG_NAME}
-    ...    deployment_target=${None}
-    ...    config=${{'values': {'MONGODB_URI': 'mongodb://mongo:27017/test'}}}
 
     # Create service config
-    ${response}=    POST On Session    ${API_SESSION}    ${SERVICE_CONFIG_BASE}
+    ${response}=    POST On Session    admin_session    ${SERVICE_CONFIG_BASE}
     ...    json=${config_data}
     ...    expected_status=any
 
@@ -94,11 +94,11 @@ TC-CFG-002: List All Service Configs
     [Documentation]    List all service configs in the system
     ...
     ...                GIVEN: Service configs exist
-    ...                WHEN: GET /api/service-configs
+    ...                WHEN: GET /api/svc-configs
     ...                THEN: Returns list of configs with metadata
     [Tags]    service-config    high-priority    api
 
-    ${response}=    GET On Session    ${API_SESSION}    ${SERVICE_CONFIG_BASE}
+    ${response}=    GET On Session    admin_session    ${SERVICE_CONFIG_BASE}
     ...    expected_status=200
 
     ${json}=    Set Variable    ${response.json()}
@@ -128,11 +128,11 @@ TC-CFG-003: Get Service Config Details
     [Documentation]    Get detailed information about a service config
     ...
     ...                GIVEN: Service config exists
-    ...                WHEN: GET /api/service-configs/{id}
+    ...                WHEN: GET /api/svc-configs/{id}
     ...                THEN: Returns complete config with environment variables
     [Tags]    service-config    high-priority    api
 
-    ${response}=    GET On Session    ${API_SESSION}    ${SERVICE_CONFIG_BASE}/${CONFIG_ID}
+    ${response}=    GET On Session    admin_session    ${SERVICE_CONFIG_BASE}/${CONFIG_ID}
     ...    expected_status=200
 
     ${json}=    Set Variable    ${response.json()}
@@ -142,14 +142,8 @@ TC-CFG-003: Get Service Config Details
     Should Be Equal    ${json}[name]    ${TEST_CONFIG_NAME}
     Should Be Equal    ${json}[template_name]    ${TEST_SERVICE_NAME}
 
-    # Verify config section
+    # Verify config section exists (values may be empty if no overrides set)
     Dictionary Should Contain Key    ${json}    config
-    ${config}=    Get From Dictionary    ${json}    config
-
-    # Verify environment variables in config
-    Dictionary Should Contain Key    ${config}    values
-    ${values}=    Get From Dictionary    ${config}    values
-    Should Contain    ${values}    MONGODB_URI
 
 # =============================================================================
 # Section 6.2: Deployment Operations
@@ -164,7 +158,7 @@ TC-DEP-005: Pre-Flight Check - Port Conflict Detection
     [Tags]    deployment    high-priority    api    pre-flight
 
     # Run pre-flight check for our config
-    ${response}=    GET On Session    ${API_SESSION}
+    ${response}=    GET On Session    admin_session
     ...    ${SERVICE_CONFIG_BASE}/${CONFIG_ID}/preflight
     ...    expected_status=200
 
@@ -182,12 +176,12 @@ TC-DEP-001: Deploy Service Config to Local Docker
     [Documentation]    Deploy service config to local Docker
     ...
     ...                GIVEN: Service config created with local target
-    ...                WHEN: POST /api/service-configs/{id}/deploy
+    ...                WHEN: POST /api/svc-configs/{id}/deploy
     ...                THEN: Deployment created and container starts
     [Tags]    deployment    high-priority    api    docker
 
     # Deploy the service config
-    ${response}=    POST On Session    ${API_SESSION}
+    ${response}=    POST On Session    admin_session
     ...    ${SERVICE_CONFIG_BASE}/${CONFIG_ID}/deploy
     ...    expected_status=any
 
@@ -220,12 +214,11 @@ TC-DEP-004: Deploy Multiple Instances of Same Service
 
     # Create second service config
     ${config_data}=    Create Dictionary
-    ...    template_name=${TEST_SERVICE_NAME}
+    ...    id=${TEST_CONFIG_NAME}-2
+    ...    template_id=${TEST_SERVICE_NAME}
     ...    name=${TEST_CONFIG_NAME}-2
-    ...    deployment_target=${None}
-    ...    config=${{'values': {'MONGODB_URI': 'mongodb://mongo:27017/test2'}}}
 
-    ${response}=    POST On Session    ${API_SESSION}    ${SERVICE_CONFIG_BASE}
+    ${response}=    POST On Session    admin_session    ${SERVICE_CONFIG_BASE}
     ...    json=${config_data}
     ...    expected_status=any
 
@@ -235,14 +228,14 @@ TC-DEP-004: Deploy Multiple Instances of Same Service
     ${config_id_2}=    Set Variable    ${json}[id]
 
     # Deploy second instance
-    ${deploy_response}=    POST On Session    ${API_SESSION}
+    ${deploy_response}=    POST On Session    admin_session
     ...    ${SERVICE_CONFIG_BASE}/${config_id_2}/deploy
     ...    expected_status=any
 
     Should Be True    ${deploy_response.status_code} in [200, 201, 202]
 
     # Verify both deployments running
-    ${deployments}=    GET On Session    ${API_SESSION}    ${DEPLOYMENTS_BASE}
+    ${deployments}=    GET On Session    admin_session    ${DEPLOYMENTS_BASE}
     ...    expected_status=200
 
     ${deployments_json}=    Set Variable    ${deployments.json()}
@@ -251,9 +244,9 @@ TC-DEP-004: Deploy Multiple Instances of Same Service
     ...    msg=Should have at least 2 deployments
 
     # Cleanup second instance
-    POST On Session    ${API_SESSION}    ${SERVICE_CONFIG_BASE}/${config_id_2}/undeploy
+    POST On Session    admin_session    ${SERVICE_CONFIG_BASE}/${config_id_2}/undeploy
     ...    expected_status=any
-    DELETE On Session    ${API_SESSION}    ${SERVICE_CONFIG_BASE}/${config_id_2}
+    DELETE On Session    admin_session    ${SERVICE_CONFIG_BASE}/${config_id_2}
     ...    expected_status=any
 
 # =============================================================================
@@ -268,7 +261,7 @@ TC-DEP-007: List All Deployments Across Targets
     ...                THEN: Returns all deployments with status
     [Tags]    deployment    high-priority    api
 
-    ${response}=    GET On Session    ${API_SESSION}    ${DEPLOYMENTS_BASE}
+    ${response}=    GET On Session    admin_session    ${DEPLOYMENTS_BASE}
     ...    expected_status=200
 
     ${json}=    Set Variable    ${response.json()}
@@ -303,7 +296,7 @@ TC-DEP-008: Get Deployment Details (Status, Logs, URLs)
     ...                THEN: Returns complete deployment details
     [Tags]    deployment    high-priority    api
 
-    ${response}=    GET On Session    ${API_SESSION}    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}
+    ${response}=    GET On Session    admin_session    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}
     ...    expected_status=200
 
     ${json}=    Set Variable    ${response.json()}
@@ -334,7 +327,7 @@ TC-DEP-012: View Deployment Logs (Real-Time)
     ...                THEN: Returns log lines from container
     [Tags]    deployment    high-priority    api    logs
 
-    ${response}=    GET On Session    ${API_SESSION}
+    ${response}=    GET On Session    admin_session
     ...    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}/logs?tail=50
     ...    expected_status=200
 
@@ -344,7 +337,8 @@ TC-DEP-012: View Deployment Logs (Real-Time)
     Should Be True    isinstance($json, (list, str))
     ...    msg=Logs should be list or string
 
-    Log    Retrieved ${len($json)} log lines
+    ${log_count}=    Get Length    ${json}
+    Log    Retrieved ${log_count} log lines
 
 TC-DEP-013: Generic Service Proxy - GET Request
     [Documentation]    Proxy GET request to deployed service
@@ -354,7 +348,7 @@ TC-DEP-013: Generic Service Proxy - GET Request
     ...                THEN: Request forwarded to service, response returned
     [Tags]    deployment    high-priority    api    proxy
 
-    ${response}=    GET On Session    ${API_SESSION}
+    ${response}=    GET On Session    admin_session
     ...    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}/proxy/health
     ...    expected_status=any
 
@@ -375,7 +369,7 @@ TC-DEP-014: Generic Service Proxy - POST Request
 
     ${post_data}=    Create Dictionary    test_field=test_value
 
-    ${response}=    POST On Session    ${API_SESSION}
+    ${response}=    POST On Session    admin_session
     ...    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}/proxy/api/test
     ...    json=${post_data}
     ...    expected_status=any
@@ -394,7 +388,7 @@ TC-DEP-009: Stop Running Deployment
     ...                THEN: Container stopped, status updated
     [Tags]    deployment    high-priority    api    lifecycle
 
-    ${response}=    POST On Session    ${API_SESSION}
+    ${response}=    POST On Session    admin_session
     ...    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}/stop
     ...    expected_status=any
 
@@ -408,58 +402,23 @@ TC-DEP-009: Stop Running Deployment
     Log    Deployment stopped successfully
 
 *** Keywords ***
-Setup Service Config Tests
-    [Documentation]    Setup API session with authentication
+Cleanup Deployed Test Configs
+    [Documentation]    Stop and remove deployment and service config created during tests
 
-    # Get API URL from environment
-    ${api_url}=    Get Api Url
-
-    # Get test user credentials from environment
-    ${admin_email}=    Get Environment Variable    TEST_ADMIN_EMAIL    admin@test.local
-    ${admin_password}=    Get Environment Variable    TEST_ADMIN_PASSWORD    TestPass123!
-
-    # Create session
-    Create Session    ${API_SESSION}    ${api_url}    verify=True
-
-    # Login to get token
-    ${login_data}=    Create Dictionary
-    ...    username=${admin_email}
-    ...    password=${admin_password}
-
-    ${login_response}=    POST On Session    ${API_SESSION}    /api/auth/bearer/login
-    ...    data=${login_data}
-    ...    headers=${{ {'Content-Type': 'application/x-www-form-urlencoded'} }}
-    ...    expected_status=200
-
-    ${token_data}=    Set Variable    ${login_response.json()}
-    ${access_token}=    Get From Dictionary    ${token_data}    access_token
-
-    # Update session with auth header
-    ${auth_headers}=    Create Dictionary    Authorization=Bearer ${access_token}
-    Set To Dictionary    ${API_SESSION.headers}    &{auth_headers}
-
-Teardown Service Config Tests
-    [Documentation]    Cleanup test data and close session
-
-    # Stop and delete deployment if it exists
-    Run Keyword And Ignore Error    POST On Session    ${API_SESSION}
+    Run Keyword And Ignore Error    POST On Session    admin_session
     ...    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}/stop
 
-    Run Keyword And Ignore Error    DELETE On Session    ${API_SESSION}
+    Run Keyword And Ignore Error    DELETE On Session    admin_session
     ...    ${DEPLOYMENTS_BASE}/${DEPLOYMENT_ID}
 
-    # Delete service config if it exists
-    Run Keyword And Ignore Error    DELETE On Session    ${API_SESSION}
+    Run Keyword And Ignore Error    DELETE On Session    admin_session
     ...    ${SERVICE_CONFIG_BASE}/${CONFIG_ID}
-
-    # Close session
-    Delete All Sessions
 
 Deployment Should Be Running
     [Documentation]    Verify deployment is in running state
     [Arguments]    ${deployment_id}
 
-    ${response}=    GET On Session    ${API_SESSION}    ${DEPLOYMENTS_BASE}/${deployment_id}
+    ${response}=    GET On Session    admin_session    ${DEPLOYMENTS_BASE}/${deployment_id}
     ...    expected_status=200
 
     ${json}=    Set Variable    ${response.json()}
@@ -470,7 +429,7 @@ Deployment Should Be Stopped
     [Documentation]    Verify deployment is in stopped state
     [Arguments]    ${deployment_id}
 
-    ${response}=    GET On Session    ${API_SESSION}    ${DEPLOYMENTS_BASE}/${deployment_id}
+    ${response}=    GET On Session    admin_session    ${DEPLOYMENTS_BASE}/${deployment_id}
     ...    expected_status=200
 
     ${json}=    Set Variable    ${response.json()}

@@ -45,21 +45,23 @@ async def get_settings_info():
 async def get_config():
     """Get merged configuration with secrets masked.
 
-    Dynamically injects keycloak.public_url based on Tailscale configuration.
+    Dynamically injects casdoor config based on environment settings.
     """
     try:
-        from src.config.keycloak_settings import get_keycloak_config
-
         settings = get_settings()
         all_config = await settings.get_all()
 
-        # Inject dynamic Keycloak config (public_url determined from tailscale.hostname)
-        keycloak_config = get_keycloak_config()
-        if "keycloak" not in all_config:
-            all_config["keycloak"] = {}
-        all_config["keycloak"]["public_url"] = keycloak_config["public_url"]
-        all_config["keycloak"]["realm"] = keycloak_config["realm"]
-        all_config["keycloak"]["frontend_client_id"] = keycloak_config["frontend_client_id"]
+        # Inject Casdoor config
+        try:
+            from src.config.casdoor_settings import get_casdoor_config
+            casdoor_config = get_casdoor_config()
+            if "casdoor" not in all_config:
+                all_config["casdoor"] = {}
+            all_config["casdoor"]["public_url"] = casdoor_config["public_url"]
+            all_config["casdoor"]["client_id"] = casdoor_config["client_id"]
+            all_config["casdoor"]["organization"] = casdoor_config["organization"]
+        except Exception as e:
+            logger.warning(f"Could not inject Casdoor config: {e}")
 
         # Recursively mask all sensitive values
         masked_config = mask_dict_secrets(all_config)

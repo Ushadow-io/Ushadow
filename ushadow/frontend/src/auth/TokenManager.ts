@@ -23,17 +23,19 @@ interface TokenResponse {
 }
 
 interface LoginUrlParams {
-  keycloakUrl: string
-  realm: string
+  baseUrl: string        // Auth provider base URL (Casdoor public URL)
+  realm?: string         // not used for Casdoor
   clientId: string
   redirectUri: string
   state: string
+  authEndpoint?: string  // explicit endpoint (overrides realm-based construction)
 }
 
 interface LogoutUrlParams {
-  keycloakUrl: string
-  realm: string
+  baseUrl: string        // Auth provider base URL (Casdoor public URL)
+  realm?: string
   redirectUri: string
+  logoutEndpoint?: string  // explicit endpoint
 }
 
 interface DecodedToken {
@@ -132,11 +134,11 @@ export class TokenManager {
       console.log('[TokenManager] Requesting token from launcher...')
 
       // Send request to launcher
-      window.parent.postMessage({ type: 'GET_KC_TOKEN' }, '*')
+      window.parent.postMessage({ type: 'GET_CASDOOR_TOKEN' }, '*')
 
       // Listen for response
       const handler = (event: MessageEvent) => {
-        if (event.data.type === 'KC_TOKEN_RESPONSE') {
+        if (event.data.type === 'CASDOOR_TOKEN_RESPONSE') {
           window.removeEventListener('message', handler)
 
           const tokens = event.data.tokens
@@ -261,7 +263,7 @@ export class TokenManager {
       // Token is now cached in localStorage, continue with validation below
     }
 
-    // Check for Keycloak token (localStorage)
+    // Check for Casdoor/OIDC token (localStorage)
     let token = localStorage.getItem(TOKEN_KEY)
 
     // Check for native token (localStorage - persists)
@@ -310,7 +312,7 @@ export class TokenManager {
    * Use isAuthenticatedAsync() for launcher-aware check.
    */
   static isAuthenticated(): boolean {
-    // Check for Keycloak token first (localStorage)
+    // Check for Casdoor/OIDC token (localStorage)
     let token = localStorage.getItem(TOKEN_KEY)
 
     // Check for native token (localStorage - persists)
@@ -378,25 +380,23 @@ export class TokenManager {
   }
 
   /**
-   * Build Keycloak login URL with PKCE
+   * Build OAuth login URL with PKCE (Casdoor)
    */
   static async buildLoginUrl(params: LoginUrlParams): Promise<string> {
-    const { keycloakUrl, realm, clientId, redirectUri, state } = params
+    const { baseUrl, realm, clientId, redirectUri, state, authEndpoint } = params
 
-    // Generate PKCE code verifier and challenge
     const codeVerifier = this.generateCodeVerifier()
     const codeChallenge = await this.generateCodeChallenge(codeVerifier)
-
-    // Store code verifier for token exchange
     sessionStorage.setItem('pkce_code_verifier', codeVerifier)
 
-    const authUrl = `${keycloakUrl}/realms/${realm}/protocol/openid-connect/auth`
+    // Use explicit authEndpoint (Casdoor) or construct from realm path (legacy)
+    const authUrl = authEndpoint || `${baseUrl}/realms/${realm}/protocol/openid-connect/auth`
     const queryParams = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: 'openid profile email offline_access',
-      state: state,
+      state,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
     })
@@ -404,21 +404,16 @@ export class TokenManager {
     return `${authUrl}?${queryParams.toString()}`
   }
 
-  /**
-   * Build Keycloak logout URL
-   */
   static buildLogoutUrl(params: LogoutUrlParams): string {
-    const { keycloakUrl, realm, redirectUri } = params
-    const logoutUrl = `${keycloakUrl}/realms/${realm}/protocol/openid-connect/logout`
+    const { baseUrl, realm, redirectUri, logoutEndpoint } = params
 
-    // Get id_token from storage for proper logout
+    // Use explicit logoutEndpoint (Casdoor) or construct from realm path (legacy)
+    const logoutUrl = logoutEndpoint || `${baseUrl}/realms/${realm}/protocol/openid-connect/logout`
     const idToken = this.getIdToken()
 
     const queryParams = new URLSearchParams({
       post_logout_redirect_uri: redirectUri,
     })
-
-    // Add id_token_hint if available (recommended by OIDC spec)
     if (idToken) {
       queryParams.set('id_token_hint', idToken)
     }
@@ -484,19 +479,19 @@ export class TokenManager {
   }
 
   /**
-   * Refresh access token using refresh token directly with Keycloak.
+   * Refresh access token using refresh token directly with auth provider.
    *
    * @deprecated Use backend /api/auth/refresh endpoint instead.
-   * Direct Keycloak calls can fail with "token not active" errors if the
+   * Direct provider calls can fail with "token not active" errors if the
    * SSO session has expired or refresh token was rotated.
    *
    * This is the standard OAuth2/OIDC approach:
    * - Frontend manages its own token lifecycle
-   * - No issuer mismatch issues (uses same Keycloak URL as login)
+   * - No issuer mismatch issues (uses same provider URL as login)
    * - Works from any domain (localhost, Tailscale, etc.)
    */
   static async refreshAccessToken(
-    keycloakUrl: string,
+    baseUrl: string,
     realm: string,
     clientId: string
   ): Promise<TokenResponse> {
@@ -505,9 +500,9 @@ export class TokenManager {
       throw new Error('No refresh token available')
     }
 
-    console.log('[TokenManager] Refreshing access token with Keycloak...')
+    console.log('[TokenManager] Refreshing access token...')
 
-    const tokenUrl = `${keycloakUrl}/realms/${realm}/protocol/openid-connect/token`
+    const tokenUrl = `${baseUrl}/realms/${realm}/protocol/openid-connect/token`
 
     const response = await fetch(tokenUrl, {
       method: 'POST',

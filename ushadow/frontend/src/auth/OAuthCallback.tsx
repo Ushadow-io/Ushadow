@@ -1,20 +1,20 @@
 /**
  * OAuth Callback Handler
  *
- * Handles the redirect from Keycloak after login.
+ * Handles the redirect from Casdoor after login.
  * Exchanges authorization code for tokens and redirects to original page.
  */
 
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
+import { useCasdoorAuth } from '../contexts/CasdoorAuthContext'
 import { TokenManager } from './TokenManager'
 
 export default function OAuthCallback() {
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(true)
   const navigate = useNavigate()
-  const { handleCallback } = useKeycloakAuth()
+  const { handleCallback } = useCasdoorAuth()
   const hasProcessed = useRef(false)
 
   useEffect(() => {

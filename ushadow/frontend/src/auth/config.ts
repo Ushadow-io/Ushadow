@@ -1,5 +1,5 @@
 /**
- * Keycloak and Backend Configuration
+ * Auth and Backend Configuration
  *
  * Configuration is fetched from backend settings API at runtime.
  * Fallback to env vars only for initial load before settings are available.
@@ -36,41 +36,41 @@ export const backendConfig = {
   url: getBackendUrl(),
 }
 
-// Keycloak config will be populated from backend settings
-// Default to localhost for initial load, then update from backend
-export let keycloakConfig = {
-  url: 'http://localhost:8081',
-  realm: 'ushadow',
-  clientId: 'ushadow-frontend',
+// Casdoor config — overwritten by updateAuthConfig() once backend settings load.
+// Pre-settings fallback uses VITE_CASDOOR_URL env var, defaulting to localhost:8082.
+const _defaultBase = import.meta.env.VITE_CASDOOR_URL || 'http://localhost:8082'
+export let casdoorConfig = {
+  url: _defaultBase,
+  clientId: import.meta.env.VITE_CASDOOR_CLIENT_ID || 'ushadow',
+  organization: import.meta.env.VITE_CASDOOR_ORG || 'ushadow',
+  authEndpoint: `${_defaultBase}/login/oauth/authorize`,
+  signupEndpoint: `${_defaultBase}/signup/oauth/authorize`,
+  logoutEndpoint: `${_defaultBase}/api/logout`,
 }
 
-/**
- * Update Keycloak config from backend settings.
- * Should be called on app initialization and after settings changes.
- */
-export function updateKeycloakConfig(settings: {
-  keycloak?: {
-    public_url?: string
-    realm?: string
-    frontend_client_id?: string
-  }
+export function updateAuthConfig(settings: {
+  casdoor?: { public_url?: string; client_id?: string; organization?: string; port?: number }
 }) {
-  if (settings.keycloak) {
-    keycloakConfig = {
-      url: settings.keycloak.public_url || keycloakConfig.url,
-      realm: settings.keycloak.realm || keycloakConfig.realm,
-      clientId: settings.keycloak.frontend_client_id || keycloakConfig.clientId,
+  if (settings.casdoor?.public_url) {
+    const base = settings.casdoor.public_url
+    casdoorConfig = {
+      url: base,
+      clientId: settings.casdoor.client_id || casdoorConfig.clientId,
+      organization: settings.casdoor.organization || casdoorConfig.organization,
+      authEndpoint: `${base}/login/oauth/authorize`,
+      signupEndpoint: `${base}/signup/oauth/authorize`,
+      logoutEndpoint: `${base}/api/logout`,
     }
-    console.log('[Config] Updated Keycloak config from backend:', keycloakConfig)
+    console.log('[Config] Updated Casdoor config from backend:', casdoorConfig)
   }
 }
 
 /**
- * Register this environment's OAuth redirect URI with Keycloak.
+ * Register this environment's OAuth redirect URI with Casdoor.
  * Called on app initialization to enable dynamic redirect URI registration.
  *
  * This allows multiple environments running on different ports to register
- * their callback URLs without pre-configuring them in Keycloak.
+ * their callback URLs without pre-configuring them in Casdoor.
  */
 export async function registerRedirectUri(): Promise<void> {
   // Build redirect URI for this environment
@@ -78,7 +78,7 @@ export async function registerRedirectUri(): Promise<void> {
   const postLogoutRedirectUri = `${window.location.origin}/`
 
   try {
-    console.log('[Auth] Registering redirect URI with Keycloak:', redirectUri)
+    console.log('[Auth] Registering redirect URI with Casdoor:', redirectUri)
 
     const response = await fetch(`${backendConfig.url}/api/auth/register-redirect-uri`, {
       method: 'POST',

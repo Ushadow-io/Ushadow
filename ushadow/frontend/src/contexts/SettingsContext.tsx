@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { settingsApi } from '../services/api'
-import { updateKeycloakConfig } from '../auth/config'
+import { updateAuthConfig } from '../auth/config'
 
 interface SettingsContextType {
   settings: Record<string, any> | null
@@ -19,10 +19,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       const response = await settingsApi.getConfig()
       setSettings(response.data)
 
-      // Update Keycloak config with backend settings
-      updateKeycloakConfig(response.data)
-
-      console.log('[SettingsContext] Settings loaded and Keycloak config updated')
+      updateAuthConfig(response.data)
+      console.log('[SettingsContext] Settings loaded and auth config updated')
     } catch (error) {
       console.error('[SettingsContext] Failed to load settings:', error)
       // Don't block app initialization if settings fail

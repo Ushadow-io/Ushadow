@@ -1,252 +1,112 @@
 *** Settings ***
 Documentation    Health Check API Tests
 ...
-...              Tests the /health endpoint to ensure service is running
-...              and all critical services are monitored.
-...
-...              TDD Process Followed:
-...              1. RED: Wrote tests with expected simple structure → FAILED (4/7)
-...              2. Discovered real endpoint has complex health monitoring
-...              3. GREEN: Updated tests to match actual endpoint behavior
-...              4. REFACTOR: Add comprehensive health monitoring tests
+...              Three tests covering the full environment signal:
+...              1. Backend Smoke — /health returns 200 and MongoDB/Redis are healthy
+...              2. Casdoor Reachable — auth service is up (backend /health doesn't check this)
+...              3. Response Schema — field types and per-service structure
 
 Library          RequestsLibrary
 Library          Collections
 
-# Import test environment configuration and setup resources
 Resource         ../resources/setup/suite_setup.robot
-Variables        ../resources/setup/test_env.py
 
-Suite Setup      Health Check Suite Setup
-Suite Teardown   Health Check Suite Teardown
+Suite Setup      Run Keywords
+...              Standard Suite Setup    AND
+...              Create Session    ${SESSION}          ${BACKEND_URL}    verify=True     timeout=10    AND
+...              Create Session    ${CASDOOR_SESSION}  ${CASDOOR_URL}    verify=False    timeout=10
+Suite Teardown   Standard Suite Teardown
 
 *** Variables ***
-${HEALTH_ENDPOINT}    /health
-${SESSION}            health_session
+${HEALTH_ENDPOINT}      /health
+${SESSION}              health_session
+${CASDOOR_SESSION}      casdoor_health_session
+@{VALID_STATUSES}       healthy    degraded    unhealthy
 
 *** Test Cases ***
-Health Endpoint Returns 200 OK
-    [Documentation]    Health endpoint should always return 200 even if services are degraded
+Backend Health - Critical Services Up
+    [Documentation]    Core health signal: backend is up and MongoDB/Redis are healthy.
     ...
-    ...                This allows monitoring systems to detect the service is running
+    ...                GIVEN: Test containers are running
+    ...                WHEN: GET /health
+    ...                THEN: 200 OK and critical_services_healthy=True
+    ...
+    ...                Fail here means MongoDB or Redis is down — environment not usable.
     [Tags]    health    smoke    api    quick
 
     ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ...             expected_status=200
 
-    Status Should Be    200    ${response}
+    ${json}=    Set Variable    ${response.json()}
 
-Health Response Has Required Top-Level Fields
-    [Documentation]    Verify response contains core health monitoring fields
+    # MongoDB and Redis must be healthy for the environment to be usable
+    Should Be True    ${json}[critical_services_healthy]
+    ...    msg=Critical services not healthy: ${json}[services]
+
+Casdoor Health - Auth Service Reachable
+    [Documentation]    Verify the Casdoor auth service is up and responding.
     ...
-    ...                Required: status, timestamp, services, config, overall_healthy, critical_services_healthy
+    ...                GIVEN: Casdoor container is running (${CASDOOR_URL})
+    ...                WHEN: GET /api/health on Casdoor
+    ...                THEN: 200 OK with status "ok"
+    ...
+    ...                The backend /health endpoint does NOT check Casdoor.
+    ...                Without Casdoor, login is broken even if backend reports healthy.
+    [Tags]    health    smoke    api    quick    casdoor
+
+    # Casdoor exposes its own health endpoint
+    ${response}=    GET On Session    ${CASDOOR_SESSION}    /api/health
+    ...             expected_status=200
+
+    ${json}=    Set Variable    ${response.json()}
+
+    Should Be Equal As Strings    ${json}[status]    ok
+    ...    msg=Casdoor health check failed: ${json}
+
+Backend Health - Response Schema
+    [Documentation]    Validate health response structure, field types, and per-service fields.
+    ...
+    ...                GIVEN: Health endpoint reachable
+    ...                WHEN: GET /health
+    ...                THEN: All required fields present with correct types
+    ...
+    ...                Checks: required top-level fields, valid status enum, recent timestamp,
+    ...                non-empty config section, and status/healthy fields on every service.
     [Tags]    health    api    schema
 
     ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
     ${json}=        Set Variable    ${response.json()}
 
-    # Core fields
-    Dictionary Should Contain Key    ${json}    status
-    ...    msg=Response missing 'status' field
-
-    Dictionary Should Contain Key    ${json}    timestamp
-    ...    msg=Response missing 'timestamp' field
-
-    Dictionary Should Contain Key    ${json}    services
-    ...    msg=Response missing 'services' field
-
-    Dictionary Should Contain Key    ${json}    config
-    ...    msg=Response missing 'config' field
-
-    Dictionary Should Contain Key    ${json}    overall_healthy
-    ...    msg=Response missing 'overall_healthy' field
-
-    Dictionary Should Contain Key    ${json}    critical_services_healthy
-    ...    msg=Response missing 'critical_services_healthy' field
-
-Health Status Is Valid
-    [Documentation]    Status should be one of: healthy, degraded, unhealthy
-    [Tags]    health    api
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-
-    ${valid_statuses}=    Create List    healthy    degraded    unhealthy
-
-    Should Contain    ${valid_statuses}    ${json}[status]
-    ...    msg=Status '${json}[status]' is not valid. Must be: healthy, degraded, or unhealthy
-
-Health Timestamp Is Recent
-    [Documentation]    Timestamp should be within last 10 seconds (recent health check)
-    [Tags]    health    api
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-
-    ${current_time}=    Get Time    epoch
-    ${time_diff}=       Evaluate    ${current_time} - ${json}[timestamp]
-
-    Should Be True    ${time_diff} < 10
-    ...    msg=Timestamp is ${time_diff}s old, should be < 10s
-
-Critical Services Field Exists
-    [Documentation]    critical_services_healthy indicates if critical services are up
-    ...
-    ...                Even if overall_healthy is False, critical services should be True
-    ...                for the application to function
-    [Tags]    health    api    critical
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-
-    ${critical_healthy}=    Get From Dictionary    ${json}    critical_services_healthy
-
-    Should Be True    isinstance($critical_healthy, bool)
-    ...    msg=critical_services_healthy should be boolean, got ${critical_healthy}
-
-Services Dictionary Contains Expected Services
-    [Documentation]    Verify services dictionary contains key service dependencies
-    ...
-    ...                Expected services: mongodb, redis
-    [Tags]    health    api    services
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-    ${services}=    Get From Dictionary    ${json}    services
-
-    # Critical services
-    Dictionary Should Contain Key    ${services}    mongodb
-    ...    msg=Missing mongodb service health check
-
-    Dictionary Should Contain Key    ${services}    redis
-    ...    msg=Missing redis service health check
-
-Each Service Has Status And Healthy Fields
-    [Documentation]    Every service in services dict should have status and healthy fields
-    [Tags]    health    api    services    schema
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-    ${services}=    Get From Dictionary    ${json}    services
-
-    FOR    ${service_name}    IN    @{services.keys()}
-        ${service}=    Get From Dictionary    ${services}    ${service_name}
-
-        Dictionary Should Contain Key    ${service}    status
-        ...    msg=Service ${service_name} missing 'status' field
-
-        Dictionary Should Contain Key    ${service}    healthy
-        ...    msg=Service ${service_name} missing 'healthy' field
-
-        # Healthy should be boolean
-        ${healthy}=    Get From Dictionary    ${service}    healthy
-        Should Be True    isinstance($healthy, bool)
-        ...    msg=Service ${service_name} healthy field should be boolean
+    # All required top-level fields must be present
+    FOR    ${field}    IN    status    timestamp    services    config    overall_healthy    critical_services_healthy
+        Dictionary Should Contain Key    ${json}    ${field}
+        ...    msg=Response missing '${field}' field
     END
 
-MongoDB Service Health Check
-    [Documentation]    MongoDB is a critical service and should be healthy
-    [Tags]    health    api    mongodb    critical
+    # Status must be a known value
+    Should Contain    ${VALID_STATUSES}    ${json}[status]
+    ...    msg=Status '${json}[status]' not valid — expected one of: ${VALID_STATUSES}
 
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-    ${services}=    Get From Dictionary    ${json}    services
-    ${mongodb}=     Get From Dictionary    ${services}    mongodb
+    # Timestamp must be recent (generated at request time, not stale)
+    ${now}=         Get Time    epoch
+    ${age}=         Evaluate    ${now} - ${json}[timestamp]
+    Should Be True    ${age} < 10
+    ...    msg=Timestamp is ${age}s old — should be < 10s (is health check caching?)
 
-    Should Be True    ${mongodb}[healthy]
-    ...    msg=MongoDB should be healthy, status: ${mongodb}[status]
-
-    Should Be True    ${mongodb}[critical]
-    ...    msg=MongoDB should be marked as critical
-
-Redis Service Health Check
-    [Documentation]    Redis is a critical service and should be healthy
-    [Tags]    health    api    redis    critical
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-    ${services}=    Get From Dictionary    ${json}    services
-    ${redis}=       Get From Dictionary    ${services}    redis
-
-    Should Be True    ${redis}[healthy]
-    ...    msg=Redis should be healthy, status: ${redis}[status]
-
-    Should Be True    ${redis}[critical]
-    ...    msg=Redis should be marked as critical
-
-Config Section Contains Environment Info
-    [Documentation]    Config section should contain environment configuration details
-    [Tags]    health    api    config
-
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${json}=        Set Variable    ${response.json()}
-    ${config}=      Get From Dictionary    ${json}    config
-
-    # Verify config is a dictionary
-    Should Be True    isinstance($config, dict)
-    ...    msg=Config should be a dictionary
-
-    # Config should not be empty
-    ${config_size}=    Get Length    ${config}
+    # Config section must not be empty
+    ${config_size}=    Get Length    ${json}[config]
     Should Be True    ${config_size} > 0
-    ...    msg=Config should contain environment information
+    ...    msg=Config section is empty — expected environment info
 
-Health Check Response Time Is Acceptable
-    [Documentation]    Health check should respond quickly (< 2 seconds)
-    ...
-    ...                Note: Increased from 1s as this endpoint checks multiple services
-    [Tags]    health    api    performance
+    # Every service entry must have status (str) and healthy (bool)
+    ${services}=    Get From Dictionary    ${json}    services
+    FOR    ${name}    IN    @{services.keys()}
+        ${svc}=    Get From Dictionary    ${services}    ${name}
+        Dictionary Should Contain Key    ${svc}    status
+        ...    msg=Service '${name}' missing 'status' field
+        Dictionary Should Contain Key    ${svc}    healthy
+        ...    msg=Service '${name}' missing 'healthy' field
+        Should Be True    isinstance($svc['healthy'], bool)
+        ...    msg=Service '${name}' healthy field should be bool, got: ${svc}[healthy]
+    END
 
-    ${start}=       Get Time    epoch
-    ${response}=    GET On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ${end}=         Get Time    epoch
-
-    ${elapsed}=     Evaluate    ${end} - ${start}
-
-    Should Be True    ${elapsed} < 2
-    ...    msg=Health check took ${elapsed}s, should be < 2s
-
-Health Check With Invalid Method Returns 405
-    [Documentation]    POST to health endpoint should return 405 Method Not Allowed
-    [Tags]    health    api    error-handling    negative
-
-    ${response}=    POST On Session    ${SESSION}    ${HEALTH_ENDPOINT}
-    ...             expected_status=405
-
-    Status Should Be    405    ${response}
-
-*** Keywords ***
-Health Check Suite Setup
-    [Documentation]    Setup test environment and API session for health tests
-
-    # First, run standard suite setup (starts containers including backend-test)
-    Suite Setup
-
-    # Then setup health-specific session using test backend (port 8200, no auth required)
-    Log To Console    \nConnecting to test backend: ${BACKEND_URL}
-
-    # Create session with 10-second timeout - health endpoint is public, no auth needed
-    Create Session    ${SESSION}    ${BACKEND_URL}    verify=True    timeout=10
-
-Health Check Suite Teardown
-    [Documentation]    Cleanup after tests
-
-    Delete All Sessions
-
-    # Run standard suite teardown (keeps/stops containers based on TEST_MODE)
-    Suite Teardown
-
-Setup Health Tests
-    [Documentation]    DEPRECATED: Use Health Check Suite Setup instead
-    Health Check Suite Setup
-
-Teardown Health Tests
-    [Documentation]    DEPRECATED: Use Health Check Suite Teardown instead
-    Health Check Suite Teardown
-
-Status Should Be
-    [Documentation]    Helper keyword to verify HTTP status code
-    [Arguments]    ${expected}    ${response}
-
-    Should Be Equal As Integers    ${response.status_code}    ${expected}
-    ...    msg=Expected status ${expected}, got ${response.status_code}

@@ -10,7 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { memoriesApi, type MemorySource } from '../services/api'
 import { useMemoriesStore } from '../stores/memoriesStore'
 import { useAuth } from '../contexts/AuthContext'
-import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
+import { useCasdoorAuth } from '../contexts/CasdoorAuthContext'
 import type { Memory } from '../types/memory'
 
 // Fallback user ID when not authenticated
@@ -19,9 +19,9 @@ const FALLBACK_USER_ID = 'ushadow'
 export function useMemories(source: MemorySource = 'openmemory') {
   // Get user from auth context - use email as OpenMemory user_id
   const { user: legacyUser, isLoading: legacyLoading } = useAuth()
-  const { isAuthenticated: kcAuthenticated, user: kcUser, isLoading: kcLoading } = useKeycloakAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, isLoading: kcLoading } = useCasdoorAuth()
 
-  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  // Use Casdoor user if authenticated, otherwise use legacy user
   const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
   const isLoadingUser = legacyLoading || kcLoading
@@ -30,13 +30,13 @@ export function useMemories(source: MemorySource = 'openmemory') {
   if (!isLoadingUser && !user) {
     console.warn('[useMemories] No user object available from either auth context, falling back to:', FALLBACK_USER_ID)
     console.warn('[useMemories] Auth state:', {
-      keycloakAuth: { isAuthenticated: kcAuthenticated, hasUser: !!kcUser },
+      casdoorAuth: { isAuthenticated: kcAuthenticated, hasUser: !!kcUser },
       legacyAuth: { hasUser: !!legacyUser }
     })
   } else if (!isLoadingUser && !user.email) {
     console.warn('[useMemories] User object exists but email is missing:', { user, userId: FALLBACK_USER_ID })
   } else if (!isLoadingUser) {
-    console.log('[useMemories] Using user email as ID:', user.email, 'from', kcAuthenticated ? 'Keycloak' : 'legacy auth')
+    console.log('[useMemories] Using user email as ID:', user.email, 'from', kcAuthenticated ? 'Casdoor' : 'legacy auth')
   }
   const queryClient = useQueryClient()
   const {
@@ -141,9 +141,9 @@ export function useMemories(source: MemorySource = 'openmemory') {
  */
 export function useMemory(memoryId: string) {
   const { user: legacyUser } = useAuth()
-  const { isAuthenticated: kcAuthenticated, user: kcUser } = useKeycloakAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser } = useCasdoorAuth()
 
-  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  // Use Casdoor user if authenticated, otherwise use legacy user
   const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
 
@@ -159,9 +159,9 @@ export function useMemory(memoryId: string) {
  */
 export function useRelatedMemories(memoryId: string) {
   const { user: legacyUser } = useAuth()
-  const { isAuthenticated: kcAuthenticated, user: kcUser } = useKeycloakAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser } = useCasdoorAuth()
 
-  // Use Keycloak user if authenticated via Keycloak, otherwise use legacy user
+  // Use Casdoor user if authenticated, otherwise use legacy user
   const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   const userId = user?.email || FALLBACK_USER_ID
 

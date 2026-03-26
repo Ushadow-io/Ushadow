@@ -11,10 +11,14 @@ Library          RequestsLibrary
 Library          Collections
 Library          OperatingSystem
 Library          String
+
+Resource         ../resources/setup/suite_setup.robot
 Resource         ../resources/api_keywords.robot
 
-Suite Setup      Setup Test Environment
-Suite Teardown   Cleanup Test Environment
+Variables        ../resources/setup/test_env.py
+
+Suite Setup      Run Keywords    Standard Suite Setup    AND    Backup Config Files    ${OVERRIDES_FILE}    ${SECRETS_FILE}
+Suite Teardown   Run Keywords    Restore Config Files    ${OVERRIDES_FILE}    ${SECRETS_FILE}    AND    Standard Suite Teardown
 
 *** Variables ***
 ${SERVICE_ID}           chronicle
@@ -101,9 +105,13 @@ Update Database Via Environment File
     ...    Run Keyword Unless    ${backup_created}    Remove File    ${ENV_FILE}    AND
     ...    Log    Environment file test completed
 
-Update Database Via Service Config API
-    [Documentation]    Verify database config can be set via service config API
-    ...                Tests the API → config.overrides.yaml → config merge flow
+Settings API Writes Non-Secret Override To Overrides File
+    [Documentation]    Verify non-secret config set via settings API goes to config.overrides.yaml
+    ...                Tests the API → config.overrides.yaml → config merge flow.
+    ...
+    ...                Distinguishes settings overrides (config.overrides.yaml) from secrets
+    ...                (secrets.yaml). Database name is not a secret, so it must NOT appear
+    ...                in secrets.yaml.
     [Tags]    integration    config-merge    api    critical    quick
 
     # Arrange: Get current database config
@@ -208,28 +216,6 @@ Test Secret Override Via Service Config API
     Log    Secret successfully written to secrets.yaml and masked in API responses
 
 *** Keywords ***
-Setup Test Environment
-    [Documentation]    Setup for all tests
-    Log    Setting up test environment
-
-    # Backup config files if they exist
-    Backup Config Files    ${OVERRIDES_FILE}    ${SECRETS_FILE}
-
-    # Create admin session for API calls (reused by all tests)
-    ${session}=    Get Admin API Session
-    Set Suite Variable    ${admin_session}    ${session}
-
-Cleanup Test Environment
-    [Documentation]    Cleanup after all tests
-    Log    Cleaning up test environment
-
-    # Restore backups and clean up
-    Restore Config Files    ${OVERRIDES_FILE}    ${SECRETS_FILE}
-
-    # Close all API sessions
-    Delete All Sessions
-    Log    Test environment cleaned up
-
 Verify Database Not In Secrets
     [Documentation]    Verify database setting is not in secrets file
     [Arguments]    ${secrets_file}    ${service_id}

@@ -1,7 +1,7 @@
 """Share token models for conversation and resource sharing.
 
 This module provides models for secure sharing of conversations and resources
-with fine-grained access control compatible with Keycloak FGA policies.
+with fine-grained access control.
 """
 
 import logging
@@ -34,10 +34,10 @@ class SharePermission(str, Enum):
     ADMIN = "admin"
 
 
-class KeycloakPolicy(BaseModel):
-    """Keycloak-compatible authorization policy.
+class SharePolicy(BaseModel):
+    """Authorization policy for fine-grained access control.
 
-    Matches Mycelia's policy structure:
+    Generic policy structure:
     {"resource": "conversation:123", "action": "read", "effect": "allow"}
     """
 
@@ -51,9 +51,9 @@ class KeycloakPolicy(BaseModel):
 class ShareToken(Document):
     """Share token for secure resource sharing.
 
-    Stores information about shared resources including Keycloak-compatible
-    policies for fine-grained access control. Supports both authenticated
-    and anonymous sharing with optional expiration and view limits.
+    Stores information about shared resources with fine-grained access control
+    policies. Supports both authenticated and anonymous sharing with optional
+    expiration and view limits.
     """
 
     # Token identification
@@ -66,13 +66,13 @@ class ShareToken(Document):
     resource_type: str = Field(..., description="Type of shared resource")
     resource_id: str = Field(..., description="ID of the shared resource")
 
-    # Ownership (str to support both MongoDB ObjectId and Keycloak UUID)
+    # Ownership (str to support both MongoDB ObjectId and federated auth UUID)
     created_by: str = Field(..., description="User ID who created the share")
 
-    # Keycloak-compatible policies
-    policies: List[KeycloakPolicy] = Field(
+    # Access control policies
+    policies: List[SharePolicy] = Field(
         default_factory=list,
-        description="Keycloak FGA policies for this share",
+        description="Authorization policies for this share",
     )
 
     # Permissions (simplified view for API responses)
@@ -124,14 +124,14 @@ class ShareToken(Document):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Keycloak integration (populated when Keycloak is active)
-    keycloak_policy_id: Optional[str] = Field(
+    # FGA integration fields (reserved for future fine-grained auth)
+    fga_policy_id: Optional[str] = Field(
         default=None,
-        description="Keycloak policy ID if registered with Keycloak FGA",
+        description="FGA policy ID (reserved for future fine-grained auth integration)",
     )
-    keycloak_resource_id: Optional[str] = Field(
+    fga_resource_id: Optional[str] = Field(
         default=None,
-        description="Keycloak resource ID if registered",
+        description="FGA resource ID (reserved for future fine-grained auth integration)",
     )
 
     class Settings:

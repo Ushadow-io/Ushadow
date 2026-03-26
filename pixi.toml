@@ -64,3 +64,4 @@ pyyaml = ">=6.0.0"
 
 # uv for fast Python package management
 uv = ">=0.5.0"
+restinstance = ">=1.6.2,<2"

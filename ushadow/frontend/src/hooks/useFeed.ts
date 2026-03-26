@@ -8,12 +8,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { feedApi, type FeedPost, type SourceCreateData, type GraphUserInterestsResponse } from '../services/feedApi'
 import { useAuth } from '../contexts/AuthContext'
-import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
+import { useCasdoorAuth } from '../contexts/CasdoorAuthContext'
 
 /** Resolve user email from whichever auth provider is active. */
 function useUserId(): { userId: string; isLoadingUser: boolean } {
   const { user: legacyUser, isLoading: legacyLoading } = useAuth()
-  const { isAuthenticated: kcAuthenticated, user: kcUser, isLoading: kcLoading } = useKeycloakAuth()
+  const { isAuthenticated: kcAuthenticated, user: kcUser, isLoading: kcLoading } = useCasdoorAuth()
 
   const user = kcAuthenticated && kcUser ? kcUser : legacyUser
   return {

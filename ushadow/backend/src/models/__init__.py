@@ -7,7 +7,7 @@ from .share import (
     ShareTokenCreate,
     ShareTokenResponse,
     ShareAccessLog,
-    KeycloakPolicy,
+    SharePolicy,
     ResourceType,
     SharePermission,
 )
@@ -19,7 +19,7 @@ __all__ = [
     "ShareTokenCreate",
     "ShareTokenResponse",
     "ShareAccessLog",
-    "KeycloakPolicy",
+    "SharePolicy",
     "ResourceType",
     "SharePermission",
 ]

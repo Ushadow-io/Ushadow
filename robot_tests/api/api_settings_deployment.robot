@@ -14,6 +14,7 @@ Library          Collections
 Library          OperatingSystem
 Library          ../resources/EnvConfig.py
 Resource         ../resources/setup/suite_setup.robot
+Resource         ../resources/auth_keywords.robot
 
 Suite Setup      Standard Suite Setup
 Suite Teardown   Standard Suite Teardown

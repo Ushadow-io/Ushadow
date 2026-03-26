@@ -24,18 +24,13 @@ Resource         ../resources/auth_keywords.robot
 Resource         ../resources/tailscale_keywords.robot
 Resource         ../resources/setup/suite_setup.robot
 
-Suite Setup      Standard Suite Setup
-Suite Teardown   Standard Suite Teardown
-Test Setup       Start Tailscale Container
+Suite Setup      Run Keywords    Standard Suite Setup    AND    Start Test Tailscale Container
+Suite Teardown   Run Keywords    Cleanup Test Tailscale Container    AND    Standard Suite Teardown
 
 *** Variables ***
 ${TAILSCALE_API}              /api/tailscale
 ${SESSION}                    tailscale_session
-${PROJECT_ROOT}               ${CURDIR}/../..
-# App environment — read from OS env (exported from .env.test by Makefile) or use defaults
-${COMPOSE_PROJECT_NAME}       %{COMPOSE_PROJECT_NAME=ushadow-green}
-${TAILSCALE_HOSTNAME}         %{TAILSCALE_HOSTNAME=green.spangled-kettle.ts.net}
-# Derived container/service names
+# Container/service names derived from COMPOSE_PROJECT_NAME (set in test_env.py)
 ${TAILSCALE_CONTAINER}        ${COMPOSE_PROJECT_NAME}-tailscale
 ${WEBUI_SERVICE}              ${COMPOSE_PROJECT_NAME}-webui
 ${BACKEND_SERVICE}            ${COMPOSE_PROJECT_NAME}-backend
@@ -108,6 +103,8 @@ Detect Tailscale Container Is Running
     ...                Container is guaranteed to be running by Test Setup.
     [Tags]    tailscale    integration    container
 
+    Require Tailscale Configured
+
     # Check container status
     REST.GET    /api/tailscale/container/status
     Integer    response status    200
@@ -127,6 +124,8 @@ Detect Tailscale Authentication State
     ...
     ...                REQUIRES: Tailscale container running
     [Tags]    tailscale    integration    auth
+
+    Require Tailscale Configured
 
     REST.GET    /api/tailscale/container/status
     Integer    response status    200
@@ -162,8 +161,11 @@ Detect Tailscale Authentication State
 Test Container Start When Stopped
     [Documentation]    TDD GREEN: Test starting container when explicitly stopped
     ...
-    ...                Stops the container first, then verifies start endpoint works
+    ...                Stops the container first, then verifies start endpoint works.
+    ...                REQUIRES: TAILSCALE_HOSTNAME set — destructive, stops live container.
     [Tags]    tailscale    integration    container    destructive
+
+    Require Tailscale Configured
 
     # Get environment name to build container name
     ${env_name}=    Get Env Value    ENV_NAME    green
@@ -202,6 +204,8 @@ Container Must Be Running For Auth
     [Documentation]    Ensure container is running before testing auth flow
     [Tags]    tailscale    integration    auth    prerequisite
 
+    Require Tailscale Configured
+
     REST.GET    /api/tailscale/container/status
     Integer    response status    200
 
@@ -217,8 +221,10 @@ Container Must Be Running For Auth
 Auth URL Generation Works
     [Documentation]    TDD RED: Verify we can successfully get an auth URL with QR code
     ...
-    ...                NOTE: Requires container to be logged out - setup handles this
-    [Tags]    tailscale    integration    auth    critical
+    ...                NOTE: Requires container to be logged out - setup handles this.
+    ...                DESTRUCTIVE: Logs out the live Tailscale container temporarily.
+    ...                Requires TAILSCALE_AUTH_KEY to re-authenticate afterward.
+    [Tags]    tailscale    integration    auth    critical    destructive
     [Setup]    Logout Tailscale Container For Auth Testing
 
     # Get auth URL
@@ -307,9 +313,13 @@ Auth URL Contains Valid Tailscale Token
 
 Verify Container Can Authenticate
     [Documentation]    Verify temp container can authenticate with Tailscale
+    ...
+    ...                REQUIRES: TAILSCALE_HOSTNAME set and TAILSCALE_AUTH_KEY in env
     [Tags]    tailscale    integration    cert    auth
     [Setup]    Start Test Tailscale Container
     [Teardown]    Cleanup Test Tailscale Container
+
+    Require Tailscale Configured
 
     # Authenticate the container
     Auth Tailscale Container
@@ -326,6 +336,7 @@ Verify Container Can Authenticate
 Provision Certificate With Unique Temporary Container
     [Documentation]    Create temp container with unique name, auth, provision cert, cleanup
     ...
+    ...                REQUIRES: TAILSCALE_HOSTNAME set and TAILSCALE_AUTH_KEY in env.
     ...                This test creates a completely isolated temporary container
     ...                with a unique timestamp-based hostname, provisions a certificate
     ...                for it, then cleans up everything including removing the device
@@ -387,6 +398,8 @@ Configure Tailscale Serve Routes
     [Documentation]    TDD RED: Configure routes before testing them
     [Tags]    tailscale    integration    routing    setup
 
+    Require Tailscale Configured
+
     # Build request payload as dict
     ${deployment_mode}=    Create Dictionary    mode=single    environment=dev
     ${payload}=    Create Dictionary
@@ -429,6 +442,8 @@ Tailscale Serve Routes Are Configured
     [Documentation]    Verify that Tailscale serve has routes configured
     [Tags]    tailscale    integration    routing
 
+    Require Tailscale Configured
+
     # Get serve status from container
     ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     Should Be Equal As Integers    ${result.rc}    0
@@ -443,6 +458,8 @@ Tailscale Serve Routes Are Configured
 Frontend Route Uses Correct Port
     [Documentation]    TDD RED: Verify frontend route uses 5173 (dev) or 80 (prod)
     [Tags]    tailscale    integration    routing    critical
+
+    Require Tailscale Configured
 
     # Get serve status
     ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
@@ -476,6 +493,8 @@ Backend API Routes Are Configured
     [Documentation]    TDD GREEN: Verify /api and /auth routes exist
     [Tags]    tailscale    integration    routing
 
+    Require Tailscale Configured
+
     ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     ${output}=    Set Variable    ${result.stdout}
 
@@ -497,6 +516,8 @@ WebSocket Routes Are Configured
     [Documentation]    TDD GREEN: Verify WebSocket routes go to chronicle
     [Tags]    tailscale    integration    routing
 
+    Require Tailscale Configured
+
     ${result}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
     ${output}=    Set Variable    ${result.stdout}
 
@@ -514,6 +535,8 @@ WebSocket Routes Are Configured
 Routes Can Be Reconfigured
     [Documentation]    TDD GREEN: Verify routes can be updated by recalling configure-serve
     [Tags]    tailscale    integration    routing
+
+    Require Tailscale Configured
 
     # Get current routes
     ${result_before}=    Run Process    docker    exec    ${TAILSCALE_CONTAINER}    tailscale    serve    status
@@ -555,6 +578,8 @@ Get Tailscale Access URLs
     ...
     ...                REQUIRES: Tailscale configured
     [Tags]    tailscale    integration    url
+
+    Require Tailscale Configured
 
     # Try to get access URLs
     TRY
@@ -611,6 +636,8 @@ Get Tailnet Settings
     ...                REQUIRES: Tailscale authenticated
     [Tags]    tailscale    integration    tailnet
 
+    Require Tailscale Configured
+
     # Try to get tailnet settings
     TRY
         REST.GET    /api/tailscale/container/tailnet-settings
@@ -645,6 +672,8 @@ Control Plane Connection Stability During Long Operations
     ...                REQUIRES: Tailscale authenticated, HTTPS enabled
     ...                KNOWN ISSUE: macOS sleep/wake events sever long-lived connections
     [Tags]    tailscale    integration    stability    network
+
+    Require Tailscale Configured
 
     # Get initial log position
     ${result}=    Run Process    docker    logs    --tail\=0    ${TAILSCALE_CONTAINER}
@@ -734,15 +763,23 @@ Control Plane Connection Stability During Long Operations
     ...    Log    ⚠️ Control plane connection instability detected    WARN
 
 *** Keywords ***
+Require Tailscale Configured
+    [Documentation]    Skip the calling test if TAILSCALE_HOSTNAME is not set.
+    ...                Prevents integration/routing/cert tests from running in environments
+    ...                without a live Tailscale node (e.g. CI test environment).
+    Skip If    '${TAILSCALE_HOSTNAME}' == '${EMPTY}'
+    ...    Tailscale integration tests skipped — TAILSCALE_HOSTNAME not set in .env.test
+
 Logout Tailscale Container For Auth Testing
     [Documentation]    Logout Tailscale container to test auth flow from unauthenticated state
     ...
-    ...                WARNING: Temporarily logs out the Tailscale container
-    ...                This is needed for auth URL tests to work properly
+    ...                WARNING: Temporarily logs out the Tailscale container.
+    ...                Skips if TAILSCALE_HOSTNAME not set (no live node to logout).
+    ...                Requires TAILSCALE_AUTH_KEY to re-authenticate afterward.
 
-    # Get environment name to build container name
-    ${env_name}=    Get Env Value    ENV_NAME    green
-    ${container_name}=    Set Variable    ushadow-${env_name}-tailscale
+    Require Tailscale Configured
+
+    ${container_name}=    Set Variable    ${TAILSCALE_CONTAINER}
 
     Log    ⚠️ Logging out ${container_name} for auth URL testing    WARN
 
@@ -759,9 +796,7 @@ Reauth Tailscale Container After Auth Testing
     ...
     ...                This restores the container to authenticated state
 
-    # Get environment name to build container name
-    ${env_name}=    Get Env Value    ENV_NAME    green
-    ${container_name}=    Set Variable    ushadow-${env_name}-tailscale
+    ${container_name}=    Set Variable    ${TAILSCALE_CONTAINER}
 
     Log    Re-authenticating ${container_name} after auth flow tests
 

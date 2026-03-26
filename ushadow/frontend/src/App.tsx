@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
-import { KeycloakAuthProvider } from './contexts/KeycloakAuthContext'
+import { CasdoorAuthProvider } from './contexts/CasdoorAuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
 import { WizardProvider } from './contexts/WizardContext'
 import { ChronicleProvider } from './contexts/ChronicleContext'
@@ -73,7 +73,7 @@ function AppContent() {
 
   const { backendError, checkSetupStatus, isLoading, token } = useAuth()
 
-  // Note: Redirect URI registration moved to login flow (KeycloakAuthContext)
+  // Note: Redirect URI registration moved to login flow (CasdoorAuthContext)
   // to avoid unnecessary calls on every app mount
 
   // Show error page if backend has configuration errors
@@ -169,7 +169,7 @@ function App() {
         <ToastProvider>
           <SettingsProvider>
             <VibeKanbanWebCompanion />
-            <KeycloakAuthProvider>
+            <CasdoorAuthProvider>
               <AuthProvider>
                 <FeatureFlagsProvider>
                   <BrowserRouter basename={getBasename()}>
@@ -177,7 +177,7 @@ function App() {
                   </BrowserRouter>
                 </FeatureFlagsProvider>
               </AuthProvider>
-            </KeycloakAuthProvider>
+            </CasdoorAuthProvider>
           </SettingsProvider>
         </ToastProvider>
       </ThemeProvider>

@@ -775,7 +775,7 @@ async def proxy_service_request(
         except Exception as e:
             logger.debug(f"[PROXY] Could not decode token: {e}")
 
-        # Bridge Keycloak tokens to service tokens for Chronicle
+        # Bridge auth tokens to service tokens for Chronicle
         from src.services.token_bridge import bridge_to_service_token
         token_without_bearer = auth_header.replace("Bearer ", "")
         service_token = await bridge_to_service_token(
@@ -783,9 +783,9 @@ async def proxy_service_request(
             audiences=["ushadow", "chronicle"]
         )
         if service_token and service_token != token_without_bearer:
-            # Token was bridged (Keycloak → service token)
+            # Token was bridged (Casdoor → service token)
             headers["authorization"] = f"Bearer {service_token}"
-            logger.info(f"[PROXY] ✓ Bridged Keycloak token to service token")
+            logger.info(f"[PROXY] ✓ Bridged auth token to service token")
         else:
             logger.debug(f"[PROXY] Token passed through (already a service token or bridging failed)")
     else:

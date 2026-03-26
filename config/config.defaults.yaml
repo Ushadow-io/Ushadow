@@ -17,23 +17,17 @@ auth:
   admin_email: admin@example.com
   admin_name: admin
 
-# Keycloak OAuth Configuration
-# Uses KC_* environment variables (Keycloak's native format)
-keycloak:
-  url: ${oc.env:KC_URL,http://keycloak:8080}                    # Internal URL (backend→Keycloak admin API)
-  public_url: ${oc.env:KC_HOSTNAME_URL,http://localhost:8081}   # Browser/web URL (OAuth redirects, token issuer)
-  mobile_url: ${oc.env:KC_MOBILE_URL,''}                         # Mobile URL override; auto-derived from Tailscale IP if empty
-  realm: ${oc.env:KC_REALM,ushadow}
-  backend_client_id: ${oc.env:KC_BACKEND_CLIENT_ID,ushadow-backend}
-  frontend_client_id: ${oc.env:KC_FRONTEND_CLIENT_ID,ushadow-frontend}
-  admin_user: ${oc.env:KC_BOOTSTRAP_ADMIN_USERNAME,admin}
-  admin_password: ${oc.env:KC_BOOTSTRAP_ADMIN_PASSWORD,admin}
-  cli_client_id: ${oc.env:KEYCLOAK_CLI_CLIENT_ID,ushadow-cli}  # CLI tools (ush) with direct grant
-  # Keycloak server behaviour defaults
-  hostname_strict: ${oc.env:KC_HOSTNAME_STRICT,false}      # Allow backend to use internal URL
-  http_enabled: ${oc.env:KC_HTTP_ENABLED,true}             # Required for non-HTTPS KC_HOSTNAME_URL
-  health_enabled: ${oc.env:KC_HEALTH_ENABLED,true}
-  proxy_headers: ${oc.env:KC_PROXY_HEADERS,xforwarded}     # Trust X-Forwarded-* headers
+# Casdoor Authentication
+casdoor:
+  url: ${oc.env:CASDOOR_URL,http://casdoor:8000}                    # Internal Docker URL (backend→Casdoor)
+  public_url: ${oc.env:CASDOOR_EXTERNAL_URL,http://localhost:8082}  # Browser-visible URL — must match Casdoor origin/JWT iss
+  client_id: ${oc.env:CASDOOR_CLIENT_ID,ushadow}
+  client_secret: ${oc.env:CASDOOR_CLIENT_SECRET,}
+  organization: ${oc.env:CASDOOR_ORG_NAME,ushadow}
+  frontend_client_id: ${oc.env:CASDOOR_FRONTEND_CLIENT_ID,ushadow-frontend}
+  mobile_client_id: ${oc.env:CASDOOR_MOBILE_CLIENT_ID,ushadow-mobile}
+  admin_user: ${oc.env:CASDOOR_ADMIN_USER,built-in/admin}
+  admin_password: ${oc.env:CASDOOR_ADMIN_PASSWORD,123}
 
 # Speech Detection Settings
 speech_detection:

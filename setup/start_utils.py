@@ -89,7 +89,7 @@ def check_infrastructure_running() -> bool:
     """
     try:
         # Check each infrastructure service
-        for service in ["mongo", "redis", "qdrant"]:
+        for service in ["mongo", "redis", "qdrant", "postgres", "casdoor"]:
             # Use format filter to get exact container name match
             result = subprocess.run(
                 ["docker", "ps", "--filter", f"name={service}", "--filter", "status=running", "--format", "{{.Names}}"],
@@ -234,49 +234,67 @@ def start_infrastructure(
         return False, f"Error starting infrastructure: {e}"
 
 
-def wait_for_keycloak_realm(
-    kc_port: int = 8081,
-    realm: str = "ushadow",
-    timeout: int = 120,
-    poll_interval: int = 3
+def ensure_postgres_databases(container: str = "postgres") -> None:
+    """
+    Ensure all required databases exist in the running postgres container.
+    Reads POSTGRES_USER and POSTGRES_MULTIPLE_DATABASES from os.environ.
+    Idempotent — safe to call on every startup.
+    """
+    import os
+    postgres_user = os.environ.get("POSTGRES_USER", "ushadow")
+    databases_str = os.environ.get("POSTGRES_MULTIPLE_DATABASES", "")
+    if not databases_str:
+        return
+    for db in databases_str.split(","):
+        db = db.strip()
+        if not db:
+            continue
+        check = subprocess.run(
+            ["docker", "exec", container, "psql", "-U", postgres_user,
+             "-tc", f"SELECT 1 FROM pg_database WHERE datname='{db}'"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "1" not in check.stdout:
+            subprocess.run(
+                ["docker", "exec", container, "psql", "-U", postgres_user,
+                 "-c", f"CREATE DATABASE {db}"],
+                capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["docker", "exec", container, "psql", "-U", postgres_user,
+                 "-c", f"GRANT ALL PRIVILEGES ON DATABASE {db} TO {postgres_user}"],
+                capture_output=True, timeout=10,
+            )
+            print(f"  Created database: {db}")
+        else:
+            print(f"  Database exists: {db}")
+
+
+def wait_for_url(
+    url: str,
+    timeout: int = 60,
+    poll_interval: int = 3,
 ) -> Tuple[bool, int]:
     """
-    Wait for the Keycloak realm to be fully imported and ready.
-
-    Polls the OIDC well-known endpoint, which only responds after the realm
-    import completes - more reliable than the /health/ready endpoint which
-    passes before the realm is imported.
+    Wait for a URL to return HTTP 200.
 
     Args:
-        kc_port: Keycloak public port (default: 8081)
-        realm: Realm name to check (default: ushadow)
-        timeout: Maximum seconds to wait (default: 120)
-        poll_interval: Seconds between checks (default: 3)
+        url: Full URL to poll
+        timeout: Maximum seconds to wait
+        poll_interval: Seconds between checks
 
     Returns:
         Tuple of (ready: bool, elapsed_seconds: int)
     """
-    url = f"http://localhost:{kc_port}/realms/{realm}/.well-known/openid-configuration"
+    import urllib.request
     elapsed = 0
 
     while elapsed < timeout:
         try:
-            result = subprocess.run(
-                ["curl", "-sf", url],
-                capture_output=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                return True, elapsed
-        except subprocess.TimeoutExpired:
+            urllib.request.urlopen(url, timeout=3)
+            return True, elapsed
+        except Exception:
             pass
-        except FileNotFoundError:
-            try:
-                import urllib.request
-                urllib.request.urlopen(url, timeout=3)
-                return True, elapsed
-            except Exception:
-                pass
 
         time.sleep(poll_interval)
         elapsed += poll_interval
@@ -284,53 +302,12 @@ def wait_for_keycloak_realm(
     return False, elapsed
 
 
-def wait_for_backend_health(
-    port: int = 8000,
-    timeout: int = 60,
-    poll_interval: int = 2
-) -> Tuple[bool, int]:
-    """
-    Wait for Chronicle backend to become healthy.
+def wait_for_casdoor(port: int = 8082, timeout: int = 60) -> Tuple[bool, int]:
+    return wait_for_url(f"http://localhost:{port}/api/health", timeout=timeout)
 
-    Args:
-        port: Backend port (default: 8000)
-        timeout: Maximum seconds to wait (default: 60)
-        poll_interval: Seconds between health checks (default: 2)
 
-    Returns:
-        Tuple of (healthy: bool, elapsed_seconds: int)
-    """
-    elapsed = 0
-
-    while elapsed < timeout:
-        try:
-            result = subprocess.run(
-                ["curl", "-s", f"http://localhost:{port}/health"],
-                capture_output=True,
-                timeout=5
-            )
-
-            if result.returncode == 0:
-                return True, elapsed
-
-        except subprocess.TimeoutExpired:
-            pass
-        except FileNotFoundError:
-            # curl not available, fallback to basic check
-            try:
-                import socket
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(1)
-                    result = sock.connect_ex(('127.0.0.1', port))
-                    if result == 0:
-                        return True, elapsed
-            except Exception:
-                pass
-
-        time.sleep(poll_interval)
-        elapsed += poll_interval
-
-    return False, elapsed
+def wait_for_backend_health(port: int = 8000, timeout: int = 60) -> Tuple[bool, int]:
+    return wait_for_url(f"http://localhost:{port}/health", timeout=timeout)
 
 
 

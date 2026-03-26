@@ -1,6 +1,6 @@
 import React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useKeycloakAuth } from '../contexts/KeycloakAuthContext'
+import { useCasdoorAuth } from '../contexts/CasdoorAuthContext'
 import AuthHeader from '../components/auth/AuthHeader'
 import { LogIn, ExternalLink, UserPlus } from 'lucide-react'
 import { setupApi } from '../services/api'
@@ -8,7 +8,7 @@ import { setupApi } from '../services/api'
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { isAuthenticated, isLoading, login, register } = useKeycloakAuth()
+  const { isAuthenticated, isLoading, login, register } = useCasdoorAuth()
   const [hasUsers, setHasUsers] = React.useState<boolean | null>(null)
 
   // Parse query parameters once
@@ -20,10 +20,10 @@ export default function LoginPage() {
   // Default to /cluster instead of / to avoid redirect loop
   const from = (location.state as { from?: string })?.from || returnTo || '/cluster'
 
-  // Check if any users exist in Keycloak — if not, disable Login to force registration
+  // Check if any users exist — if not, disable Login to force registration
   React.useEffect(() => {
     setupApi.getSetupStatus()
-      .then(res => setHasUsers(res.data.keycloak_user_count > 0))
+      .then(res => setHasUsers(res.data.user_count > 0))
       .catch(() => setHasUsers(true)) // Default to allowing login if check fails
   }, [])
 
@@ -48,8 +48,7 @@ export default function LoginPage() {
       return
     }
 
-    // Redirect to Keycloak login page
-    console.log('[LoginPage] Starting Keycloak SSO login, redirect target:', from)
+    console.log('[LoginPage] Starting SSO login, redirect target:', from)
     try {
       await login(from)
     } catch (error) {
@@ -70,8 +69,7 @@ export default function LoginPage() {
       return
     }
 
-    // Redirect to Keycloak registration page
-    console.log('[LoginPage] Starting Keycloak SSO registration, redirect target:', from)
+    console.log('[LoginPage] Starting SSO registration, redirect target:', from)
     try {
       await register(from)
     } catch (error) {
@@ -166,11 +164,11 @@ export default function LoginPage() {
                 Welcome to Ushadow
               </h2>
               <p className="text-sm" style={{ color: '#a1a1aa' }}>
-                Secure authentication powered by Keycloak
+                Secure authentication powered by Casdoor
               </p>
             </div>
 
-            {/* Sign in with Keycloak Button */}
+            {/* Sign in with Casdoor */}
             <div className="space-y-4">
               {/* Login disabled when no users exist — register first */}
               {hasUsers === false && (
@@ -187,10 +185,10 @@ export default function LoginPage() {
                   color: '#ffffff',
                   border: 'none',
                 }}
-                data-testid="login-button-keycloak"
+                data-testid="login-button"
               >
                 <LogIn className="h-5 w-5" />
-                <span>Sign in with Keycloak</span>
+                <span>Sign in</span>
               </button>
 
               <button
@@ -201,15 +199,15 @@ export default function LoginPage() {
                   color: '#ffffff',
                   border: 'none',
                 }}
-                data-testid="register-button-keycloak"
+                data-testid="register-button"
               >
                 <UserPlus className="h-5 w-5" />
-                <span>Register with Keycloak</span>
+                <span>Register</span>
               </button>
 
               <div className="text-center">
                 <p className="text-xs" style={{ color: '#71717a' }}>
-                  You'll be redirected to Keycloak for authentication
+                  You'll be redirected to Casdoor for authentication
                 </p>
               </div>
             </div>

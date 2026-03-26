@@ -744,6 +744,11 @@ class Settings:
 
             store = get_settings_store()
 
+            if not target.infrastructure:
+                logger.warning(f"No infrastructure data for deploy target: {deploy_target}")
+                # Continue to load manual overrides even if no auto-scanned data
+            else:
+                logger.debug(f"Infrastructure data available: {list(target.infrastructure.keys())}")
             # Layer 1: compose defaults from docker-compose.infra.yml (non-HOST/PORT/URL)
             # These fill credential/config vars without requiring any user action.
             from src.services.compose_registry import get_compose_registry
