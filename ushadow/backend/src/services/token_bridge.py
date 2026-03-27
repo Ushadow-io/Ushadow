@@ -42,19 +42,6 @@ async def bridge_to_service_token(
         return None
 
     user = await get_user_from_token(token)
-
-    # Sync Keycloak user to MongoDB (creates User record if needed)
-    # This gives us a MongoDB ObjectId that Chronicle can use
-    try:
-        mongodb_user_id = await get_mongodb_user_id_for_keycloak_user(
-            keycloak_sub=keycloak_sub,
-            email=user_email,
-            name=user_name
-        )
-        logger.debug(f"[TOKEN-BRIDGE] Keycloak {keycloak_sub} → MongoDB {mongodb_user_id}")
-    except Exception as e:
-        logger.error(f"[TOKEN-BRIDGE] Failed to sync Keycloak user to MongoDB: {e}", exc_info=True)
-        return None
     if not user:
         logger.debug("[TOKEN-BRIDGE] Token is not a Casdoor token, passing through")
         return token
