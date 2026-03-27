@@ -57,6 +57,7 @@ TEST_CONFIG = {
 TAILSCALE_HOSTNAME = os.getenv('TAILSCALE_HOSTNAME', '')
 TAILSCALE_URL = os.getenv('TAILSCALE_URL', '')
 
+
 # Casdoor app credentials (test environment uses a fixed secret)
 CASDOOR_CLIENT_SECRET = os.getenv('CASDOOR_CLIENT_SECRET', 'test-casdoor-secret')
 
@@ -75,3 +76,8 @@ REDIS_CONTAINER = f"{COMPOSE_PROJECT_NAME}-redis-test-1"
 
 # Docker compose file path
 DOCKER_COMPOSE_FILE = str((ROBOT_TESTS_DIR / "docker-compose-test.yml").absolute())
+
+# Docker network for test environment
+# Uses the hardcoded compose project name from docker-compose-test.yml (name: ushadow-test)
+# NOT derived from COMPOSE_PROJECT_NAME env var (which is for the dev environment)
+TEST_DOCKER_NETWORK = "ushadow-test_default"

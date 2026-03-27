@@ -26,8 +26,8 @@ casdoor:
   organization: ${oc.env:CASDOOR_ORG_NAME,ushadow}
   frontend_client_id: ${oc.env:CASDOOR_FRONTEND_CLIENT_ID,ushadow-frontend}
   mobile_client_id: ${oc.env:CASDOOR_MOBILE_CLIENT_ID,ushadow-mobile}
-  admin_user: ${oc.env:CASDOOR_ADMIN_USER,built-in/admin}
-  admin_password: ${oc.env:CASDOOR_ADMIN_PASSWORD,123}
+  app_admin_user: ${oc.env:CASDOOR_APP_ADMIN_USER,admin}
+  app_admin_password: ${oc.env:CASDOOR_APP_ADMIN_PASSWORD,ushadow}
 
 # Speech Detection Settings
 speech_detection:
