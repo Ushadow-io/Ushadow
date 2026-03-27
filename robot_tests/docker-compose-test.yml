@@ -62,7 +62,7 @@ services:
       - CASDOOR_ADMIN_USER=built-in/admin
       - CASDOOR_ADMIN_PASSWORD=123
       - AUTH_SECRET_KEY=test-auth-secret-key-for-robot-tests-only
-      - TAILSCALE_CONTAINER=  # disabled in test env
+      - TAILSCALE_CONTAINER=ushadow-test-tailscale
     volumes:
       - ../ushadow/backend:/app
       - ../config:/config

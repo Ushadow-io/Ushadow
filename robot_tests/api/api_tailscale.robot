@@ -24,14 +24,13 @@ Resource         ../resources/auth_keywords.robot
 Resource         ../resources/tailscale_keywords.robot
 Resource         ../resources/setup/suite_setup.robot
 
-Suite Setup      Run Keywords    Standard Suite Setup    AND    Start Test Tailscale Container
-Suite Teardown   Run Keywords    Cleanup Test Tailscale Container    AND    Standard Suite Teardown
+Suite Setup      Run Keywords    Standard Suite Setup    AND    Start Tailscale Suite Container
+Suite Teardown   Run Keywords    Stop Tailscale Suite Container    AND    Standard Suite Teardown
 
 *** Variables ***
 ${TAILSCALE_API}              /api/tailscale
 ${SESSION}                    tailscale_session
-# Container/service names derived from COMPOSE_PROJECT_NAME (set in test_env.py)
-${TAILSCALE_CONTAINER}        ${COMPOSE_PROJECT_NAME}-tailscale
+# TAILSCALE_CONTAINER is set as a suite variable by Start Tailscale Suite Container
 ${WEBUI_SERVICE}              ${COMPOSE_PROJECT_NAME}-webui
 ${BACKEND_SERVICE}            ${COMPOSE_PROJECT_NAME}-backend
 # Internal Docker service ports (defined in docker-compose.yml)
@@ -57,7 +56,7 @@ Container Status Endpoint Returns Valid Response
 
     # Make request using REST library and validate schema
     REST.GET    /api/tailscale/container/status
-
+    ${status} =    Get Tailscale Container Status    container_name=${TAILSCALE_CONTAINER}
     # Validate response status and schema
     Integer    response status    200
     Boolean    response body exists
