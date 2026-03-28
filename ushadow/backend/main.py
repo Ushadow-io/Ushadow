@@ -164,22 +164,18 @@ async def lifespan(app: FastAPI):
     # Start background task for stale u-node checking
     stale_check_task = asyncio.create_task(check_stale_unodes_task())
 
-    # Register redirect URIs with Casdoor — localhost + Tailscale if available
+    # Register redirect URIs with Casdoor — localhost only.
+    # The canonical redirect URIs (including public/Tailscale URLs) are set by
+    # `just casdoor-provision` via apps.yaml. This step only handles the local
+    # localhost URI for dev environments that haven't been provisioned yet.
     try:
         from src.services.casdoor_client import register_redirect_uri as casdoor_register_uri
-        from src.services.casdoor_client import get_tailscale_hostname
 
         port_offset = int(os.getenv("PORT_OFFSET", "10"))
         webui_port = 3000 + port_offset
-        uris = [f"http://localhost:{webui_port}/oauth/callback"]
-
-        tailscale_hostname = get_tailscale_hostname()
-        if tailscale_hostname:
-            uris.append(f"https://{tailscale_hostname}/oauth/callback")
-
-        for uri in uris:
-            casdoor_register_uri(uri)
-            logger.info(f"[CASDOOR-STARTUP] ✓ Registered redirect URI: {uri}")
+        uri = f"http://localhost:{webui_port}/oauth/callback"
+        casdoor_register_uri(uri)
+        logger.info(f"[CASDOOR-STARTUP] ✓ Registered redirect URI: {uri}")
     except Exception as e:
         logger.warning(f"[CASDOOR-STARTUP] Redirect URI registration failed (non-critical): {e}")
 

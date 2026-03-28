@@ -15,10 +15,12 @@ apps:
       - authorization_code
       - refresh_token
       - password
+    homepageUrl: "${APP_PUBLIC_URL}"
     redirectUris:
-      - http://localhost:3000/api/auth/callback/casdoor
-      # Add production and Tailscale URLs here, e.g.:
-      # - https://${CASDOOR_APP_NAME}.example.com/api/auth/callback/casdoor
+      - http://localhost:3000/oauth/callback
+      - http://localhost:3010/oauth/callback
+      - http://localhost:3340/oauth/callback
+      - ${APP_PUBLIC_URL}/oauth/callback
     enablePassword: true
     enableSignUp: true
     providers: []

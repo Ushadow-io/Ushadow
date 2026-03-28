@@ -56,23 +56,69 @@ def _require_env(name: str) -> str:
 # Admin client (inline of ushadow_casdoor.client)
 # ---------------------------------------------------------------------------
 
+def _psql_query(cmd: list[str], pg_user: str, pg_db: str) -> tuple[str, str]:
+    """Run a psql query via an exec command (docker or kubectl) and return (client_id, client_secret)."""
+    result = subprocess.run(
+        cmd + ["psql", "-U", pg_user, "-d", pg_db, "-t", "-c",
+               "SELECT client_id, client_secret FROM application WHERE name='app-built-in';"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    line = result.stdout.strip()
+    parts = [p.strip() for p in line.split("|")]
+    if len(parts) != 2 or not parts[0]:
+        raise RuntimeError(f"Unexpected DB output: {line!r}")
+    return parts[0], parts[1]
+
+
+def _kubectl_exec_cmd(namespace: str, selector: str) -> list[str]:
+    """Resolve kubectl exec command for the first pod matching selector in namespace."""
+    pod_result = subprocess.run(
+        ["kubectl", "get", "pod", "-n", namespace, "-l", selector,
+         "--field-selector=status.phase=Running", "-o", "name"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if pod_result.returncode != 0:
+        raise RuntimeError(f"kubectl get pod failed: {pod_result.stderr.strip()}")
+    pod_name = pod_result.stdout.strip().splitlines()[0] if pod_result.stdout.strip() else ""
+    if not pod_name:
+        raise RuntimeError(f"No running pod found in namespace={namespace!r} with selector={selector!r}")
+    # pod_name may be "pod/postgres-0" — strip the "pod/" prefix for exec
+    pod_name = pod_name.removeprefix("pod/")
+    return ["kubectl", "exec", pod_name, "-n", namespace, "--"]
+
+
 def _bootstrap_credentials(pg_container: str, pg_user: str, pg_db: str, retries: int = 10, retry_delay: float = 3.0) -> tuple[str, str]:
     import time
-    last_err: Exception | None = None
+
+    # K8s path: use kubectl exec when CASDOOR_PG_K8S_NAMESPACE is set.
+    # This avoids hitting the local Docker postgres (which may belong to a different environment).
+    k8s_namespace = os.environ.get("CASDOOR_PG_K8S_NAMESPACE", "")
+    if k8s_namespace:
+        selector = os.environ.get("CASDOOR_PG_K8S_SELECTOR", "app=postgres")
+        print(f"  [k8s] using kubectl exec in namespace={k8s_namespace!r} selector={selector!r}")
+        last_err: Exception | None = None
+        for attempt in range(retries):
+            try:
+                cmd = _kubectl_exec_cmd(k8s_namespace, selector)
+                return _psql_query(cmd, pg_user, pg_db)
+            except Exception as e:
+                last_err = e
+                if attempt < retries - 1:
+                    print(f"  [wait] K8s postgres not ready, retrying in {retry_delay:.0f}s... ({attempt+1}/{retries})")
+                    time.sleep(retry_delay)
+        raise RuntimeError(
+            f"Could not bootstrap Casdoor admin credentials via kubectl.\n"
+            f"  kubectl exec failed: {last_err}\n"
+            f"  Check CASDOOR_PG_K8S_NAMESPACE and CASDOOR_PG_K8S_SELECTOR."
+        ) from last_err
+
+    # Docker path: default for local dev environments.
+    last_err = None
     for attempt in range(retries):
         try:
-            result = subprocess.run(
-                ["docker", "exec", pg_container, "psql", "-U", pg_user, "-d", pg_db, "-t", "-c",
-                 "SELECT client_id, client_secret FROM application WHERE name='app-built-in';"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(result.stderr.strip())
-            line = result.stdout.strip()
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) != 2 or not parts[0]:
-                raise RuntimeError(f"Unexpected DB output: {line!r}")
-            return parts[0], parts[1]
+            return _psql_query(["docker", "exec", pg_container], pg_user, pg_db)
         except Exception as e:
             last_err = e
             if "does not exist" in str(e) and attempt < retries - 1:
@@ -220,7 +266,7 @@ def cmd_provision(args: argparse.Namespace) -> None:
     config_dir = Path(args.config_dir)
     base_url = (os.environ.get("CASDOOR_EXTERNAL_URL") or _require_env("CASDOOR_ENDPOINT")).rstrip("/")
     pg_container = os.environ.get("CASDOOR_PG_CONTAINER", "postgres")
-    pg_superuser = os.environ.get("POSTGRES_USER", "postgres")
+    pg_superuser = os.environ.get("CASDOOR_PG_USER") or os.environ.get("POSTGRES_USER", "postgres")
     pg_db = os.environ.get("CASDOOR_PG_DB", "casdoor")
     app_name = os.environ.get("CASDOOR_APP_NAME", "")
 
@@ -302,7 +348,7 @@ def cmd_delete_app(args: argparse.Namespace) -> None:
 
     base_url = (os.environ.get("CASDOOR_EXTERNAL_URL") or _require_env("CASDOOR_ENDPOINT")).rstrip("/")
     pg_container = os.environ.get("CASDOOR_PG_CONTAINER", "postgres")
-    pg_superuser = os.environ.get("POSTGRES_USER", "postgres")
+    pg_superuser = os.environ.get("CASDOOR_PG_USER") or os.environ.get("POSTGRES_USER", "postgres")
     pg_db = os.environ.get("CASDOOR_PG_DB", "casdoor")
 
     orgs_config = _load_yaml("organizations.yaml", Path(args.config_dir)) if Path(args.config_dir).exists() else {}
