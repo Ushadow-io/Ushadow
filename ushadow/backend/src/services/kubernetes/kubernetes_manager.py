@@ -349,6 +349,47 @@ class KubernetesManager:
             logger.error(f"Error getting pod events: {e}")
             raise
 
+    async def get_service_access_url(
+        self,
+        cluster_id: str,
+        service_name: str,
+        namespace: str = "default",
+        port: int = 8000,
+    ) -> Optional[str]:
+        """
+        Resolve the external URL for a K8s service for use outside the cluster.
+
+        Priority: LoadBalancer hostname (Tailscale operator) > LoadBalancer IP > ClusterIP.
+        ClusterIP is reachable via a Tailscale subnet router.
+
+        Returns None if the service does not exist or no address is available.
+        """
+        try:
+            core_api, _ = self._k8s_client.get_kube_client(cluster_id)
+            svc = core_api.read_namespaced_service(service_name, namespace)
+
+            lb_ingress = (
+                (svc.status.load_balancer.ingress or [])
+                if svc.status and svc.status.load_balancer
+                else []
+            )
+            for entry in lb_ingress:
+                host = getattr(entry, "hostname", None) or getattr(entry, "ip", None)
+                if host:
+                    url = f"http://{host}:{port}"
+                    logger.info(f"Resolved K8s service {service_name} via LoadBalancer: {url}")
+                    return url
+
+            if svc.spec and svc.spec.cluster_ip and svc.spec.cluster_ip not in ("None", ""):
+                url = f"http://{svc.spec.cluster_ip}:{port}"
+                logger.info(f"Resolved K8s service {service_name} via ClusterIP: {url}")
+                return url
+
+        except Exception as e:
+            logger.debug(f"Could not resolve K8s service URL for {service_name}: {e}")
+
+        return None
+
     async def scan_cluster_for_infra_services(
         self,
         cluster_id: str,

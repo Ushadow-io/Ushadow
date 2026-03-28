@@ -304,7 +304,6 @@ class ComposeServiceRegistry:
                 exposes=service.exposes,
                 tags=service.tags,
                 environments=service.environments,
-                setup_script=service.setup_script,
                 provider_id=service.provider_id,
                 capability_env_mappings=service.capability_env_mappings,
                 required_env_vars=service.required_env_vars,

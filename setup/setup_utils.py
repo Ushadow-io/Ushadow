@@ -412,14 +412,9 @@ def ensure_secrets_yaml(secrets_file: str) -> Tuple[bool, dict]:
             'chronicle': {'api_key': ''}
         }
 
-    # Ensure casdoor section exists with client_secret and admin credentials
-    if 'casdoor' not in data:
-        data['casdoor'] = {}
-        created_new = True
-
-    if not data['casdoor'].get('client_secret'):
-        data['casdoor']['client_secret'] = secrets.token_urlsafe(32)
-        created_new = True
+    # Casdoor section — do NOT pre-generate client_secret here.
+    # The actual secret is written by casdoor-provision after Casdoor creates the app.
+    # Pre-generating here would override the real secret via the settings store merge order.
 
     # Write back to file
     try:
@@ -545,11 +540,14 @@ def provision_casdoor(env_file: Path, config_dir: Path, backend_dir: Path) -> tu
         failure, or empty string on success.
     """
     try:
+        provision_script = (env_file.resolve().parent / "scripts" / "casdoor_provision.py")
         result = subprocess.run(
             [
                 "uv", "run",
                 "--directory", str(backend_dir.resolve()),
-                "casdoor-provision",
+                "--with", "httpx",
+                "--with", "pyyaml",
+                str(provision_script),
                 "--env-file", str(env_file.resolve()),
                 "--config-dir", str(config_dir.resolve()),
             ],

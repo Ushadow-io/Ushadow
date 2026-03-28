@@ -1239,12 +1239,18 @@ class DeploymentManager:
     async def list_deployments(
         self,
         service_id: Optional[str] = None,
-        unode_hostname: Optional[str] = None
+        unode_hostname: Optional[str] = None,
+        local_only: bool = False,
     ) -> List[Deployment]:
         """
         List deployments by querying runtime (Docker/K8s).
 
         This is stateless - queries container runtime, not database.
+
+        Args:
+            local_only: When True, only return deployments on the leader (local) unode.
+                        Use this for proxy routing to prevent forwarding to remote
+                        environments (e.g. another ushadow instance's services).
         """
         from src.models.unode import UNodeType, UNodeRole
         from src.utils.deployment_targets import parse_deployment_target_id
@@ -1252,9 +1258,11 @@ class DeploymentManager:
         all_deployments = []
 
         # Get all unodes (or specific one if hostname provided)
-        query = {}
+        query: dict = {}
         if unode_hostname:
             query["hostname"] = unode_hostname
+        if local_only:
+            query["role"] = UNodeRole.LEADER.value
 
         logger.debug(f"[list_deployments] Querying unodes with: {query}")
         cursor = self.unodes_collection.find(query)
@@ -1378,6 +1386,7 @@ class DeploymentManager:
                         backend_metadata=dep_backend_meta,
                         metadata={"adopted": True},
                         exposed_port=exposed_port,
+                        access_url=doc.get("access_url"),
                     ))
             except Exception as e:
                 logger.warning(f"[list_deployments] Failed to query adopted workloads: {e}")
@@ -1778,6 +1787,19 @@ class DeploymentManager:
                 f"in {req.namespace} ({req.cluster_id})"
             )
 
+            # Resolve the K8s service URL for proxy routing from outside the cluster.
+            # Delegated to KubernetesManager (kubernetes layer).
+            namespace_val = req.namespace or "default"
+            port = 8000
+            if req.ports:
+                try:
+                    port = int(str(req.ports[0]).split(":")[-1])
+                except (ValueError, IndexError):
+                    pass
+            svc_access_url = await k8s_mgr.get_service_access_url(
+                req.cluster_id, req.container_name, namespace_val, port
+            )
+
             # Store in MongoDB so list_deployments() can find it regardless of namespace.
             # The stateless K8s scan only covers cluster.namespace; adopted workloads may
             # live in any namespace (e.g. chakra-3eye), so we persist them here.
@@ -1792,6 +1814,7 @@ class DeploymentManager:
                 "image": req.image,
                 "ports": req.ports,
                 "status": req.status,
+                "access_url": svc_access_url,
                 "adopted_at": now.isoformat(),
             }
             await self.adopted_workloads_collection.replace_one(
@@ -1847,6 +1870,132 @@ class DeploymentManager:
             backend_metadata=backend_meta,
             metadata={"adopted": True, "adopted_at": now.isoformat()},
         )
+
+
+    async def resolve_service_url(self, name: str) -> str:
+        """
+        Resolve the internal URL for a named service.
+
+        Tries, in order:
+          1. Local deployments (Docker or K8s) via list_deployments(local_only=True)
+          2. MANAGEABLE_SERVICES (infrastructure services) via DockerManager
+          3. Raises ValueError if nothing found
+
+        This is the single entry-point for proxy routing — callers do not need to
+        know whether the service is Docker, K8s, or a managed infrastructure service.
+
+        Returns:
+            Internal base URL, e.g. "http://chronicle-backend:8000"
+
+        Raises:
+            ValueError: service not found or not reachable
+        """
+        import os
+        from src.services.docker_manager import get_docker_manager
+        from src.services.compose_registry import get_compose_registry
+        from src.utils.environment import is_kubernetes
+
+        compose_registry = get_compose_registry()
+        docker_mgr = get_docker_manager()
+        project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
+
+        # ── 1. Deployed services ──────────────────────────────────────────────
+        deployments = await self.list_deployments(local_only=True)
+        matching = None
+        for dep in deployments:
+            if dep.service_id != name:
+                continue
+            if dep.backend_type != "kubernetes":
+                has_prefix = bool(dep.container_name and dep.container_name.startswith(f"{project_name}-"))
+                if not has_prefix and dep.container_name != name:
+                    continue
+                # Verify the Docker container is actually running
+                try:
+                    container = docker_mgr._client.containers.get(dep.container_name)
+                    if container.status != "running":
+                        logger.debug(f"[resolve_url] Container {dep.container_name} not running, skipping")
+                        continue
+                except Exception:
+                    logger.debug(f"[resolve_url] Container {dep.container_name} not found, skipping")
+                    continue
+            if dep.status == "running":
+                matching = dep
+                break
+            if matching is None:
+                matching = dep
+
+        if matching is not None:
+            port = self._parse_deployment_port(matching, name, compose_registry)
+            if matching.backend_type == "kubernetes":
+                return await self._resolve_k8s_url(matching, port)
+            return f"http://{matching.container_name}:{port}"
+
+        # ── 2. MANAGEABLE_SERVICES fallback ──────────────────────────────────
+        if name in docker_mgr.MANAGEABLE_SERVICES:
+            info = docker_mgr.get_service_info(name)
+            if info.status != "running":
+                raise ValueError(f"Service '{name}' is not running (status: {info.status})")
+            ports = docker_mgr.get_service_ports(name)
+            port = 8000
+            if ports:
+                raw = ports[0].get("container_port", 8000)
+                try:
+                    port = int(raw)
+                except (ValueError, TypeError):
+                    pass
+            try:
+                container = docker_mgr._client.containers.get(info.container_id)
+                return f"http://{container.name}:{port}"
+            except Exception as e:
+                raise ValueError(f"Service '{name}' container not reachable: {e}") from e
+
+        raise ValueError(f"Service '{name}' not found in deployments or managed services")
+
+    # ── private helpers ───────────────────────────────────────────────────────
+
+    def _parse_deployment_port(self, dep, name: str, compose_registry) -> int:
+        """Extract the container port from a deployment record."""
+        if dep.deployed_config and dep.deployed_config.get("ports"):
+            first = dep.deployed_config["ports"][0]
+            try:
+                return int(str(first).split(":")[-1])
+            except (ValueError, IndexError):
+                pass
+        if dep.backend_type == "kubernetes" and compose_registry:
+            svc = compose_registry.get_service_by_name(name)
+            if svc and svc.ports:
+                raw = svc.ports[0].get("container") or svc.ports[0].get("target")
+                try:
+                    return int(raw)
+                except (ValueError, TypeError):
+                    pass
+        return 8000
+
+    async def _resolve_k8s_url(self, dep, port: int) -> str:
+        """Return the best reachable URL for a K8s deployment."""
+        from src.utils.environment import is_kubernetes
+
+        namespace = (dep.backend_metadata or {}).get("namespace", "default")
+        cluster_dns = f"http://{dep.container_name}.{namespace}.svc.cluster.local:{port}"
+
+        if is_kubernetes():
+            return cluster_dns
+        if dep.access_url:
+            return dep.access_url.rstrip("/")
+
+        cluster_id = (dep.backend_metadata or {}).get("cluster_id")
+        if cluster_id:
+            try:
+                from src.services.kubernetes import get_kubernetes_manager
+                k8s_mgr = await get_kubernetes_manager()
+                url = await k8s_mgr.get_service_access_url(cluster_id, dep.container_name, namespace, port)
+                if url:
+                    return url
+            except Exception as e:
+                logger.debug(f"[resolve_url] K8s external URL lookup failed: {e}")
+
+        logger.warning(f"[resolve_url] K8s outside cluster, no external URL — falling back to cluster DNS: {cluster_dns}")
+        return cluster_dns
 
 
 # Global instance

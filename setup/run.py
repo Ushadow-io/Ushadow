@@ -503,6 +503,26 @@ def compose_up(dev_mode: bool, build: bool = False) -> bool:
     print_color(Colors.BLUE, f"  Ensuring postgres databases...")
     ensure_postgres_databases()
 
+    # Ensure Casdoor's dedicated postgres user + database exist (idempotent)
+    print_color(Colors.BLUE, f"  Ensuring Casdoor database...")
+    subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "casdoor_db_setup.py"),
+         "--env-file", str(PROJECT_ROOT / ".env")],
+        cwd=str(PROJECT_ROOT),
+    )
+
+    # Start casdoor after its DB is ready (handles case where it was stopped by casdoor-db-reset)
+    casdoor_ps = subprocess.run(
+        ["docker", "ps", "--filter", "name=casdoor", "--filter", "status=running", "--format", "{{.Names}}"],
+        capture_output=True, text=True,
+    )
+    if "casdoor" not in casdoor_ps.stdout:
+        print_color(Colors.BLUE, f"  Starting Casdoor...")
+        subprocess.run(
+            ["docker", "compose", "-f", str(INFRA_COMPOSE_FILE), "--profile", "infra", "up", "casdoor", "-d"],
+            cwd=str(PROJECT_ROOT),
+        )
+
     mode_label = "dev" if dev_mode else "prod"
     action = "Building and starting" if build else "Starting"
     print_color(Colors.BLUE, f"{Icons.ROCKET} {action} {APP_DISPLAY_NAME} ({mode_label} mode)...")
@@ -574,7 +594,7 @@ def wait_and_open(backend_port: int, webui_port: int, open_browser: bool):
     # Wait for Casdoor, then provision apps/providers
     casdoor_port = int(os.environ.get("CASDOOR_PORT", "8082"))
     print(f"   Waiting for Casdoor to be ready...")
-    casdoor_ready, _ = wait_for_casdoor(casdoor_port, timeout=60)
+    casdoor_ready, _ = wait_for_casdoor(casdoor_port, timeout=180)
 
     if casdoor_ready:
         print(f"   Provisioning Casdoor apps and providers...")

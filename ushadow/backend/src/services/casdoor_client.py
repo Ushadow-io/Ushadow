@@ -97,14 +97,21 @@ def refresh_token(refresh_token_str: str, client_id: Optional[str] = None) -> di
 def register_redirect_uri(redirect_uri: str, client_id: Optional[str] = None) -> bool:
     """Add a redirect URI to the Casdoor application if not already present."""
     config = get_casdoor_config()
-    client_id = client_id or config["client_id"]
+    # app_name is used as the Casdoor API id (owner/name), not the hex clientId
+    app_name = os.getenv("CASDOOR_APP_NAME") or config.get("app_name") or "ushadow"
+    app_client_id = os.getenv("CASDOOR_CLIENT_ID") or config["client_id"]
+    app_client_secret = os.getenv("CASDOOR_CLIENT_SECRET") or config.get("client_secret", "")
     base = config["url"]
-    app_client_id = os.getenv("CASDOOR_CLIENT_ID", client_id)
-    app_client_secret = config.get("client_secret") or os.getenv("CASDOOR_CLIENT_SECRET", "")
 
-    # Fetch the application record
+    if not app_client_id or not app_client_secret:
+        logger.warning("[CASDOOR-CLIENT] Missing client_id or client_secret — cannot register redirect URI")
+        return False
+
+    # Fetch the application record by app name (not hex clientId)
+    app = None
+    app_id = None
     for owner in ("admin", "built-in"):
-        app_id = f"{owner}/{client_id}"
+        app_id = f"{owner}/{app_name}"
         resp = httpx.get(
             f"{base}/api/get-application",
             params={"id": app_id, "clientId": app_client_id, "clientSecret": app_client_secret},
@@ -115,7 +122,7 @@ def register_redirect_uri(redirect_uri: str, client_id: Optional[str] = None) ->
         if isinstance(app, dict):
             break
     else:
-        logger.warning(f"[CASDOOR-CLIENT] Could not fetch app {client_id}")
+        logger.warning(f"[CASDOOR-CLIENT] Could not fetch app '{app_name}'")
         return False
 
     uris: list = app.get("redirectUris") or []

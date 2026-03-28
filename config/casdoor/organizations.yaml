@@ -1,23 +1,19 @@
 # Casdoor Organization Definitions
-# Apply with: make casdoor-provision
-#
-# admin_org: the global Casdoor admin org that owns application/provider records.
-#            Casdoor's default is "built-in" — this must match your Casdoor instance.
-# user_org:  the org where end-users register via the Ushadow apps.
-#            Must NOT be "built-in" (reserved for Casdoor global admins).
+# Apply with: make casdoor-setup-dev
 
-admin_org: admin
-user_org: ushadow
+admin_org: admin   # owns the records (visible in Casdoor UI)
+user_org: ${CASDOOR_APP_NAME}   # where end-users register
 
 organizations:
-  - name: ushadow
-    displayName: "Ushadow"
+  - name: ${CASDOOR_APP_NAME}
+    displayName: "${CASDOOR_APP_NAME}"
     phonePrefix: "1"
     enableSoftDeletion: false
     isProfilePublic: false
     languages:
       - en
-    passwordType: bcrypt
+    countryCodes:
+      - US
     passwordOptions:
       - AtLeast6
     tags: []

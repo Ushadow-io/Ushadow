@@ -1,30 +1,21 @@
 # Casdoor OAuth Provider Definitions
-# External identity providers (Google, GitHub, Apple, etc.)
-#
-# Apply with:
-#   make casdoor-provision
-#   python scripts/casdoor_provision.py
+# External identity providers (Google, GitHub, Discord, etc.)
+# Apply with: make casdoor-setup-dev
 #
 # Provider types: Google, GitHub, Apple, Facebook, Twitter, Microsoft,
 #                 LinkedIn, Discord, Slack, GitLab, Bitbucket, ...
-# Secrets: store clientId/clientSecret in config/SECRETS/secrets.yaml
-#          and reference via env vars, or fill directly for local dev.
-
-organization: built-in
+# Add clientId/clientSecret to .env and reference via env vars below.
 
 providers: []
 
-# Examples:
-#
 # providers:
 #   - name: google
 #     displayName: "Google"
 #     type: Google
 #     clientId: ${GOOGLE_CLIENT_ID}
 #     clientSecret: ${GOOGLE_CLIENT_SECRET}
-#
-#   - name: github
-#     displayName: "GitHub"
-#     type: GitHub
-#     clientId: ${GITHUB_CLIENT_ID}
-#     clientSecret: ${GITHUB_CLIENT_SECRET}
+#   - name: discord
+#     displayName: "Discord"
+#     type: Discord
+#     clientId: ${DISCORD_CLIENT_ID}
+#     clientSecret: ${DISCORD_CLIENT_SECRET}

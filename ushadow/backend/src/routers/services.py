@@ -18,6 +18,7 @@ Endpoint Groups:
 - Installation: POST /{name}/install, /uninstall, /register
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -27,7 +28,6 @@ from pydantic import BaseModel, Field
 from src.services.service_orchestrator import get_service_orchestrator, ServiceOrchestrator
 from src.services.auth import get_current_user
 from src.models.user import User
-from src.services.docker_manager import ServiceType, IntegrationType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -538,18 +538,12 @@ async def proxy_service_request(
     name: str,
     path: str,
     request: Request,
-    orchestrator: ServiceOrchestrator = Depends(get_orchestrator),
 ):
     """
     Generic proxy endpoint for service REST APIs.
 
-    Routes frontend requests to managed services (MANAGEABLE_SERVICES) or deployed services.
-    This provides:
-    - Unified authentication (JWT forwarded to service)
-    - No CORS issues
-    - Centralized logging/monitoring
-    - Service discovery (no hardcoded ports)
-    - Support for both local and remote deployments
+    Routes frontend requests to managed services via DeploymentManager.resolve_service_url(),
+    which abstracts away Docker vs K8s vs managed-infrastructure differences.
 
     Usage:
         Frontend: axios.get('/api/services/chronicle-backend/proxy/api/conversations')
@@ -558,306 +552,113 @@ async def proxy_service_request(
     For WebSocket/streaming, use direct_url from connection-info instead.
     """
     import httpx
-    import os
-    from src.services.docker_manager import get_docker_manager
+    from fastapi.responses import Response as HttpResponse
     from src.services.deployment_manager import get_deployment_manager
-    from src.services.compose_registry import get_compose_registry
 
-    docker_mgr = get_docker_manager()
     deployment_mgr = get_deployment_manager()
-    compose_registry = get_compose_registry()
 
-    container_name = None
-    internal_port = 8000
-    is_remote = False
-    remote_url = None
+    # ── 1. Resolve internal URL (all env-type logic lives in the service layer) ──
+    try:
+        internal_url = await deployment_mgr.resolve_service_url(name)
+    except ValueError as e:
+        status = 503 if "not running" in str(e) or "not reachable" in str(e) else 404
+        raise HTTPException(status_code=status, detail=str(e))
 
-    # First check deployments (user-deployed services override infrastructure)
-    all_deployments = await deployment_mgr.list_deployments()
+    logger.info(f"[PROXY] {name} → {internal_url}")
 
-    # Find deployment matching service name, scoped to the current environment
-    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
-    matching_deployment = None
-    for deployment in all_deployments:
-        # Match by service_id (now just the service name, e.g., "chronicle-backend")
-        if deployment.service_id == name:
-            # K8s deployments use pod names, not compose-prefixed container names — skip prefix filter
-            if deployment.backend_type != "kubernetes":
-                has_project_prefix = bool(deployment.container_name and deployment.container_name.startswith(f"{project_name}-"))
-                is_explicitly_named = deployment.container_name == name
-                if not has_project_prefix and not is_explicitly_named:
-                    continue
-            # Prefer running deployments
-            if deployment.status == "running":
-                matching_deployment = deployment
-                break
-            elif not matching_deployment:
-                matching_deployment = deployment
+    # ── 2. Build target URL ────────────────────────────────────────────────────
+    target_url = _build_proxy_target_url(internal_url, path, request)
+    logger.info(f"[PROXY] {request.method} {request.url.path} → {target_url}")
 
-    if matching_deployment:
-        # Extract container details from deployment
-        container_name = matching_deployment.container_name
+    # ── 3. Prepare headers + bridge auth ──────────────────────────────────────
+    headers = _build_proxy_headers(request)
+    headers = await _bridge_proxy_auth(name, headers)
 
-        # K8s deployments are verified via cluster DNS — no Docker socket needed
-        if matching_deployment.backend_type != "kubernetes":
-            # Verify the Docker container actually exists and is running
-            try:
-                container = docker_mgr._client.containers.get(container_name)
-                if container.status != "running":
-                    logger.warning(f"[PROXY] Deployment container {container_name} exists but is not running (status: {container.status}), ignoring deployment")
-                    matching_deployment = None
-            except Exception as e:
-                logger.warning(f"[PROXY] Deployment container {container_name} not found: {e}, ignoring deployment")
-                matching_deployment = None
-
-    if matching_deployment:
-        # Parse the container port from deployed_config
-        internal_port = 8000  # default
-        if matching_deployment.deployed_config and "ports" in matching_deployment.deployed_config:
-            ports = matching_deployment.deployed_config["ports"]
-            if ports and len(ports) > 0:
-                # Parse first port mapping: "8081:8000" -> container port is 8000
-                first_port = ports[0]
-                if ":" in first_port:
-                    _, container_port = first_port.split(":", 1)
-                    internal_port = int(container_port)
-                else:
-                    internal_port = int(first_port)
-        elif matching_deployment.backend_type == "kubernetes":
-            # K8s deployments often store no ports in deployed_config — fall back to
-            # compose service metadata which is the authoritative source of port definitions.
-            compose_service = compose_registry.get_service_by_name(name) if compose_registry else None
-            if compose_service and compose_service.ports:
-                first_port = compose_service.ports[0]
-                container_port = first_port.get("container") or first_port.get("target")
-                if container_port:
-                    try:
-                        internal_port = int(container_port)
-                    except (ValueError, TypeError):
-                        pass
-
-        if matching_deployment.backend_type == "kubernetes":
-            # K8s: route to pod via cluster DNS — no unode/remote check needed
-            namespace = (matching_deployment.backend_metadata or {}).get("namespace", "default")
-            internal_url = f"http://{container_name}.{namespace}.svc.cluster.local:{internal_port}"
-            logger.info(f"[PROXY] Using K8s service: {internal_url} (deployment_id={matching_deployment.id})")
-        else:
-            # Docker: check if this is a remote deployment (on a different unode)
-            from src.services.unode_manager import get_unode_manager
-
-            try:
-                unode_mgr = await get_unode_manager()
-                unode = await unode_mgr.get_unode(matching_deployment.unode_hostname)
-                # Check for is_local label - if not present or "false", treat as remote
-                is_local = unode and unode.labels.get("is_local") == "true"
-                is_remote = not is_local
-
-                logger.info(f"[PROXY] Deployment check: unode={matching_deployment.unode_hostname}, is_local={is_local}, labels={unode.labels if unode else 'N/A'}")
-            except Exception as e:
-                # If we can't fetch the unode, fall back to treating it as remote for safety
-                logger.warning(f"[PROXY] Could not fetch unode {matching_deployment.unode_hostname}: {e}")
-                is_remote = True
-
-            if is_remote:
-                # For remote deployments, proxy through the remote unode manager
-                # TODO: Implement remote proxy via unode manager API
-                raise HTTPException(
-                    status_code=501,
-                    detail=f"Remote service proxy not yet implemented for {name} on {matching_deployment.unode_hostname}"
-                )
-
-            internal_url = f"http://{container_name}:{internal_port}"
-            logger.info(f"[PROXY] Using Docker service: {internal_url} (deployment_id={matching_deployment.id})")
-
-    elif name in docker_mgr.MANAGEABLE_SERVICES:
-        # Fall back to MANAGEABLE_SERVICES (infrastructure services)
-        # Use get_service_info to find the actual running container
-        service_info = docker_mgr.get_service_info(name)
-
-        if service_info.status != "running":
-            raise HTTPException(
-                status_code=503,
-                detail=f"Service '{name}' is not running (status: {service_info.status})"
-            )
-
-        if service_info.error:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Service '{name}' error: {service_info.error}"
-            )
-
-        ports = docker_mgr.get_service_ports(name)
-        if ports:
-            primary_port = ports[0]
-            container_port = primary_port.get("container_port", 8000)
-            # Convert to int if it's a string
-            if isinstance(container_port, str):
-                try:
-                    internal_port = int(container_port)
-                except ValueError:
-                    logger.warning(f"[PROXY] Invalid container_port '{container_port}' for {name}, using default 8000")
-                    internal_port = 8000
-            else:
-                internal_port = container_port or 8000
-
-        # Use the actual container name found by get_service_info
-        # This will be something like "ushadow-orange-chronicle-backend"
-        from src.services.docker_manager import ServiceStatus
-        try:
-            # Get container object to extract name
-            container = docker_mgr._client.containers.get(service_info.container_id)
-            container_name = container.name
-            internal_url = f"http://{container_name}:{internal_port}"
-            logger.info(f"[PROXY] Using MANAGEABLE_SERVICE: {internal_url}")
-        except Exception as e:
-            target_url = f"http://{container_name if 'container_name' in locals() else 'unknown'}:{internal_port}"
-            logger.error(f"[PROXY] Failed to get container details for {name}: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail=f"Service '{name}' is not reachable (trying {target_url})"
-            )
-
-    else:
-        # Service not found anywhere
-        raise HTTPException(
-            status_code=404,
-            detail=f"Service '{name}' not found in deployments or MANAGEABLE_SERVICES"
-        )
-
-    # Log the exact URL we're going to proxy to
-    logger.info(f"[PROXY DEBUG] Container: {container_name}, Internal Port: {internal_port}, Full URL: {internal_url}")
-    if matching_deployment:
-        logger.info(f"[PROXY DEBUG] Deployment ID: {matching_deployment.id}, deployed_config ports: {matching_deployment.deployed_config.get('ports') if matching_deployment.deployed_config else 'None'}")
-
-    # Extract token from query params for audio/media requests
-    # We'll move it to Authorization header
-    query_params = dict(request.query_params)
-    extracted_token = None
-    if ('audio' in path or 'media' in path) and 'token' in query_params:
-        extracted_token = query_params.pop('token')
-        logger.info(f"[PROXY] Extracted token from query param for audio request")
-
-    # Build target URL (without token in query string if extracted)
-    target_url = f"{internal_url}/{path}"
-    if query_params:
-        # Rebuild query string without token
-        from urllib.parse import urlencode
-        query_string = urlencode(query_params)
-        if query_string:
-            target_url = f"{target_url}?{query_string}"
-    elif request.url.query and not extracted_token:
-        # Use original query string if we didn't extract token
-        target_url = f"{target_url}?{request.url.query}"
-
-    logger.info(f"Proxying {request.method} {request.url.path} -> {target_url}")
-
-    # Forward request headers (including auth)
-    headers = dict(request.headers)
-
-    # Add extracted token to Authorization header
-    if extracted_token and not headers.get("authorization"):
-        headers["authorization"] = f"Bearer {extracted_token}"
-        logger.info(f"[PROXY] Added Authorization header from extracted token")
-
-    # Log auth header for debugging (masked)
-    auth_header = headers.get("authorization", "")
-    if auth_header:
-        # Show token type and first few chars
-        token_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
-        logger.info(f"[PROXY] Forwarding auth: {token_preview}")
-
-        # Decode token without verification to see payload (for debugging)
-        try:
-            import jwt
-            token = auth_header.replace("Bearer ", "")
-            payload = jwt.decode(token, options={"verify_signature": False})
-            logger.info(f"[PROXY] Token payload: iss={payload.get('iss')}, aud={payload.get('aud')}, sub={payload.get('sub')}")
-        except Exception as e:
-            logger.debug(f"[PROXY] Could not decode token: {e}")
-
-        # Bridge auth tokens to service tokens for Chronicle
-        from src.services.token_bridge import bridge_to_service_token
-        token_without_bearer = auth_header.replace("Bearer ", "")
-        service_token = await bridge_to_service_token(
-            token_without_bearer,
-            audiences=["ushadow", "chronicle"]
-        )
-        if service_token and service_token != token_without_bearer:
-            # Token was bridged (Casdoor → service token)
-            headers["authorization"] = f"Bearer {service_token}"
-            logger.info(f"[PROXY] ✓ Bridged auth token to service token")
-        else:
-            logger.debug(f"[PROXY] Token passed through (already a service token or bridging failed)")
-    else:
-        logger.warning(f"[PROXY] No Authorization header in request to {name}")
-
-    # Remove host header (will be set by httpx)
-    headers.pop("host", None)
-    # Strip conditional cache headers — proxy has no cache to serve 304 content from
-    for h in ["if-none-match", "if-modified-since", "if-unmodified-since", "if-match", "if-range"]:
-        headers.pop(h, None)
-
+    # ── 4. Forward and return ──────────────────────────────────────────────────
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            # Forward the request
             if request.method in ["POST", "PUT", "PATCH"]:
                 body = await request.body()
-                response = await client.request(
-                    method=request.method,
-                    url=target_url,
-                    headers=headers,
-                    content=body
-                )
+                response = await client.request(request.method, target_url, headers=headers, content=body)
             else:
-                response = await client.request(
-                    method=request.method,
-                    url=target_url,
-                    headers=headers
-                )
+                response = await client.request(request.method, target_url, headers=headers)
 
-            logger.info(f"[PROXY] {name} response: {response.status_code}")
-            if response.status_code == 206:
-                logger.info(f"[PROXY] Partial content response - Content-Range: {response.headers.get('content-range')}, Content-Type: {response.headers.get('content-type')}")
-            if response.status_code not in [200, 206]:
-                logger.warning(f"[PROXY] {name} error body: {response.text[:500]}")
+        logger.info(f"[PROXY] {name} → {response.status_code}")
+        if response.status_code not in [200, 206]:
+            logger.warning(f"[PROXY] {name} error body: {response.text[:500]}")
 
-            # Forward response headers
-            response_headers = dict(response.headers)
-            # Remove hop-by-hop headers
-            for header in ["connection", "keep-alive", "transfer-encoding"]:
-                response_headers.pop(header, None)
-
-            # Fix Content-Disposition for audio/media files
-            # Change "attachment" to "inline" so browsers play instead of download
-            if 'audio' in path or 'media' in path:
-                content_disp = response_headers.get('content-disposition', '')
-                if 'attachment' in content_disp:
-                    # Change attachment to inline
-                    response_headers['content-disposition'] = content_disp.replace('attachment', 'inline')
-                    logger.info(f"[PROXY] Changed Content-Disposition from attachment to inline")
-
-                # Add CORS headers for audio playback
-                response_headers['access-control-allow-origin'] = '*'
-                response_headers['access-control-expose-headers'] = 'Content-Range, Content-Length, Accept-Ranges'
-
-                logger.info(f"[PROXY] Audio response headers: Content-Type={response_headers.get('content-type')}, Content-Length={response_headers.get('content-length')}, Accept-Ranges={response_headers.get('accept-ranges')}")
-
-            # Return proxied response
-            from fastapi.responses import Response
-            return Response(
-                content=response.content,
-                status_code=response.status_code,
-                headers=response_headers
-            )
+        return HttpResponse(
+            content=response.content,
+            status_code=response.status_code,
+            headers=_build_proxy_response_headers(response, path),
+        )
 
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail=f"Service '{name}' request timed out (trying {target_url})")
+        raise HTTPException(status_code=504, detail=f"Service '{name}' timed out (url: {target_url})")
     except httpx.ConnectError as e:
-        logger.error(f"[PROXY] Connection failed to {target_url}: {e}")
-        raise HTTPException(status_code=503, detail=f"Service '{name}' is not reachable (trying {target_url})")
+        raise HTTPException(status_code=503, detail=f"Service '{name}' unreachable (url: {target_url}): {e}")
     except Exception as e:
-        logger.error(f"Proxy error for {name} at {target_url}: {e}")
-        raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)} (trying {target_url})")
+        logger.error(f"[PROXY] Unexpected error for {name} at {target_url}: {e}")
+        raise HTTPException(status_code=502, detail=f"Proxy error: {e}")
+
+
+# ── Proxy helpers (HTTP-layer concerns, not service-discovery) ─────────────────
+
+def _build_proxy_target_url(internal_url: str, path: str, request: Request) -> str:
+    """Build the full target URL, extracting token from query params for audio paths."""
+    from urllib.parse import urlencode
+    query_params = dict(request.query_params)
+    # Audio elements pass JWT as query param; move it to header downstream
+    if ("audio" in path or "media" in path) and "token" in query_params:
+        query_params.pop("token")
+    target = f"{internal_url}/{path}"
+    qs = urlencode(query_params)
+    return f"{target}?{qs}" if qs else target
+
+
+def _build_proxy_headers(request: Request) -> dict:
+    """Copy request headers, lifting audio token and stripping hop-by-hop/cache headers."""
+    headers = dict(request.headers)
+    # Lift audio token from query param to Authorization header
+    token_from_query = request.query_params.get("token")
+    if token_from_query and not headers.get("authorization") and (
+        "audio" in str(request.url) or "media" in str(request.url)
+    ):
+        headers["authorization"] = f"Bearer {token_from_query}"
+
+    headers.pop("host", None)
+    for h in ["if-none-match", "if-modified-since", "if-unmodified-since", "if-match", "if-range"]:
+        headers.pop(h, None)
+    return headers
+
+
+async def _bridge_proxy_auth(service_name: str, headers: dict) -> dict:
+    """Convert a Casdoor OIDC token to a service JWT if needed."""
+    from src.services.token_bridge import bridge_to_service_token
+    auth = headers.get("authorization", "")
+    if not auth:
+        logger.warning(f"[PROXY] No Authorization header for {service_name}")
+        return headers
+    token = auth.removeprefix("Bearer ")
+    bridged = await bridge_to_service_token(token, audiences=["ushadow", "chronicle"])
+    if bridged and bridged != token:
+        headers["authorization"] = f"Bearer {bridged}"
+        logger.info(f"[PROXY] ✓ Bridged auth token for {service_name}")
+    return headers
+
+
+def _build_proxy_response_headers(response, path: str) -> dict:
+    """Strip hop-by-hop headers; fix Content-Disposition and add CORS for audio."""
+    headers = dict(response.headers)
+    for h in ["connection", "keep-alive", "transfer-encoding"]:
+        headers.pop(h, None)
+    if "audio" in path or "media" in path:
+        cd = headers.get("content-disposition", "")
+        if "attachment" in cd:
+            headers["content-disposition"] = cd.replace("attachment", "inline")
+        headers["access-control-allow-origin"] = "*"
+        headers["access-control-expose-headers"] = "Content-Range, Content-Length, Accept-Ranges"
+    return headers
 
 
 @router.get("/debug/docker-ports")

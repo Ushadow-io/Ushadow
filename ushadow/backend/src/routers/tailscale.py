@@ -1403,10 +1403,13 @@ async def configure_tailscale_serve(
             tailscale_hostname = _get_casdoor_tailscale_hostname()
             if tailscale_hostname:
                 uri = f"https://{tailscale_hostname}/oauth/callback"
-                _casdoor_register_redirect_uri(uri)
-                casdoor_success = True
-                casdoor_message = f"OAuth callback registered: {uri}"
-                logger.info(f"[TAILSCALE] ✓ Registered Casdoor redirect URI: {uri}")
+                casdoor_success = _casdoor_register_redirect_uri(uri)
+                if casdoor_success:
+                    casdoor_message = f"OAuth callback registered: {uri}"
+                    logger.info(f"[TAILSCALE] ✓ Registered Casdoor redirect URI: {uri}")
+                else:
+                    casdoor_message = f"Failed to register OAuth callback URI: {uri}"
+                    logger.warning(f"[TAILSCALE] register_redirect_uri returned False for {uri}")
             else:
                 casdoor_message = "Tailscale hostname not available"
         except Exception as e:

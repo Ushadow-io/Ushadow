@@ -1,0 +1,71 @@
+# Casdoor SSO service — shared infra protocol
+# Scaffolded by: uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-init
+#
+# This file follows the shared infra protocol:
+#   - Attaches to external named networks (created by your infra bootstrap)
+#   - Declares profile "infra" so it starts with `--profile infra`
+#   - Depends on a healthy postgres service
+#   - Exports connection details as environment variables for consumers
+#
+# Usage:
+#   just casdoor-start                       # recommended — also creates networks
+#
+#   docker compose -f compose/casdoor.yml --profile infra up -d
+#
+# Combined with an existing infra compose:
+#   docker compose -f compose/infra.yml -f compose/casdoor.yml --profile infra up -d
+#
+# Prerequisites (run once before first boot):
+#   just casdoor-db-setup   # creates the Postgres user + database
+
+# =============================================================================
+# SERVICE METADATA (ignored by Docker, read by app backends that support it)
+# =============================================================================
+x-app:
+  casdoor:
+    display_name: "Casdoor"
+    description: "OAuth2 / OIDC identity provider"
+    requires: [postgres]
+    provides: auth
+    tags: ["auth", "oauth2", "oidc", "sso"]
+
+name: ${COMPOSE_PROJECT_NAME:-app}-casdoor
+
+services:
+  casdoor:
+    image: casbin/casdoor:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-app}-casdoor
+    profiles: ["infra"]
+    ports:
+      - "${CASDOOR_PORT:-8082}:8000"
+    environment:
+      - RUNNING_IN_DOCKER=true
+      # Infrastructure exports — consumed by backend services
+      - CASDOOR_HOST=${CASDOOR_HOST:-casdoor}
+      - CASDOOR_PORT=${CASDOOR_PORT:-8082}
+      - CASDOOR_ENDPOINT=${CASDOOR_ENDPOINT:-http://casdoor:8000}
+      - CASDOOR_EXTERNAL_URL=${CASDOOR_EXTERNAL_URL:-http://localhost:8082}
+    volumes:
+      # app.conf is generated from config/casdoor/app.conf.template by `just casdoor-start`
+      - ../config/casdoor:/conf
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+      - infra-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+networks:
+  app-network:
+    name: ${APP_NETWORK:-app-network}
+    external: true
+  infra-network:
+    name: ${INFRA_NETWORK:-infra-network}
+    external: true
