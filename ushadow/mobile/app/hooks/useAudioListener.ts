@@ -35,6 +35,14 @@ export const useAudioListener = (
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const shouldRetryRef = useRef<boolean>(false);
   const currentOnAudioDataRef = useRef<((bytes: Uint8Array) => void) | null>(null);
+  // Ref to retryStartAudioListener to break circular useCallback dependency
+  const retryStartAudioListenerRef = useRef<() => void>(() => {});
+
+  // Silent-disconnect watchdog: if we're "listening" but no packets arrive within
+  // this window, assume BLE died without firing handleConnectionStateChange and restart.
+  const AUDIO_WATCHDOG_MS = 10000;
+  const watchdogRef = useRef<NodeJS.Timeout | null>(null);
+  const lastPacketTimeRef = useRef<number>(0);
 
   // Retry configuration
   const MAX_RETRY_ATTEMPTS = 10;
@@ -55,28 +63,36 @@ export const useAudioListener = (
       retryTimeoutRef.current = null;
     }
 
+    if (watchdogRef.current) {
+      clearInterval(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+
     if (uiUpdateIntervalRef.current) {
       clearInterval(uiUpdateIntervalRef.current);
       uiUpdateIntervalRef.current = null;
     }
 
-    if (audioSubscriptionRef.current) {
-      try {
-        await omiConnection.stopAudioBytesListener(audioSubscriptionRef.current);
-        audioSubscriptionRef.current = null;
-        setIsListeningAudio(false);
-        localPacketCounterRef.current = 0;
-        audioLevelRef.current = 0;
-        setAudioLevel(0);
+    // Update state eagerly before the BLE call — the native stopAudioBytesListener
+    // can hang indefinitely if the BLE connection is already dropped, which would
+    // block the entire handleStopStreaming chain and leave the UI frozen.
+    const sub = audioSubscriptionRef.current;
+    audioSubscriptionRef.current = null;
+    setIsListeningAudio(false);
+    localPacketCounterRef.current = 0;
+    audioLevelRef.current = 0;
+    setAudioLevel(0);
+
+    if (sub) {
+      // Fire-and-forget — we've already cleared JS state above
+      omiConnection.stopAudioBytesListener(sub).then(() => {
         console.log('Audio listener stopped.');
-      } catch (error) {
+      }).catch((error: unknown) => {
         console.error('Stop audio listener error:', error);
-        Alert.alert('Error', `Failed to stop audio listener: ${error}`);
-      }
+      });
     } else {
       console.log('Audio listener was not active.');
     }
-    setIsListeningAudio(false);
   }, [omiConnection]);
 
   // Calculate exponential backoff delay
@@ -104,9 +120,9 @@ export const useAudioListener = (
     try {
       const subscription = await omiConnection.startAudioBytesListener((bytes) => {
         localPacketCounterRef.current++;
+        lastPacketTimeRef.current = Date.now();
         if (bytes && bytes.length > 0) {
           const audioBytes = new Uint8Array(bytes);
-          // Calculate and update audio level for waveform visualization
           const level = calculateAudioLevel(audioBytes);
           audioLevelRef.current = level;
           setAudioLevel(level);
@@ -119,7 +135,28 @@ export const useAudioListener = (
         setIsListeningAudio(true);
         setIsRetrying(false);
         setRetryAttempts(0);
+        lastPacketTimeRef.current = Date.now();
         console.log('[AudioListener] Audio listener started successfully');
+
+        // Start silent-disconnect watchdog. Omi BLE can drop without firing
+        // handleConnectionStateChange — we detect this by watching for audio silence.
+        if (watchdogRef.current) clearInterval(watchdogRef.current);
+        watchdogRef.current = setInterval(() => {
+          if (!shouldRetryRef.current) return;
+          const silentMs = Date.now() - lastPacketTimeRef.current;
+          if (silentMs > AUDIO_WATCHDOG_MS) {
+            console.warn(`[AudioListener] Watchdog: no audio for ${Math.round(silentMs / 1000)}s — BLE may have silently disconnected, restarting listener`);
+            if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
+            setIsListeningAudio(false);
+            if (audioSubscriptionRef.current) {
+              omiConnection.stopAudioBytesListener(audioSubscriptionRef.current).catch(() => {});
+              audioSubscriptionRef.current = null;
+            }
+            setIsRetrying(true);
+            retryStartAudioListenerRef.current(); // use ref to avoid circular dep
+          }
+        }, AUDIO_WATCHDOG_MS);
+
         return true;
       } else {
         console.error('[AudioListener] No subscription returned from startAudioBytesListener');
@@ -174,11 +211,13 @@ export const useAudioListener = (
     }
   }, [retryAttempts, attemptStartAudioListener, getRetryDelay]);
 
+  // Keep the ref in sync so the watchdog can call it without a dep cycle
+  useEffect(() => { retryStartAudioListenerRef.current = retryStartAudioListener; }, [retryStartAudioListener]);
+
   const startAudioListener = useCallback(async (onAudioData: (bytes: Uint8Array) => void) => {
-    if (!isConnected()) {
-      Alert.alert('Not Connected', 'Please connect to a device first to start audio listener.');
-      return;
-    }
+    // No early abort for isConnected() — BLE may still be establishing when this is called
+    // immediately after connectToDevice(). The retry mechanism polls isConnected() with
+    // exponential backoff until the BLE handshake completes.
 
     if (isListeningAudio) {
       console.log('[AudioListener] Audio listener is already active. Stopping first.');
@@ -211,7 +250,7 @@ export const useAudioListener = (
       setIsRetrying(true);
       retryStartAudioListener();
     }
-  }, [omiConnection, isConnected, stopAudioListener, attemptStartAudioListener, retryStartAudioListener]);
+  }, [omiConnection, stopAudioListener, attemptStartAudioListener, retryStartAudioListener]);
 
   // Cleanup on unmount
   useEffect(() => {

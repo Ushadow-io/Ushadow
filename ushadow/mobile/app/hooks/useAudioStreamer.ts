@@ -28,6 +28,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import NetInfo from '@react-native-community/netinfo';
 import { SessionDiagnostics } from '../types/streamingSession';
+import { addPersistentLog } from '../services/persistentLogger';
 
 export interface UseAudioStreamer {
   isStreaming: boolean;
@@ -60,6 +61,7 @@ export interface RelayStatus {
 export interface UseAudioStreamerOptions {
   onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
   onRelayStatus?: (status: RelayStatus) => void;
+  onTranscript?: (text: string, isFinal: boolean, source: string) => void;
 }
 
 // Wyoming Protocol Types
@@ -120,7 +122,18 @@ const AUDIO_BUFFER_MAX_CHUNKS = 6000;  // ~10 minutes of audio at 100ms chunks
 const AUDIO_BUFFER_MAX_AGE_MS = 600000; // Keep buffered chunks up to 10 minutes
 
 export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
-  const { onLog, onRelayStatus } = options || {};
+  const { onLog, onRelayStatus, onTranscript } = options || {};
+
+  // Store callbacks in refs so they can be called from useCallback/useEffect without
+  // being listed as dependencies. This prevents callers passing inline functions from
+  // causing the NetInfo effect (which depends on attemptReconnect) to re-run on every
+  // render, which would trigger an immediate NetInfo callback and infinite setState loop.
+  const onLogRef = useRef(onLog);
+  const onRelayStatusRef = useRef(onRelayStatus);
+  const onTranscriptRef = useRef(onTranscript);
+  useEffect(() => { onLogRef.current = onLog; }, [onLog]);
+  useEffect(() => { onRelayStatusRef.current = onRelayStatus; }, [onRelayStatus]);
+  useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
@@ -227,7 +240,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       websocketRef.current = null;
     }
 
-    onLog?.('disconnected', 'Manually stopped streaming');
+    onLogRef.current?.('disconnected', 'Manually stopped streaming');
 
     // Clear audio buffer
     audioBufferRef.current = [];
@@ -309,6 +322,15 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       return;
     }
 
+    // If a reconnect is already scheduled, do nothing — let it fire on its own schedule.
+    // Without this guard, rapid callers (NetInfo events, error callbacks) cancel and
+    // reschedule the timeout on every call, incrementing the counter without ever
+    // actually connecting (the timeout is always reset before it fires).
+    if (reconnectTimeoutRef.current) {
+      console.log('[AudioStreamer] Reconnect already scheduled, skipping duplicate call');
+      return;
+    }
+
     const attempt = reconnectAttemptsRef.current + 1;
     // Exponential backoff capped at MAX_RECONNECT_MS (60s)
     const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, Math.min(reconnectAttemptsRef.current, 6)));
@@ -324,18 +346,18 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     if (retryingDuration > DEGRADED_THRESHOLD_MS) {
       setStateSafe(setIsDegraded, true);
       console.warn(`[AudioStreamer] Connection degraded: retrying for ${Math.round(retryingDuration / 1000)}s without success`);
-      onLog?.('error', 'Connection degraded', `Retrying for ${Math.round(retryingDuration / 60000)}min without success`);
+      onLogRef.current?.('error', 'Connection degraded', `Retrying for ${Math.round(retryingDuration / 60000)}min without success`);
     }
 
     console.log(`[AudioStreamer] Reconnect attempt ${attempt} in ${delay}ms (will keep trying)`);
-    onLog?.('connecting', `Reconnecting (attempt ${attempt})`, `Delay: ${delay}ms`);
+    onLogRef.current?.('connecting', `Reconnecting (attempt ${attempt})`, `Delay: ${delay}ms`);
 
-    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     setStateSafe(setIsConnecting, true);
     setStateSafe(setIsRetrying, true);
     setStateSafe(setRetryCount, attempt);
 
     reconnectTimeoutRef.current = setTimeout(() => {
+      reconnectTimeoutRef.current = null; // clear so next failure can schedule a new one
       if (!manuallyStoppedRef.current) {
         startStreaming(currentUrlRef.current, currentModeRef.current, currentCodecRef.current)
           .then(() => {
@@ -351,7 +373,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
           });
       }
     }, delay);
-  }, [setStateSafe, onLog]);
+  }, [setStateSafe]);
 
   // Start streaming
   const startStreaming = useCallback(async (
@@ -390,7 +412,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
     console.log(`[AudioStreamer] Initializing WebSocket: ${finalUrl}`);
     console.log(`[AudioStreamer] Network state:`, netState);
-    onLog?.('connecting', 'Initializing WebSocket connection', finalUrl);
+    onLogRef.current?.('connecting', 'Initializing WebSocket connection', finalUrl);
     if (websocketRef.current) await stopStreaming();
 
     setStateSafe(setIsConnecting, true);
@@ -411,7 +433,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
             const bufferedChunks = audioBufferRef.current.length;
             const droppedChunks = droppedChunkCountRef.current;
             console.log(`[AudioStreamer] RECONNECTED after background gap: ${gapDurationMs}ms, buffered=${bufferedChunks}, dropped=${droppedChunks}`);
-            onLog?.('connected', 'Reconnected after background gap', `Gap: ${Math.round(gapDurationMs / 1000)}s, buffered: ${bufferedChunks}, dropped: ${droppedChunks}`);
+            onLogRef.current?.('connected', 'Reconnected after background gap', `Gap: ${Math.round(gapDurationMs / 1000)}s, buffered: ${bufferedChunks}, dropped: ${droppedChunks}`);
 
             // Update cumulative diagnostics
             diagRef.current.reconnectCount++;
@@ -422,7 +444,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
             backgroundDisconnectTimeRef.current = null;
           } else {
-            onLog?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
+            onLogRef.current?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
           }
 
           // Set binary type to arraybuffer (matches web implementation)
@@ -452,11 +474,17 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
           // This catches cases where WebSocket dies silently (no onclose fired)
           // and proactively reconnects — critical for background streaming.
           if (healthCheckRef.current) clearInterval(healthCheckRef.current);
+          const streamStartTime = Date.now();
           healthCheckRef.current = setInterval(() => {
             if (manuallyStoppedRef.current) return;
             const ready = websocketRef.current?.readyState;
+            const aliveSeconds = Math.round((Date.now() - streamStartTime) / 1000);
+            // Heartbeat: if this log stops appearing in persistent logs after a disconnect,
+            // we know exactly when the process was killed.
+            addPersistentLog('health', `Heartbeat t+${aliveSeconds}s ws=${ready ?? 'null'} chunks=${audioChunkCountRef.current}`);
             if (ready !== WebSocket.OPEN && ready !== WebSocket.CONNECTING && currentUrlRef.current) {
               console.log(`[AudioStreamer] Health check: WebSocket dead (readyState=${ready}), triggering reconnect`);
+              addPersistentLog('error', `WS dead at t+${aliveSeconds}s, reconnecting`, { readyState: ready });
               diagRef.current.healthCheckReconnects++;
               attemptReconnect();
             }
@@ -493,23 +521,37 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
           try {
             const data = typeof event.data === 'string' ? JSON.parse(event.data) : null;
             if (data) {
+              // Respond to server pings immediately with a pong
+              if (data.type === 'ping') {
+                try { ws.send(JSON.stringify({ type: 'pong', t: data.t ?? Date.now() })); } catch {}
+                return;
+              }
               // Handle relay_status message
               if (data.type === 'relay_status' && data.data) {
                 console.log('[AudioStreamer] Relay status:', data.data);
-                onRelayStatus?.(data.data as RelayStatus);
+                onRelayStatusRef.current?.(data.data as RelayStatus);
+              }
+              // Handle live transcription from Chronicle/Deepgram
+              else if (data.type === 'interim_transcript' && data.data) {
+                const text: string = data.data.text ?? '';
+                const isFinal: boolean = data.data.is_final ?? false;
+                const source: string = data.source ?? 'unknown';
+                if (text) {
+                  onTranscriptRef.current?.(text, isFinal, source);
+                }
               }
               // Check for error responses from server
               else if (data.type === 'error' || data.error || data.status === 'error') {
                 serverErrorCountRef.current += 1;
                 const errorMsg = data.message || data.error || 'Server error';
                 console.error(`[AudioStreamer] Server error ${serverErrorCountRef.current}/${MAX_SERVER_ERRORS}: ${errorMsg}`);
-                onLog?.('error', `Server error (${serverErrorCountRef.current}/${MAX_SERVER_ERRORS})`, errorMsg);
+                onLogRef.current?.('error', `Server error (${serverErrorCountRef.current}/${MAX_SERVER_ERRORS})`, errorMsg);
                 setStateSafe(setError, errorMsg);
 
                 // Auto-stop after too many consecutive server errors
                 if (serverErrorCountRef.current >= MAX_SERVER_ERRORS) {
                   console.log('[AudioStreamer] Too many server errors, stopping stream');
-                  onLog?.('error', 'Too many server errors, stopped stream', `${MAX_SERVER_ERRORS} consecutive errors`);
+                  onLogRef.current?.('error', 'Too many server errors, stopped stream', `${MAX_SERVER_ERRORS} consecutive errors`);
                   manuallyStoppedRef.current = true;
                   ws.close(1000, 'too-many-errors');
                   setStateSafe(setError, `Stopped: ${errorMsg} (${MAX_SERVER_ERRORS} errors)`);
@@ -527,7 +569,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         ws.onerror = (e) => {
           const msg = (e as ErrorEvent).message || 'WebSocket connection error.';
           console.error('[AudioStreamer] Error:', msg);
-          onLog?.('error', 'WebSocket connection error', msg);
+          onLogRef.current?.('error', 'WebSocket connection error', msg);
           setStateSafe(setError, msg);
           setStateSafe(setIsConnecting, false);
           setStateSafe(setIsStreaming, false);
@@ -539,8 +581,15 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
           console.log('[AudioStreamer] Closed. Code:', event.code, 'Reason:', event.reason);
           const isManual = event.code === 1000 && (event.reason === 'manual-stop' || event.reason === 'too-many-errors');
 
+          // Persist close event — survives process kill, visible after restart
+          addPersistentLog('connection', `WS closed code=${event.code}`, {
+            reason: event.reason || 'none',
+            manual: isManual,
+            chunks: audioChunkCountRef.current,
+          });
+
           if (!isManual) {
-            onLog?.('disconnected', 'WebSocket connection closed', `Code: ${event.code}, Reason: ${event.reason || 'none'}`);
+            onLogRef.current?.('disconnected', 'WebSocket connection closed', `Code: ${event.code}, Reason: ${event.reason || 'none'}`);
           }
 
           setStateSafe(setIsConnecting, false);

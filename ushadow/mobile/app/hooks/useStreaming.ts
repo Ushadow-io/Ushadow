@@ -32,6 +32,8 @@ export interface UseStreaming {
   maxRetries: number;
   error: string | null;
   audioLevel: number;
+  /** Real amplitude history (0–1) from mic analysis, for data-driven waveform */
+  waveformData: number[];
 
   // Actions
   startStreaming: (streamUrl: string, mode?: 'batch' | 'streaming', codec?: 'pcm' | 'opus') => Promise<void>;
@@ -41,7 +43,11 @@ export interface UseStreaming {
   resetDiagnostics: () => void;
 }
 
-export const useStreaming = (): UseStreaming => {
+export interface UseStreamingOptions {
+  onTranscript?: (text: string, isFinal: boolean, source: string) => void;
+}
+
+export const useStreaming = (options?: UseStreamingOptions): UseStreaming => {
   const [combinedError, setCombinedError] = useState<string | null>(null);
   const streamUrlRef = useRef<string>('');
   const shouldBeStreamingRef = useRef<boolean>(false);
@@ -65,7 +71,7 @@ export const useStreaming = (): UseStreaming => {
     getBufferStatus,
     getDiagnostics,
     resetDiagnostics,
-  } = useAudioStreamer();
+  } = useAudioStreamer({ onTranscript: options?.onTranscript });
 
   // Live Activity (iOS 16.2+) — lock screen + Dynamic Island recording indicator
   // Destructure to get stable callback references (useCallback with [] deps)
@@ -77,6 +83,7 @@ export const useStreaming = (): UseStreaming => {
     isInitializing,
     error: recorderError,
     audioLevel,
+    waveformData,
     startRecording,
     stopRecording,
   } = usePhoneAudioRecorder();
@@ -251,6 +258,7 @@ export const useStreaming = (): UseStreaming => {
     maxRetries,
     error,
     audioLevel,
+    waveformData,
     startStreaming: startStreamingCombined,
     stopStreaming: stopStreamingCombined,
     cancelRetry,

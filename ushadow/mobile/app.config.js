@@ -66,6 +66,16 @@ module.exports = {
       favicon: './assets/favicon.ico',
     },
     plugins: [
+      [
+        '@siteed/expo-audio-studio',
+        {
+          enableBackgroundAudio: true,
+          iosBackgroundModes: { useProcessing: false },
+          iosConfig: {
+            microphoneUsageDescription: 'Ushadow needs microphone access for voice input.',
+          },
+        },
+      ],
       './plugins/withAndroidManifestFix.js',
       './plugins/withAndroidGradleFix.js',
       './plugins/withNowPlayingModule.js',

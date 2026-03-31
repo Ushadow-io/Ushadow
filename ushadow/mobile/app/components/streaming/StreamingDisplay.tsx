@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Animated, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, AppState } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
@@ -19,10 +19,14 @@ interface StreamingDisplayProps {
   testID?: string;
   onStopPress?: () => void; // Stop button handler
   children?: React.ReactNode; // For overlaying start button
+  /** Live transcription text received from Chronicle/Deepgram */
+  liveTranscript?: string;
+  /** Whether the current transcript segment is final (vs interim) */
+  isTranscriptFinal?: boolean;
+  /** Real amplitude values (0–1) from mic analysis, replaces animated bars */
+  waveformData?: number[];
 }
 
-const WAVEFORM_BARS = 32;
-const WAVEFORM_UPDATE_INTERVAL = 100; // ms
 const MONITOR_POINTS = 40;
 const MONITOR_UPDATE_INTERVAL = 50; // ms - faster for smooth sweep
 
@@ -35,22 +39,23 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
   testID = 'streaming-display',
   onStopPress,
   children,
+  liveTranscript = '',
+  isTranscriptFinal = false,
+  waveformData,
 }) => {
   const [duration, setDuration] = useState<number>(0);
-  const [waveformData, setWaveformData] = useState<number[]>(Array(WAVEFORM_BARS).fill(0.1));
   const [blipPosition, setBlipPosition] = useState<number>(0);
   const [trailData, setTrailData] = useState<number[]>(Array(MONITOR_POINTS).fill(0));
 
-  // Animation values for waveform bars
-  const barAnimations = useRef<Animated.Value[]>(
-    Array(WAVEFORM_BARS).fill(0).map(() => new Animated.Value(0.1))
-  ).current;
-
-  // Store audioLevel in ref so waveform animation can read it without re-triggering
-  const audioLevelRef = useRef(audioLevel);
+  // Track app foreground state — animations are paused in background to avoid
+  // the iOS CPU watchdog kill (~80% CPU for 60s kills background processes).
+  const isInForegroundRef = useRef(AppState.currentState === 'active');
   useEffect(() => {
-    audioLevelRef.current = audioLevel;
-  }, [audioLevel]);
+    const sub = AppState.addEventListener('change', (state) => {
+      isInForegroundRef.current = state === 'active';
+    });
+    return () => sub.remove();
+  }, []);
 
   // Duration timer
   useEffect(() => {
@@ -68,47 +73,6 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
     return () => clearInterval(interval);
   }, [isStreaming, startTime]);
 
-  // Waveform animation for phone mic
-  useEffect(() => {
-    if (!isStreaming || sourceType !== 'microphone') {
-      // Reset waveform when not streaming
-      barAnimations.forEach((anim) => {
-        Animated.timing(anim, {
-          toValue: 0.1,
-          duration: 200,
-          useNativeDriver: false,
-        }).start();
-      });
-      return;
-    }
-
-    const interval = setInterval(() => {
-      // Generate new waveform data based on audio level (read from ref to avoid effect restart)
-      const currentLevel = audioLevelRef.current;
-
-      const newData = Array(WAVEFORM_BARS).fill(0).map((_, index) => {
-        // Create wave-like pattern centered around the audio level
-        const baseLevel = currentLevel / 100;
-        const variance = Math.random() * 0.4 - 0.2;
-        const centerBias = 1 - Math.abs(index - WAVEFORM_BARS / 2) / (WAVEFORM_BARS / 2) * 0.3;
-        return Math.max(0.1, Math.min(1, baseLevel * centerBias + variance));
-      });
-
-      setWaveformData(newData);
-
-      // Animate bars
-      newData.forEach((value, index) => {
-        Animated.timing(barAnimations[index], {
-          toValue: value,
-          duration: WAVEFORM_UPDATE_INTERVAL - 10,
-          useNativeDriver: false,
-        }).start();
-      });
-    }, WAVEFORM_UPDATE_INTERVAL);
-
-    return () => clearInterval(interval);
-  }, [isStreaming, sourceType, barAnimations]);
-
   // Heartrate monitor animation for OMI - blip sweeps across
   useEffect(() => {
     if (!isStreaming || sourceType !== 'omi') {
@@ -118,6 +82,8 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
     }
 
     const interval = setInterval(() => {
+      if (!isInForegroundRef.current) return;
+
       setBlipPosition((prev) => {
         const next = (prev + 1) % MONITOR_POINTS;
 
@@ -213,23 +179,17 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
       <View style={styles.waveformWrapper}>
         {/* Waveform Visualization - Phone Mic or OMI */}
       {sourceType === 'microphone' ? (
-        // Phone Mic: Animated waveform bars
+        // Phone Mic: data-driven waveform bars from real analysis amplitude
         <View style={styles.waveformContainer} testID="streaming-waveform">
-          {barAnimations.map((anim, index) => (
-            <Animated.View
+          {(waveformData && waveformData.length > 0 ? waveformData : Array(30).fill(0.1)).map((amplitude, index) => (
+            <View
               key={index}
               style={[
                 styles.waveformBar,
                 {
-                  height: anim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: ['10%', '100%'],
-                  }),
+                  height: Math.max(6, amplitude * 60),
                   backgroundColor: isStreaming ? colors.accent[400] : theme.textMuted,
-                  opacity: anim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0.3, 1],
-                  }),
+                  opacity: isStreaming ? 0.3 + amplitude * 0.7 : 0.3,
                 },
               ]}
             />
@@ -297,6 +257,27 @@ export const StreamingDisplay: React.FC<StreamingDisplayProps> = ({
           </View>
           <Text style={styles.levelValue}>
             {Math.round((audioLevel * 0.6) - 60)} dB
+          </Text>
+        </View>
+      )}
+
+      {/* Live Transcription - only show when streaming and text is available */}
+      {isStreaming && liveTranscript.length > 0 && (
+        <View
+          style={styles.transcriptContainer}
+          testID={`${testID}-transcript`}
+        >
+          <Text style={styles.transcriptLabel}>
+            {isTranscriptFinal ? 'Transcript' : 'Listening…'}
+          </Text>
+          <Text
+            style={[
+              styles.transcriptText,
+              !isTranscriptFinal && styles.transcriptTextInterim,
+            ]}
+            testID={`${testID}-transcript-text`}
+          >
+            {liveTranscript}
           </Text>
         </View>
       )}
@@ -386,7 +367,6 @@ const styles = StyleSheet.create({
   waveformBar: {
     flex: 1,
     borderRadius: 2,
-    minHeight: 6,
   },
   monitorContainer: {
     height: 60,
@@ -440,6 +420,30 @@ const styles = StyleSheet.create({
     width: 50,
     textAlign: 'right',
     fontFamily: 'monospace',
+  },
+  transcriptContainer: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    backgroundColor: theme.backgroundInput,
+    borderRadius: borderRadius.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent[400],
+  },
+  transcriptLabel: {
+    fontSize: fontSize.xs,
+    color: theme.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: spacing.xs,
+  },
+  transcriptText: {
+    fontSize: fontSize.base,
+    color: theme.textPrimary,
+    lineHeight: 22,
+  },
+  transcriptTextInterim: {
+    color: theme.textSecondary,
+    fontStyle: 'italic',
   },
 });
 

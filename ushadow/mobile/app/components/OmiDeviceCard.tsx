@@ -461,7 +461,7 @@ export const OmiDeviceCard: React.FC<OmiDeviceCardProps> = ({
   const getBatteryIcon = (): string => {
     if (batteryLevel === null) return 'battery-half-outline';
     if (batteryLevel > 75) return 'battery-full';
-    if (batteryLevel > 50) return 'battery-three-quarters-outline';
+    if (batteryLevel > 50) return 'battery-half-outline';
     if (batteryLevel > 25) return 'battery-half-outline';
     if (batteryLevel > 10) return 'battery-quarter-outline';
     return 'battery-dead-outline';

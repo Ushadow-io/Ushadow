@@ -59,6 +59,20 @@ export default function HomeScreen() {
   // Connection logging hook
   const { entries: logEntries, connectionState: logConnectionState, logEvent, clearLogs, clearLogsByType } = useConnectionLog();
 
+  // Stable log handlers — must be useCallback so they don't get a new reference every render.
+  // Inline arrow functions passed as props cause useAudioStreamer's NetInfo effect to re-run
+  // on every render, which triggers an immediate NetInfo callback → infinite setState loop.
+  const handleWebSocketLog = useCallback(
+    (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) =>
+      logEvent('websocket', status, message, details),
+    [logEvent]
+  );
+  const handleBluetoothLog = useCallback(
+    (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) =>
+      logEvent('bluetooth', status, message, details),
+    [logEvent]
+  );
+
   // Session tracking hook
   const { sessions, startSession, updateSessionStatus, endSession, clearAllSessions } = useSessionTracking();
 
@@ -260,8 +274,8 @@ export default function HomeScreen() {
             if (opts?.hostname) setCurrentHostname(opts.hostname);
             setShowLoginScreen(true);
           }}
-          onWebSocketLog={(status, message, details) => logEvent('websocket', status, message, details)}
-          onBluetoothLog={(status, message, details) => logEvent('bluetooth', status, message, details)}
+          onWebSocketLog={handleWebSocketLog}
+          onBluetoothLog={handleBluetoothLog}
           onSessionStart={startSession}
           onSessionUpdate={updateSessionStatus}
           onSessionEnd={endSession}

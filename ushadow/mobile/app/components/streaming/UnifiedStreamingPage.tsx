@@ -18,9 +18,7 @@ import {
   SafeAreaView,
   Alert,
   TouchableOpacity,
-  Platform,
 } from 'react-native';
-import { Audio } from 'expo-av';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
 
@@ -35,6 +33,7 @@ import { LeaderDiscovery } from '../LeaderDiscovery';
 
 // Hooks
 import { useStreaming } from '../../hooks/useStreaming';
+import { usePhoneAudioRecorder } from '../../hooks/usePhoneAudioRecorder';
 import { useLiveActivity } from '../../hooks/useLiveActivity';
 import { useOmiConnection } from '../../contexts/OmiConnectionContext';
 import { useDeviceConnection } from '../../hooks/useDeviceConnection';
@@ -42,6 +41,7 @@ import { useAudioListener } from '../../hooks/useAudioListener';
 import { useAudioStreamer } from '../../hooks/useAudioStreamer';
 import { useAppLifecycle } from '../../hooks/useAppLifecycle';
 import { addPersistentLog } from '../../services/persistentLogger';
+import { registerBackgroundTask, unregisterBackgroundTask, updateConnectionState } from '../../services/backgroundTasks';
 
 // Storage
 import {
@@ -117,23 +117,38 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Session tracking
   const currentSessionIdRef = useRef<string | null>(null);
 
+  // Live transcription state
+  const [liveTranscript, setLiveTranscript] = useState<string>('');
+  const [isTranscriptFinal, setIsTranscriptFinal] = useState<boolean>(false);
+
+  const handleTranscript = useCallback((text: string, isFinal: boolean, _source: string) => {
+    setLiveTranscript(text);
+    setIsTranscriptFinal(isFinal);
+  }, []);
+
   // OMI stream URL tracking for foreground reconnection
   const omiStreamUrlRef = useRef<string | null>(null);
   const omiShouldBeStreamingRef = useRef<boolean>(false);
+  const omiDeviceIdRef = useRef<string | null>(null);
+  // Stable ref to the audio forwarding callback, so the foreground reconnect can
+  // restart the audio listener without needing the callback in its closure.
+  const omiAudioCallbackRef = useRef<((bytes: Uint8Array) => void) | null>(null);
 
   // iOS audio session keepalive for OMI BLE streaming.
   // When streaming from OMI (BLE), there's no active microphone recording keeping the
   // iOS process alive. iOS will suspend the app faster without an active audio session.
   // We start a silent audio session (playAndRecord category with staysActiveInBackground)
-  // to keep the process running — same technique as the phone mic path but without
-  // actually capturing audio from the mic.
+  // Real audio session keepalive for OMI path: expo-audio-studio recording keeps the
+  // iOS process alive via the 'audio' background mode. Without actual audio I/O,
+  // iOS terminates the process after ~1 minute even with staysActiveInBackground set.
+  const { startRecording: startKeepaliveRecording, stopRecording: stopKeepaliveRecording } = usePhoneAudioRecorder();
   const omiAudioKeepaliveRef = useRef<boolean>(false);
 
   // OMI connection context
   const omiConnection = useOmiConnection();
 
   // Phone microphone streaming hook
-  const phoneStreaming = useStreaming();
+  const phoneStreaming = useStreaming({ onTranscript: handleTranscript });
 
   // Live Activity for OMI streaming (phone mic manages its own via useStreaming)
   const omiLiveActivity = useLiveActivity();
@@ -177,6 +192,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         onSessionUpdate(currentSessionIdRef.current, status);
       }
     },
+    onTranscript: handleTranscript,
   });
 
   // Helper: get diagnostics from the active source's streamer
@@ -187,72 +203,88 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     return omiStreamer.getDiagnostics();
   }, [selectedSource.type, phoneStreaming, omiStreamer]);
 
-  // OMI foreground reconnection - reconnect WebSocket when app returns from background
+  // OMI foreground reconnection - reconnect BLE + WebSocket when app returns from background
   useAppLifecycle({
     onForeground: useCallback((backgroundDurationMs: number) => {
-      if (
-        selectedSource.type === 'omi' &&
-        omiShouldBeStreamingRef.current &&
-        omiStreamUrlRef.current
-      ) {
-        const wsState = omiStreamer.getWebSocketReadyState();
-        const wsStateLabel = wsState === WebSocket.OPEN ? 'OPEN'
-          : wsState === WebSocket.CONNECTING ? 'CONNECTING'
-          : wsState === WebSocket.CLOSING ? 'CLOSING'
-          : wsState === WebSocket.CLOSED ? 'CLOSED'
-          : 'UNDEFINED';
-        const bufferStatus = omiStreamer.getBufferStatus();
+      if (!omiShouldBeStreamingRef.current || !omiStreamUrlRef.current) return;
 
-        const diagnostics = {
-          backgroundDurationMs,
-          backgroundDurationSec: Math.round(backgroundDurationMs / 1000),
-          webSocketState: wsStateLabel,
-          bufferedChunks: bufferStatus.bufferedChunks,
-          droppedChunks: bufferStatus.droppedChunks,
-          bleConnected: connectedDeviceId ? true : false,
-        };
+      const bleConnected = omiConnection.isConnected();
+      const wsState = omiStreamer.getWebSocketReadyState();
+      const wsStateLabel = wsState === WebSocket.OPEN ? 'OPEN'
+        : wsState === WebSocket.CONNECTING ? 'CONNECTING'
+        : wsState === WebSocket.CLOSING ? 'CLOSING'
+        : wsState === WebSocket.CLOSED ? 'CLOSED'
+        : 'UNDEFINED';
+      const bufferStatus = omiStreamer.getBufferStatus();
 
-        console.log('[UnifiedStreaming] OMI foreground reconnect - diagnostics:', JSON.stringify(diagnostics));
-        addPersistentLog('streaming', 'OMI foreground reconnect check', diagnostics);
+      const diagnostics = {
+        backgroundDurationMs,
+        backgroundDurationSec: Math.round(backgroundDurationMs / 1000),
+        webSocketState: wsStateLabel,
+        bufferedChunks: bufferStatus.bufferedChunks,
+        droppedChunks: bufferStatus.droppedChunks,
+        bleConnected,
+      };
 
-        if (wsState !== WebSocket.OPEN) {
-          console.log(`[UnifiedStreaming] OMI: Reconnecting WebSocket after ${Math.round(backgroundDurationMs / 1000)}s in background (ws=${wsStateLabel})`);
-          addPersistentLog('connection', 'OMI foreground WebSocket reconnect', diagnostics);
+      console.log('[UnifiedStreaming] OMI foreground reconnect - diagnostics:', JSON.stringify(diagnostics));
+      addPersistentLog('streaming', 'OMI foreground reconnect check', diagnostics);
 
-          omiStreamer.startStreaming(omiStreamUrlRef.current!, 'streaming', 'opus')
-            .then(() => {
-              console.log('[UnifiedStreaming] OMI foreground reconnect succeeded');
-              addPersistentLog('connection', 'OMI foreground reconnect succeeded', { backgroundDurationMs });
-            })
-            .catch(err => {
-              const errorMsg = (err as Error).message || String(err);
-              console.warn('[UnifiedStreaming] OMI foreground reconnect failed:', errorMsg);
-              addPersistentLog('error', 'OMI foreground reconnect failed', {
-                error: errorMsg,
-                backgroundDurationMs,
-              });
-            });
-        } else {
-          console.log('[UnifiedStreaming] OMI: WebSocket still open after background, no reconnect needed');
-        }
-      }
-    }, [selectedSource.type, omiStreamer, connectedDeviceId]),
-    onBackground: useCallback(() => {
-      if (selectedSource.type === 'omi' && omiShouldBeStreamingRef.current) {
-        const wsState = omiStreamer.getWebSocketReadyState();
-        console.log(`[UnifiedStreaming] OMI: App backgrounded while streaming (ws=${wsState === WebSocket.OPEN ? 'OPEN' : wsState})`);
-        addPersistentLog('streaming', 'OMI app backgrounded during stream', {
-          webSocketState: wsState,
-          bleConnected: connectedDeviceId ? true : false,
+      // Step 1: Reconnect BLE if it dropped during background.
+      // startAudioListener's retry loop will wait for BLE to be ready before
+      // starting notifications, so we fire both reconnects concurrently.
+      if (!bleConnected && omiDeviceIdRef.current) {
+        console.log('[UnifiedStreaming] OMI: BLE disconnected during background, reconnecting...');
+        addPersistentLog('connection', 'OMI foreground BLE reconnect', diagnostics);
+        connectOmiDevice(omiDeviceIdRef.current).catch(err => {
+          console.warn('[UnifiedStreaming] OMI foreground BLE reconnect failed:', (err as Error).message || err);
         });
       }
-    }, [selectedSource.type, omiStreamer, connectedDeviceId]),
+
+      // Step 2: Restart audio listener (retry loop handles BLE not-yet-ready timing).
+      if (omiAudioCallbackRef.current) {
+        startAudioListener(omiAudioCallbackRef.current).catch(err => {
+          console.warn('[UnifiedStreaming] OMI foreground audio listener restart failed:', (err as Error).message || err);
+        });
+      }
+
+      // Step 3: Reconnect WebSocket if dead.
+      if (wsState !== WebSocket.OPEN) {
+        console.log(`[UnifiedStreaming] OMI: Reconnecting WebSocket after ${Math.round(backgroundDurationMs / 1000)}s background (ws=${wsStateLabel})`);
+        addPersistentLog('connection', 'OMI foreground WebSocket reconnect', diagnostics);
+        omiStreamer.startStreaming(omiStreamUrlRef.current!, 'streaming', 'opus')
+          .then(() => {
+            console.log('[UnifiedStreaming] OMI foreground WebSocket reconnect succeeded');
+            updateConnectionState({ isConnected: true, isStreaming: true, source: 'omi' }).catch(() => {});
+          })
+          .catch(err => {
+            console.warn('[UnifiedStreaming] OMI foreground WebSocket reconnect failed:', (err as Error).message || err);
+          });
+      }
+    }, [omiConnection, omiStreamer, connectOmiDevice, startAudioListener]),
+    onBackground: useCallback(() => {
+      if (!omiShouldBeStreamingRef.current) return;
+      const wsState = omiStreamer.getWebSocketReadyState();
+      const bleConnected = omiConnection.isConnected();
+      console.log(`[UnifiedStreaming] OMI: backgrounded (ws=${wsState === WebSocket.OPEN ? 'OPEN' : wsState}, ble=${bleConnected})`);
+      addPersistentLog('streaming', 'OMI app backgrounded during stream', {
+        webSocketState: wsState,
+        bleConnected,
+      });
+      updateConnectionState({
+        isConnected: bleConnected,
+        isStreaming: true,
+        source: 'omi',
+      }).catch(() => {});
+    }, [omiConnection, omiStreamer]),
   });
 
   // Combined state
+  // Phone mic: both WS and mic must be up.
+  // OMI: BLE audio listener OR WebSocket is active — user can always stop if either is running.
+  // Using && for OMI meant the stop button vanished whenever WS was reconnecting in background.
   const isStreaming = selectedSource.type === 'microphone'
     ? phoneStreaming.isStreaming
-    : (isListeningAudio && omiStreamer.isStreaming);
+    : (isListeningAudio || omiStreamer.isStreaming);
 
   // Debug logging for streaming state
   useEffect(() => {
@@ -281,8 +313,14 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
     if (!currentSessionIdRef.current || !onSessionEnd) return;
 
-    // Case 1: Retry cancelled (manually or by server error limit) — immediate session end
-    if (currentError && !currentRetrying && !currentStreaming) {
+    // Case 1: Retry explicitly cancelled (user pressed Cancel, or server error limit hit).
+    // We require retryCount > 0 to guard against the brief window where an error fires
+    // before the reconnect loop sets isRetrying=true — without this check, the first
+    // transient 1006 would end the session before a single retry attempt was made.
+    const currentRetryCount = selectedSource.type === 'microphone'
+      ? phoneStreaming.retryCount
+      : omiStreamer.retryCount;
+    if (currentError && !currentRetrying && !currentStreaming && currentRetryCount > 0) {
       console.log('[UnifiedStreaming] Connection failed (retry cancelled), ending session');
       const endReason = currentError.toLowerCase().includes('timeout') ? 'timeout' : 'connection_lost';
       onSessionEnd(currentSessionIdRef.current, currentError, endReason, getCurrentDiagnostics());
@@ -302,10 +340,12 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     phoneStreaming.isRetrying,
     phoneStreaming.isStreaming,
     phoneStreaming.isDegraded,
+    phoneStreaming.retryCount,
     omiStreamer.error,
     omiStreamer.isRetrying,
     omiStreamer.isStreaming,
     omiStreamer.isDegraded,
+    omiStreamer.retryCount,
     isDegraded,
     onSessionEnd,
     getCurrentDiagnostics,
@@ -323,6 +363,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     ? phoneStreaming.audioLevel
     : omiAudioLevel;
 
+  const waveformData = selectedSource.type === 'microphone'
+    ? phoneStreaming.waveformData
+    : [];
+
   const error = selectedSource.type === 'microphone'
     ? phoneStreaming.error
     : omiStreamer.error;
@@ -338,15 +382,6 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   const maxRetries = selectedSource.type === 'microphone'
     ? phoneStreaming.maxRetries
     : omiStreamer.maxRetries;
-
-  // Handle cancel retry
-  const handleCancelRetry = useCallback(() => {
-    if (selectedSource.type === 'microphone') {
-      phoneStreaming.cancelRetry();
-    } else {
-      omiStreamer.cancelRetry();
-    }
-  }, [selectedSource, phoneStreaming, omiStreamer]);
 
   // Load saved data on mount
   useEffect(() => {
@@ -458,7 +493,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     }
   }, [connectedDeviceId, omiConnectionStatus, getBatteryLevel]);
 
-  // Track streaming start time
+  // Track streaming start time, and clear transcript when stream ends
   useEffect(() => {
     if (isStreaming && !streamingStartTime.current) {
       streamingStartTime.current = new Date();
@@ -466,6 +501,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     } else if (!isStreaming && streamingStartTime.current) {
       streamingStartTime.current = null;
       setStartTime(undefined);
+      setLiveTranscript('');
+      setIsTranscriptFinal(false);
     }
   }, [isStreaming]);
 
@@ -558,23 +595,28 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       } else {
         omiShouldBeStreamingRef.current = false;
         omiStreamUrlRef.current = null;
-        await stopAudioListener();
+        stopAudioListener().catch(() => {});
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
-        // Deactivate audio keepalive
+        // Stop audio session keepalive
         if (omiAudioKeepaliveRef.current) {
           omiAudioKeepaliveRef.current = false;
-          Audio.setAudioModeAsync({
-            allowsRecordingIOS: false, playsInSilentModeIOS: false, staysActiveInBackground: false,
-          }).catch(() => {});
+          stopKeepaliveRecording().catch(() => {});
         }
       }
     }
 
     setSelectedSource(source);
 
-    // Auto-connect to OMI device when selected
-    if (source.type === 'omi' && connectedDeviceId !== source.deviceId) {
+    if (source.type === 'microphone') {
+      // Disconnect any stale OMI BLE connection when switching to phone mic.
+      // A lingering BLE connection fires disconnect events when the device sleeps/drifts,
+      // which can interfere with expo-audio-studio's AVAudioSession.
+      if (connectedDeviceId) {
+        disconnectOmiDevice().catch(() => {});
+      }
+    } else if (source.type === 'omi' && connectedDeviceId !== source.deviceId) {
+      // Auto-connect to OMI device when selected
       try {
         await connectOmiDevice(source.deviceId);
       } catch (err) {
@@ -589,6 +631,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     omiStreamer,
     connectedDeviceId,
     connectOmiDevice,
+    disconnectOmiDevice,
   ]);
 
   // Handle destination change
@@ -636,6 +679,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
 
     try {
       if (selectedSource.type === 'microphone') {
+        // Ensure any stale OMI BLE connection is gone before starting mic recording.
+        // BLE disconnect events during mic streaming can interrupt AVAudioSession.
+        if (connectedDeviceId) {
+          disconnectOmiDevice().catch(() => {});
+        }
         // Phone microphone uses PCM
         await phoneStreaming.startStreaming(streamUrl, 'streaming', 'pcm');
       } else {
@@ -649,27 +697,22 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         const codec = 'opus';
         console.log('[UnifiedStreaming] OMI device - using Opus codec');
 
-        // Store URL for foreground reconnection
+        // Store refs for foreground reconnection
         omiStreamUrlRef.current = streamUrl;
         omiShouldBeStreamingRef.current = true;
+        omiDeviceIdRef.current = selectedSource.deviceId ?? null;
 
-        // Activate iOS audio session keepalive for background persistence.
-        // Without an active audio session, iOS suspends the app much faster
-        // and BLE notifications stop being delivered.
-        if (Platform.OS === 'ios' && !omiAudioKeepaliveRef.current) {
+        // Start a real audio session keepalive for background persistence.
+        // expo-audio-studio opens an active AVAudioEngine recording session which
+        // engages the 'audio' UIBackgroundMode, preventing iOS from killing the process.
+        // Without actual audio I/O, iOS terminates after ~1 min regardless of config.
+        if (!omiAudioKeepaliveRef.current) {
           try {
-            await Audio.setAudioModeAsync({
-              allowsRecordingIOS: true,
-              playsInSilentModeIOS: true,
-              staysActiveInBackground: true,
-              interruptionModeIOS: 2, // DoNotMix
-              shouldDuckAndroid: false,
-              playThroughEarpieceAndroid: false,
-            });
+            await startKeepaliveRecording(() => { /* discard — keepalive only */ });
             omiAudioKeepaliveRef.current = true;
-            console.log('[UnifiedStreaming] OMI: iOS audio session keepalive activated');
+            console.log('[UnifiedStreaming] OMI: audio session keepalive started');
           } catch (audioErr) {
-            console.warn('[UnifiedStreaming] OMI: Failed to activate audio keepalive:', audioErr);
+            console.warn('[UnifiedStreaming] OMI: Failed to start audio keepalive:', audioErr);
             // Continue anyway — streaming may still work in foreground
           }
         }
@@ -677,14 +720,24 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         // Start WebSocket with codec
         await omiStreamer.startStreaming(streamUrl, 'streaming', codec);
 
-        // Start OMI audio listener
-        await startAudioListener(async (audioBytes: Uint8Array) => {
+        // Store the audio callback so the foreground reconnect can restart the listener
+        const omiAudioCb = async (audioBytes: Uint8Array) => {
           if (audioBytes.length > 0) {
             await omiStreamer.sendAudio(audioBytes);
           }
-        });
+        };
+        omiAudioCallbackRef.current = omiAudioCb;
+
+        // Start OMI audio listener
+        await startAudioListener(omiAudioCb);
 
         omiLiveActivity.startActivity(selectedSource.deviceName ?? 'OMI Device');
+
+        // Register background task to keep JS thread alive (same as phone mic path)
+        registerBackgroundTask(60).catch(err =>
+          console.warn('[UnifiedStreaming] OMI: Background task registration failed:', err)
+        );
+        updateConnectionState({ isConnected: true, isStreaming: true, source: 'omi' }).catch(() => {});
       }
     } catch (err) {
       const errorMessage = (err as Error).message || 'Failed to start streaming';
@@ -702,9 +755,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       omiStreamUrlRef.current = null;
       if (omiAudioKeepaliveRef.current) {
         omiAudioKeepaliveRef.current = false;
-        Audio.setAudioModeAsync({
-          allowsRecordingIOS: false, playsInSilentModeIOS: false, staysActiveInBackground: false,
-        }).catch(() => {});
+        stopKeepaliveRecording().catch(() => {});
       }
     }
   }, [
@@ -713,8 +764,11 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     phoneStreaming,
     connectedDeviceId,
     connectOmiDevice,
+    disconnectOmiDevice,
     omiStreamer,
     startAudioListener,
+    startKeepaliveRecording,
+    stopKeepaliveRecording,
     onSessionStart,
     getCurrentDiagnostics,
     onSessionEnd,
@@ -731,19 +785,24 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       } else {
         omiShouldBeStreamingRef.current = false;
         omiStreamUrlRef.current = null;
-        await stopAudioListener();
+        omiDeviceIdRef.current = null;
+        omiAudioCallbackRef.current = null;
+        // Fire-and-forget — stopAudioListener updates JS state synchronously now;
+        // the underlying BLE call may be slow or hang if BLE dropped already.
+        stopAudioListener().catch(() => {});
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
+        // Disconnect BLE — clears isOmiConnecting so UI doesn't stay stuck in "Connecting..."
+        disconnectOmiDevice().catch(() => {});
+        // Unregister background task and clear connection state
+        unregisterBackgroundTask().catch(() => {});
+        updateConnectionState({ isConnected: false, isStreaming: false }).catch(() => {});
 
-        // Deactivate iOS audio session keepalive
+        // Stop audio session keepalive
         if (omiAudioKeepaliveRef.current) {
           omiAudioKeepaliveRef.current = false;
-          Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: false,
-            staysActiveInBackground: false,
-          }).catch(() => {});
-          console.log('[UnifiedStreaming] OMI: iOS audio session keepalive deactivated');
+          stopKeepaliveRecording().catch(() => {});
+          console.log('[UnifiedStreaming] OMI: audio session keepalive stopped');
         }
       }
 
@@ -762,7 +821,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         currentSessionIdRef.current = null;
       }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, onSessionEnd, getCurrentDiagnostics]);
+  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, disconnectOmiDevice, stopKeepaliveRecording, onSessionEnd, getCurrentDiagnostics]);
+
+  // Cancel = full stop. Must be defined after handleStopStreaming (no forward references).
+  const handleCancelRetry = handleStopStreaming;
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {
@@ -904,6 +966,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
             startTime={startTime}
             sourceType={selectedSource.type === 'microphone' ? 'microphone' : 'omi'}
             onStopPress={handleStopStreaming}
+            liveTranscript={liveTranscript}
+            isTranscriptFinal={isTranscriptFinal}
+            waveformData={waveformData}
             testID={`${testID}-display`}
           >
             {/* Compact start button overlaid on waveform */}
@@ -920,11 +985,15 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
             )}
           </StreamingDisplay>
 
-          {/* Retry controls if retrying */}
-          {isRetrying && (
+          {/* Cancel button — shown while connecting OR retrying.
+              isConnecting covers the BLE mid-handshake case where the UI shows
+              "Connecting..." but there's no other way to abort. */}
+          {(isConnecting || isRetrying) && !isStreaming && (
             <View style={styles.retryContainer}>
               <Text style={styles.retryText}>
-                Retrying... ({retryCount}/{maxRetries})
+                {isRetrying
+                  ? `Retrying... (${retryCount}/${maxRetries})`
+                  : 'Connecting...'}
               </Text>
               <TouchableOpacity
                 style={styles.cancelRetryButton}

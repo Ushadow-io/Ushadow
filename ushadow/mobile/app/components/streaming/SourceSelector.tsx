@@ -78,7 +78,7 @@ export const SourceSelector: React.FC<SourceSelectorProps> = ({
     if (level < 0) return 'battery-dead-outline';
     if (level <= 20) return 'battery-dead';
     if (level <= 50) return 'battery-half';
-    if (level <= 80) return 'battery-three-quarters';
+    if (level <= 80) return 'battery-half';
     return 'battery-full';
   };
 
