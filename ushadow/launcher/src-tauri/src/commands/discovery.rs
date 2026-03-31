@@ -14,7 +14,7 @@ const INFRA_PATTERNS: &[(&str, &str)] = &[
     ("redis", "Redis"),
     ("neo4j", "Neo4j"),
     ("qdrant", "Qdrant"),
-    ("keycloak", "Keycloak"),
+    ("casdoor", "Casdoor"),
     ("ollama", "Ollama"),
 ];
 
@@ -26,7 +26,7 @@ fn get_display_name(service_name: &str) -> String {
         "redis"               => "Redis",
         "neo4j"               => "Neo4j",
         "qdrant"              => "Qdrant",
-        "keycloak"            => "Keycloak",
+        "casdoor"             => "Casdoor",
         "ollama"              => "Ollama",
         "mysql"               => "MySQL",
         "elasticsearch"       => "Elasticsearch",

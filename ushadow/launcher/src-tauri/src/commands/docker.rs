@@ -894,7 +894,7 @@ pub fn get_infra_services_from_compose(state: State<AppState>) -> Result<Vec<Inf
         ("kafka", "Kafka"),
         ("qdrant", "Qdrant"),
         ("neo4j", "Neo4j"),
-        ("keycloak", "Keycloak"),
+        ("casdoor", "Casdoor"),
         ("ollama", "Ollama"),
     ].iter().copied().collect();
 

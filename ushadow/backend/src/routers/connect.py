@@ -49,10 +49,10 @@ async def get_connection_info(
     to authenticate and access the API.
     """
     from src.utils.environment import is_kubernetes
-    from src.config.keycloak_settings import get_keycloak_config
+    from src.config.casdoor_settings import get_casdoor_config
 
-    kc_config = get_keycloak_config()
-    realm = kc_config.get("realm", "ushadow")
+    casdoor_config = get_casdoor_config()
+    realm = casdoor_config.get("organization", "ushadow")
 
     if target_id:
         return await _connection_info_for_target(target_id, realm)
@@ -60,16 +60,15 @@ async def get_connection_info(
     if is_kubernetes():
         return _connection_info_k8s(realm)
 
-    return await _connection_info_docker(realm)
+    return await _connection_info_docker(realm, casdoor_config["public_url"])
 
 
 # ── Platform handlers ────────────────────────────────────────────────────────
 
-async def _connection_info_docker(realm: str) -> ConnectionInfo:
+async def _connection_info_docker(realm: str, auth_url: str) -> ConnectionInfo:
     """Connection info for a private Docker/unode deployment."""
     from src.services.unode_manager import get_unode_manager
     from src.models.unode import UNodeRole
-    from src.config.keycloak_settings import get_keycloak_mobile_url
     from src.utils.tailscale_serve import get_tailscale_status
 
     unode_manager = await get_unode_manager()
@@ -92,7 +91,7 @@ async def _connection_info_docker(realm: str) -> ConnectionInfo:
 
     return ConnectionInfo(
         api_url=api_url,
-        keycloak_mobile_url=get_keycloak_mobile_url(leader.tailscale_ip),
+        keycloak_mobile_url=auth_url,
         realm=realm,
         mobile_client_id="ushadow-mobile",
         platform="docker",
@@ -164,7 +163,7 @@ async def _connection_info_for_target(target_id: str, realm: str) -> ConnectionI
         return _connection_info_public_unode(target, realm)
 
     # Standard remote Docker unode — use its Tailscale IP
-    from src.config.keycloak_settings import get_keycloak_mobile_url
+    from src.config.casdoor_settings import get_casdoor_config
 
     tailscale_ip = target.raw_metadata.get("tailscale_ip")
     if not tailscale_ip:
@@ -174,9 +173,10 @@ async def _connection_info_for_target(target_id: str, realm: str) -> ConnectionI
         )
 
     api_url = target.raw_metadata.get("public_url") or f"http://{tailscale_ip}:8000"
+    auth_url = get_casdoor_config()["public_url"]
     return ConnectionInfo(
         api_url=api_url,
-        keycloak_mobile_url=get_keycloak_mobile_url(tailscale_ip),
+        keycloak_mobile_url=auth_url,
         realm=realm,
         mobile_client_id="ushadow-mobile",
         platform="docker",

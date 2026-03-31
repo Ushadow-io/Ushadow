@@ -43,8 +43,12 @@ release-test:
 		-f release_name="Test Build - $$PLATFORM" && \
 	echo "✓ Workflow dispatched! Check: https://github.com/$$(git remote get-url origin | sed 's/.*://;s/.git//')/actions"
 
+# Install dependencies if needed
+node_modules: package.json package-lock.json
+	npm install
+
 # Development
-dev:
+dev: node_modules
 	npm run tauri:dev
 
 # Build frontend only (for quick iterations)

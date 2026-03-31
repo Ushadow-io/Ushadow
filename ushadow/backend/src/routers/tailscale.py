@@ -680,7 +680,6 @@ async def get_mobile_connection_qr(
     import qrcode
     from urllib.parse import urlparse
     from src.utils.environment import is_kubernetes
-    from src.utils.auth_helpers import get_user_id, get_user_email
 
     try:
         config = get_settings()

@@ -1296,6 +1296,13 @@ class DeploymentManager:
                 raw_metadata=unode.model_dump()
             )
 
+            # In K8s the local leader is a pod — no Docker socket available.
+            # K8s deployments are queried via the cluster scan below.
+            from src.utils.environment import is_kubernetes
+            if is_kubernetes() and is_leader and target.type != "k8s":
+                logger.debug(f"[list_deployments] Skipping Docker platform for K8s leader unode {unode.hostname}")
+                continue
+
             # Query platform for deployments
             platform = get_deploy_platform(target)
             deployments = await platform.list_deployments(target, service_id=service_id)

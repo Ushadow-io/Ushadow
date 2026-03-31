@@ -2,7 +2,7 @@
 ///
 /// Implements the standard OAuth flow for desktop apps:
 /// 1. Start temporary HTTP server on random port
-/// 2. Register http://localhost:PORT/callback with Keycloak
+/// 2. Register http://localhost:PORT/callback with Casdoor
 /// 3. Open system browser for login
 /// 4. Catch redirect, exchange code for tokens
 /// 5. Shut down server
