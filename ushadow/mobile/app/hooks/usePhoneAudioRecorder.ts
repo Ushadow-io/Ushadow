@@ -181,6 +181,16 @@ export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
       if (isRecording) {
         stopRecorderInternal().catch(() => {});
       }
+
+      // Deactivate iOS audio session on unmount to dismiss recording indicator
+      Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: false,
+        staysActiveInBackground: false,
+        interruptionModeIOS: 0,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
