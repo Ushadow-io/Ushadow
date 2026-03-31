@@ -1,13 +1,8 @@
 # LLM Capability Providers
 # Implements the 'llm' capability defined in capabilities.yaml
 #
-# Each provider specifies:
-#   - credentials: Values for the capability + env_var name to expose
-#   - mode: cloud or local
-#   - docker: Container config (for local providers)
-#
-# Services get the provider's env vars directly. Only need env_mapping to override.
-# Default provider selection is in config.defaults.yaml under `selected_providers`
+# Credentials are stored in settings at: llm.{provider_id}.{key}
+# e.g. llm.openai.api_key, llm.ollama.base_url
 
 capability: llm
 
@@ -15,7 +10,7 @@ providers:
   # ==========================================================================
   # OpenAI - Cloud LLM
   # ==========================================================================
-  - id: openai
+  - id: openai-net
     name: "OpenAI"
     description: "OpenAI GPT models (GPT-4, GPT-4o, etc.)"
     mode: cloud
@@ -43,7 +38,7 @@ providers:
   # ==========================================================================
   # Anthropic - Cloud LLM
   # ==========================================================================
-  - id: anthropic
+  - id: anthropic-net
     name: "Anthropic"
     description: "Claude models from Anthropic"
     mode: cloud
@@ -70,7 +65,7 @@ providers:
   # ==========================================================================
   # Ollama - Local LLM
   # ==========================================================================
-  - id: ollama
+  - id: ollama-net
     name: "Ollama"
     description: "Local LLM server - runs models on your machine"
     mode: local
@@ -98,6 +93,7 @@ providers:
         env_var: OLLAMA_BASE_URL
         label: "Ollama URL"
         required: true
+        default: "http://ollama:11434"
       model:
         env_var: OLLAMA_MODEL
         label: "Model"
@@ -110,7 +106,7 @@ providers:
   # ==========================================================================
   # OpenAI-Compatible (Custom) - For local servers with OpenAI API
   # ==========================================================================
-  - id: openai-compatible
+  - id: openai-compatible-net
     name: "OpenAI-Compatible Server"
     description: "Any server with OpenAI-compatible API (vLLM, LMStudio, etc.)"
     mode: local

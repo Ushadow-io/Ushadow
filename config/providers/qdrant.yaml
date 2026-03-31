@@ -1,0 +1,96 @@
+# Qdrant Capability Providers
+# Implements the 'qdrant' capability defined in capabilities.yaml
+#
+# Credentials are stored in settings at: qdrant.{provider_id}.{key}
+# e.g. qdrant.docker.url, qdrant.cloud.api_key
+
+capability: qdrant
+
+providers:
+  # ==========================================================================
+  # Docker Qdrant - Local Vector Database
+  # ==========================================================================
+  - id: docker
+    name: "Qdrant (Docker)"
+    description: "Qdrant vector database running in Docker"
+    mode: local
+
+    docker:
+      image: qdrant/qdrant:latest
+      compose_file: compose/docker-compose.infra.yml
+      service_name: qdrant
+      container_name: qdrant
+      profiles: ["memory", "qdrant", "infra"]
+      ports:
+        - host: 6333
+          container: 6333
+          protocol: http
+        - host: 6334
+          container: 6334
+          protocol: grpc
+      volumes:
+        - name: qdrant_data
+          path: /qdrant/storage
+          persistent: true
+      health:
+        http_get: /health
+        port: 6333
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
+      networks:
+        - ushadow-network
+        - infra-network
+
+    credentials:
+      url:
+        env_var: QDRANT_URL
+        default: "http://qdrant:6333"
+      host:
+        env_var: QDRANT_HOST
+        default: "qdrant"
+      port:
+        env_var: QDRANT_PORT
+        default: "6333"
+      grpc_port:
+        env_var: QDRANT_GRPC_PORT
+        default: "6334"
+
+    ui:
+      icon: qdrant
+      tags: ["infrastructure", "vector", "embeddings", "search"]
+
+  # ==========================================================================
+  # Qdrant Cloud - Managed
+  # ==========================================================================
+  - id: cloud
+    name: "Qdrant Cloud"
+    description: "Managed Qdrant cluster"
+    mode: cloud
+
+    credentials:
+      url:
+        env_var: QDRANT_URL
+        label: "Qdrant Cloud URL"
+        required: true
+      host:
+        env_var: QDRANT_HOST
+        label: "Qdrant Host"
+      port:
+        env_var: QDRANT_PORT
+        default: "6333"
+      grpc_port:
+        env_var: QDRANT_GRPC_PORT
+        default: "6334"
+
+    config:
+      api_key:
+        env_var: QDRANT_API_KEY
+        label: "Qdrant Cloud API Key"
+        type: secret
+        required: true
+
+    ui:
+      icon: cloud-search
+      tags: ["infrastructure", "vector", "cloud", "managed"]

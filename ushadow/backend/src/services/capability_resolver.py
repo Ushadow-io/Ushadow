@@ -36,6 +36,40 @@ class CapabilityResolver:
         self._settings = get_settings()
         self._services_cache: Dict[str, dict] = {}
 
+    async def resolve_capabilities(
+        self,
+        requires: List[str],
+        capability_env_mappings: Dict[str, Dict[str, str]],
+        consumer_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """
+        Resolve capability env vars using explicit mappings from x-ushadow header.
+
+        This is the preferred entry point for the settings module — it already has
+        the service's capability_env_mappings, so we don't re-discover them.
+
+        Args:
+            requires: Capabilities the service needs (e.g. ["llm", "transcription"])
+            capability_env_mappings: From x-ushadow: {capability -> {canonical_key -> env_var}}
+            consumer_id: Optional service ID for wiring lookup
+
+        Returns:
+            Dict of ENV_VAR_NAME -> value (e.g. {"TRANSCRIPTION_MODEL": "Systran/..."})
+        """
+        env: Dict[str, str] = {}
+        for capability in requires:
+            use = {
+                'capability': capability,
+                'required': False,  # Best-effort: don't let one missing cap block others
+                'env_mapping': capability_env_mappings.get(capability, {}),
+            }
+            try:
+                vals = await self._resolve_capability(use, consumer_id)
+                env.update(vals)
+            except ValueError as e:
+                logger.debug(f"Could not resolve {capability} for {consumer_id}: {e}")
+        return env
+
     async def resolve_for_service(self, service_id: str) -> Dict[str, str]:
         """
         Resolve all env vars for a service.
@@ -241,41 +275,49 @@ class CapabilityResolver:
 
         # Get the selected provider for this capability
         provider, provider_config = await self._get_selected_provider(capability, consumer_config_id)
+        print(f"[capability_resolver] {capability} → {provider.id if provider else None} (consumer={consumer_config_id}, instance={provider_config.id if provider_config else None})")
         if not provider:
             raise ValueError(
                 f"No provider selected for capability '{capability}'. "
                 f"Run the wizard or set selected_providers.{capability} in settings."
             )
 
+        # Look up canonical env var names from capability contract
+        cap_def = self._provider_registry.get_capability(capability)
+        cap_provides = cap_def.provides if cap_def else {}
+
         # Resolve each env mapping the provider offers
         env: Dict[str, EnvVarValue] = {}
 
         for env_map in provider.env_maps:
-            # Resolve with source tracking
-            result = await self._resolve_env_map_with_source(env_map, provider_config)
+            derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+            result = await self._resolve_env_map_with_source(env_map, provider_config, settings_path=derived_path)
 
             if result is None:
                 if env_map.required:
                     raise ValueError(
                         f"Provider '{provider.id}' requires {env_map.key} but it's not configured. "
-                        f"Set {env_map.settings_path or env_map.key} in settings."
+                        f"Set {derived_path} in settings."
                     )
                 continue
 
             value, source, source_path = result
 
             provider_env = env_map.env_var or env_map.key.upper()
-            service_env = (
-                env_mapping.get(env_map.key)
-                or env_mapping.get(provider_env)
-                or provider_env
-            )
+            cap_key = cap_provides.get(env_map.key)
+            canonical_env = cap_key.env[0] if (cap_key and cap_key.env) else None
 
-            env[service_env] = EnvVarValue(
-                value=value,
-                source=source,
-                source_path=source_path
-            )
+            explicit_mapping = env_mapping.get(env_map.key) or env_mapping.get(provider_env)
+            service_env = explicit_mapping or canonical_env or provider_env
+
+            env_val = EnvVarValue(value=value, source=source, source_path=source_path)
+            env[service_env] = env_val
+
+            # When no explicit mapping is declared and we used the canonical name,
+            # also inject under the provider's own env_var name so services that
+            # use provider-specific names get Source.CAPABILITY marking too.
+            if not explicit_mapping and canonical_env and provider_env != canonical_env:
+                env.setdefault(provider_env, env_val)
 
             logger.debug(
                 f"Resolved {capability}.{env_map.key}: "
@@ -313,8 +355,8 @@ class CapabilityResolver:
                 errors.append(str(e))
 
         if errors:
-            raise ValueError(
-                f"Service '{service_id}' has unresolved capabilities:\n"
+            logger.warning(
+                f"Service '{service_id}' has unresolved capabilities (returning partial):\n"
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
@@ -341,39 +383,54 @@ class CapabilityResolver:
 
         # Get the selected provider for this capability (and instance if applicable)
         provider, provider_config = await self._get_selected_provider(capability, consumer_config_id)
+        print(f"[capability_resolver] {capability} → {provider.id if provider else None} (consumer={consumer_config_id}, instance={provider_config.id if provider_config else None})")
         if not provider:
             raise ValueError(
                 f"No provider selected for capability '{capability}'. "
                 f"Run the wizard or set selected_providers.{capability} in settings."
             )
 
+        # Look up canonical env var names from capability contract
+        cap_def = self._provider_registry.get_capability(capability)
+        cap_provides = cap_def.provides if cap_def else {}
+
         # Resolve each env mapping the provider offers
         env: Dict[str, str] = {}
 
         for env_map in provider.env_maps:
-            # Pass provider_config so we can check instance-specific config overrides
-            value = await self._resolve_env_map(env_map, provider_config)
+            # Auto-derive settings path: {capability}.{provider_id}.{key}
+            derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+            value = await self._resolve_env_map(env_map, provider_config, settings_path=derived_path)
 
             if value is None:
                 if env_map.required:
                     raise ValueError(
                         f"Provider '{provider.id}' requires {env_map.key} but it's not configured. "
-                        f"Set {env_map.settings_path or env_map.key} in settings."
+                        f"Set {derived_path} in settings."
                     )
                 continue
 
-            # Resolve service env var name.
-            # env_mapping may use canonical keys (e.g. server_url -> TRANSCRIPTION_BASE_URL)
-            # or provider env_var names (e.g. OPENAI_BASE_URL -> TRANSCRIPTION_BASE_URL).
-            # Check canonical key first, then provider env_var, then fall back to provider env_var.
+            # Resolve the env var name to inject into the consumer:
+            # 1. Explicit mapping from consumer's x-ushadow capability_env_mappings
+            # 2. Capability's canonical env var (first in env list)
+            # 3. Provider's own env_var as fallback
             provider_env = env_map.env_var or env_map.key.upper()
-            service_env = (
-                env_mapping.get(env_map.key)
-                or env_mapping.get(provider_env)
-                or provider_env
-            )
+            cap_key = cap_provides.get(env_map.key)
+            canonical_env = cap_key.env[0] if (cap_key and cap_key.env) else None
+
+            explicit_mapping = env_mapping.get(env_map.key) or env_mapping.get(provider_env)
+            service_env = explicit_mapping or canonical_env or provider_env
 
             env[service_env] = str(value)
+
+            # When no explicit mapping is declared and we used the canonical name,
+            # also inject under the provider's own env_var name so that services
+            # using provider-specific names (e.g. OPENAI_API_KEY instead of
+            # LLM_API_KEY) are resolved via Source.CAPABILITY rather than falling
+            # through to the config-default path.
+            if not explicit_mapping and canonical_env and provider_env != canonical_env:
+                env.setdefault(provider_env, str(value))
+
             logger.debug(
                 f"Resolved {capability}.{env_map.key}: "
                 f"{provider_env} -> {service_env} = ***"
@@ -478,6 +535,18 @@ class CapabilityResolver:
                 from src.services.service_config_manager import get_service_config_manager
                 provider_config = get_service_config_manager().get_service_config_by_template(provider.id)
                 return provider, provider_config
+
+            # Fallback: selected value may be a compose service ID (e.g. "faster-whisper")
+            # that links to a YAML provider via provider_id
+            compose_provider = self._get_provider_for_compose_service(selected)
+            if compose_provider:
+                logger.info(
+                    f"Using compose service '{selected}' backed by YAML provider "
+                    f"'{compose_provider.id}' for {capability}"
+                )
+                return compose_provider, None
+
+
             logger.warning(f"Selected provider '{selected}' not found for {capability}")
 
         # 3. Fall back to default based on wizard mode
@@ -496,24 +565,23 @@ class CapabilityResolver:
 
         return None, None
 
-    async def _resolve_env_map(self, env_map, provider_config=None) -> Optional[str]:
+    async def _resolve_env_map(self, env_map, provider_config=None, settings_path: Optional[str] = None) -> Optional[str]:
         """
         Resolve an env mapping to its actual value.
 
         Priority:
         1. ServiceConfig-specific config override (if provider_config provided)
-        2. Settings path lookup (global config)
+        2. Settings path lookup — auto-derived as {capability}.{provider_id}.{key}
         3. Default value (provider's default)
 
         Args:
             env_map: The environment map to resolve
             provider_config: Optional instance with config overrides
+            settings_path: Derived settings path (e.g. "transcription.deepgram.api_key")
         """
         # 1. Check instance-specific config override first
         if provider_config and hasattr(provider_config, 'config'):
-            # instance.config is a Pydantic ConfigValues model with values dict
             config_values = provider_config.config.values if provider_config.config else {}
-            # The key in instance config matches the env_map.key (e.g., 'api_key')
             if env_map.key in config_values:
                 value = config_values[env_map.key]
                 if value:
@@ -523,15 +591,30 @@ class CapabilityResolver:
                     )
                     return str(value)
 
-        # 2. Try settings path (global config)
-        if env_map.settings_path:
-            value = await self._settings.get(env_map.settings_path)
+        # 2. Try auto-derived settings path
+        path = settings_path
+        if path:
+            value = await self._settings.get(path)
             if value:
                 logger.info(
                     f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, str(value))} "
-                    f"(from global settings: {env_map.settings_path})"
+                    f"(from settings: {path})"
                 )
                 return str(value)
+
+        # 2b. Fallback: fuzzy-match the provider env var name across all settings.
+        #     Handles migration where keys were stored under old wizard paths
+        #     (e.g. api_keys.openai_api_key) rather than the derived path.
+        env_var_name = env_map.env_var or env_map.key.upper()
+        setting_result = await self._settings.find_value_for_env_var(env_var_name)
+        if setting_result:
+            fallback_path, fallback_value = setting_result
+            if fallback_value:
+                logger.info(
+                    f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, str(fallback_value))} "
+                    f"(from settings fallback: {fallback_path})"
+                )
+                return str(fallback_value)
 
         # 3. Fall back to provider's default
         if env_map.default is not None:
@@ -543,7 +626,7 @@ class CapabilityResolver:
 
         return None
 
-    async def _resolve_env_map_with_source(self, env_map, provider_config=None) -> Optional[tuple[str, str, Optional[str]]]:
+    async def _resolve_env_map_with_source(self, env_map, provider_config=None, settings_path: Optional[str] = None) -> Optional[tuple[str, str, Optional[str]]]:
         """
         Resolve an env mapping to its actual value WITH source tracking.
 
@@ -567,15 +650,30 @@ class CapabilityResolver:
                     )
                     return (str(value), EnvVarSource.OVERRIDE.value, provider_config.id)
 
-        # 2. Try settings path (global config)
-        if env_map.settings_path:
-            value = await self._settings.get(env_map.settings_path)
+        # 2. Try auto-derived settings path
+        path = settings_path
+        if path:
+            value = await self._settings.get(path)
             if value:
                 logger.info(
                     f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, str(value))} "
-                    f"(from global settings: {env_map.settings_path})"
+                    f"(from settings: {path})"
                 )
-                return (str(value), EnvVarSource.SETTINGS.value, env_map.settings_path)
+                return (str(value), EnvVarSource.SETTINGS.value, path)
+
+        # 2b. Fallback: fuzzy-match the provider env var name across all settings.
+        #     Handles migration where keys were stored under old wizard paths
+        #     (e.g. api_keys.openai_api_key) rather than the derived path.
+        env_var_name = env_map.env_var or env_map.key.upper()
+        setting_result = await self._settings.find_value_for_env_var(env_var_name)
+        if setting_result:
+            fallback_path, fallback_value = setting_result
+            if fallback_value:
+                logger.info(
+                    f"[Capability Resolver] {env_map.key} -> {mask_if_secret(env_map.key, str(fallback_value))} "
+                    f"(from settings fallback: {fallback_path})"
+                )
+                return (str(fallback_value), EnvVarSource.SETTINGS.value, fallback_path)
 
         # 3. Fall back to provider's default
         if env_map.default is not None:
@@ -728,14 +826,15 @@ class CapabilityResolver:
                 if not env_map.required:
                     continue
 
-                value = await self._resolve_env_map(env_map)
+                derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+                value = await self._resolve_env_map(env_map, settings_path=derived_path)
                 if not value:
                     if required:
                         missing_keys.append({
                             "capability": capability,
                             "provider": provider.id,
                             "key": env_map.key,
-                            "settings_path": env_map.settings_path,
+                            "settings_path": derived_path,
                             "link": env_map.link,
                             "label": env_map.label or env_map.key
                         })
@@ -807,12 +906,13 @@ class CapabilityResolver:
                     if not env_map.required:
                         continue
 
-                    value = await self._resolve_env_map(env_map)
+                    derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+                    value = await self._resolve_env_map(env_map, settings_path=derived_path)
                     if not value:
                         missing_keys.append({
                             "key": env_map.key,
                             "label": env_map.label or env_map.key,
-                            "settings_path": env_map.settings_path,
+                            "settings_path": derived_path,
                             "link": env_map.link,
                             "type": env_map.type or "secret"
                         })

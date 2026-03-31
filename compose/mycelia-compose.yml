@@ -26,13 +26,17 @@ x-ushadow:
     display_name: "Mycelia"
     description: "Self-hosted AI memory and timeline - capture ideas via voice, screenshots, or text"
     requires: ["llm", "transcription"]
-    capability_env_mappings:
-      transcription:
-        server_url: TRANSCRIPTION_BASE_URL
-        api_key: TRANSCRIPTION_API_KEY
-        model: TRANSCRIPTION_MODEL
     provides: memory  # Primary capability (timeline, transcription are secondary)
     tags: ["ai", "memory", "voice", "transcription", "timeline"]
+    capability_env_mappings:
+      llm:
+        api_key: OPENAI_API_KEY
+        base_url: OPENAI_BASE_URL
+        model: OPENAI_MODEL
+      transcription:
+        api_key: TRANSCRIPTION_API_KEY
+        server_url: TRANSCRIPTION_BASE_URL
+        model: TRANSCRIPTION_MODEL
     exposes:
       - name: audio_intake
         type: audio
@@ -88,7 +92,7 @@ services:
       context: ${PROJECT_ROOT:-..}/mycelia
       dockerfile: ./backend/Dockerfile
     pull_policy: missing
-    command: deno run -A server.ts serve
+    command: deno run -A server.ts serve --port 5173
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-mycelia-backend
     ports:
       - "${MYCELIA_BACKEND_PORT:-5173}:5173"
@@ -103,17 +107,16 @@ services:
       - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-none}
       - SECRET_KEY=${AUTH_SECRET_KEY:-}
 
-      # MongoDB Configuration (component-based)
+      # MongoDB - component vars; MONGO_URL is computed by ushadow from these.
+      # Set MONGO_URL explicitly in your .env to override the computed value.
       - MONGODB_HOST=${MONGODB_HOST:-mongo}
       - MONGODB_PORT=${MONGODB_PORT:-27017}
       - MONGODB_USER=${MONGODB_USER:-}
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:-}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-mycelia}
+      - MONGODB_DATABASE=${MYCELIA_DATABASE_NAME:-mycelia}
       - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
-      # Database name (Mycelia uses DATABASE_NAME)
+      - MONGODB_REPLICA_SET=${MONGODB_REPLICA_SET:-rs0}
       - DATABASE_NAME=${MYCELIA_DATABASE_NAME:-mycelia}
-      # Constructed URI - set MONGO_URL directly or it will be built from components
-      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017/mycelia}
 
       # Redis Configuration - uses shared redis from infra
       - REDIS_HOST=redis

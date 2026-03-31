@@ -87,6 +87,7 @@ export const useWebRecording = (): WebRecordingReturn => {
   // Destination selection state
   const [availableDestinations, setAvailableDestinations] = useState<ExposedUrl[]>([])
   const [selectedDestinationIds, setSelectedDestinationIds] = useState<string[]>([])
+  const destinationsFetchedRef = useRef(false)
 
   // Audio device selection state
   const [availableAudioDevices, setAvailableAudioDevices] = useState<MediaDeviceInfo[]>([])
@@ -111,8 +112,10 @@ export const useWebRecording = (): WebRecordingReturn => {
   const capabilities = typeof window !== 'undefined' ? getBrowserCapabilities() : { hasGetDisplayMedia: false }
   const canAccessDualStream = canAccessMicrophone && capabilities.hasGetDisplayMedia
 
-  // Fetch available destinations on mount
+  // Fetch available destinations on mount (ref guard prevents StrictMode double-fetch)
   useEffect(() => {
+    if (destinationsFetchedRef.current) return
+    destinationsFetchedRef.current = true
     const fetchDestinations = async () => {
       try {
         // Filter for audio_intake endpoints on the backend

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, ReactNode, useMemo } from 'react'
 import { LucideIcon } from 'lucide-react'
 import { api } from '../services/api'
 import { getIconForLevel } from '../wizards/registry'
@@ -77,6 +77,7 @@ const initialState: WizardState = {
 
 export function WizardProvider({ children }: { children: ReactNode }) {
   const [wizardState, setWizardState] = useState<WizardState>(initialState)
+  const initializedRef = useRef(false)
 
   // Fetch state from backend
   const fetchState = () => {
@@ -96,8 +97,10 @@ export function WizardProvider({ children }: { children: ReactNode }) {
       .catch(() => {})
   }
 
-  // Load state from backend on mount
+  // Load state from backend on mount (ref guard prevents StrictMode double-fetch)
   useEffect(() => {
+    if (initializedRef.current) return
+    initializedRef.current = true
     fetchState()
   }, [])
 

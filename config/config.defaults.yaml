@@ -136,9 +136,9 @@ wizard:
 # Selected Providers per Capability
 # Services declare `uses: [{capability: llm}]` and get the selected provider's env vars.
 selected_providers:
-  llm: openai                   # openai | anthropic | ollama | openai-compatible
-  transcription: deepgram       # deepgram | mistral-voxtral | whisper-local | parakeet
-  memory: openmemory            # openmemory | cognee | mem0-cloud
+  llm: openai-net               # openai-net | anthropic-net | ollama-net | openai-compatible-net
+  transcription: deepgram-net   # deepgram-net | mistral-voxtral-net | whisper-net | parakeet-asr-compose
+  memory: openmemory-compose    # openmemory-compose | cognee-compose | mem0-cloud-net
 
 # Default Services to Install
 # These are installed by default in quickstart mode. User modifications

@@ -122,7 +122,7 @@ export function SystemOverview({
           provider: {
             id: providerId,
             name: providerName,
-            capability: wire.source_capability,
+            capability: wire.capability,
             mode: sourceTemplate.mode,
             configured: sourceTemplate.configured,
             isTemplate: !sourceConfig,
@@ -134,7 +134,7 @@ export function SystemOverview({
       usageMap.get(providerId)!.consumers.push({
         id: wire.target_config_id,
         name: targetConfig?.name || targetTemplate?.name || wire.target_config_id,
-        capability: wire.target_capability,
+        capability: wire.capability,
         status: targetConfig?.status || 'pending',
       })
     }
@@ -149,7 +149,7 @@ export function SystemOverview({
       for (const consumer of consumersToCheck) {
         for (const cap of template.requires) {
           const isWired = wiring.some(
-            w => w.target_config_id === consumer.id && w.target_capability === cap
+            w => w.target_config_id === consumer.id && w.capability === cap
           )
           if (!isWired) {
             unwired.push({

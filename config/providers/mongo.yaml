@@ -1,0 +1,104 @@
+# MongoDB Capability Providers
+# Implements the 'mongo' capability defined in capabilities.yaml
+#
+# Credentials are stored in settings at: mongo.{provider_id}.{key}
+# e.g. mongo.docker.host, mongo.atlas.host
+
+capability: mongo
+
+providers:
+  # ==========================================================================
+  # Docker MongoDB - Local MongoDB with Replica Set
+  # ==========================================================================
+  - id: docker
+    name: "MongoDB (Docker)"
+    description: "MongoDB with replica set running in Docker"
+    mode: local
+
+    docker:
+      image: mongo:8.0
+      compose_file: compose/docker-compose.infra.yml
+      service_name: mongo
+      container_name: mongo
+      profiles: ["infra"]
+      ports:
+        - host: 27017
+          container: 27017
+          protocol: tcp
+      volumes:
+        - name: mongo_data
+          path: /data/db
+          persistent: true
+      command: ["--replSet", "rs0", "--bind_ip_all"]
+      health:
+        cmd: 'mongosh --quiet --eval "try { rs.status().ok } catch(e) { 0 }"'
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 15s
+      networks:
+        - ushadow-network
+        - infra-network
+
+      # One-time init sidecar for replica set
+      init_containers:
+        - name: mongo-init
+          image: mongo:8.0
+          entrypoint: >
+            mongosh --host mongo --quiet --eval "
+              try { rs.status(); print('Replica set already initialized'); }
+              catch(e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]}); }
+            "
+
+    credentials:
+      host:
+        env_var: MONGODB_HOST
+        default: "mongo"
+      port:
+        env_var: MONGODB_PORT
+        default: "27017"
+      username:
+        env_var: MONGODB_USERNAME
+        label: "MongoDB Username"
+        required: false
+      password:
+        env_var: MONGODB_PASSWORD
+        label: "MongoDB Password"
+        type: secret
+        required: false
+
+    config:
+      database:
+        env_var: MONGODB_DATABASE
+        label: "Default Database"
+        default: "ushadow"
+      auth_source:
+        env_var: MONGODB_AUTH_SOURCE
+        label: "Auth Source"
+        default: "admin"
+
+    ui:
+      icon: mongo
+      tags: ["infrastructure", "database", "nosql", "document"]
+
+  # ==========================================================================
+  # MongoDB Atlas - Managed Cloud
+  # ==========================================================================
+  - id: atlas
+    name: "MongoDB Atlas"
+    description: "Cloud-managed MongoDB cluster"
+    mode: cloud
+
+    credentials:
+      host:
+        env_var: MONGODB_HOST
+        label: "Atlas Connection String"
+        description: "e.g. cluster0.xxxxx.mongodb.net"
+        required: true
+      port:
+        env_var: MONGODB_PORT
+        default: "27017"
+
+    ui:
+      icon: cloud-database
+      tags: ["infrastructure", "database", "nosql", "cloud", "managed"]

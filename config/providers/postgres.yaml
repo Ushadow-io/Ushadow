@@ -1,0 +1,109 @@
+# PostgreSQL Capability Providers
+# Implements the 'postgres' capability defined in capabilities.yaml
+#
+# Credentials are stored in settings at: postgres.{provider_id}.{key}
+# e.g. postgres.docker.host, postgres.cloud-sql.password
+
+capability: postgres
+
+providers:
+  # ==========================================================================
+  # Docker PostGIS - Local PostgreSQL with PostGIS
+  # ==========================================================================
+  - id: docker
+    name: "PostgreSQL (Docker)"
+    description: "PostGIS-enabled PostgreSQL running in Docker"
+    mode: local
+
+    docker:
+      image: imresamu/postgis:16-3.5-alpine
+      compose_file: compose/docker-compose.infra.yml
+      service_name: postgres
+      container_name: postgres
+      profiles: ["memory", "metamcp", "postgres", "infra"]
+      ports:
+        - host: 5432
+          container: 5432
+          protocol: tcp
+      volumes:
+        - name: postgres_data
+          path: /var/lib/postgresql/data
+          persistent: true
+      health:
+        cmd: "pg_isready -U ${POSTGRES_USER:-ushadow}"
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
+      networks:
+        - ushadow-network
+        - infra-network
+
+    credentials:
+      host:
+        env_var: POSTGRES_HOST
+        default: "postgres"
+      port:
+        env_var: POSTGRES_PORT
+        default: "5432"
+      user:
+        env_var: POSTGRES_USER
+        label: "PostgreSQL User"
+        default: "ushadow"
+        required: true
+      password:
+        env_var: POSTGRES_PASSWORD
+        label: "PostgreSQL Password"
+        type: secret
+        default: "ushadow"
+        required: true
+
+    config:
+      default_db:
+        env_var: POSTGRES_DB
+        label: "Default Database"
+        default: "ushadow"
+      multiple_databases:
+        env_var: POSTGRES_MULTIPLE_DATABASES
+        label: "Additional Databases (comma-separated)"
+        description: "Extra databases to create on first boot"
+        default: ""
+      init_scripts:
+        label: "Init Scripts Path"
+        description: "Path to SQL scripts mounted at /docker-entrypoint-initdb.d"
+        default: "config/postgres-init"
+
+    ui:
+      icon: postgres
+      tags: ["infrastructure", "database", "sql", "postgis"]
+
+  # ==========================================================================
+  # Cloud SQL / Managed PostgreSQL
+  # ==========================================================================
+  - id: managed
+    name: "Managed PostgreSQL"
+    description: "Cloud-managed PostgreSQL (AWS RDS, GCP Cloud SQL, etc.)"
+    mode: cloud
+
+    credentials:
+      host:
+        env_var: POSTGRES_HOST
+        label: "Database Host"
+        required: true
+      port:
+        env_var: POSTGRES_PORT
+        label: "Database Port"
+        default: "5432"
+      user:
+        env_var: POSTGRES_USER
+        label: "Database User"
+        required: true
+      password:
+        env_var: POSTGRES_PASSWORD
+        label: "Database Password"
+        type: secret
+        required: true
+
+    ui:
+      icon: cloud-database
+      tags: ["infrastructure", "database", "sql", "cloud", "managed"]

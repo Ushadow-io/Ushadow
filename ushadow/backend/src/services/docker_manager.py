@@ -1712,19 +1712,26 @@ class DockerManager:
             import subprocess
             try:
                 # Run docker compose build - use container path for compose file
-                # Docker compose reads from mounted /compose directory
-                # PROJECT_ROOT env var ensures build contexts resolve to host paths
+                # Docker compose reads from mounted /compose directory.
+                # IMPORTANT: Do NOT pass PROJECT_ROOT here. The compose file uses
+                # ${PROJECT_ROOT:-..}/mycelia — by unsetting PROJECT_ROOT, docker compose
+                # resolves the context as ../mycelia relative to /compose/, which maps to
+                # the /mycelia mount point inside the container. If we passed the host path
+                # (/Users/stu/repos/Ushadow), docker compose (running in-container) would
+                # try to find that path locally and fail.
                 cmd = ["docker", "compose", "-f", compose_file, "build", service_name]
-                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ with PROJECT_ROOT={project_root}")
+                logger.info(f"[BUILD] Running: {' '.join(cmd)} from cwd=/ (PROJECT_ROOT unset, using compose-relative path)")
 
-                # Use environment with PROJECT_ROOT set to host path
                 env = os.environ.copy()
-                env['PROJECT_ROOT'] = project_root
+                env.pop('PROJECT_ROOT', None)  # Let ${PROJECT_ROOT:-..} default to ../
+                # Default frontend mode to prod for image builds — dev mode uses a Vite
+                # dev server without copied source files, which produces a broken image.
+                env.setdefault('MYCELIA_FRONTEND_MODE', 'prod')
 
                 result = subprocess.run(
                     cmd,
                     cwd="/",  # Use root of container filesystem
-                    env=env,  # Use environment with PROJECT_ROOT set to host path
+                    env=env,
                     capture_output=True,
                     text=True,
                     timeout=600  # 10 minute timeout for builds

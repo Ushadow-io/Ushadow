@@ -1,5 +1,6 @@
 x-ushadow:
   faster-whisper:
+    id: faster-whisper-compose
     display_name: "Faster Whisper"
     description: "Local speech-to-text with OpenAI-compatible API"
     requires: []

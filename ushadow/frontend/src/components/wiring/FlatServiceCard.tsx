@@ -506,7 +506,7 @@ export function FlatServiceCard({
   const getProviderForCapability = useCallback(
     (capability: string): string | null => {
       const wire = wiring.find(
-        w => w.target_config_id === consumerId && w.target_capability === capability
+        w => w.target_config_id === consumerId && w.capability === capability
       )
       return wire?.source_config_id || null
     },
@@ -1087,7 +1087,7 @@ export function FlatServiceCard({
                       <div className="space-y-2 pl-3 border-l-2 border-neutral-200 dark:border-neutral-700">
                         {worker.template.requires.map((capability) => {
                           const wire = workerWiring.find(
-                            (w) => w.target_capability === capability
+                            (w) => w.capability === capability
                           )
                           const currentProviderId = wire?.source_config_id || null
 

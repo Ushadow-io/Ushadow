@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any
 import yaml
 
 from src.models.provider import (
+    CapabilityKey,
     EnvMap,
     Provider,
     Capability,
@@ -100,13 +101,17 @@ class ProviderRegistry:
                     logger.debug(f"Skipping {cap_id} - no 'provides' section")
                     continue
 
-                # Parse provides into Dict[str, str] (key -> type)
+                # Parse provides into Dict[str, CapabilityKey]
                 provides = {}
                 for key, key_data in cap_data.get('provides', {}).items():
                     if isinstance(key_data, dict):
-                        provides[key] = key_data.get('type', 'string')
+                        provides[key] = CapabilityKey(
+                            type=key_data.get('type', 'string'),
+                            description=key_data.get('description'),
+                            env=key_data.get('env', []),
+                        )
                     else:
-                        provides[key] = 'string'
+                        provides[key] = CapabilityKey(type='string')
 
                 capability = Capability(
                     id=cap_id,
@@ -167,17 +172,17 @@ class ProviderRegistry:
         # Parse credentials into EnvMap list
         env_maps = []
         for key, cred_data in data.get('credentials', {}).items():
-            # Get type from capability definition (now just a string)
-            cred_type = cap_provides.get(key, 'string')
+            # Get type from CapabilityKey (or default)
+            cap_key = cap_provides.get(key)
+            cred_type = cap_key.type if cap_key else 'string'
 
             if isinstance(cred_data, dict):
-                # Handle backward compatibility: 'value' becomes 'default'
+                # 'value' is a hardcoded default (no user-configurable path)
                 default_val = cred_data.get('default') or cred_data.get('value')
 
                 env_maps.append(EnvMap(
                     key=key,
                     env_var=cred_data.get('env_var', ''),
-                    settings_path=cred_data.get('settings_path'),
                     default=default_val,
                     type=cred_type,
                     label=cred_data.get('label'),
@@ -317,9 +322,9 @@ class ProviderRegistry:
         """
         # Hardcoded defaults (also in config.defaults.yaml)
         defaults = {
-            'llm': {'cloud': 'openai', 'local': 'ollama'},
-            'transcription': {'cloud': 'deepgram', 'local': 'whisper-local'},
-            'memory': {'cloud': 'mem0-cloud', 'local': 'openmemory'},
+            'llm': {'cloud': 'openai-net', 'local': 'ollama-net'},
+            'transcription': {'cloud': 'deepgram-net', 'local': 'whisper-net'},
+            'memory': {'cloud': 'mem0-cloud-net', 'local': 'openmemory-compose'},
             'speaker_recognition': {'cloud': None, 'local': 'pyannote'},
         }
 
@@ -356,8 +361,7 @@ class ProviderRegistry:
         """
         Build env_var -> settings_path mapping from all providers.
 
-        This replaces hardcoded mappings by deriving them from the
-        provider YAML definitions.
+        Settings paths are auto-derived as {capability}.{provider_id}.{key}.
 
         Returns:
             Dict mapping env var names to their settings paths
@@ -367,8 +371,9 @@ class ProviderRegistry:
         mapping = {}
         for provider in self._providers.values():
             for env_map in provider.env_maps:
-                if env_map.env_var and env_map.settings_path:
-                    mapping[env_map.env_var] = env_map.settings_path
+                if env_map.env_var:
+                    derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+                    mapping[env_map.env_var] = derived_path
         return mapping
 
 # Global singleton instance

@@ -9,7 +9,6 @@ Handles:
 """
 
 import logging
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -61,19 +60,16 @@ class ServiceConfigManager:
     Manages instances and wiring.
 
     ServiceConfigs are stored in config/service_configs.yaml.
-    Wiring is stored in config/wiring.yaml.
+    Wiring is stored inline on each consumer instance as wiring[capability] = source_config_id.
     """
 
     def __init__(self, config_dir: Optional[Path] = None):
         self.config_dir = config_dir or _get_config_dir()
         self.instances_path = self.config_dir / "service_configs.yaml"
-        self.wiring_path = self.config_dir / "wiring.yaml"
 
         # Dual storage: ServiceConfig objects for runtime, DictConfig for persistence
         self._service_configs: Dict[str, ServiceConfig] = {}  # Resolved configs (for runtime use)
         self._omegaconf_configs: Dict[str, DictConfig] = {}  # Raw configs with interpolations (for saving)
-        self._wiring: List[Wiring] = []
-        self._defaults: Dict[str, str] = {}  # capability -> default instance
         self._loaded = False
 
     def _ensure_loaded(self) -> None:
@@ -82,9 +78,8 @@ class ServiceConfigManager:
             self._load()
 
     def _load(self) -> None:
-        """Load instances and wiring from config files."""
+        """Load instances (with inline wiring) from config file."""
         self._load_service_configs()
-        self._load_wiring()
         self._loaded = True
 
     def _load_service_configs(self) -> None:
@@ -121,6 +116,7 @@ class ServiceConfigManager:
                     name=instance_data.get('name', config_id),
                     description=instance_data.get('description'),
                     config=ConfigValues(values=resolved_config),
+                    wiring=dict(instance_data.get('wiring', {}) or {}),
                     created_at=instance_data.get('created_at'),
                     updated_at=instance_data.get('updated_at'),
                     # Integration-specific fields (null for non-integrations)
@@ -135,38 +131,6 @@ class ServiceConfigManager:
         except Exception as e:
             logger.error(f"Failed to load instances: {e}")
 
-    def _load_wiring(self) -> None:
-        """Load wiring from wiring.yaml."""
-        self._wiring = []
-        self._defaults = {}
-
-        if not self.wiring_path.exists():
-            logger.debug(f"No wiring file at {self.wiring_path}")
-            return
-
-        try:
-            with open(self.wiring_path, 'r') as f:
-                data = yaml.safe_load(f) or {}
-
-            # Load defaults
-            self._defaults = data.get('defaults', {}) or {}
-
-            # Load wiring connections
-            for wire_data in data.get('wiring', []) or []:
-                wire = Wiring(
-                    id=wire_data.get('id', str(uuid.uuid4())[:8]),
-                    source_config_id=wire_data['source_config_id'],
-                    source_capability=wire_data['source_capability'],
-                    target_config_id=wire_data['target_config_id'],
-                    target_capability=wire_data['target_capability'],
-                    created_at=wire_data.get('created_at'),
-                )
-                self._wiring.append(wire)
-
-            logger.info(f"Loaded {len(self._wiring)} wiring connections, {len(self._defaults)} defaults")
-
-        except Exception as e:
-            logger.error(f"Failed to load wiring: {e}")
 
     def _save_service_configs(self) -> None:
         """Save instances to service_configs.yaml."""
@@ -193,6 +157,9 @@ class ServiceConfigManager:
                     # Fallback: no raw config available, save resolved values
                     instance_data['config'] = instance.config.values
 
+            if instance.wiring:
+                instance_data['wiring'] = dict(instance.wiring)
+
             # Timestamps
             if instance.created_at:
                 instance_data['created_at'] = instance.created_at.isoformat() if isinstance(instance.created_at, datetime) else instance.created_at
@@ -215,31 +182,6 @@ class ServiceConfigManager:
             logger.debug(f"Saved {len(self._service_configs)} instances")
         except Exception as e:
             logger.error(f"Failed to save instances: {e}")
-            raise
-
-    def _save_wiring(self) -> None:
-        """Save wiring to wiring.yaml."""
-        data = {
-            'defaults': self._defaults or {},
-            'wiring': []
-        }
-
-        for wire in self._wiring:
-            wire_data = {
-                'id': wire.id,
-                'source_config_id': wire.source_config_id,
-                'source_capability': wire.source_capability,
-                'target_config_id': wire.target_config_id,
-                'target_capability': wire.target_capability,
-            }
-            data['wiring'].append(wire_data)
-
-        try:
-            with open(self.wiring_path, 'w') as f:
-                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-            logger.debug(f"Saved {len(self._wiring)} wiring connections")
-        except Exception as e:
-            logger.error(f"Failed to save wiring: {e}")
             raise
 
     def reload(self) -> None:
@@ -280,32 +222,54 @@ class ServiceConfigManager:
                 name=config.name,
                 provides=provides,
                 description=config.description,
-                config=dict(config.config) if config.config else None,
+                config=config.config.values if config.config else None,
             ))
             config_template_ids.add(config.template_id)
 
-        # Get all templates and add placeholders for installed ones without configs
-        from src.services.template_service import list_templates
-
+        # Add placeholders for installed providers that don't have a config yet.
+        # Uses cached registries directly — no reload, no Docker/status checks.
         try:
-            templates = await list_templates()
+            from src.config import get_settings
+            from src.services.compose_registry import get_compose_registry
 
-            for template in templates:
-                # Skip if not installed
-                if not template.installed:
+            settings = get_settings()
+            default_services = await settings.get("default_services") or []
+            user_installed = await settings.get("installed_services") or []
+            removed_services = await settings.get("removed_services") or []
+            installed_names = (set(default_services) | set(user_installed)) - set(removed_services)
+
+            # Provider placeholders (YAML providers explicitly installed by user)
+            for provider in provider_registry.get_providers():
+                if provider.id not in installed_names:
                     continue
-
-                # Skip if already has a config
-                if template.id in config_template_ids:
+                if provider.id in config_template_ids:
                     continue
-
-                # Create placeholder entry
                 result.append(ServiceConfigSummary(
-                    id=template.id,
-                    template_id=template.id,
-                    name=template.name,
-                    provides=template.provides,
-                    description=template.description,
+                    id=provider.id,
+                    template_id=provider.id,
+                    name=provider.name,
+                    provides=provider.capability,
+                    description=provider.description,
+                ))
+
+            # Compose service placeholders (installed compose services without a config)
+            registry = get_compose_registry()
+            for service in registry.get_services():
+                svc_name = service.service_name
+                compose_base = service.compose_file.stem.replace('-compose', '')
+                if svc_name in set(removed_services):
+                    continue
+                is_installed = svc_name in installed_names or compose_base in installed_names
+                if not is_installed:
+                    continue
+                if service.service_id in config_template_ids:
+                    continue
+                result.append(ServiceConfigSummary(
+                    id=service.service_id,
+                    template_id=service.service_id,
+                    name=service.display_name or svc_name,
+                    provides=service.provides,
+                    description=service.description,
                 ))
         except Exception as e:
             logger.warning(f"Failed to load installed templates: {e}")
@@ -373,6 +337,91 @@ class ServiceConfigManager:
                 overrides[key] = value
 
         return overrides
+
+    async def normalize_incoming_config(self, config_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize an incoming config dict before storage.
+
+        Translates env var keys (OLLAMA_MODEL) to capability keys (model) using
+        the provider's env_maps, and resolves _from_setting dict values to literal
+        strings via settings.get().
+
+        This ensures configs are always stored in canonical format:
+        capability keys + literal string values. Mirrors get_display_config_overrides()
+        but runs at save time instead of read time.
+        """
+        self._ensure_loaded()
+        config_obj = self._service_configs.get(config_id)
+        if not config_obj:
+            return config
+
+        from src.services.provider_registry import get_provider_registry
+        provider = get_provider_registry().get_provider(config_obj.template_id)
+        env_var_to_cap_key: Dict[str, str] = {}
+        if provider:
+            for em in provider.env_maps:
+                if em.env_var:
+                    env_var_to_cap_key[em.env_var] = em.key
+
+        from src.config import get_settings
+        settings = get_settings()
+
+        result: Dict[str, Any] = {}
+        for key, value in config.items():
+            cap_key = env_var_to_cap_key.get(key, key)
+            if isinstance(value, dict) and '_from_setting' in value:
+                setting_path = value['_from_setting']
+                resolved = await settings.get(setting_path)
+                value = str(resolved) if resolved is not None else None
+            if value is not None:
+                result[cap_key] = value
+        return result
+
+    async def get_display_config_overrides(self, config_id: str) -> Dict[str, Any]:
+        """Get config overrides normalized for frontend display.
+
+        Translates env var keys (OLLAMA_MODEL) to capability keys (model) using
+        the provider's env_maps schema, and resolves _from_setting dict values
+        to actual string values via the settings store.
+
+        This handles both old configs (stored with env var keys + _from_setting refs)
+        and new configs (stored with capability keys + literal values).
+        """
+        raw_overrides = self.get_config_overrides(config_id)
+        config = self._service_configs.get(config_id)
+        if not config:
+            return {}
+
+        # Build reverse mapping: env_var_name → capability_key for this template
+        from src.services.provider_registry import get_provider_registry
+        provider = get_provider_registry().get_provider(config.template_id)
+        env_var_to_cap_key: Dict[str, str] = {}
+        if provider:
+            for em in provider.env_maps:
+                if em.env_var:
+                    env_var_to_cap_key[em.env_var] = em.key
+
+        from src.config import get_settings
+        settings = get_settings()
+
+        result: Dict[str, Any] = {}
+        for key, value in raw_overrides.items():
+            # Skip metadata keys
+            if key.startswith('_save_') or key.startswith('_from_'):
+                continue
+
+            # Translate env var key to capability key when possible
+            cap_key = env_var_to_cap_key.get(key, key)
+
+            # Resolve _from_setting dict references to actual values
+            if isinstance(value, dict) and '_from_setting' in value:
+                setting_path = value['_from_setting']
+                resolved = await settings.get(setting_path)
+                value = str(resolved) if resolved is not None else None
+
+            if value is not None:
+                result[cap_key] = value
+
+        return result
 
     def create_service_config(self, data: ServiceConfigCreate) -> ServiceConfig:
         """Create a new service configuration."""
@@ -442,11 +491,11 @@ class ServiceConfigManager:
         if config_id not in self._service_configs:
             return False
 
-        # Remove any wiring referencing this config
-        self._wiring = [
-            w for w in self._wiring
-            if w.source_config_id != config_id and w.target_config_id != config_id
-        ]
+        # Remove inline wiring on other instances that reference this config as a source
+        for other in self._service_configs.values():
+            to_remove = [cap for cap, src in other.wiring.items() if src == config_id]
+            for cap in to_remove:
+                del other.wiring[cap]
 
         del self._service_configs[config_id]
 
@@ -455,7 +504,6 @@ class ServiceConfigManager:
             del self._omegaconf_configs[config_id]
 
         self._save_service_configs()
-        self._save_wiring()
 
         logger.info(f"Deleted service config: {config_id}")
         return True
@@ -465,14 +513,34 @@ class ServiceConfigManager:
     # =========================================================================
 
     def list_wiring(self) -> List[Wiring]:
-        """List all wiring connections."""
+        """List all wiring connections (reconstructed from inline instance data)."""
         self._ensure_loaded()
-        return list(self._wiring)
+        wirings = []
+        for instance in self._service_configs.values():
+            for capability, source_id in instance.wiring.items():
+                wirings.append(Wiring(
+                    id=f"{instance.id}-{capability}",
+                    source_config_id=source_id,
+                    target_config_id=instance.id,
+                    capability=capability,
+                ))
+        return wirings
 
     def get_wiring_for_instance(self, config_id: str) -> List[Wiring]:
         """Get wiring connections where this instance is the target."""
         self._ensure_loaded()
-        return [w for w in self._wiring if w.target_config_id == config_id]
+        instance = self._service_configs.get(config_id)
+        if not instance:
+            return []
+        return [
+            Wiring(
+                id=f"{config_id}-{cap}",
+                source_config_id=src,
+                target_config_id=config_id,
+                capability=cap,
+            )
+            for cap, src in instance.wiring.items()
+        ]
 
     def get_provider_for_capability(
         self,
@@ -480,118 +548,121 @@ class ServiceConfigManager:
         capability: str
     ) -> Optional[ServiceConfig]:
         """
-        Get the provider instance to use for a capability.
+        Get the provider ServiceConfig for a capability.
 
-        Resolution order:
-        1. Explicit wiring for this consumer + capability
-        2. Default instance for this capability
-        3. None (fall back to CapabilityResolver's legacy logic)
+        Looks up inline wiring on the consumer instance.
+        Falls back to template-level config (id == template_id) if no instance match.
         """
         self._ensure_loaded()
 
-        # 1. Check explicit wiring for this consumer
-        for wiring in self._wiring:
-            if (wiring.target_config_id == consumer_config_id and
-                wiring.target_capability == capability):
-                provider_config = self.get_service_config(wiring.source_config_id)
-                if provider_config:
+        # Try the exact consumer ID first
+        instance = self._service_configs.get(consumer_config_id)
+        if instance and capability in instance.wiring:
+            source_id = instance.wiring[capability]
+            provider = self.get_service_config(source_id)
+            if provider:
+                logger.info(f"Resolved {capability} for {consumer_config_id} -> {source_id}")
+                return provider
+
+        # Instance exists but has no wiring for this capability — inherit from its template.
+        # Deployed instances (e.g. "mycelia-backend-orion--leader-") are created without wiring
+        # copied from the base template ("mycelia-backend"). Fall through to the template's wiring
+        # so that deploy uses what the user wired on the template unless explicitly overridden.
+        if instance and capability not in instance.wiring:
+            template_config = self._service_configs.get(instance.template_id)
+            if template_config and capability in template_config.wiring:
+                source_id = template_config.wiring[capability]
+                provider = self.get_service_config(source_id)
+                if provider:
                     logger.info(
                         f"Resolved {capability} for {consumer_config_id} "
-                        f"via wiring -> {wiring.source_config_id}"
+                        f"via template fallback {instance.template_id} -> {source_id}"
                     )
-                    return provider_config
+                    return provider
 
-        # 2. Check defaults
-        default_config_id = self._defaults.get(capability)
-        if default_config_id:
-            provider_config = self.get_service_config(default_config_id)
-            if provider_config:
-                logger.info(
-                    f"Resolved {capability} for {consumer_config_id} "
-                    f"via default -> {default_config_id}"
-                )
-                return provider_config
+        # Fallback: consumer_config_id may be a template_id — find the instance
+        if not instance:
+            for config in self._service_configs.values():
+                if config.template_id == consumer_config_id and capability in config.wiring:
+                    source_id = config.wiring[capability]
+                    provider = self.get_service_config(source_id)
+                    if provider:
+                        logger.info(
+                            f"Resolved {capability} for {consumer_config_id} "
+                            f"via template match {config.id} -> {source_id}"
+                        )
+                        return provider
 
-        # 3. No instance-level resolution found
+        # Extra fallback: compose service IDs include a prefix (e.g. "mycelia-compose:mycelia-backend").
+        # Strip the prefix and retry so that template-level wiring entries keyed by the short
+        # service name (e.g. "mycelia-backend") are found even when the caller passes the full ID.
+        if ':' in consumer_config_id:
+            service_name = consumer_config_id.split(':', 1)[1]
+            instance_by_name = self._service_configs.get(service_name)
+            if instance_by_name and capability in instance_by_name.wiring:
+                source_id = instance_by_name.wiring[capability]
+                provider = self.get_service_config(source_id)
+                if provider:
+                    logger.info(
+                        f"Resolved {capability} for {consumer_config_id} "
+                        f"via service-name match {service_name} -> {source_id}"
+                    )
+                    return provider
+            # Also try template_id matching with the short service name
+            for config in self._service_configs.values():
+                if config.template_id == service_name and capability in config.wiring:
+                    source_id = config.wiring[capability]
+                    provider = self.get_service_config(source_id)
+                    if provider:
+                        logger.info(
+                            f"Resolved {capability} for {consumer_config_id} "
+                            f"via service-name template match {config.id} -> {source_id}"
+                        )
+                        return provider
+
         return None
 
     def create_wiring(self, data: WiringCreate) -> Wiring:
-        """Create a wiring connection.
-        
-        For the singleton model, instance IDs can be either:
-        - Actual instance IDs from service_configs.yaml
-        - Template/provider IDs (for configured providers/services)
-        """
+        """Set capability wiring on the consumer instance."""
         self._ensure_loaded()
 
-        # Check for duplicate - only one provider per consumer+capability
-        for wire in self._wiring:
-            if (wire.target_config_id == data.target_config_id and
-                wire.target_capability == data.target_capability):
-                # Update existing wiring instead of error
-                wire.source_config_id = data.source_config_id
-                wire.source_capability = data.source_capability
-                self._save_wiring()
-                logger.info(
-                    f"Updated wiring: {data.source_config_id}.{data.source_capability} -> "
-                    f"{data.target_config_id}.{data.target_capability}"
-                )
-                return wire
+        instance = self._service_configs.get(data.target_config_id)
+        if not instance:
+            # Auto-create a minimal ServiceConfig for template-level wiring
+            instance = ServiceConfig(
+                id=data.target_config_id,
+                template_id=data.target_config_id,
+                name=data.target_config_id,
+                wiring={},
+            )
+            self._service_configs[data.target_config_id] = instance
 
-        wire = Wiring(
-            id=str(uuid.uuid4())[:8],
+        instance.wiring[data.capability] = data.source_config_id
+        instance.updated_at = datetime.now(timezone.utc)
+        self._save_service_configs()
+
+        logger.info(f"Wired {data.capability}: {data.source_config_id} -> {data.target_config_id}")
+        return Wiring(
+            id=f"{data.target_config_id}-{data.capability}",
             source_config_id=data.source_config_id,
-            source_capability=data.source_capability,
             target_config_id=data.target_config_id,
-            target_capability=data.target_capability,
-            created_at=datetime.now(timezone.utc),
+            capability=data.capability,
+            created_at=instance.updated_at,
         )
 
-        self._wiring.append(wire)
-        self._save_wiring()
-
-        logger.info(
-            f"Created wiring: {data.source_config_id}.{data.source_capability} -> "
-            f"{data.target_config_id}.{data.target_capability}"
-        )
-        return wire
-
-    def delete_wiring(self, wiring_id: str) -> bool:
-        """Delete a wiring connection."""
+    def delete_wiring(self, target_config_id: str, capability: str) -> bool:
+        """Remove capability wiring from the consumer instance."""
         self._ensure_loaded()
 
-        for i, wire in enumerate(self._wiring):
-            if wire.id == wiring_id:
-                del self._wiring[i]
-                self._save_wiring()
-                logger.info(f"Deleted wiring: {wiring_id}")
-                return True
+        instance = self._service_configs.get(target_config_id)
+        if not instance or capability not in instance.wiring:
+            return False
 
-        return False
-
-    def get_defaults(self) -> Dict[str, str]:
-        """Get default capability -> instance mappings."""
-        self._ensure_loaded()
-        return dict(self._defaults)
-
-    def set_default(self, capability: str, config_id: str) -> None:
-        """Set default instance/provider for a capability.
-        
-        For the singleton model, config_id can be either:
-        - An actual instance ID from service_configs.yaml
-        - A template/provider ID (for configured providers acting as singletons)
-        """
-        self._ensure_loaded()
-
-        # Store the mapping - we accept both instance IDs and template/provider IDs
-        # The resolution happens at runtime when the capability is needed
-        if config_id:
-            self._defaults[capability] = config_id
-        elif capability in self._defaults:
-            del self._defaults[capability]
-
-        self._save_wiring()
-        logger.info(f"Set default for {capability}: {config_id}")
+        del instance.wiring[capability]
+        instance.updated_at = datetime.now(timezone.utc)
+        self._save_service_configs()
+        logger.info(f"Removed {capability} wiring from {target_config_id}")
+        return True
 
     # =========================================================================
     # Resolution
@@ -602,26 +673,9 @@ class ServiceConfigManager:
         config_id: str,
         capability: str,
     ) -> Optional[ServiceConfig]:
-        """
-        Resolve which instance provides a capability for the given instance.
-
-        Checks:
-        1. Explicit wiring for this instance + capability
-        2. Default instance for this capability
-        """
+        """Resolve which instance provides a capability for the given instance."""
         self._ensure_loaded()
-
-        # Check explicit wiring
-        for wire in self._wiring:
-            if wire.target_config_id == config_id and wire.target_capability == capability:
-                return self._service_configs.get(wire.source_config_id)
-
-        # Check defaults
-        default_config_id = self._defaults.get(capability)
-        if default_config_id:
-            return self._service_configs.get(default_config_id)
-
-        return None
+        return self.get_provider_for_capability(config_id, capability)
 
 
 # =============================================================================

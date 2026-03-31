@@ -85,7 +85,7 @@ export function useWiringActions(
 
     for (const w of wiring) {
       // Key: targetId::capability
-      const targetKey = `${w.target_config_id}::${w.target_capability}`
+      const targetKey = `${w.target_config_id}::${w.capability}`
       byTarget.set(targetKey, w)
 
       // Source connections
@@ -140,15 +140,14 @@ export function useWiringActions(
       // Check for existing connection and remove it first
       const existing = getConnection(targetConfigId, capability)
       if (existing) {
-        await svcConfigsApi.deleteWiring(existing.id)
+        await svcConfigsApi.deleteWiring(existing.target_config_id, existing.capability)
       }
 
       // Create new wiring
       const request: WiringCreateRequest = {
         source_config_id: sourceConfigId,
-        source_capability: capability,
         target_config_id: targetConfigId,
-        target_capability: capability,
+        capability,
       }
 
       const result = await svcConfigsApi.createWiring(request)
@@ -161,10 +160,14 @@ export function useWiringActions(
     [getConnection, onUpdate]
   )
 
-  // Remove wiring by ID
+  // Remove wiring by ID (now accepts target+capability instead of synthetic ID)
   const unwire = useCallback(
     async (wiringId: string): Promise<void> => {
-      await svcConfigsApi.deleteWiring(wiringId)
+      // wiringId format: "{target_config_id}-{capability}" — split on last '-'
+      const lastDash = wiringId.lastIndexOf('-')
+      const targetConfigId = wiringId.substring(0, lastDash)
+      const capability = wiringId.substring(lastDash + 1)
+      await svcConfigsApi.deleteWiring(targetConfigId, capability)
       await onUpdate()
     },
     [onUpdate]
@@ -178,7 +181,7 @@ export function useWiringActions(
         return false
       }
 
-      await svcConfigsApi.deleteWiring(existing.id)
+      await svcConfigsApi.deleteWiring(existing.target_config_id, existing.capability)
       await onUpdate()
       return true
     },

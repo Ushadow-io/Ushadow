@@ -97,9 +97,8 @@ interface ConsumerInfo {
 interface WiringInfo {
   id: string
   source_config_id: string
-  source_capability: string
   target_config_id: string
-  target_capability: string
+  capability: string
 }
 
 // Output wiring types
@@ -389,7 +388,7 @@ export default function WiringBoard({
   // Get provider for a specific consumer's capability slot
   const getProviderForSlot = (consumerId: string, capability: string) => {
     const wire = wiring.find(
-      (w) => w.target_config_id === consumerId && w.target_capability === capability
+      (w) => w.target_config_id === consumerId && w.capability === capability
     )
     if (wire) {
       return {

@@ -15,6 +15,14 @@ from src.models.deployment import (
     DiscoveredWorkload,
     AdoptRequest,
 )
+# Slim view of a deployment — excludes deployed_config (which contains the full env map).
+# Used by the instance page to avoid transmitting large environment variable payloads.
+_SLIM_FIELDS = {
+    'id', 'config_id', 'service_id', 'unode_hostname', 'status',
+    'container_id', 'container_name', 'created_at', 'deployed_at',
+    'exposed_port', 'access_url', 'public_url', 'metadata',
+    'backend_type', 'healthy', 'health_message', 'error',
+}
 from src.services.deployment_manager import get_deployment_manager
 from src.services.auth import get_current_user
 from src.services.unode_manager import get_unode_manager
@@ -292,18 +300,30 @@ async def deploy_service(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("", response_model=List[Deployment])
+@router.get("")
 async def list_deployments(
     service_id: Optional[str] = None,
     unode_hostname: Optional[str] = None,
+    slim: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
-    """List all deployments with optional filters."""
+    """List all deployments with optional filters.
+
+    Args:
+        slim: When True, omit deployed_config (full env map) and backend_metadata
+              to reduce payload size. Use for list views that don't need env details.
+    """
     manager = get_deployment_manager()
-    return await manager.list_deployments(
+    deployments = await manager.list_deployments(
         service_id=service_id,
         unode_hostname=unode_hostname
     )
+    if slim:
+        return [
+            {k: v for k, v in d.model_dump().items() if k in _SLIM_FIELDS}
+            for d in deployments
+        ]
+    return deployments
 
 
 # =============================================================================

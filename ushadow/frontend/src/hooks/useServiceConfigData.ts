@@ -1,8 +1,16 @@
 /**
  * useServiceConfigData - Fetch all service configuration data with React Query
  *
- * Pattern 2: Data Fetching Hook
- * Handles loading templates, instances, wiring, statuses, and deployments
+ * Split into three queries to unblock page rendering:
+ *
+ * 1. coreQuery  (fast, blocks render) — templates (installed only), instances, wiring
+ *    These are pure YAML reads on the backend; the page is ready as soon as they resolve.
+ *
+ * 2. statusQuery (slow, non-blocking) — Docker container statuses
+ *    Docker API calls can be slow. Status updates the UI once ready without blocking render.
+ *
+ * 3. deploymentsQuery (non-blocking) — Slim deployment records (no env map)
+ *    Fetched without deployed_config to reduce payload size.
  */
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -28,62 +36,93 @@ export interface UseServiceConfigDataResult {
   refresh: () => Promise<void>
 }
 
+const CORE_QUERY_KEY = ['service-configs-core'] as const
+const STATUS_QUERY_KEY = ['service-statuses'] as const
+const DEPLOYMENTS_QUERY_KEY = ['service-deployments'] as const
+
 /**
- * Fetch all service configuration data in a single query.
- * Uses React Query for caching and automatic refetching.
+ * Fetch service configuration data.
+ *
+ * Core data (templates/instances/wiring) blocks page render.
+ * Status and deployments load in the background and update when ready.
  */
 export function useServiceConfigData(): UseServiceConfigDataResult {
-  const query = useQuery<ServiceConfigData, Error>({
-    queryKey: ['service-configs'],
+  const queryClient = useQueryClient()
+
+  // ── Fast core query — page renders when this resolves ───────────────────────
+  const coreQuery = useQuery({
+    queryKey: CORE_QUERY_KEY,
     queryFn: async () => {
-      console.log('🔄 Fetching service config data...')
-      const [templatesRes, instancesRes, wiringRes, statusesRes, deploymentsRes] = await Promise.all([
-        svcConfigsApi.getTemplates(),
+      console.log('🔄 Fetching core service config data...')
+      const [templatesRes, instancesRes, wiringRes] = await Promise.all([
+        svcConfigsApi.getTemplates({ installed: true }),
         svcConfigsApi.getServiceConfigs(),
         svcConfigsApi.getWiring(),
-        servicesApi.getAllStatuses().catch(() => ({ data: {} })),
-        deploymentsApi.listDeployments().catch((err) => {
-          console.error('Failed to load deployments:', err)
-          return { data: [] }
-        }),
       ])
-
-      const result = {
+      console.log('✅ Core data fetched:', {
+        templates: templatesRes.data.length,
+        instances: instancesRes.data.length,
+        wiring: wiringRes.data.length,
+      })
+      return {
         templates: templatesRes.data,
         instances: instancesRes.data,
         wiring: wiringRes.data,
-        serviceStatuses: statusesRes.data || {},
-        deployments: deploymentsRes.data || [],
       }
-
-      console.log('✅ Service config data fetched:', {
-        templates: result.templates.length,
-        instances: result.instances.length,
-        wiring: result.wiring.length,
-        deployments: result.deployments.length,
-      })
-
-      return result
     },
-    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
-    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes after component unmounts
-    refetchOnWindowFocus: false, // Only refetch on manual refresh
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
     retry: 1,
+  })
+
+  // ── Status query — non-blocking, updates when Docker responds ────────────────
+  const statusQuery = useQuery({
+    queryKey: STATUS_QUERY_KEY,
+    queryFn: async () => {
+      const res = await servicesApi.getAllStatuses().catch(() => ({ data: {} }))
+      return res.data || {}
+    },
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+
+  // ── Deployments query — slim (no env map), non-blocking ─────────────────────
+  const deploymentsQuery = useQuery({
+    queryKey: DEPLOYMENTS_QUERY_KEY,
+    queryFn: async () => {
+      const res = await deploymentsApi.listDeployments({ slim: true }).catch((err) => {
+        console.error('Failed to load deployments:', err)
+        return { data: [] }
+      })
+      return res.data || []
+    },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false,
   })
 
   const refresh = async () => {
     console.log('🔄 Manual refresh triggered')
-    await query.refetch()
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: CORE_QUERY_KEY }),
+      queryClient.refetchQueries({ queryKey: STATUS_QUERY_KEY }),
+      queryClient.refetchQueries({ queryKey: DEPLOYMENTS_QUERY_KEY }),
+    ])
   }
 
   return {
-    templates: query.data?.templates,
-    instances: query.data?.instances,
-    wiring: query.data?.wiring,
-    serviceStatuses: query.data?.serviceStatuses,
-    deployments: query.data?.deployments,
-    isLoading: query.isLoading,
-    error: query.error,
+    templates: coreQuery.data?.templates,
+    instances: coreQuery.data?.instances,
+    wiring: coreQuery.data?.wiring,
+    serviceStatuses: statusQuery.data,
+    deployments: deploymentsQuery.data,
+    // Only block render on core data — status/deployments are progressive
+    isLoading: coreQuery.isLoading,
+    error: coreQuery.error,
     refresh,
   }
 }

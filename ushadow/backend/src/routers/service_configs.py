@@ -32,15 +32,20 @@ router = APIRouter(prefix="/api/svc-configs", tags=["instances"])
 @router.get("/templates", response_model=List[Template])
 async def list_templates_endpoint(
     source: Optional[str] = None,
+    installed: Optional[bool] = None,
     current_user: dict = Depends(get_current_user),
 ) -> List[Template]:
     """
     List available templates (compose services + providers).
 
     Templates are discovered from compose/*.yaml and providers/*.yaml.
+
+    Args:
+        installed: When True, only return installed compose services (provider templates
+                   are always included as they are capability options, not installable services).
     """
     from src.services.template_service import list_templates
-    return await list_templates(source)
+    return await list_templates(source, installed_only=bool(installed))
 
 
 @router.get("/templates/{template_id}", response_model=Template)
@@ -184,50 +189,8 @@ async def get_instance(
     if not instance:
         raise HTTPException(status_code=404, detail=f"ServiceConfig not found: {config_id}")
 
-    # Get raw overrides (non-interpolation values)
-    overrides = manager.get_config_overrides(config_id)
-
-    # For existing instances with direct values, also compare with template defaults
-    # to filter out values that match the template
-    if overrides:
-        try:
-            from src.services.capability_resolver import get_capability_resolver
-            settings = get_settings()
-            resolver = get_capability_resolver()
-
-            # Get template defaults from provider registry
-            provider = resolver.get_provider_by_id(instance.template_id)
-            if provider and provider.env_maps:
-                template_defaults = {}
-                for em in provider.env_maps:
-                    # Get the current value from settings (the "template default")
-                    if em.settings_path:
-                        stored_value = await settings.get(em.settings_path)
-                        if stored_value is not None:
-                            template_defaults[em.key] = str(stored_value)
-                    elif em.default:
-                        template_defaults[em.key] = em.default
-
-                # Filter overrides to only include values that differ from template
-                true_overrides = {}
-                for key, value in overrides.items():
-                    # Skip metadata keys used by frontend for settings management
-                    if key.startswith('_save_') or key.startswith('_from_'):
-                        continue
-                    template_value = template_defaults.get(key)
-                    # Include if no template value or if values differ
-                    if template_value is None or str(value) != str(template_value):
-                        true_overrides[key] = value
-
-                overrides = true_overrides
-        except Exception as e:
-            logger.debug(f"Could not compare with template defaults: {e}")
-            # Fall back to raw overrides
-
-    # Always filter out metadata keys before returning
-    overrides = {k: v for k, v in overrides.items() if not k.startswith('_save_') and not k.startswith('_from_')}
-
-    instance.config.values = overrides
+    # Get overrides translated to capability keys with resolved values
+    instance.config.values = await manager.get_display_config_overrides(config_id)
     return instance
 
 
@@ -236,52 +199,18 @@ async def create_service_config(
     data: ServiceConfigCreate,
     current_user: dict = Depends(get_current_user),
 ) -> ServiceConfig:
-    """Create a new service configuration from a template.
-
-    Config values that match template defaults are filtered out,
-    so only actual overrides are stored.
-    """
-    # Filter config to only include values that differ from template defaults
-    filtered_config = data.config.copy() if data.config else {}
-
-    if filtered_config:
-        try:
-            from src.services.capability_resolver import get_capability_resolver
-            settings = get_settings()
-            resolver = get_capability_resolver()
-
-            # Get template defaults from provider registry
-            provider = resolver.get_provider_by_id(data.template_id)
-            if provider and provider.env_maps:
-                template_defaults = {}
-                for em in provider.env_maps:
-                    # Get the current value from settings (the "template default")
-                    if em.settings_path:
-                        stored_value = await settings.get(em.settings_path)
-                        if stored_value is not None:
-                            template_defaults[em.key] = str(stored_value)
-                    elif em.default:
-                        template_defaults[em.key] = em.default
-
-                # Filter to only values that differ from template
-                true_overrides = {}
-                for key, value in filtered_config.items():
-                    template_value = template_defaults.get(key)
-                    # Include if no template value or if values differ
-                    if template_value is None or str(value) != str(template_value):
-                        true_overrides[key] = value
-
-                filtered_config = true_overrides
-                logger.debug(f"Filtered config from {len(data.config)} to {len(filtered_config)} overrides")
-        except Exception as e:
-            logger.debug(f"Could not filter against template defaults: {e}")
-            # Fall back to using all provided config
-
-    # Create service config with filtered config
+    """Create a new service configuration from a template."""
     manager = get_service_config_manager()
     try:
-        # Create a modified data object with filtered config
         from src.models.service_config import ServiceConfigCreate as IC
+        # Strip internal metadata keys then normalize to canonical format
+        filtered_config = {
+            k: v for k, v in (data.config or {}).items()
+            if not k.startswith('_save_') and not k.startswith('_from_')
+        }
+        # Create with raw config first so normalize_incoming_config can look up template
+        # For creates, the config_id doesn't exist yet — pass template_id as a hint
+        # by creating a temporary entry then normalizing immediately after
         filtered_data = IC(
             id=data.id,
             template_id=data.template_id,
@@ -289,7 +218,13 @@ async def create_service_config(
             description=data.description,
             config=filtered_config,
         )
-        return manager.create_service_config(filtered_data)
+        created = manager.create_service_config(filtered_data)
+        # Normalize stored config (translate env var keys, resolve _from_setting refs)
+        normalized = await manager.normalize_incoming_config(created.id, filtered_config)
+        if normalized != filtered_config:
+            from src.models.service_config import ServiceConfigUpdate as IU
+            created = manager.update_service_config(created.id, IU(config=normalized))
+        return created
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -300,57 +235,19 @@ async def update_service_config(
     data: ServiceConfigUpdate,
     current_user: dict = Depends(get_current_user),
 ) -> ServiceConfig:
-    """Update a service configuration.
-
-    Config values that match template defaults are filtered out,
-    so only actual overrides are stored.
-    """
+    """Update a service configuration."""
     manager = get_service_config_manager()
 
-    # If config is being updated, filter to only include overrides
     if data.config is not None:
-        filtered_config = data.config.copy() if data.config else {}
-
-        if filtered_config:
-            try:
-                # Get the service config to find its template_id
-                config = manager.get_service_config(config_id)
-                if config:
-                    from src.services.capability_resolver import get_capability_resolver
-                    settings = get_settings()
-                    resolver = get_capability_resolver()
-
-                    # Get template defaults from provider registry
-                    provider = resolver.get_provider_by_id(config.template_id)
-                    if provider and provider.env_maps:
-                        template_defaults = {}
-                        for em in provider.env_maps:
-                            if em.settings_path:
-                                stored_value = await settings.get(em.settings_path)
-                                if stored_value is not None:
-                                    template_defaults[em.key] = str(stored_value)
-                            elif em.default:
-                                template_defaults[em.key] = em.default
-
-                        # Filter to only values that differ from template
-                        true_overrides = {}
-                        for key, value in filtered_config.items():
-                            template_value = template_defaults.get(key)
-                            if template_value is None or str(value) != str(template_value):
-                                true_overrides[key] = value
-
-                        filtered_config = true_overrides
-                        logger.debug(f"Filtered update config to {len(filtered_config)} overrides")
-            except Exception as e:
-                logger.debug(f"Could not filter against template defaults: {e}")
-
-        # Create a modified data object with filtered config
         from src.models.service_config import ServiceConfigUpdate as IU
-        data = IU(
-            name=data.name,
-            description=data.description,
-            config=filtered_config,
-        )
+        # Strip metadata keys, then normalize to canonical format:
+        # env var keys → capability keys, _from_setting dicts → literal values
+        stripped = {
+            k: v for k, v in data.config.items()
+            if not k.startswith('_save_') and not k.startswith('_from_')
+        }
+        normalized = await manager.normalize_incoming_config(config_id, stripped)
+        data = IU(name=data.name, description=data.description, config=normalized)
 
     try:
         return manager.update_service_config(config_id, data)
@@ -421,16 +318,17 @@ async def create_wiring(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/wiring/{wiring_id}")
+@router.delete("/wiring/{target_config_id}/{capability}")
 async def delete_wiring(
-    wiring_id: str,
+    target_config_id: str,
+    capability: str,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Delete a wiring connection."""
     manager = get_service_config_manager()
-    if not manager.delete_wiring(wiring_id):
-        raise HTTPException(status_code=404, detail=f"Wiring not found: {wiring_id}")
-    return {"success": True, "message": f"Wiring {wiring_id} deleted"}
+    if not manager.delete_wiring(target_config_id, capability):
+        raise HTTPException(status_code=404, detail=f"Wiring not found: {target_config_id}/{capability}")
+    return {"success": True, "message": f"Wiring {target_config_id}/{capability} deleted"}
 
 
 @router.get("/{config_id}/wiring", response_model=List[Wiring])

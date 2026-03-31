@@ -1,13 +1,8 @@
 # Memory Capability Providers
 # Implements the 'memory' capability defined in capabilities.yaml
 #
-# Each provider specifies:
-#   - credentials: Values for the capability + env_var name to expose
-#   - mode: cloud or local
-#   - docker: Container config (for local providers)
-#
-# Services get the provider's env vars directly. Only need env_mapping to override.
-# Default provider selection is in config.defaults.yaml under `selected_providers`
+# Credentials are stored in settings at: memory.{provider_id}.{key}
+# e.g. memory.mem0-cloud.api_key
 
 capability: memory
 
@@ -15,7 +10,7 @@ providers:
   # ==========================================================================
   # OpenMemory - Graph-based Memory with MCP
   # ==========================================================================
-  - id: openmemory
+  - id: openmemory-compose
     name: "OpenMemory"
     description: "Graph-based memory with MCP support and Neo4j backend"
     mode: local
@@ -73,7 +68,7 @@ providers:
   # ==========================================================================
   # Cognee - RAG Framework with Knowledge Graphs
   # ==========================================================================
-  - id: cognee
+  - id: cognee-compose
     name: "Cognee"
     description: "Open-source RAG framework with knowledge graphs"
     mode: local
@@ -117,7 +112,7 @@ providers:
   # ==========================================================================
   # Mem0 Cloud - Managed Memory Service
   # ==========================================================================
-  - id: mem0-cloud
+  - id: mem0-cloud-net
     name: "Mem0 Cloud"
     description: "Managed memory service from Mem0"
     mode: cloud

@@ -968,7 +968,7 @@ export const deploymentsApi = {
       { service_id: serviceId, unode_hostname: unodeHostname, config_id: configId, force_rebuild: forceRebuild },
       { timeout: 600000 }  // 10 minutes for builds
     ),
-  listDeployments: (params?: { service_id?: string; unode_hostname?: string }) =>
+  listDeployments: (params?: { service_id?: string; unode_hostname?: string; slim?: boolean }) =>
     api.get<Deployment[]>('/api/deployments', { params }),
   getDeployment: (deploymentId: string) => api.get<Deployment>(`/api/deployments/${deploymentId}`),
   stopDeployment: (deploymentId: string) => api.post<Deployment>(`/api/deployments/${deploymentId}/stop`),
@@ -1568,9 +1568,8 @@ export interface ServiceConfigSummary {
 export interface Wiring {
   id: string
   source_config_id: string
-  source_capability: string
   target_config_id: string
-  target_capability: string
+  capability: string
   created_at?: string
 }
 
@@ -1613,16 +1612,15 @@ export interface ServiceConfigUpdateRequest {
 /** Request to create wiring */
 export interface WiringCreateRequest {
   source_config_id: string
-  source_capability: string
   target_config_id: string
-  target_capability: string
+  capability: string
 }
 
 export const svcConfigsApi = {
   // Templates
-  /** List all templates (compose services + providers) */
-  getTemplates: (source?: TemplateSource) =>
-    api.get<Template[]>('/api/svc-configs/templates', { params: source ? { source } : {} }),
+  /** List templates. Pass installed=true to get only installed compose services + all providers (faster). */
+  getTemplates: (params?: { source?: TemplateSource; installed?: boolean }) =>
+    api.get<Template[]>('/api/svc-configs/templates', { params: params || {} }),
 
   /** Get a template by ID */
   getTemplate: (templateId: string) =>
@@ -1679,8 +1677,8 @@ export const svcConfigsApi = {
     api.post<Wiring>('/api/svc-configs/wiring', data),
 
   /** Delete a wiring connection */
-  deleteWiring: (wiringId: string) =>
-    api.delete(`/api/svc-configs/wiring/${wiringId}`),
+  deleteWiring: (targetConfigId: string, capability: string) =>
+    api.delete(`/api/svc-configs/wiring/${targetConfigId}/${capability}`),
 
   /** Get wiring for a specific instance */
   getServiceConfigWiring: (instanceId: string) =>

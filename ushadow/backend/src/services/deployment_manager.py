@@ -465,6 +465,23 @@ class DeploymentManager:
                 requires=service.requires  # Direct attribute on DiscoveredService
             )
 
+            # Compute derived connection URLs from resolved component vars.
+            # Runs after all resolution layers so component values are final.
+            # Explicit MONGO_URL in the environment always wins over derived value.
+            from src.utils.mongodb import build_mongodb_uri_from_env
+            existing_mongo_url = environment.get("MONGO_URL", "")
+            has_mongo_components = "MONGODB_HOST" in environment
+            url_is_template = "${" in existing_mongo_url
+
+            if has_mongo_components and (not existing_mongo_url or url_is_template):
+                mongo_url = build_mongodb_uri_from_env(environment)
+                if mongo_url:
+                    environment["MONGO_URL"] = mongo_url
+                    logger.info(
+                        f"[Derived] MONGO_URL computed from components for {service_id}: "
+                        f"{mongo_url.replace(environment.get('MONGODB_PASSWORD', '???'), '***') if environment.get('MONGODB_PASSWORD') else mongo_url}"
+                    )
+
             logger.info(
                 f"Resolved service {service_id}: image={image}, "
                 f"ports={ports}, env_vars={len(environment)}, volumes={len(volumes)}"
@@ -946,7 +963,14 @@ class DeploymentManager:
         elif overrides_only:
             # Create new ServiceConfig only if there are overrides
             # Use deployment.config_id if available, otherwise generate one
-            config_id = deployment.config_id or f"{deployment.service_id}-{deployment.unode_hostname}".replace(":", "-").replace("/", "-").replace("(", "").replace(")", "")
+            if not deployment.config_id:
+                # Generate config_id as {service_id}-{hostname}-{envname}
+                unode_rec = await self.unodes_collection.find_one({"hostname": deployment.unode_hostname})
+                envname = (unode_rec or {}).get("envname") if unode_rec else None
+                suffix = f"-{envname}" if envname else ""
+                config_id = f"{deployment.service_id}-{deployment.unode_hostname}{suffix}"
+            else:
+                config_id = deployment.config_id
             logger.info(f"Creating ServiceConfig: {config_id}")
 
             config_manager.create_service_config(

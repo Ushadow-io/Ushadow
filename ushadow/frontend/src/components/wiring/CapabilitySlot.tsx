@@ -224,7 +224,25 @@ function CapabilitySlotDropdown({
 
 export function CapabilitySlot(props: CapabilitySlotProps) {
   if (props.mode === 'dropdown') {
-    return <CapabilitySlotDropdown {...props} />
+    const { onSelect, selectedOption, options, ...rest } = props
+    return (
+      <div onClick={() => {
+        console.log(`[CapabilitySlot] ${props.consumerId}/${props.capability} opened`, {
+          selected: selectedOption ? { id: selectedOption.id, name: selectedOption.name, configSummary: selectedOption.configSummary, templateId: selectedOption.templateId } : null,
+          options: Object.fromEntries(Object.entries(options).map(([group, items]) => [group, items.map(o => o.id)])),
+        })
+      }}>
+        <CapabilitySlotDropdown
+          {...rest}
+          selectedOption={selectedOption}
+          options={options}
+          onSelect={(option) => {
+            console.log(`[CapabilitySlot] ${props.consumerId}/${props.capability} → selected`, { id: option.id, name: option.name, configSummary: option.configSummary, templateId: option.templateId })
+            onSelect(option)
+          }}
+        />
+      </div>
+    )
   }
 
   // Default to legacy mode for backwards compatibility

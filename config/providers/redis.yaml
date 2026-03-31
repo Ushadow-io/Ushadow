@@ -1,0 +1,86 @@
+# Redis Capability Providers
+# Implements the 'redis' capability defined in capabilities.yaml
+#
+# Credentials are stored in settings at: redis.{provider_id}.{key}
+# e.g. redis.docker.url, redis.managed.host
+
+capability: redis
+
+providers:
+  # ==========================================================================
+  # Docker Redis - Local Redis
+  # ==========================================================================
+  - id: docker
+    name: "Redis (Docker)"
+    description: "Redis in-memory data store running in Docker"
+    mode: local
+
+    docker:
+      image: redis:7-alpine
+      compose_file: compose/docker-compose.infra.yml
+      service_name: redis
+      container_name: redis
+      profiles: ["infra"]
+      ports:
+        - host: 6379
+          container: 6379
+          protocol: tcp
+      volumes:
+        - name: redis_data
+          path: /data
+          persistent: true
+      command: redis-server --appendonly yes
+      health:
+        cmd: "redis-cli ping"
+        interval: 5s
+        timeout: 3s
+        retries: 5
+      networks:
+        - ushadow-network
+        - infra-network
+
+    credentials:
+      url:
+        env_var: REDIS_URL
+        default: "redis://redis:6379/0"
+      host:
+        env_var: REDIS_HOST
+        default: "redis"
+      port:
+        env_var: REDIS_PORT
+        default: "6379"
+      password:
+        env_var: REDIS_PASSWORD
+        label: "Redis Password"
+        type: secret
+        required: false
+
+    ui:
+      icon: redis
+      tags: ["infrastructure", "cache", "pubsub"]
+
+  # ==========================================================================
+  # Managed Redis
+  # ==========================================================================
+  - id: managed
+    name: "Managed Redis"
+    description: "Cloud-managed Redis (AWS ElastiCache, GCP Memorystore, etc.)"
+    mode: cloud
+
+    credentials:
+      url:
+        env_var: REDIS_URL
+        label: "Redis Connection URL"
+        description: "Full connection URL (redis://host:port/db)"
+        required: true
+      host:
+        env_var: REDIS_HOST
+        label: "Redis Host"
+      port:
+        env_var: REDIS_PORT
+        label: "Redis Port"
+        default: "6379"
+
+    ui:
+      icon: cloud-cache
+      tags: ["infrastructure", "cache", "cloud", "managed"]

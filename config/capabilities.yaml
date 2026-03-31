@@ -1,17 +1,13 @@
 # Capability Definitions
 #
 # Capabilities define abstract interfaces that services can depend on.
-# Each capability specifies:
-#   - provides: Credential keys that providers must supply (api_key, base_url, etc.)
+# Each key under `provides` declares:
+#   - type: the value type (string, secret, url, boolean, integer)
+#   - env:  canonical env var names — first is the primary name injected into consumers,
+#           additional entries are recognised synonyms for automap detection.
 #
-# Note: Providers define what env vars they expose (e.g., OPENAI_API_KEY).
-# Services get the provider's env vars directly - only need env_mapping if overriding.
-#
-# Usage:
-#   1. Services declare `uses: [{capability: llm}]`
-#   2. Providers in config/providers/*.yaml implement capabilities with env_var per credential
-#   3. CapabilityResolver passes provider's env vars to service
-#   4. Service uses env_mapping only if it needs different env var names
+# Settings for a credential are stored at: {capability}.{provider_id}.{key}
+# e.g.  transcription.deepgram.api_key   or   llm.openai.base_url
 
 capabilities:
   # ==========================================================================
@@ -19,82 +15,228 @@ capabilities:
   # ==========================================================================
   llm:
     description: "Large Language Model providers"
-
-    # Credential keys that providers must supply
-    # Providers define the actual env_var names (e.g., OPENAI_API_KEY)
     provides:
       api_key:
         type: secret
         description: "API key for the LLM provider"
+        env: [LLM_API_KEY]
       base_url:
         type: url
         description: "API endpoint URL"
+        env: [LLM_BASE_URL]
       model:
         type: string
         description: "Model identifier to use"
+        env: [LLM_MODEL]
 
   # ==========================================================================
   # Transcription Capability
   # ==========================================================================
   transcription:
     description: "Speech-to-text transcription services"
-
     provides:
       api_key:
         type: secret
         description: "API key for transcription service"
+        env: [TRANSCRIPTION_API_KEY]
       server_url:
         type: url
         description: "Transcription service endpoint"
+        env: [TRANSCRIPTION_BASE_URL]
       language:
         type: string
         description: "Target language code (e.g., en, es, fr)"
+        env: [TRANSCRIPTION_LANGUAGE]
       model:
         type: string
         description: "Model identifier to use for transcription"
+        env: [TRANSCRIPTION_MODEL]
 
   # ==========================================================================
   # Memory Capability
   # ==========================================================================
   memory:
     description: "Memory and knowledge storage services"
-
     provides:
       server_url:
         type: url
         description: "Memory service endpoint"
+        env: [MEMORY_SERVER_URL]
       api_key:
         type: secret
         description: "API key for memory service (if required)"
+        env: [MEMORY_API_KEY]
 
   # ==========================================================================
   # Speaker Recognition Capability
   # ==========================================================================
   speaker_recognition:
     description: "Speaker identification and diarization"
-
     provides:
       api_key:
         type: secret
         description: "API key for speaker recognition"
+        env: [SPEAKER_API_KEY]
       server_url:
         type: url
         description: "Speaker recognition service endpoint"
+        env: [SPEAKER_SERVER_URL]
 
   # ==========================================================================
   # Memory Source Capability (Integrations)
   # ==========================================================================
   memory_source:
     description: "External data sources that sync to memory (Obsidian, Notion, etc.)"
-
-    # Base fields that ALL memory_source providers must implement
-    # Each provider (obsidian, notion, gdrive) provides these fields
-    # with provider-specific labels, defaults, and validation
     provides:
       source_path:
         type: string
         description: "Path/URL to the data source (file path, API endpoint, etc.)"
+        env: [MEMORY_SOURCE_PATH]
       sync_interval:
         type: integer
         description: "Auto-sync interval in seconds"
+        env: [MEMORY_SOURCE_SYNC_INTERVAL]
 
+  # ==========================================================================
+  # Infrastructure Capabilities
+  # ==========================================================================
+  # Infrastructure services that application services depend on.
+  # Each is a concrete service type (not interchangeable — you can't swap
+  # postgres for redis). Database name is per-consumer config, not here.
+
+  postgres:
+    description: "PostgreSQL relational database (with PostGIS support)"
+    category: infrastructure
+    provides:
+      host:
+        type: string
+        description: "PostgreSQL hostname"
+        env: [POSTGRES_HOST]
+      port:
+        type: integer
+        description: "PostgreSQL port"
+        env: [POSTGRES_PORT]
+      user:
+        type: string
+        description: "PostgreSQL superuser name"
+        env: [POSTGRES_USER]
+      password:
+        type: secret
+        description: "PostgreSQL superuser password"
+        env: [POSTGRES_PASSWORD]
+
+  redis:
+    description: "Redis in-memory data store"
+    category: infrastructure
+    provides:
+      url:
+        type: url
+        description: "Redis connection URL (redis://host:port/db)"
+        env: [REDIS_URL]
+      host:
+        type: string
+        description: "Redis hostname"
+        env: [REDIS_HOST]
+      port:
+        type: integer
+        description: "Redis port"
+        env: [REDIS_PORT]
+      password:
+        type: secret
+        description: "Redis password (optional, leave blank if auth is disabled)"
+        env: [REDIS_PASSWORD]
+        required: false
+
+  mongo:
+    description: "MongoDB document database"
+    category: infrastructure
+    provides:
+      host:
+        type: string
+        description: "MongoDB hostname"
+        env: [MONGODB_HOST]
+      port:
+        type: integer
+        description: "MongoDB port"
+        env: [MONGODB_PORT]
+      username:
+        type: string
+        description: "MongoDB username (optional, leave blank if auth is disabled)"
+        env: [MONGODB_USERNAME]
+        required: false
+      password:
+        type: secret
+        description: "MongoDB password (optional, leave blank if auth is disabled)"
+        env: [MONGODB_PASSWORD]
+        required: false
+
+  qdrant:
+    description: "Qdrant vector database for embeddings"
+    category: infrastructure
+    provides:
+      url:
+        type: url
+        description: "Qdrant HTTP endpoint"
+        env: [QDRANT_URL]
+      host:
+        type: string
+        description: "Qdrant hostname"
+        env: [QDRANT_HOST]
+      port:
+        type: integer
+        description: "Qdrant HTTP port"
+        env: [QDRANT_PORT]
+      grpc_port:
+        type: integer
+        description: "Qdrant gRPC port"
+        env: [QDRANT_GRPC_PORT]
+
+  neo4j:
+    description: "Neo4j graph database"
+    category: infrastructure
+    provides:
+      uri:
+        type: url
+        description: "Neo4j Bolt connection URI"
+        env: [NEO4J_URI]
+      host:
+        type: string
+        description: "Neo4j hostname"
+        env: [NEO4J_HOST]
+      bolt_port:
+        type: integer
+        description: "Neo4j Bolt protocol port"
+        env: [NEO4J_BOLT_PORT]
+      http_port:
+        type: integer
+        description: "Neo4j HTTP browser port"
+        env: [NEO4J_HTTP_PORT]
+      username:
+        type: string
+        description: "Neo4j username"
+        env: [NEO4J_USERNAME]
+      password:
+        type: secret
+        description: "Neo4j password"
+        env: [NEO4J_PASSWORD]
+
+  auth:
+    description: "Authentication and identity provider"
+    category: infrastructure
+    provides:
+      server_url:
+        type: url
+        description: "Auth server base URL"
+        env: [AUTH_SERVER_URL]
+      realm:
+        type: string
+        description: "Auth realm/tenant name"
+        env: [AUTH_REALM]
+      client_id:
+        type: string
+        description: "OAuth2 client ID for backend"
+        env: [AUTH_CLIENT_ID]
+      client_secret:
+        type: secret
+        description: "OAuth2 client secret for backend"
+        env: [AUTH_CLIENT_SECRET]

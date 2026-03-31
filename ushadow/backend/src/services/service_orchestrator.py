@@ -591,11 +591,11 @@ class ServiceOrchestrator:
 
         required_vars = [
             await build_env_var_info(ev, is_required=True)
-            for ev in schema.required_env_vars
+            for ev in sorted(schema.required_env_vars, key=lambda ev: ev.name)
         ]
         optional_vars = [
             await build_env_var_info(ev, is_required=False)
-            for ev in schema.optional_env_vars
+            for ev in sorted(schema.optional_env_vars, key=lambda ev: ev.name)
         ]
 
         return {
