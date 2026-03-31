@@ -252,9 +252,17 @@ class ProviderRegistry:
         return list(self._capabilities.values())
 
     def get_provider(self, provider_id: str) -> Optional[Provider]:
-        """Get a provider by ID."""
+        """Get a provider by ID.
+
+        Includes backward-compat fallback: provider IDs were renamed from
+        e.g. 'openai' to 'openai-net' in the provider refactor. Stored wiring
+        and service_configs may still reference the old IDs.
+        """
         self._load()
-        return self._providers.get(provider_id)
+        provider = self._providers.get(provider_id)
+        if provider is None and not provider_id.endswith('-net'):
+            provider = self._providers.get(f"{provider_id}-net")
+        return provider
 
     def get_providers(self) -> List[Provider]:
         """Get all providers."""
