@@ -10,26 +10,26 @@ def build_mongodb_uri_from_env(env: Optional[dict] = None) -> Optional[str]:
     Construct MongoDB URI from component environment variables.
 
     Reads individual MongoDB configuration from the provided dict or os.environ:
-    - MONGODB_HOST (default: mongo)
+    - MONGODB_HOST (required — returns None if absent)
     - MONGODB_PORT (default: 27017)
     - MONGODB_USER (optional)
-    - MONGODB_PASSWORD (optional)
-    - MONGODB_DATABASE (optional, for default database in URI)
-    - MONGODB_AUTH_SOURCE (default: admin, only used with authentication)
+    - MONGODB_PASSWORD (optional — omitted from URI if not set)
+    - MONGODB_DATABASE (optional)
+    - MONGODB_AUTH_SOURCE (default: admin, only included when user is set)
+    - MONGODB_REPLICA_SET (optional — adds ?replicaSet=<name> to the URI)
 
     Args:
         env: Optional dict of env vars. Defaults to os.environ if not provided.
 
     Returns:
-        Constructed MongoDB URI string, or None if MONGODB_HOST not set
+        Constructed MongoDB URI string, or None if MONGODB_HOST not set.
 
     Examples:
-        Without authentication:
-        mongodb://mongo:27017
-        mongodb://mongo:27017/ushadow
-
-        With authentication:
-        mongodb://user:pass@mongo:27017/ushadow?authSource=admin
+        No auth:          mongodb://mongo:27017/mydb
+        User only:        mongodb://user@mongo:27017/mydb?authSource=admin
+        User + password:  mongodb://user:pass@mongo:27017/mydb?authSource=admin
+        With replica set: mongodb://mongo:27017/mydb?replicaSet=rs0
+        Full:             mongodb://user:pass@mongo:27017/mydb?authSource=admin&replicaSet=rs0
     """
     source = env if env is not None else os.environ
     host = source.get("MONGODB_HOST")
@@ -41,32 +41,31 @@ def build_mongodb_uri_from_env(env: Optional[dict] = None) -> Optional[str]:
     password = source.get("MONGODB_PASSWORD", "")
     database = source.get("MONGODB_DATABASE", "")
     auth_source = source.get("MONGODB_AUTH_SOURCE", "admin")
+    replica_set = source.get("MONGODB_REPLICA_SET", "")
 
-    # URL-encode credentials to handle special characters
+    # Build credentials — user is enough on its own (password is optional)
     if user:
-        user = quote_plus(user)
-    if password:
-        password = quote_plus(password)
-
-    # Build URI components
-    if user and password:
-        # Authenticated connection
-        credentials = f"{user}:{password}@"
-        query_params = f"?authSource={auth_source}"
+        encoded_user = quote_plus(user)
+        credentials = (
+            f"{encoded_user}:{quote_plus(password)}@" if password
+            else f"{encoded_user}@"
+        )
     else:
-        # No authentication
         credentials = ""
-        query_params = ""
 
     # Build base URI
     uri = f"mongodb://{credentials}{host}:{port}"
-
-    # Add database if specified
     if database:
         uri += f"/{database}"
 
-    # Add query parameters (only for authenticated connections)
-    uri += query_params
+    # Build query string
+    params: list[str] = []
+    if user:
+        params.append(f"authSource={auth_source}")
+    if replica_set:
+        params.append(f"replicaSet={replica_set}")
+    if params:
+        uri += "?" + "&".join(params)
 
     return uri
 

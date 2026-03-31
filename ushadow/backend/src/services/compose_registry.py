@@ -122,6 +122,7 @@ class DiscoveredService:
     infra_services: List[str] = field(default_factory=list)  # Infra services to start first
     route_path: Optional[str] = None  # Tailscale Serve route path (e.g., "/chronicle")
     wizard: Optional[str] = None  # Setup wizard ID from x-ushadow
+    setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # Exposed URLs from x-ushadow
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all)
@@ -272,10 +273,9 @@ class ComposeServiceRegistry:
 
         # Extract services
         for name, service in parsed.services.items():
-            # Use just the service name - simpler and more user-friendly
-            # Old: "chronicle-compose:chronicle-backend"
-            # New: "chronicle-backend"
-            service_id = name
+            # Use x-ushadow id override if present, otherwise Docker service name
+            # e.g. ollama → ollama-compose avoids ID collision with YAML provider ollama-net
+            service_id = service.id or name
 
             discovered = DiscoveredService(
                 service_id=service_id,
@@ -294,6 +294,7 @@ class ComposeServiceRegistry:
                 infra_services=service.infra_services,
                 route_path=service.route_path,
                 wizard=service.wizard,
+                setup_script=service.setup_script,
                 exposes=service.exposes,
                 tags=service.tags,
                 environments=service.environments,

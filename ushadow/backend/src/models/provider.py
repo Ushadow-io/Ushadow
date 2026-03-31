@@ -11,20 +11,36 @@ from typing import Dict, List, Optional, Any, Literal
 from pydantic import BaseModel, Field
 
 
+class CapabilityKey(BaseModel):
+    """
+    A single key in a capability's provides contract.
+
+    Defines the type and canonical env var names consumers should expect.
+    The first entry in `env` is the primary/canonical name injected by default.
+    Additional entries are recognised synonyms for automap detection.
+    """
+    type: Literal["string", "secret", "url", "boolean", "integer"] = "string"
+    description: Optional[str] = None
+    env: List[str] = Field(
+        default_factory=list,
+        description="Canonical env var names — first is primary, rest are recognised synonyms"
+    )
+
+
 class EnvMap(BaseModel):
     """
-    Maps a settings path to an environment variable.
+    Maps a provider credential key to an environment variable.
 
-    Reusable across providers and services. The provider declares the mapping,
-    the actual value lives in settings (OmegaConf).
+    The actual settings path is auto-derived as:
+        {capability}.{provider_id}.{key}
 
     Resolution order:
-    1. settings.get(settings_path) - User override
-    2. default - Provider's default value
+    1. Instance config override
+    2. settings.get({capability}.{provider_id}.{key})
+    3. default — provider's default value
     """
     key: str = Field(..., description="Logical key (e.g., 'api_key', 'base_url')")
-    env_var: str = Field(..., description="Environment variable name to expose")
-    settings_path: Optional[str] = Field(None, description="Dot-notation path in settings")
+    env_var: str = Field(..., description="Environment variable name on the provider's own container")
     default: Optional[str] = Field(None, description="Default value if not in settings")
     type: Literal["string", "secret", "url", "boolean", "integer"] = Field(
         "string", description="Value type (affects UI rendering)"
@@ -43,9 +59,9 @@ class Capability(BaseModel):
     """
     id: str = Field(..., description="Capability identifier (e.g., 'llm', 'memory')")
     description: str = Field(..., description="Human-readable description")
-    provides: Dict[str, str] = Field(
+    provides: Dict[str, CapabilityKey] = Field(
         default_factory=dict,
-        description="Schema: key -> type (string, secret, url, boolean, integer)"
+        description="Schema: key -> CapabilityKey (type + canonical env var names)"
     )
 
 

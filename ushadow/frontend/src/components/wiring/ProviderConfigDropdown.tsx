@@ -118,14 +118,14 @@ function Submenu({ option, template, savedConfigs, isEditingConfig, position, on
       setEnvVars([])
       setConfigs({})
       setLoading(true)
+
+      // Step 1: Fetch template env config (always required for field definitions)
+      let initial: Record<string, EnvVarConfig> = {}
       try {
         const response = await svcConfigsApi.getTemplateEnvConfig(template.id)
         const data = response.data
-
         setEnvVars(data)
 
-        // Initialize configs from backend response (already has auto-mapping)
-        const initial: Record<string, EnvVarConfig> = {}
         for (const ev of data) {
           initial[ev.name] = {
             name: ev.name,
@@ -134,15 +134,48 @@ function Submenu({ option, template, savedConfigs, isEditingConfig, position, on
             value: ev.value,
           }
         }
-        setConfigs(initial)
       } catch (err) {
-        console.error('Failed to fetch template env config:', err)
-      } finally {
+        console.error('[ProviderConfigDropdown] Failed to fetch template env config:', err)
         setLoading(false)
+        return
       }
+
+      // Step 2: If editing a saved config, overlay its stored values on top of template defaults
+      if (isEditingConfig) {
+        console.log('[ProviderConfigDropdown] Fetching service config for overlay:', option.id)
+        try {
+          const svcResponse = await svcConfigsApi.getServiceConfig(option.id)
+          const svcValues = svcResponse.data.config?.values ?? {}
+          console.log('[ProviderConfigDropdown] Service config values:', svcValues)
+
+          // Build capability key → env var name mapping from the template schema
+          const capKeyToEnvVar: Record<string, string> = {}
+          for (const field of template.config_schema) {
+            capKeyToEnvVar[field.key] = field.env_var ?? field.key.toUpperCase()
+          }
+          console.log('[ProviderConfigDropdown] capKeyToEnvVar:', capKeyToEnvVar, 'initial keys:', Object.keys(initial))
+
+          // Overlay stored values - capability-keyed → env var name → update initial.
+          // Clear setting_path so EnvVarEditor shows the literal value, not the mapping dropdown.
+          const overlaid = { ...initial }
+          for (const [capKey, value] of Object.entries(svcValues)) {
+            const envName = capKeyToEnvVar[capKey] ?? capKey.toUpperCase()
+            if (overlaid[envName] && typeof value === 'string' && value) {
+              overlaid[envName] = { ...overlaid[envName], source: 'literal', value, setting_path: undefined }
+            }
+          }
+          initial = overlaid
+        } catch (err) {
+          console.error('[ProviderConfigDropdown] Failed to fetch service config overrides:', err)
+          // Fall through — show template defaults
+        }
+      }
+
+      setConfigs(initial)
+      setLoading(false)
     }
     fetchEnvConfig()
-  }, [template?.id])
+  }, [template?.id, isEditingConfig, option.id])
 
   const hasChanges = Object.values(configs).some(c => c.source !== 'default' || c.value || c.setting_path)
 
@@ -793,96 +826,36 @@ export function ProviderConfigDropdown({
               <>
                 {effectiveOptions.defaults.map(templateOption => {
                   const childConfigs = effectiveOptions.saved.filter(s => s.templateId === templateOption.templateId)
-
-                  // When exactly one saved config exists, skip the parent/child hierarchy:
-                  // show the template name (recognizable) but clicking selects the saved config.
-                  // Include the edit arrow so the user can still configure it.
-                  if (childConfigs.length === 1) {
-                    const singleConfig = childConfigs[0]
-                    const isSelected = value?.id === singleConfig.id
-                    const ModeIcon = templateOption.mode === 'cloud' ? Cloud : HardDrive
-                    const testId = `provider-option-default-${templateOption.templateId}`
-                    return (
-                      <div
-                        key={templateOption.id}
-                        className={`flex items-center text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 ${isSelected ? 'bg-primary-50 dark:bg-primary-900/30' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleSelect(singleConfig)}
-                          data-testid={testId}
-                          className="flex-1 flex items-center gap-2 px-3 py-2 text-left"
-                        >
-                          <ModeIcon className="h-4 w-4 text-neutral-500 flex-shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium truncate">{templateOption.name}</span>
-                              {singleConfig.configSummary && (
-                                <span className="text-neutral-500 dark:text-neutral-400 truncate text-xs">
-                                  - {singleConfig.configSummary}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          {isSelected && <Check className="h-4 w-4 text-primary-500 flex-shrink-0" />}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleArrowClick(singleConfig, e)}
-                          className={`px-2 py-2 hover:bg-neutral-200 dark:hover:bg-neutral-600 border-l border-neutral-200 dark:border-neutral-700 ${activeSubmenu?.option.id === singleConfig.id ? 'bg-neutral-200 dark:bg-neutral-600' : ''}`}
-                          data-testid={`${testId}-arrow`}
-                        >
-                          <ChevronRight className="h-4 w-4 text-neutral-400" />
-                        </button>
-                      </div>
-                    )
-                  }
-
                   return (
                     <div key={templateOption.id}>
                       {/* Template option */}
                       {renderOption(templateOption, value?.id === templateOption.id)}
 
-                      {/* Saved configs indented under this template (when >1 exist) */}
+                      {/* Saved configs indented under this template */}
                       {childConfigs.map(savedConfig => (
-                        <div
+                        <button
                           key={savedConfig.id}
+                          type="button"
+                          onClick={(e) => handleArrowClick(savedConfig, e)}
+                          data-testid={`provider-option-config-${savedConfig.id}`}
                           className={`
-                            flex items-center text-sm pl-6
+                            w-full flex items-center gap-2 pl-9 pr-3 py-1.5 text-sm text-left
                             hover:bg-neutral-100 dark:hover:bg-neutral-700
+                            ${activeSubmenu?.option.id === savedConfig.id ? 'bg-neutral-100 dark:bg-neutral-700' : ''}
                             ${value?.id === savedConfig.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''}
                           `}
                         >
-                          <button
-                            type="button"
-                            onClick={() => handleSelect(savedConfig)}
-                            data-testid={`provider-option-config-${savedConfig.id}`}
-                            className="flex-1 flex items-center gap-2 px-3 py-1.5 text-left"
-                          >
-                            <span className="text-neutral-400 text-xs">└</span>
-                            <span className="text-neutral-700 dark:text-neutral-300">{savedConfig.name}</span>
-                            {savedConfig.configSummary && (
-                              <span className="text-neutral-500 dark:text-neutral-400 truncate text-xs">
-                                - {savedConfig.configSummary}
-                              </span>
-                            )}
-                            {value?.id === savedConfig.id && (
-                              <Check className="h-3 w-3 text-primary-500 flex-shrink-0 ml-auto" />
-                            )}
-                          </button>
-                          {/* Arrow to edit saved config */}
-                          <button
-                            type="button"
-                            onClick={(e) => handleArrowClick(savedConfig, e)}
-                            className={`
-                              px-2 py-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-600 border-l border-neutral-200 dark:border-neutral-700
-                              ${activeSubmenu?.option.id === savedConfig.id ? 'bg-neutral-200 dark:bg-neutral-600' : ''}
-                            `}
-                            data-testid={`provider-option-config-${savedConfig.id}-arrow`}
-                          >
-                            <ChevronRight className="h-4 w-4 text-neutral-400" />
-                          </button>
-                        </div>
+                          <span className="text-neutral-400 text-xs">└</span>
+                          <span className="text-neutral-700 dark:text-neutral-300">{savedConfig.name}</span>
+                          {savedConfig.configSummary && (
+                            <span className="text-neutral-500 dark:text-neutral-400 truncate text-xs">
+                              - {savedConfig.configSummary}
+                            </span>
+                          )}
+                          {value?.id === savedConfig.id && (
+                            <Check className="h-3 w-3 text-primary-500 flex-shrink-0 ml-auto" />
+                          )}
+                        </button>
                       ))}
                     </div>
                   )

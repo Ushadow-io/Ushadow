@@ -233,8 +233,9 @@ export function useProviderConfigs(
       configSummary: getConfigSummary(t),
     }))
 
-    // Configs as "saved"
-    const saved: ProviderOption[] = configs.map(c => {
+    // Configs as "saved" — exclude placeholders (id === template_id are installed-but-unconfigured
+    // defaults, not real user configs; they're already represented by the template entry above)
+    const saved: ProviderOption[] = configs.filter(c => c.id !== c.template_id).map(c => {
       const template = templates.find(t => t.id === c.template_id)
       return {
         id: c.id,
@@ -284,9 +285,8 @@ export function useProviderConfigs(
     // Create wiring connection
     await svcConfigsApi.createWiring({
       source_config_id: actualConfigId,
-      source_capability: capability!,
       target_config_id: targetId,
-      target_capability: targetCapability,
+      capability: capability!,
     })
 
     // Refresh to get updated configs

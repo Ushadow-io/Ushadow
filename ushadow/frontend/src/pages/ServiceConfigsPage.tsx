@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus,
@@ -95,6 +96,8 @@ export default function ServiceConfigsPage() {
     isLoading: loading,
     refresh: refreshData,
   } = useServiceConfigData()
+
+  const queryClient = useQueryClient()
 
   // Service catalog hook
   const catalog = useServiceCatalog()
@@ -424,9 +427,7 @@ export default function ServiceConfigsPage() {
       const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.startService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} started` })
-      // Reload service statuses
-      const statusesRes = await servicesApi.getAllStatuses()
-      setServiceStatuses(statusesRes.data || {})
+      refreshData()
     } catch (error: any) {
       setMessage({
         type: 'error',
@@ -444,9 +445,7 @@ export default function ServiceConfigsPage() {
       const serviceName = templateId.includes(':') ? templateId.split(':').pop()! : templateId
       await servicesApi.stopService(serviceName)
       setMessage({ type: 'success', text: `${consumerId} stopped` })
-      // Reload service statuses
-      const statusesRes = await servicesApi.getAllStatuses()
-      setServiceStatuses(statusesRes.data || {})
+      refreshData()
     } catch (error: any) {
       setMessage({
         type: 'error',
@@ -539,7 +538,7 @@ export default function ServiceConfigsPage() {
         const provider = [...templates, ...instances].find((p) => p.id === conn.source_config_id)
         if (provider) {
           // Get the capability mapping (e.g., "mongodb" -> MONGODB_URL, MONGODB_NAME)
-          const capability = conn.source_capability
+          const capability = conn.capability
 
           // Map capability to env var names based on common patterns
           if (capability === 'mongodb') {
@@ -898,12 +897,10 @@ export default function ServiceConfigsPage() {
     } else {
       // Edit instance - fetch details and load environment configuration
       try {
-        let details = instanceDetails[providerId]
-        if (!details) {
-          const res = await svcConfigsApi.getServiceConfig(providerId)
-          details = res.data
-          setServiceConfigDetails((prev) => ({ ...prev, [providerId]: details }))
-        }
+        // Always fetch fresh data when opening the edit modal to avoid stale cache issues
+        const res = await svcConfigsApi.getServiceConfig(providerId)
+        const details = res.data
+        setServiceConfigDetails((prev) => ({ ...prev, [providerId]: details }))
 
         const instance = instances.find((i) => i.id === providerId)
         const template = templates.find((t) => t.id === instance?.template_id)
@@ -937,7 +934,7 @@ export default function ServiceConfigsPage() {
               for (const conn of wiringConnections) {
                 const provider = [...templates, ...instances].find((p) => p.id === conn.source_config_id)
                 if (provider) {
-                  const capability = conn.source_capability
+                  const capability = conn.capability
 
                   // Map capability to env var names
                   if (capability === 'mongodb') {
@@ -1151,9 +1148,8 @@ export default function ServiceConfigsPage() {
         }
 
         await svcConfigsApi.updateServiceConfig(editingProvider.id, { config: configToSave })
-        // Refresh instance details
-        const res = await svcConfigsApi.getServiceConfig(editingProvider.id)
-        setServiceConfigDetails((prev) => ({ ...prev, [editingProvider.id]: res.data }))
+        // Refresh instance list so wiring board reflects new config
+        await queryClient.invalidateQueries({ queryKey: ['service-configs-core'] })
         setMessage({ type: 'success', text: `${editingProvider.name} updated` })
       }
       setEditingProvider(null)
@@ -1445,9 +1441,8 @@ export default function ServiceConfigsPage() {
     try {
       await svcConfigsApi.createWiring({
         source_config_id: sourceConfigId,
-        source_capability: capability,
         target_config_id: consumerId,
-        target_capability: capability,
+        capability,
       })
       refreshData() // Refresh data from React Query
       setMessage({ type: 'success', text: `${capability} provider connected` })
@@ -1461,11 +1456,11 @@ export default function ServiceConfigsPage() {
 
   const handleWiringClear = async (consumerId: string, capability: string) => {
     const wire = wiring.find(
-      (w) => w.target_config_id === consumerId && w.target_capability === capability
+      (w) => w.target_config_id === consumerId && w.capability === capability
     )
     if (!wire) return
     try {
-      await svcConfigsApi.deleteWiring(wire.id)
+      await svcConfigsApi.deleteWiring(wire.target_config_id, wire.capability)
       refreshData() // Refresh data from React Query
       setMessage({ type: 'success', text: `${capability} provider disconnected` })
     } catch (error: any) {
@@ -1609,6 +1604,7 @@ export default function ServiceConfigsPage() {
         />
       ) : activeTab === 'providers' ? (
         <ProvidersTab
+          instances={instances}
           providers={providerTemplates.map((t) => addedProviderIds.has(t.id) ? { ...t, installed: true } : t)}
           expandedProviderId={expandedProviderCard}
           onToggleExpand={handleExpandProviderCard}

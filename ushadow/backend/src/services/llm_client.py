@@ -5,10 +5,10 @@ Uses the capability system to get credentials for the selected provider,
 then calls LiteLLM with the appropriate model format.
 
 Provider mapping:
-- openai -> openai/gpt-4o-mini (or configured model)
-- anthropic -> anthropic/claude-3-5-sonnet-20241022
-- ollama -> ollama/llama3.1:latest
-- openai-compatible -> openai/<model> with custom base_url
+- openai-net -> openai/gpt-4o-mini (or configured model)
+- anthropic-net -> anthropic/claude-3-5-sonnet-20241022
+- ollama-net -> ollama/llama3.1:latest
+- openai-compatible-net -> openai/<model> with custom base_url
 """
 
 import logging
@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 # Map our provider IDs to litellm provider prefixes
 PROVIDER_PREFIX_MAP = {
-    "openai": "openai",
-    "anthropic": "anthropic",
-    "ollama": "ollama",
-    "openai-compatible": "openai",  # Uses OpenAI format with custom base_url
+    "openai-net": "openai",
+    "anthropic-net": "anthropic",
+    "ollama-net": "ollama",
+    "openai-compatible-net": "openai",  # Uses OpenAI format with custom base_url
 }
 
 
@@ -51,7 +51,7 @@ class LLMClient:
             Dict with keys: provider_id, model, api_key, base_url
         """
         # Get selected provider for 'llm' capability
-        selected_provider_id = await self._settings.get("selected_providers.llm", "openai")
+        selected_provider_id = await self._settings.get("selected_providers.llm", "openai-net")
         provider = self._provider_registry.get_provider(selected_provider_id)
 
         if not provider:
@@ -64,10 +64,10 @@ class LLMClient:
         }
 
         for env_map in provider.env_maps:
-            # Get value from settings or use default
+            # Get value from auto-derived settings path: {capability}.{provider_id}.{key}
             value = None
-            if env_map.settings_path:
-                value = await self._settings.get(env_map.settings_path)
+            derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+            value = await self._settings.get(derived_path)
             if value is None and env_map.default:
                 value = env_map.default
 
@@ -205,7 +205,7 @@ class LLMClient:
             provider_id = config.get("provider_id", "")
 
             # Ollama doesn't need an API key
-            if provider_id == "ollama":
+            if provider_id == "ollama-net":
                 return bool(config.get("base_url"))
 
             # Cloud providers need an API key

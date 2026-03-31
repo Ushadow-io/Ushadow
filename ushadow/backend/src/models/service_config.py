@@ -135,6 +135,10 @@ class ServiceConfig(BaseModel):
     # Configuration mappings (@settings.path or literals)
     config: ConfigValues = Field(default_factory=ConfigValues, description="Config values")
 
+    # Inline wiring: capability -> source_config_id
+    # e.g. {"llm": "openai", "transcription": "faster-chakra"}
+    wiring: Dict[str, str] = Field(default_factory=dict, description="capability -> provider ServiceConfig ID")
+
     # Deployment constraints (label-based targeting)
     deployment_labels: Dict[str, str] = Field(
         default_factory=dict,
@@ -166,22 +170,14 @@ class Wiring(BaseModel):
     """
     Connects an instance output to an instance input.
 
-    When wired, the source instance's output values override
-    the target instance's input configuration for that capability.
+    Stored inline on the consumer ServiceConfig as wiring[capability] = source_config_id.
+    This model is used for API responses only (reconstructed from inline data).
     """
-    id: str = Field(..., description="Unique wiring identifier")
-
-    # Source (provides the capability)
+    id: str = Field(..., description="Synthetic ID: '{target_config_id}-{capability}'")
     source_config_id: str = Field(..., description="ServiceConfig providing the capability")
-    source_capability: str = Field(..., description="Capability being provided (e.g., 'llm', 'memory')")
-
-    # Target (consumes the capability)
     target_config_id: str = Field(..., description="ServiceConfig consuming the capability")
-    target_capability: str = Field(..., description="Capability slot being filled")
-
-    # Metadata
+    capability: str = Field(..., description="Capability being wired (e.g., 'llm', 'transcription')")
     created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
 
 
 # API Request/Response Models
@@ -217,9 +213,8 @@ class ServiceConfigUpdate(BaseModel):
 class WiringCreate(BaseModel):
     """Request to create a wiring connection."""
     source_config_id: str
-    source_capability: str
     target_config_id: str
-    target_capability: str
+    capability: str
 
 
 class ServiceConfigSummary(BaseModel):

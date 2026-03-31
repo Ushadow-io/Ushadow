@@ -24,15 +24,15 @@ async def _check_provider_configured(provider) -> bool:
             continue
         # Check if value exists in settings or has default
         has_value = bool(em.default)
-        if em.settings_path:
-            value = await settings.get(em.settings_path)
-            has_value = value is not None and str(value).strip() != ""
+        derived_path = f"{provider.capability}.{provider.id}.{em.key}"
+        value = await settings.get(derived_path)
+        has_value = value is not None and str(value).strip() != ""
         if not has_value:
             return False
     return True
 
 
-async def list_templates(source: Optional[str] = None) -> List[Template]:
+async def list_templates(source: Optional[str] = None, include_status: bool = True, installed_only: bool = False) -> List[Template]:
     """
     List available templates (compose services + providers).
 
@@ -40,6 +40,8 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
 
     Args:
         source: Optional filter - "compose" or "provider"
+        include_status: When False, skip Docker status checks and setup checks
+                        (faster, use when only installed/name/provides is needed)
 
     Returns:
         List of Template objects with installation/configuration status
@@ -67,8 +69,10 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
         logger.info(f"Loading templates - defaults: {default_services}, user_installed: {user_installed}, removed: {removed_services}")
         logger.info(f"Loading templates - final installed_names: {installed_names}")
 
-        from src.services.service_orchestrator import get_service_orchestrator
-        orchestrator = get_service_orchestrator()
+        orchestrator = None
+        if include_status:
+            from src.services.service_orchestrator import get_service_orchestrator
+            orchestrator = get_service_orchestrator()
 
         for service in registry.get_services():
             if source and source != "compose":
@@ -88,14 +92,19 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
             # Debug logging
             logger.debug(f"Service: {service.service_name}, installed: {is_installed}, installed_names: {installed_names}")
 
-            needs_setup = await orchestrator._check_needs_setup(service)
+            # Skip non-installed compose services when caller only wants installed ones
+            if installed_only and not is_installed:
+                continue
 
-            # Check if container is actually running (don't rely on default=True)
-            try:
-                service_status = await orchestrator.get_service_status(service.service_name)
-                is_running = service_status is not None and service_status.get("status") == "running"
-            except Exception:
-                is_running = False
+            needs_setup = False
+            is_running = False
+            if include_status and orchestrator:
+                needs_setup = await orchestrator._check_needs_setup(service)
+                try:
+                    service_status = await orchestrator.get_service_status(service.service_name)
+                    is_running = service_status is not None and service_status.get("status") == "running"
+                except Exception:
+                    is_running = False
 
             templates.append(Template(
                 id=service.service_id,
@@ -121,7 +130,8 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
     # Get providers as templates
     try:
         from src.services.provider_registry import get_provider_registry
-        from src.routers.providers import check_local_provider_available
+        if include_status:
+            from src.routers.providers import check_local_provider_available
         provider_registry = get_provider_registry()
         provider_registry.reload()  # Force reload from provider files to bust cache
         settings = get_settings()
@@ -137,35 +147,36 @@ async def list_templates(source: Optional[str] = None) -> List[Template]:
             is_installed = provider.id in user_installed
 
             # Check if provider is configured (has all required keys)
-            is_configured = await _check_provider_configured(provider)
-
-            # Check if local provider is running (Docker container up)
+            is_configured = False
             is_running = True
-            if provider.mode == 'local':
-                is_running = await check_local_provider_available(provider, settings)
+            if include_status:
+                is_configured = await _check_provider_configured(provider)
+                if provider.mode == 'local':
+                    is_running = await check_local_provider_available(provider, settings)
 
-            # Build config_schema with current values from settings
+            # Build config_schema with current values from settings (only when status needed)
             config_schema = []
-            for em in provider.env_maps:
-                value = None
-                has_value = bool(em.default)
-                if em.settings_path:
-                    stored_value = await settings.get(em.settings_path)
+            if include_status:
+                for em in provider.env_maps:
+                    value = None
+                    has_value = bool(em.default)
+                    derived_path = f"{provider.capability}.{provider.id}.{em.key}"
+                    stored_value = await settings.get(derived_path)
                     has_value = stored_value is not None and str(stored_value).strip() != ""
                     # Only return actual value for non-secrets
                     if has_value and em.type != "secret":
                         value = str(stored_value)
-                config_schema.append({
-                    "key": em.key,
-                    "type": em.type,
-                    "label": em.label,
-                    "required": em.required,
-                    "default": em.default,
-                    "env_var": em.env_var,
-                    "settings_path": em.settings_path,
-                    "has_value": has_value,
-                    "value": value,  # Non-secret values for pre-population
-                })
+                    config_schema.append({
+                        "key": em.key,
+                        "type": em.type,
+                        "label": em.label,
+                        "required": em.required,
+                        "default": em.default,
+                        "env_var": em.env_var,
+                        "settings_path": derived_path,
+                        "has_value": has_value,
+                        "value": value,  # Non-secret values for pre-population
+                    })
 
             templates.append(Template(
                 id=provider.id,

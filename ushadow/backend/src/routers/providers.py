@@ -54,8 +54,8 @@ async def check_local_provider_available(provider, settings) -> bool:
     base_url = None
     for em in provider.env_maps:
         if em.key == 'base_url':
-            if em.settings_path:
-                base_url = await settings.get(em.settings_path)
+            derived_path = f"{provider.capability}.{provider.id}.{em.key}"
+            base_url = await settings.get(derived_path)
             if not base_url:
                 base_url = em.default
             break
@@ -102,14 +102,14 @@ async def get_missing_fields(provider, settings) -> List[Dict[str, Any]]:
             continue
         # Check if value exists in settings or has default
         has_value = bool(em.default)
-        if em.settings_path:
-            value = await settings.get(em.settings_path)
-            has_value = value is not None and str(value).strip() != ""
+        derived_path = f"{provider.capability}.{provider.id}.{em.key}"
+        value = await settings.get(derived_path)
+        has_value = value is not None and str(value).strip() != ""
         if not has_value:
             missing.append({
                 "key": em.key,
                 "label": em.label or em.key,
-                "settings_path": em.settings_path,
+                "settings_path": derived_path,
                 "link": em.link
             })
     return missing
@@ -185,17 +185,17 @@ async def list_capabilities() -> List[Dict[str, Any]]:
             for em in p.env_maps:
                 value = None
                 has_value = bool(em.default)
-                if em.settings_path:
-                    stored_value = await settings.get(em.settings_path)
-                    has_value = stored_value is not None and str(stored_value).strip() != ""
-                    # Only return actual value for non-secrets
-                    if has_value and em.type != "secret":
-                        value = str(stored_value)
+                derived_path = f"{p.capability}.{p.id}.{em.key}"
+                stored_value = await settings.get(derived_path)
+                has_value = stored_value is not None and str(stored_value).strip() != ""
+                # Only return actual value for non-secrets
+                if has_value and em.type != "secret":
+                    value = str(stored_value)
                 credentials.append({
                     "key": em.key,
                     "type": em.type,
                     "label": em.label or em.key,
-                    "settings_path": em.settings_path,
+                    "settings_path": derived_path,
                     "link": em.link,
                     "required": em.required,
                     "default": em.default,

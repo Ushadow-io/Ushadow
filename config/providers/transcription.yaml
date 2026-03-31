@@ -1,13 +1,8 @@
 # Transcription Capability Providers
 # Implements the 'transcription' capability defined in capabilities.yaml
 #
-# Each provider specifies:
-#   - credentials: Values for the capability + env_var name to expose
-#   - mode: cloud or local
-#   - docker: Container config (for local providers)
-#
-# Services get the provider's env vars directly. Only need env_mapping to override.
-# Default provider selection is in config.defaults.yaml under `selected_providers`
+# Credentials are stored in settings at: transcription.{provider_id}.{key}
+# e.g. transcription.deepgram-net.api_key, transcription.whisper-net.server_url
 
 capability: transcription
 
@@ -15,7 +10,7 @@ providers:
   # ==========================================================================
   # Deepgram - Cloud Transcription
   # ==========================================================================
-  - id: deepgram
+  - id: deepgram-net
     name: "Deepgram"
     description: "Cloud speech-to-text API with real-time streaming"
     mode: cloud
@@ -23,7 +18,6 @@ providers:
     credentials:
       api_key:
         env_var: DEEPGRAM_API_KEY
-        settings_path: api_keys.deepgram_api_key
         label: "Deepgram API Key"
         link: "https://console.deepgram.com/project/default/keys"
         required: true
@@ -32,8 +26,11 @@ providers:
         value: "https://api.deepgram.com/v1"
       language:
         env_var: TRANSCRIPTION_LANGUAGE
-        settings_path: transcription.language
         default: "en"
+      model:
+        env_var: TRANSCRIPTION_MODEL
+        label: "Model"
+        default: "nova-2"
 
     ui:
       icon: deepgram
@@ -42,7 +39,7 @@ providers:
   # ==========================================================================
   # Mistral Voxtral - Cloud Transcription
   # ==========================================================================
-  - id: mistral-voxtral
+  - id: mistral-voxtral-net
     name: "Mistral Voxtral"
     description: "Mistral's voice transcription models"
     mode: cloud
@@ -50,7 +47,6 @@ providers:
     credentials:
       api_key:
         env_var: MISTRAL_API_KEY
-        settings_path: api_keys.mistral_api_key
         label: "Mistral API Key"
         link: "https://console.mistral.ai/api-keys"
         required: true
@@ -59,8 +55,11 @@ providers:
         value: "https://api.mistral.ai/v1"
       language:
         env_var: TRANSCRIPTION_LANGUAGE
-        settings_path: transcription.language
         default: "en"
+      model:
+        env_var: TRANSCRIPTION_MODEL
+        label: "Model"
+        default: "voxtral-mini-latest"
 
     ui:
       icon: mistral
@@ -69,7 +68,7 @@ providers:
   # ==========================================================================
   # Whisper (Local) - Local Transcription
   # ==========================================================================
-  - id: whisper-local
+  - id: whisper-net
     name: "Whisper (Remote)"
     description: "Connect to an OpenAI-compatible Whisper server via URL"
     mode: local
@@ -92,18 +91,15 @@ providers:
         value: ""
       server_url:
         env_var: WHISPER_SERVER_URL
-        settings_path: transcription.whisper_server_url
         label: "Whisper Server URL"
         type: url
         default: "http://faster-whisper:8000"
         required: true
       language:
         env_var: TRANSCRIPTION_LANGUAGE
-        settings_path: transcription.language
         default: "en"
       model:
         env_var: WHISPER_MODEL
-        settings_path: transcription.whisper_model
         label: "Model"
         description: "HuggingFace model name for faster-whisper (e.g. Systran/faster-whisper-base)"
         default: "Systran/faster-whisper-base"
@@ -115,7 +111,7 @@ providers:
   # ==========================================================================
   # Parakeet (Local) - NVIDIA Parakeet
   # ==========================================================================
-  - id: parakeet
+  - id: parakeet-asr-compose
     name: "Parakeet"
     description: "NVIDIA Parakeet ASR model - fast and accurate"
     mode: local
@@ -136,7 +132,6 @@ providers:
         value: ""
       server_url:
         env_var: PARAKEET_SERVER_URL
-        settings_path: transcription.parakeet_server_url
         default: "http://parakeet:8001"
         label: "Parakeet Server URL"
         type: url
@@ -144,6 +139,10 @@ providers:
       language:
         env_var: TRANSCRIPTION_LANGUAGE
         default: "en"
+      model:
+        env_var: PARAKEET_MODEL
+        label: "Model"
+        default: "nvidia/parakeet-tdt-0.6b-v2"
 
     ui:
       icon: nvidia

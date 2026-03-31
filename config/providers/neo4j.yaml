@@ -1,0 +1,114 @@
+# Neo4j Capability Providers
+# Implements the 'neo4j' capability defined in capabilities.yaml
+#
+# Credentials are stored in settings at: neo4j.{provider_id}.{key}
+# e.g. neo4j.docker.uri, neo4j.aura.password
+
+capability: neo4j
+
+providers:
+  # ==========================================================================
+  # Docker Neo4j - Local Graph Database
+  # ==========================================================================
+  - id: docker
+    name: "Neo4j (Docker)"
+    description: "Neo4j graph database with APOC plugin running in Docker"
+    mode: local
+
+    docker:
+      image: neo4j:latest
+      compose_file: compose/docker-compose.infra.yml
+      service_name: neo4j
+      container_name: neo4j
+      profiles: ["memory", "neo4j"]
+      ports:
+        - host: 7474
+          container: 7474
+          protocol: http
+        - host: 7687
+          container: 7687
+          protocol: bolt
+      volumes:
+        - name: neo4j_data
+          path: /data
+          persistent: true
+      environment:
+        # NEO4J_AUTH is set as user/password concatenation
+        NEO4J_PLUGINS: '["apoc"]'
+        # JVM fix for ARM64 containers
+        JAVA_OPTS_APPEND: "-XX:-UsePerfData -XX:+DisableAttachMechanism"
+      health:
+        http_get: /
+        port: 7474
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 30s
+      networks:
+        - ushadow-network
+        - infra-network
+
+    credentials:
+      uri:
+        env_var: NEO4J_URI
+        default: "bolt://neo4j:7687"
+      host:
+        env_var: NEO4J_HOST
+        default: "neo4j"
+      bolt_port:
+        env_var: NEO4J_BOLT_PORT
+        default: "7687"
+      http_port:
+        env_var: NEO4J_HTTP_PORT
+        default: "7474"
+      username:
+        env_var: NEO4J_USERNAME
+        label: "Neo4j Username"
+        default: "neo4j"
+      password:
+        env_var: NEO4J_PASSWORD
+        label: "Neo4j Password"
+        type: secret
+        default: "password"
+        min_length: 8
+
+    ui:
+      icon: neo4j
+      tags: ["infrastructure", "database", "graph"]
+
+  # ==========================================================================
+  # Neo4j Aura - Managed Cloud
+  # ==========================================================================
+  - id: aura
+    name: "Neo4j Aura"
+    description: "Managed Neo4j cloud service"
+    mode: cloud
+
+    credentials:
+      uri:
+        env_var: NEO4J_URI
+        label: "Aura Connection URI"
+        description: "neo4j+s://xxxxxxxx.databases.neo4j.io"
+        required: true
+      host:
+        env_var: NEO4J_HOST
+        label: "Aura Host"
+      bolt_port:
+        env_var: NEO4J_BOLT_PORT
+        default: "7687"
+      http_port:
+        env_var: NEO4J_HTTP_PORT
+        default: "7474"
+      username:
+        env_var: NEO4J_USERNAME
+        label: "Username"
+        required: true
+      password:
+        env_var: NEO4J_PASSWORD
+        label: "Password"
+        type: secret
+        required: true
+
+    ui:
+      icon: cloud-graph
+      tags: ["infrastructure", "database", "graph", "cloud", "managed"]

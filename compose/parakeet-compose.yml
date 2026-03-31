@@ -1,3 +1,12 @@
+x-ushadow:
+  parakeet-asr:
+    id: parakeet-asr-compose
+    display_name: "Parakeet ASR"
+    description: "NVIDIA Parakeet ASR - GPU-accelerated speech-to-text"
+    requires: []
+    provides: transcription
+    tags: ["transcription", "local", "gpu", "nvidia"]
+
 services:
   parakeet-asr:
     build:

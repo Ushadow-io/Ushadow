@@ -169,10 +169,12 @@ export default function DeployModal({ isOpen, onClose, onSuccess, mode = 'deploy
           const fallbackValue = envVar.resolved_value || envVar.value || envVar.default_value || ''
           initialConfigs[envVar.name] = {
             name: envVar.name,
-            source: (envVar.source as 'setting' | 'new_setting' | 'literal' | 'default') || 'default',
+            source: envVar.source || 'default',
             setting_path: envVar.setting_path,
             value: fallbackValue,
             new_setting_path: undefined,
+            locked: envVar.locked,
+            provider_name: envVar.provider_name,
             _isTemplateDefault: true  // Mark as coming from template, not user override
           }
         }

@@ -6,10 +6,11 @@ import { AlertCircle, Database } from 'lucide-react'
 import { useMemo } from 'react'
 import ProviderCard from './ProviderCard'
 import EmptyState from './EmptyState'
-import { EnvVarInfo, EnvVarConfig, Template } from '../../services/api'
+import { EnvVarInfo, EnvVarConfig, Template, ServiceConfigSummary } from '../../services/api'
 
 interface ProvidersTabProps {
   providers: Template[]
+  instances?: ServiceConfigSummary[]
   expandedProviderId: string | null
   onToggleExpand: (providerId: string) => void
   envVars: EnvVarInfo[]
@@ -23,6 +24,7 @@ interface ProvidersTabProps {
 
 export default function ProvidersTab({
   providers,
+  instances = [],
   expandedProviderId,
   onToggleExpand,
   envVars,
@@ -34,8 +36,14 @@ export default function ProvidersTab({
   isSaving,
 }: ProvidersTabProps) {
   const { grouped, sortedCapabilities, needsSetupCount } = useMemo(() => {
-    // Show configured providers and installed-but-unconfigured ones (not unrelated providers)
-    const relevant = providers.filter((p) => p.configured || p.installed || p.running)
+    // Provider IDs that have at least one real service config (id !== template_id means user-created)
+    const providerIdsWithConfigs = new Set(
+      instances.filter(i => i.id !== i.template_id).map(i => i.template_id)
+    )
+    // Show configured, installed, running, or providers with user-created service configs
+    const relevant = providers.filter(
+      (p) => p.configured || p.installed || p.running || providerIdsWithConfigs.has(p.id)
+    )
 
     const capabilityOrder = ['llm', 'transcription', 'memory', 'embedding', 'tts', 'other']
 
@@ -96,10 +104,14 @@ export default function ProvidersTab({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {grouped[capability].map((provider) => {
               const isExpanded = expandedProviderId === provider.id
+              const providerInstances = instances.filter(
+                i => i.template_id === provider.id && i.id !== i.template_id
+              )
               return (
                 <ProviderCard
                   key={provider.id}
                   provider={provider}
+                  instances={providerInstances}
                   isExpanded={isExpanded}
                   onToggleExpand={() => onToggleExpand(provider.id)}
                   envVars={isExpanded ? envVars : []}

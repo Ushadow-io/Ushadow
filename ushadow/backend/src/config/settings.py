@@ -272,6 +272,17 @@ class Settings:
         """Get all settings as a plain Python dict."""
         return await self._store._get_config_as_dict()
 
+    async def find_value_for_env_var(self, env_var: str) -> Optional[Tuple[str, Any]]:
+        """
+        Find a settings value matching an env var name (fuzzy match).
+
+        Returns (settings_path, value) or None. Used by the capability resolver
+        as a migration fallback when the derived settings path (e.g.
+        llm.openai.api_key) doesn't exist but the value was stored under an old
+        wizard path (e.g. api_keys.openai_api_key).
+        """
+        return await self._find_config_default(env_var)
+
     # -------------------------------------------------------------------------
     # Mutations (Public API)
     # -------------------------------------------------------------------------
@@ -390,9 +401,13 @@ class Settings:
         if service.requires:
             try:
                 resolver = CapabilityResolver()
-                # Use resolve_for_instance so wiring is always checked — the service
-                # name doubles as the consumer ID (matches target_config_id in wiring.yaml)
-                capability_values = await resolver.resolve_for_instance(service_id)
+                # Use capability_env_mappings from the x-ushadow header directly —
+                # the settings module owns the mapping, resolver just fetches provider values
+                capability_values = await resolver.resolve_capabilities(
+                    requires=service.requires,
+                    capability_env_mappings=service.capability_env_mappings,
+                    consumer_id=service_id,
+                )
             except Exception as e:
                 logger.debug(f"Could not resolve capabilities for {service_id}: {e}")
 
@@ -952,20 +967,21 @@ class Settings:
                     continue
 
                 for env_map in provider.env_maps:
-                    if env_map.key == env_var_name and env_map.settings_path:
-                        if env_map.settings_path in seen_paths:
+                    if env_map.key == env_var_name:
+                        derived_path = f"{provider.capability}.{provider.id}.{env_map.key}"
+                        if derived_path in seen_paths:
                             continue
-                        seen_paths.add(env_map.settings_path)
+                        seen_paths.add(derived_path)
 
-                        value = await self._store.get(env_map.settings_path)
+                        value = await self._store.get(derived_path)
                         str_value = str(value) if value is not None else ""
                         has_value = bool(str_value.strip())
 
                         suggestions.append(SettingSuggestion(
-                            path=env_map.settings_path,
+                            path=derived_path,
                             label=f"{provider.name}: {env_map.label or env_map.key}",
                             has_value=has_value,
-                            value=mask_secret_value(str_value, env_map.settings_path) if has_value else None,
+                            value=mask_secret_value(str_value, derived_path) if has_value else None,
                             capability=capability,
                             provider_name=provider.name,
                         ))

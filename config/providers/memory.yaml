@@ -1,13 +1,8 @@
 # Memory Capability Providers
 # Implements the 'memory' capability defined in capabilities.yaml
 #
-# Each provider specifies:
-#   - credentials: Values for the capability + env_var name to expose
-#   - mode: cloud or local
-#   - docker: Container config (for local providers)
-#
-# Services get the provider's env vars directly. Only need env_mapping to override.
-# Default provider selection is in config.defaults.yaml under `selected_providers`
+# Credentials are stored in settings at: memory.{provider_id}.{key}
+# e.g. memory.mem0-cloud.api_key
 
 capability: memory
 
@@ -15,7 +10,7 @@ providers:
   # ==========================================================================
   # OpenMemory - Graph-based Memory with MCP
   # ==========================================================================
-  - id: openmemory
+  - id: openmemory-compose
     name: "OpenMemory"
     description: "Graph-based memory with MCP support and Neo4j backend"
     mode: local
@@ -49,14 +44,12 @@ providers:
     config:
       enable_graph:
         env_var: ENABLE_GRAPH_MEMORY
-        settings_path: service_preferences.openmemory.enable_graph
         label: "Enable Graph Memory"
         description: "Use Neo4j for relationship tracking"
         type: boolean
         default: false
       neo4j_password:
         env_var: NEO4J_PASSWORD
-        settings_path: service_preferences.openmemory.neo4j_password
         label: "Neo4j Password"
         type: secret
         required_if: "enable_graph == true"
@@ -75,7 +68,7 @@ providers:
   # ==========================================================================
   # Cognee - RAG Framework with Knowledge Graphs
   # ==========================================================================
-  - id: cognee
+  - id: cognee-compose
     name: "Cognee"
     description: "Open-source RAG framework with knowledge graphs"
     mode: local
@@ -119,7 +112,7 @@ providers:
   # ==========================================================================
   # Mem0 Cloud - Managed Memory Service
   # ==========================================================================
-  - id: mem0-cloud
+  - id: mem0-cloud-net
     name: "Mem0 Cloud"
     description: "Managed memory service from Mem0"
     mode: cloud
@@ -130,7 +123,6 @@ providers:
         value: "https://api.mem0.ai"
       api_key:
         env_var: MEM0_API_KEY
-        settings_path: api_keys.mem0_api_key
         label: "Mem0 API Key"
         link: "https://app.mem0.ai/dashboard/api-keys"
         required: true

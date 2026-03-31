@@ -4,10 +4,11 @@
 
 import { AlertCircle, CheckCircle, ChevronUp, Cloud, HardDrive, Loader2, Pencil, Save } from 'lucide-react'
 import EnvVarEditor from '../EnvVarEditor'
-import { EnvVarInfo, EnvVarConfig } from '../../services/api'
+import { EnvVarInfo, EnvVarConfig, ServiceConfigSummary } from '../../services/api'
 
 interface ProviderCardProps {
   provider: any
+  instances?: ServiceConfigSummary[]
   isExpanded: boolean
   onToggleExpand: () => void
   envVars: EnvVarInfo[]
@@ -21,6 +22,7 @@ interface ProviderCardProps {
 
 export default function ProviderCard({
   provider,
+  instances = [],
   isExpanded,
   onToggleExpand,
   envVars,
@@ -95,6 +97,24 @@ export default function ProviderCard({
           )}
         </button>
       </div>
+
+      {/* Service config instances */}
+      {instances.length > 0 && (
+        <div className="border-t border-neutral-100 dark:border-neutral-800 px-3 py-2 flex flex-wrap gap-1.5">
+          {instances.map(inst => (
+            <span
+              key={inst.id}
+              className="px-2 py-0.5 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400"
+              data-testid={`provider-instance-${inst.id}`}
+            >
+              {inst.name}
+              {inst.config?.model && (
+                <span className="ml-1 text-neutral-400 dark:text-neutral-500">· {inst.config.model}</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Expanded Content - EnvVarEditor */}
       {isExpanded && (

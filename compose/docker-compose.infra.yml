@@ -12,7 +12,8 @@
 # =============================================================================
 x-ushadow:
   ollama:
-    display_name: "Ollama"
+    id: ollama-compose
+    display_name: "Ollama (Docker)"
     description: "Local LLM inference server with OpenAI-compatible API"
     requires: []
     provides: llm
