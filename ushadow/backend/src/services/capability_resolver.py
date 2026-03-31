@@ -501,28 +501,33 @@ class CapabilityResolver:
                     )
                     return compose_provider, provider_config
 
-            # 1b. Wiring may point directly to a YAML provider ID (no ServiceConfig instance).
-            # get_provider_for_capability silently drops wiring when source_config_id isn't a
-            # ServiceConfig, so we check the raw wiring here as a fallback.
-            for wiring in service_config_manager.list_wiring():
-                if (wiring.target_config_id == consumer_config_id and
-                        wiring.target_capability == capability):
-                    provider = self._provider_registry.get_provider(wiring.source_config_id)
+            # 1b. Inline wiring on the ServiceConfig may reference a YAML provider ID directly
+            # (e.g. wiring: {llm: "ollama-net"}).  get_provider_for_capability() only resolves
+            # wiring entries whose source is *another ServiceConfig*, so it silently drops these.
+            # Check the consumer's wiring dict directly and treat the source as a provider ID.
+            check_ids = [consumer_config_id]
+            if ':' in consumer_config_id:
+                check_ids.append(consumer_config_id.split(':', 1)[1])
+            for check_id in check_ids:
+                consumer_cfg = service_config_manager.get_service_config(check_id)
+                if consumer_cfg and capability in consumer_cfg.wiring:
+                    source_id = consumer_cfg.wiring[capability]
+                    provider = self._provider_registry.get_provider(source_id)
                     if provider:
                         logger.info(
-                            f"Using wired YAML provider '{wiring.source_config_id}' "
+                            f"Using inline-wired provider '{source_id}' "
                             f"for {capability} (consumer={consumer_config_id})"
                         )
                         return provider, None
-                    # Also try compose service backed by a YAML provider
-                    compose_provider = self._get_provider_for_compose_service(wiring.source_config_id)
+                    compose_provider = self._get_provider_for_compose_service(source_id)
                     if compose_provider:
                         logger.info(
-                            f"Using wired compose service '{wiring.source_config_id}' "
+                            f"Using inline-wired compose service '{source_id}' "
                             f"backed by YAML provider '{compose_provider.id}' "
                             f"for {capability} (consumer={consumer_config_id})"
                         )
                         return compose_provider, None
+                    break  # Found wiring entry — don't try other candidate IDs
 
 
         # 2. Try to get explicit selection from settings
