@@ -94,18 +94,17 @@ async def check_local_provider_available(provider, settings) -> bool:
 # Helper - Check missing required fields (needs settings access)
 # =============================================================================
 
-async def get_missing_fields(provider, settings) -> List[Dict[str, Any]]:
+async def get_missing_fields(provider) -> List[Dict[str, Any]]:
     """Check which required fields are missing for a provider."""
+    from src.services.capability_resolver import CapabilityResolver
+    resolver = CapabilityResolver()
     missing = []
     for em in provider.env_maps:
         if not em.required:
             continue
-        # Check if value exists in settings or has default
-        has_value = bool(em.default)
         derived_path = f"{provider.capability}.{provider.id}.{em.key}"
-        value = await settings.get(derived_path)
-        has_value = value is not None and str(value).strip() != ""
-        if not has_value:
+        value = await resolver._resolve_env_map(em, settings_path=derived_path)
+        if not value:
             missing.append({
                 "key": em.key,
                 "label": em.label or em.key,
@@ -140,7 +139,7 @@ async def get_providers_by_capability(capability: str) -> List[Dict[str, Any]]:
 
     result = []
     for p in registry.find_providers(capability=capability):
-        missing = await get_missing_fields(p, settings)
+        missing = await get_missing_fields(p)
         result.append({
             "id": p.id,
             "name": p.name,
@@ -177,7 +176,7 @@ async def list_capabilities() -> List[Dict[str, Any]]:
         availability_results = await asyncio.gather(*availability_tasks)
 
         for i, p in enumerate(cap_providers):
-            missing = await get_missing_fields(p, settings)
+            missing = await get_missing_fields(p)
             is_available = availability_results[i]
 
             # Build credentials list (env_maps with has_value and value for non-secrets)
@@ -244,7 +243,7 @@ async def get_provider(provider_id: str) -> Dict[str, Any]:
     if not p:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
-    missing = await get_missing_fields(p, settings)
+    missing = await get_missing_fields(p)
     return {
         "id": p.id,
         "name": p.name,
@@ -269,7 +268,7 @@ async def get_provider_missing(provider_id: str) -> Dict[str, Any]:
     if not p:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
-    missing = await get_missing_fields(p, settings)
+    missing = await get_missing_fields(p)
     return {"provider_id": provider_id, "configured": len(missing) == 0, "missing": missing}
 
 
@@ -294,7 +293,7 @@ async def find_providers(query: ProviderQuery) -> List[Dict[str, Any]]:
 
     result = []
     for p in registry.find_providers(capability=query.capability, mode=query.mode):
-        missing = await get_missing_fields(p, settings)
+        missing = await get_missing_fields(p)
         is_configured = len(missing) == 0
 
         if query.configured is not None and is_configured != query.configured:
