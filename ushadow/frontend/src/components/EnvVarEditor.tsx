@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Lock, KeyRound, Link, Pencil } from 'lucide-react'
+import { Select, ComboboxItem } from '@mantine/core'
 import { EnvVarInfo, EnvVarConfig } from '../services/api'
 
 interface EnvVarEditorProps {
@@ -33,6 +34,32 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
 
   const isSecret = envVar.is_secret ?? false
   const isLocked = config.locked || envVar.locked || false
+
+  // Build deduplicated select items + value display map for the mapping dropdown.
+  // Mantine v9 throws (and renders nothing) if any value is duplicated in data.
+  const { selectData, valueDisplay } = (() => {
+    const seen = new Set<string>()
+    const valueDisplay = new Map<string, string>()
+    const selectData: { value: string; label: string }[] = []
+    const inputLabel = (path: string, value?: string) => {
+      const root = path.split('.')[0]
+      return value ? `${root} → ${value}` : root
+    }
+
+    if (config.setting_path && !envVar.suggestions.some(s => s.path === config.setting_path)) {
+      seen.add(config.setting_path)
+      selectData.push({ value: config.setting_path, label: inputLabel(config.setting_path, config.value) })
+      valueDisplay.set(config.setting_path, config.value || '(current)')
+    }
+    for (const s of envVar.suggestions) {
+      if (!seen.has(s.path)) {
+        seen.add(s.path)
+        selectData.push({ value: s.path, label: inputLabel(s.path, s.value) })
+        if (s.value) valueDisplay.set(s.path, s.value)
+      }
+    }
+    return { selectData, valueDisplay }
+  })()
 
   const autoSettingPath = () => {
     const name = envVar.name.toLowerCase()
@@ -110,36 +137,46 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
       <div className="flex-1 min-w-0 flex items-center gap-2">
         {showMapping ? (
           // Mapping mode — settings path dropdown
-          <select
-            value={config.setting_path || ''}
-            onChange={(e) => {
-              if (e.target.value) {
+          <Select
+            value={config.setting_path || null}
+            onChange={(val) => {
+              if (val) {
                 onChange({
                   source: 'setting',
-                  setting_path: e.target.value,
+                  setting_path: val,
                   value: undefined,
                   new_setting_path: undefined,
                 })
               }
             }}
-            className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono rounded border-0 bg-neutral-100 dark:bg-neutral-700/50 text-neutral-900 dark:text-neutral-200 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer overflow-hidden text-ellipsis"
-            data-testid={`map-select-${envVar.name}`}
-          >
-            <option value="">select...</option>
-            {config.setting_path && !envVar.suggestions.some(s => s.path === config.setting_path) && (
-              <option value={config.setting_path}>
-                {config.setting_path}{config.value ? ` → ${config.value.length > 20 ? config.value.substring(0, 20) + '...' : config.value}` : ' (current)'}
-              </option>
+            data={selectData}
+            placeholder="select..."
+            w="100%"
+            renderOption={({ option }: { option: ComboboxItem }) => (
+              <div className="flex flex-col py-1">
+                <span className="text-xs font-mono font-medium leading-tight">
+                  {valueDisplay.get(option.value) || '—'}
+                </span>
+                <span className="text-[11px] font-mono leading-tight" style={{ color: 'var(--mantine-color-dimmed)' }}>
+                  {option.value}
+                </span>
+              </div>
             )}
-            {envVar.suggestions.map((s) => {
-              const sv = s.value && s.value.length > 30 ? s.value.substring(0, 30) + '...' : s.value
-              return (
-                <option key={s.path} value={s.path}>
-                  {s.path}{sv ? ` → ${sv}` : ''}
-                </option>
-              )
-            })}
-          </select>
+            size="xs"
+            variant="filled"
+            styles={{
+              input: {
+                fontSize: '0.75rem',
+                fontFamily: 'monospace',
+                cursor: 'pointer',
+                backgroundColor: 'var(--mantine-color-dark-6)',
+                color: 'var(--mantine-color-dark-0)',
+                border: 'none',
+              },
+            }}
+            comboboxProps={{ zIndex: 10000, width: 400, position: 'bottom-start' }}
+            data-testid={`map-select-${envVar.name}`}
+          />
         ) : isLocked && !editing ? (
           // Locked: read-only value + source badge
           <>

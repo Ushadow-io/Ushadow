@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X, GitBranch } from 'lucide-react'
 import type { UshadowEnvironment } from '../hooks/useTauri'
+import { BranchSelector } from './BranchSelector'
 
 interface NewEnvironmentDialogProps {
   isOpen: boolean
@@ -10,7 +11,7 @@ interface NewEnvironmentDialogProps {
   onWorktree: (name: string, branch: string, baseBranch?: string) => void
 }
 
-type BaseType = 'main' | 'dev' | 'worktree'
+type BaseType = 'main' | 'dev' | 'worktree' | 'branch'
 
 export function NewEnvironmentDialog({
   isOpen,
@@ -22,8 +23,9 @@ export function NewEnvironmentDialog({
   const [branch, setBranch] = useState('')
   const [baseType, setBaseType] = useState<BaseType>('main')
   const [selectedWorktree, setSelectedWorktree] = useState<string>('')
-  const [environments, setEnvironments] = useState<UshadowEnvironment[]>([])
-  const [loadingEnvs, setLoadingEnvs] = useState(false)
+  const [branches, setBranches] = useState<string[]>([])
+  const [selectedBranch, setSelectedBranch] = useState<string>('')
+  const [loadingBranches, setLoadingBranches] = useState(false)
 
   // Load environments when dialog opens
   useEffect(() => {
@@ -35,11 +37,13 @@ export function NewEnvironmentDialog({
       setBranch('')
       setBaseType('main')
       setSelectedWorktree('')
+      setSelectedBranch('')
     }
   }, [isOpen])
 
   const loadEnvironments = async () => {
     setLoadingEnvs(true)
+    setLoadingBranches(true)
     try {
       const { tauri } = await import('../hooks/useTauri')
       const discovery = await tauri.discoverEnvironments()
@@ -49,10 +53,18 @@ export function NewEnvironmentDialog({
       if (worktreeEnvs.length > 0 && !selectedWorktree) {
         setSelectedWorktree(worktreeEnvs[0].branch!)
       }
+
+      // Load git branches
+      const gitBranches = await tauri.listGitBranches(projectRoot)
+      setBranches(gitBranches)
+      if (gitBranches.length > 0 && !selectedBranch) {
+        setSelectedBranch(gitBranches[0])
+      }
     } catch (err) {
-      console.error('Failed to load environments:', err)
+      console.error('Failed to load environments or branches:', err)
     } finally {
       setLoadingEnvs(false)
+      setLoadingBranches(false)
     }
   }
 
@@ -61,18 +73,22 @@ export function NewEnvironmentDialog({
   const handleSubmit = () => {
     if (!name.trim()) return
     if (baseType === 'worktree' && !selectedWorktree) return
+    if (baseType === 'branch' && !selectedBranch) return
 
     const envName = name.trim()
     const branchSuffix = branch.trim() || 'base'
 
     // Branch name format: envname/branchname-basebranch (if main/dev)
-    // or: envname/branchname (if branching from another worktree)
+    // or: envname/branchname (if branching from another worktree or branch)
     let branchName: string
     let baseBranch: string | undefined
 
     if (baseType === 'worktree') {
       branchName = `${envName}/${branchSuffix}`
       baseBranch = selectedWorktree // Full branch name like "rouge/feature-dev"
+    } else if (baseType === 'branch') {
+      branchName = `${envName}/${branchSuffix}`
+      baseBranch = selectedBranch // Selected branch name
     } else {
       branchName = `${envName}/${branchSuffix}-${baseType}`
       baseBranch = baseType // 'main' or 'dev'
@@ -81,7 +97,7 @@ export function NewEnvironmentDialog({
     onWorktree(envName, branchName, baseBranch)
   }
 
-  const isValid = name.trim() && (baseType !== 'worktree' || selectedWorktree)
+  const isValid = name.trim() && (baseType !== 'worktree' || selectedWorktree) && (baseType !== 'branch' || selectedBranch)
 
   return (
     <div
@@ -155,6 +171,8 @@ export function NewEnvironmentDialog({
 
               if (baseType === 'worktree') {
                 return `Will create: ${envName}/${branchSuffix} from ${selectedWorktree || '(select worktree)'}`
+              } else if (baseType === 'branch') {
+                return `Will create: ${envName}/${branchSuffix} from ${selectedBranch || '(select branch)'}`
               } else {
                 return `Will create: ${envName}/${branchSuffix}-${baseType} from origin/${baseType}`
               }
@@ -167,7 +185,7 @@ export function NewEnvironmentDialog({
           <label className="block text-sm text-text-secondary mb-2">
             Branch From
           </label>
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-700 p-1">
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-700 p-1">
             <button
               type="button"
               onClick={() => setBaseType('main')}
@@ -191,6 +209,18 @@ export function NewEnvironmentDialog({
               data-testid="base-branch-dev"
             >
               Dev
+            </button>
+            <button
+              type="button"
+              onClick={() => setBaseType('branch')}
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                baseType === 'branch'
+                  ? 'bg-gradient-brand text-white'
+                  : 'text-text-secondary hover:bg-surface-600'
+              }`}
+              data-testid="base-branch-branch"
+            >
+              Branch
             </button>
             <button
               type="button"
@@ -237,9 +267,40 @@ export function NewEnvironmentDialog({
             </div>
           )}
 
+          {/* Branch selection dropdown */}
+          {baseType === 'branch' && (
+            <div className="mt-3">
+              <label className="block text-xs text-text-secondary mb-2">
+                Select Branch
+              </label>
+              {loadingBranches ? (
+                <div className="text-xs text-text-muted p-2 bg-surface-700/50 rounded">
+                  Loading branches...
+                </div>
+              ) : (
+                <>
+                  <BranchSelector
+                    branches={branches}
+                    value={selectedBranch}
+                    onChange={setSelectedBranch}
+                    placeholder="Type or select branch (e.g., master, feature/x)"
+                    testId="select-base-branch"
+                  />
+                  {branches.length === 0 && (
+                    <div className="mt-2 text-xs text-text-muted p-2 bg-surface-700/50 rounded">
+                      No branches detected. Type a branch name to create from (e.g., "master" or "main").
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           <p className="text-xs text-text-muted mt-2">
             {baseType === 'worktree'
               ? `Creates worktree branching from selected worktree`
+              : baseType === 'branch'
+              ? `Creates worktree branching from selected branch`
               : `Creates worktree from origin/${baseType}`}
           </p>
         </div>
@@ -248,6 +309,8 @@ export function NewEnvironmentDialog({
         <p className="text-xs text-text-muted mb-4">
           {baseType === 'worktree'
             ? 'Creates a git worktree branching from the selected worktree'
+            : baseType === 'branch'
+            ? 'Creates a git worktree branching from the selected branch'
             : `Creates a git worktree with branch name: envname/branchname-${baseType} from origin/${baseType}`}
         </p>
 

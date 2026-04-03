@@ -876,6 +876,7 @@ export interface Deployment {
   unode_hostname: string
   backend_type?: string  // 'docker' | 'kubernetes'
   status: 'pending' | 'deploying' | 'running' | 'stopped' | 'failed' | 'removing'
+  config_id?: string  // ServiceConfig ID with env var overrides
   container_id?: string
   container_name?: string
   created_at?: string

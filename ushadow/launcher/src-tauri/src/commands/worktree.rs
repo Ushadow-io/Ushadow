@@ -61,6 +61,63 @@ fn delete_branch(main_repo: &str, branch_name: &str) {
     }
 }
 
+/// Returns true if a given Git ref exists in the repo.
+fn git_ref_exists(main_repo: &str, ref_name: &str) -> bool {
+    let output = silent_command("git")
+        .args(["show-ref", "--verify", "--quiet", ref_name])
+        .current_dir(main_repo)
+        .output();
+
+    match output {
+        Ok(result) => result.status.success(),
+        Err(_) => false,
+    }
+}
+
+/// Resolve a base branch string to a real ref (with origin prefix when needed), with fallback for non-main roots.
+fn resolve_base_branch(main_repo: &str, provided_base: &str) -> String {
+    let provided = provided_base.trim();
+
+    if provided.contains('/') {
+        return provided.to_string();
+    }
+
+    // For "main", try origin/main first, then origin/master
+    if provided == "main" {
+        // Check if origin/main exists
+        if git_ref_exists(main_repo, "origin/main") {
+            return "origin/main".to_string();
+        }
+        // Fallback to origin/master
+        if git_ref_exists(main_repo, "origin/master") {
+            return "origin/master".to_string();
+        }
+        // Local fallbacks
+        if git_ref_exists(main_repo, "main") {
+            return "main".to_string();
+        }
+        if git_ref_exists(main_repo, "master") {
+            return "master".to_string();
+        }
+    }
+
+    // For other branches, use the same logic
+    let candidates: Vec<String> = match provided {
+        "dev" => vec!["origin/dev".into(), "origin/develop".into(), "dev".into(), "develop".into(), "origin/main".into(), "origin/master".into()],
+        "master" => vec!["origin/master".into(), "origin/main".into(), "master".into(), "main".into()],
+        _ => vec![format!("origin/{}", provided), provided.to_string()],
+    };
+
+    for candidate in candidates {
+        if git_ref_exists(main_repo, &candidate) {
+            return candidate;
+        }
+    }
+
+    // If no candidate exists, fall back to remote origin ref style for the provided branch name.
+    format!("origin/{}", provided)
+}
+
 /// Check if a worktree exists for a given branch
 #[tauri::command]
 pub async fn check_worktree_exists(main_repo: String, branch: String) -> Result<Option<WorktreeInfo>, String> {
@@ -264,6 +321,23 @@ pub async fn list_git_branches(main_repo: String) -> Result<Vec<String>, String>
     unique_branches.sort();
     unique_branches.dedup();
 
+    // Fallback: if branch list is empty, detect current HEAD branch
+    if unique_branches.is_empty() {
+        let head_output = silent_command("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&main_repo)
+            .output();
+
+        if let Ok(head_result) = head_output {
+            if head_result.status.success() {
+                let current_branch = String::from_utf8_lossy(&head_result.stdout).trim().to_string();
+                if !current_branch.is_empty() && current_branch != "HEAD" {
+                    unique_branches.push(current_branch);
+                }
+            }
+        }
+    }
+
     Ok(unique_branches)
 }
 
@@ -459,26 +533,17 @@ pub async fn create_worktree(
         let new_branch_name = desired_branch.clone();
 
         // Determine base branch to use
-        // Priority: 1) Provided base_branch parameter, 2) Derive from suffix, 3) Default to origin/main
+        // Priority: 1) Provided base_branch parameter, 2) Derived from suffix, 3) Default to origin/main
         let base = if let Some(ref provided_base) = base_branch {
-            // Use provided base branch - could be origin/main, origin/dev, or another branch like rouge/feature-dev
-            if provided_base.contains('/') {
-                // Already has a remote prefix (e.g., "origin/dev" or "rouge/feature-dev")
-                provided_base.clone()
-            } else {
-                // Always branch from the remote tip so we get the latest, not a
-                // potentially stale local tracking branch.
-                let remote_ref = format!("origin/{}", provided_base);
-                eprintln!("[create_worktree] Using remote ref '{}' as base", remote_ref);
-                remote_ref
-            }
+            let resolved = resolve_base_branch(&main_repo, provided_base);
+            eprintln!("[create_worktree] Resolved provided base '{}' to '{}'", provided_base, resolved);
+            resolved
         } else if new_branch_name.ends_with("-dev") {
-            "origin/dev".to_string()
+            resolve_base_branch(&main_repo, "dev")
         } else if new_branch_name.ends_with("-main") {
-            "origin/main".to_string()
+            resolve_base_branch(&main_repo, "main")
         } else {
-            // Default to origin/main if no suffix
-            "origin/main".to_string()
+            resolve_base_branch(&main_repo, "main")
         };
 
         eprintln!("[create_worktree] Creating new branch '{}' from '{}'", new_branch_name, base);

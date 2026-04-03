@@ -1386,7 +1386,7 @@ export default function ServiceConfigsPage() {
 
       let allEnvVars: any[] = []
       try {
-        const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget)
+        const envResponse = await servicesApi.getEnvConfig(template.id, deployTarget, deployment.config_id)
         const envData = envResponse.data
         allEnvVars = [...envData.required_env_vars, ...envData.optional_env_vars]
           .sort((a, b) => a.name.localeCompare(b.name))

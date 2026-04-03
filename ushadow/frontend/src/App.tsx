@@ -1,7 +1,17 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { ThemeProvider } from './contexts/ThemeContext'
+import { ThemeProvider, useTheme } from './contexts/ThemeContext'
+import { MantineProvider } from '@mantine/core'
+
+function MantineSync({ children }: { children: React.ReactNode }) {
+  const { isDark } = useTheme()
+  return (
+    <MantineProvider forceColorScheme={isDark ? 'dark' : 'light'}>
+      {children}
+    </MantineProvider>
+  )
+}
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { CasdoorAuthProvider } from './contexts/CasdoorAuthContext'
 import { FeatureFlagsProvider } from './contexts/FeatureFlagsContext'
@@ -166,6 +176,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
+        <MantineSync>
         <ToastProvider>
           <SettingsProvider>
             <VibeKanbanWebCompanion />
@@ -180,6 +191,7 @@ function App() {
             </CasdoorAuthProvider>
           </SettingsProvider>
         </ToastProvider>
+        </MantineSync>
       </ThemeProvider>
     </ErrorBoundary>
   )
