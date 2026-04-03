@@ -7,6 +7,7 @@ use crate::models::{ContainerStatus, ServiceInfo, InfraService};
 use super::utils::{silent_command, shell_command, quote_path_buf};
 use super::platform::{Platform, PlatformOps};
 use super::bundled;
+use crate::config::LauncherConfig;
 use serde_yaml::Value;
 
 /// Recursively copy a directory and all its contents
@@ -457,30 +458,60 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         // Note: Removed --skip-admin flag so admin user can be auto-created from secrets.yaml
         status_log.push(format!("Running setup script..."));
 
-        // Get bundled setup scripts if available
-        let bundled_setup_dir = bundled::get_setup_dir(&working_dir);
-
-        // Copy bundled setup to working directory if it's from the bundled location
-        // This avoids permission issues on Windows where Program Files requires admin
-        let working_setup_dir = std::path::Path::new(&working_dir).join("setup");
-
-        if bundled_setup_dir != working_setup_dir {
-            debug_log.push(format!("Copying bundled setup from {:?} to {:?}", bundled_setup_dir, working_setup_dir));
-
-            // Recursively copy the entire setup directory
-            if let Err(e) = copy_dir_recursive(&bundled_setup_dir, &working_setup_dir) {
-                debug_log.push(format!("Warning: Failed to copy setup directory: {}", e));
-                // Continue anyway - might be a partial copy that still works
-            } else {
-                debug_log.push(format!("[OK] Bundled setup copied successfully"));
+        // Check if this worktree has a .launcher-config.yaml with a custom setup command
+        let mut setup_command = None;
+        let config_path = Path::new(&working_dir).join(".launcher-config.yaml");
+        if config_path.exists() {
+            debug_log.push(format!("Found .launcher-config.yaml at: {:?}", config_path));
+            match LauncherConfig::load(&Path::new(&working_dir).to_path_buf()) {
+                Ok(config) => {
+                    if !config.setup.command.is_empty() {
+                        setup_command = Some(config.setup.command.clone());
+                        debug_log.push(format!("Using custom setup command from config: {}", config.setup.command));
+                    } else {
+                        debug_log.push(format!("Config exists but setup.command is empty, falling back to default"));
+                    }
+                }
+                Err(e) => {
+                    debug_log.push(format!("Failed to load config: {}, falling back to default", e));
+                }
             }
+        } else {
+            debug_log.push(format!("No .launcher-config.yaml found, using default ushadow setup"));
         }
 
-        let run_py_path = working_setup_dir.join("run.py");
-        let run_py_quoted = quote_path_buf(&run_py_path);
+        let command = if let Some(custom_command) = setup_command {
+            // Use the custom command from the config
+            custom_command
+        } else {
+            // Fall back to default ushadow setup
+            // Get bundled setup scripts if available
+            let bundled_setup_dir = bundled::get_setup_dir(&working_dir);
 
-        debug_log.push(format!("Using setup script: {:?}", run_py_path));
-        debug_log.push(format!("Running: {} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted));
+            // Copy bundled setup to working directory if it's from the bundled location
+            // This avoids permission issues on Windows where Program Files requires admin
+            let working_setup_dir = std::path::Path::new(&working_dir).join("setup");
+
+            if bundled_setup_dir != working_setup_dir {
+                debug_log.push(format!("Copying bundled setup from {:?} to {:?}", bundled_setup_dir, working_setup_dir));
+
+                // Recursively copy the entire setup directory
+                if let Err(e) = copy_dir_recursive(&bundled_setup_dir, &working_setup_dir) {
+                    debug_log.push(format!("Warning: Failed to copy setup directory: {}", e));
+                    // Continue anyway - might be a partial copy that still works
+                } else {
+                    debug_log.push(format!("[OK] Bundled setup copied successfully"));
+                }
+            }
+
+            let run_py_path = working_setup_dir.join("run.py");
+            let run_py_quoted = quote_path_buf(&run_py_path);
+
+            debug_log.push(format!("Using setup script: {:?}", run_py_path));
+            debug_log.push(format!("Running: {} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted));
+
+            format!("{} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted)
+        };
 
         // Build the full command string using platform abstraction
         // Pass PORT_OFFSET for compatibility with both old and new setup scripts
@@ -488,7 +519,6 @@ pub async fn start_environment(state: State<'_, AppState>, env_name: String, env
         env_vars.insert("ENV_NAME".to_string(), env_name.clone());
         env_vars.insert("PORT_OFFSET".to_string(), port_offset.to_string());
 
-        let command = format!("{} run --with pyyaml {} --dev --quick", uv_cmd, run_py_quoted);
         let setup_command = Platform::build_env_command(&working_dir, env_vars, &command);
 
         let output = shell_command(&setup_command)

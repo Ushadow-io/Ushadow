@@ -19,6 +19,7 @@ from src.services.user_manager import (
     cookie_backend,
     bearer_backend,
     get_user_manager,
+    get_auth_cookie_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,7 @@ async def login(
         
         # Set cookie for SSE/WebSocket support
         response.set_cookie(
-            key="ushadow_auth",
+            key=get_auth_cookie_name(),
             value=token,
             httponly=True,
             samesite="lax",
@@ -273,7 +274,7 @@ async def create_initial_admin(
 
         # Set cookie for SSE/WebSocket support
         response.set_cookie(
-            key="ushadow_auth",
+            key=get_auth_cookie_name(),
             value=token,
             httponly=True,
             samesite="lax",
@@ -356,7 +357,7 @@ async def logout(
     discarding the token. This endpoint clears the HTTP-only cookie.
     """
     response.delete_cookie(
-        key="ushadow_auth",
+        key=get_auth_cookie_name(),
         httponly=True,
         samesite="lax",
     )

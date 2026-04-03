@@ -182,7 +182,9 @@ async def websocket_auth(websocket, token: Optional[str] = None) -> Optional[Use
             (v.decode() for k, v in websocket.headers.items() if k.lower() == b"cookie"), None
         )
         if cookie_header:
-            match = re.search(r"ushadow_auth=([^;]+)", cookie_header)
+            from src.services.user_manager import get_auth_cookie_name
+            cookie_name = re.escape(get_auth_cookie_name())
+            match = re.search(rf"{cookie_name}=([^;]+)", cookie_header)
             if match:
                 return await get_user_from_token(match.group(1))
     except Exception as e:

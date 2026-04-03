@@ -25,6 +25,16 @@ from src.models.user import User, UserCreate, get_user_db
 logger = logging.getLogger(__name__)
 
 SECRET_KEY = get_auth_secret_key()
+
+
+def get_auth_cookie_name() -> str:
+    """Return the env-scoped auth cookie name.
+
+    Uses the environment name so that multiple envs on the same host
+    (different ports) don't share cookies — browsers don't scope cookies by port.
+    """
+    from src.utils.environment import get_env_name
+    return f"ushadow_auth_{get_env_name()}"
 JWT_LIFETIME_SECONDS = 86400
 ALGORITHM = "HS256"
 
@@ -63,7 +73,7 @@ async def get_user_manager(user_db=Depends(get_user_db)):
 
 
 cookie_transport = CookieTransport(
-    cookie_name="ushadow_auth",
+    cookie_name=get_auth_cookie_name(),
     cookie_max_age=JWT_LIFETIME_SECONDS,
     cookie_secure=_get_cookie_secure(),
     cookie_httponly=True,
