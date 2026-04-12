@@ -28,10 +28,9 @@ providers:
         env_var: TRANSCRIPTION_LANGUAGE
         default: "en"
       model:
-        env_var: DEEPGRAM_MODEL
+        env_var: TRANSCRIPTION_MODEL
         label: "Model"
-        description: "Deepgram model to use (e.g. nova-2-general, nova-3)"
-        default: "nova-2-general"
+        default: "nova-2"
 
     ui:
       icon: deepgram
@@ -58,10 +57,9 @@ providers:
         env_var: TRANSCRIPTION_LANGUAGE
         default: "en"
       model:
-        env_var: MISTRAL_MODEL
+        env_var: TRANSCRIPTION_MODEL
         label: "Model"
-        description: "Mistral transcription model (e.g. voxtral-mini-2507)"
-        default: "voxtral-mini-2507"
+        default: "voxtral-mini-latest"
 
     ui:
       icon: mistral
