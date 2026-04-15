@@ -7,18 +7,10 @@
   "private": true,
   "exports": {
     ".": "./index.ts",
-    "./audio": "./audio/index.ts",
     "./ble": "./ble/index.ts",
-    "./auth": "./auth/index.ts",
-    "./session": "./session/index.ts",
-    "./data": "./data/index.ts",
     "./timeline": "./timeline/index.ts",
     "./routine": "./routine/index.ts",
     "./feedback": "./feedback/index.ts",
-    "./analysis": "./analysis/index.ts",
-    "./schedule": "./schedule/index.ts",
-    "./location": "./location/index.ts",
-    "./chat": "./chat/index.ts",
     "./core": "./core/index.ts"
   },
   "peerDependencies": {

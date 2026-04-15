@@ -1,28 +1,20 @@
 /**
- * @ushadow/mobile-core
+ * @ushadow/mobile-core (nar8 subset)
  *
- * Shared component library for ushadow mobile apps (ushadow, nar8, etc.).
+ * Shared component library — trimmed for the nar8 standalone repo to
+ * only include modules reachable from nar8's entry points.
  *
  * Import from subpaths for tree-shaking:
- *   import { useAudioStreamer } from '@ushadow/mobile-core/audio';
- *   import { TimelineView } from '@ushadow/mobile-core/timeline';
- *   import { useRoutines } from '@ushadow/mobile-core/routine';
  *   import { ThemeProvider } from '@ushadow/mobile-core/core';
+ *   import { BluetoothProvider } from '@ushadow/mobile-core/ble';
+ *   import { useRoutines } from '@ushadow/mobile-core/routine';
  *
  * Modules:
- * - audio/    — Audio streaming hooks and components
  * - ble/      — Bluetooth / Omi device discovery
- * - auth/     — Keycloak OAuth and token management
- * - session/  — Session tracking and persistence
- * - data/     — Backend API clients
- * - timeline/ — Timeline extraction and display (NEW)
- * - routine/  — Routine management and recording (NEW)
- * - feedback/ — Post-session feedback collection (NEW)
- * - analysis/ — Trend analysis and suggestions (NEW, Phase 3)
- * - schedule/ — Schedule monitoring and alerts (NEW, Phase 4)
- * - location/ — GPS tracking during recording (NEW, Phase 4)
- * - chat/     — Chat message components
  * - core/     — Feature flags, lifecycle, theme, utilities
+ * - feedback/ — Post-session feedback collection
+ * - routine/  — Routine management and recording
+ * - timeline/ — Timeline extraction and display
  */
 
 // Re-export active modules for convenience (prefer subpath imports)
