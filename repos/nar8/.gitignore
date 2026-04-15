@@ -39,6 +39,9 @@ fastlane/test_output
 .env.*
 !.env.example
 
+# Pixi
+.pixi/
+
 # IDE
 .vscode/
 .idea/
