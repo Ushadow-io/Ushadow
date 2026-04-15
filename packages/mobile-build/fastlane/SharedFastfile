@@ -58,7 +58,22 @@ def ios_project
 end
 
 def apple_team_id
-  eas_config.dig('submit', 'production', 'ios', 'appleTeamId') || ENV['APPLE_TEAM_ID'] || ''
+  eas_team = eas_config.dig('submit', 'production', 'ios', 'appleTeamId')
+  eas_team = nil if eas_team.is_a?(String) && eas_team.strip.empty?
+  eas_team || ENV['APPLE_TEAM_ID'] || ''
+end
+
+def require_team_id!
+  team_id = apple_team_id
+  if team_id.strip.empty?
+    UI.user_error!(
+      "Apple Team ID not set. Either:\n" \
+      "  1. Add \"appleTeamId\": \"YOURTEAMID\" to eas.json#submit.production.ios, or\n" \
+      "  2. Set APPLE_TEAM_ID=YOURTEAMID in .env.local\n" \
+      "You can find your Team ID at https://developer.apple.com/account (top right)."
+    )
+  end
+  team_id
 end
 
 # ════════════════════════════════════════════════════════════════════════
@@ -75,6 +90,7 @@ platform :ios do
   desc "Build and upload to TestFlight"
   desc "This is the fastest way to deploy — no EAS queues!"
   lane :beta do
+    team_id = require_team_id!
     api_key = app_store_connect_api_key_from_env
 
     # Step 0: Generate iOS project
@@ -82,6 +98,10 @@ platform :ios do
     sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
     UI.message("📦 Running pod install...")
     sh("cd ../ios && bundle exec pod install")
+
+    # Set DEVELOPMENT_TEAM on the freshly-generated xcodeproj
+    UI.message("🔏 Setting development team: #{team_id}")
+    update_project_team(path: ios_project, teamid: team_id)
 
     # Step 1: Sync build number with App Store Connect
     UI.message("📦 Syncing build number with App Store Connect...")
@@ -192,13 +212,15 @@ platform :ios do
 
   desc "Build the iOS app"
   private_lane :build_ios_app do |options|
-    team_id = apple_team_id
+    team_id = require_team_id!
 
     unless options[:skip_prebuild]
       UI.message("🔧 Running expo prebuild for production variant...")
       sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
       UI.message("📦 Running pod install...")
       sh("cd ../ios && bundle exec pod install")
+      UI.message("🔏 Setting development team: #{team_id}")
+      update_project_team(path: ios_project, teamid: team_id)
     end
 
     # Fetch provisioning profiles for main app + all extensions
