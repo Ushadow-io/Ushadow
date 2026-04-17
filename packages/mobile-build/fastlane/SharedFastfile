@@ -128,7 +128,7 @@ platform :ios do
 
     # Step 2: Build
     UI.message("🔨 Building iOS app...")
-    build_ios_app(skip_prebuild: true)
+    do_build_ios(skip_prebuild: true)
 
     # Step 3: Upload
     ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
@@ -156,7 +156,7 @@ platform :ios do
   desc "Build iOS app only (no upload)"
   lane :build do
     UI.message("🔨 Building iOS app...")
-    build_ios_app(
+    do_build_ios(
       skip_package_ipa: false,
       export_method: "app-store"
     )
@@ -211,7 +211,7 @@ platform :ios do
   # ════════════════════════════════════════════════════════════════════
 
   desc "Build the iOS app"
-  private_lane :build_ios_app do |options|
+  private_lane :do_build_ios do |options|
     team_id = require_team_id!
 
     unless options[:skip_prebuild]
