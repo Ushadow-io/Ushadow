@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "io.nar8.app",
+      "bundleIdentifier": "com.nar8",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "nar8 uses Bluetooth to connect to your recording device.",
         "NSBluetoothPeripheralUsageDescription": "nar8 uses Bluetooth to connect to your recording device.",
@@ -23,7 +23,7 @@
       }
     },
     "android": {
-      "package": "io.nar8.app",
+      "package": "com.nar8",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0a0a12"
