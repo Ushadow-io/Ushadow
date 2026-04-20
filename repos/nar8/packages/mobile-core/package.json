@@ -1,7 +1,7 @@
 {
-  "name": "@ushadow/mobile-core",
+  "name": "@nar8/mobile-core",
   "version": "0.1.0",
-  "description": "Shared component library for ushadow mobile apps",
+  "description": "Shared mobile component library for nar8",
   "main": "index.ts",
   "types": "index.ts",
   "private": true,
