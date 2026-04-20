@@ -1,8 +1,8 @@
 # nar8 — Fastlane Appfile
 require 'json'
 
-build_config = JSON.parse(File.read(File.join(File.dirname(__FILE__), '..', 'build.json')))
-eas_config   = JSON.parse(File.read(File.join(File.dirname(__FILE__), '..', 'eas.json')))
+build_config = JSON.parse(File.read(File.join(Dir.pwd, 'build.json')))
+eas_config   = JSON.parse(File.read(File.join(Dir.pwd, 'eas.json')))
 eas_submit   = eas_config.dig('submit', 'production', 'ios') || {}
 
 app_identifier(build_config['app_identifier'])
