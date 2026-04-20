@@ -6,10 +6,7 @@
   "scripts": {
     "start": "expo start",
     "ios": "expo start --ios",
-    "android": "expo start --android",
-    "build:ios:production": "eas build --platform ios --profile production",
-    "build:ios:preview": "eas build --platform ios --profile preview",
-    "submit:ios": "eas submit --platform ios --latest"
+    "android": "expo start --android"
   },
   "dependencies": {
     "expo": "~52.0.0",

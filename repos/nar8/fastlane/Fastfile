@@ -1,28 +1,18 @@
 require 'json'
 
-# nar8 — Fastlane iOS deployment automation
+# nar8 — Fastlane iOS deployment
 #
-# Configuration is read from build.json in the app root:
-#   {
-#     "scheme": "nar8",
-#     "app_identifier": "io.nar8.app",
-#     "extensions": { "io.nar8.app.widget": "WidgetTarget" }
-#   }
-#
-# Credentials are read from eas.json (submit.production.ios).
+# Reads config from build.json:  { scheme, app_identifier, extensions }
+# Reads creds from eas.json:     submit.production.ios
 
 default_platform(:ios)
 
-# ════════════════════════════════════════════════════════════════════════
-# Configuration helpers
-# ════════════════════════════════════════════════════════════════════════
+# ── Config helpers ──────────────────────────────────────────────────────
 
 def build_config
   @build_config ||= begin
     path = File.expand_path('../build.json', FastlaneCore::FastlaneFolder.path)
-    unless File.exist?(path)
-      UI.user_error!("build.json not found at #{path}. Create one with scheme, app_identifier, and extensions.")
-    end
+    UI.user_error!("build.json not found at #{path}") unless File.exist?(path)
     JSON.parse(File.read(path))
   end
 end
@@ -34,105 +24,60 @@ def eas_config
   end
 end
 
-def app_scheme
-  build_config['scheme']
-end
-
-def app_identifier
-  build_config['app_identifier']
-end
-
-def app_extensions
-  build_config['extensions'] || {}
-end
-
-def ios_workspace
-  "./ios/#{app_scheme}.xcworkspace"
-end
-
-def ios_project
-  "./ios/#{app_scheme}.xcodeproj"
-end
+def app_scheme;      build_config['scheme']              end
+def app_identifier;  build_config['app_identifier']      end
+def app_extensions;  build_config['extensions'] || {}    end
+def ios_workspace;   "./ios/#{app_scheme}.xcworkspace"   end
+def ios_project;     "./ios/#{app_scheme}.xcodeproj"     end
 
 def apple_team_id
-  eas_team = eas_config.dig('submit', 'production', 'ios', 'appleTeamId')
-  eas_team = nil if eas_team.is_a?(String) && eas_team.strip.empty?
-  eas_team || ENV['APPLE_TEAM_ID'] || ''
+  team = eas_config.dig('submit', 'production', 'ios', 'appleTeamId')
+  team = nil if team.is_a?(String) && team.strip.empty?
+  team || ENV['APPLE_TEAM_ID'] || ''
 end
 
 def require_team_id!
-  team_id = apple_team_id
-  if team_id.strip.empty?
+  id = apple_team_id
+  if id.strip.empty?
     UI.user_error!(
-      "Apple Team ID not set. Either:\n" \
-      "  1. Add \"appleTeamId\": \"YOURTEAMID\" to eas.json#submit.production.ios, or\n" \
-      "  2. Set APPLE_TEAM_ID=YOURTEAMID in .env.local\n" \
-      "You can find your Team ID at https://developer.apple.com/account (top right)."
+      "Apple Team ID not set. Add appleTeamId to eas.json#submit.production.ios " \
+      "or set APPLE_TEAM_ID in .env.local. Find it at https://developer.apple.com/account"
     )
   end
-  team_id
+  id
 end
 
-# ════════════════════════════════════════════════════════════════════════
-# Lanes
-# ════════════════════════════════════════════════════════════════════════
+# ── Lanes ───────────────────────────────────────────────────────────────
 
 platform :ios do
-  before_all do
-    # No git state checks - allow deploys with uncommitted changes
-  end
-
-  # ── Beta: Build + TestFlight ─────────────────────────────────────────
+  before_all { }
 
   desc "Build and upload to TestFlight"
-  desc "This is the fastest way to deploy — no EAS queues!"
   lane :beta do
     team_id = require_team_id!
     api_key = app_store_connect_api_key_from_env
 
-    # Step 0: Generate iOS project
-    UI.message("🔧 Running expo prebuild for production variant...")
+    UI.message("🔧 Running expo prebuild...")
     sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
     UI.message("📦 Running pod install...")
     sh("cd ../ios && bundle exec pod install")
-
-    # Set DEVELOPMENT_TEAM on the freshly-generated xcodeproj
-    UI.message("🔏 Setting development team: #{team_id}")
+    UI.message("🔏 Setting development team #{team_id}...")
     update_project_team(path: ios_project, teamid: team_id)
 
-    # Step 1: Sync build number with App Store Connect
     UI.message("📦 Syncing build number with App Store Connect...")
-
-    asc_build = app_store_build_number(
-      app_identifier: app_identifier,
-      live: false,
-      api_key: api_key,
-    ).to_i
-    project_build = get_build_number(xcodeproj: ios_project).to_i
-    latest_build = [asc_build, project_build].max
-    next_build = latest_build + 1
-
-    UI.message("ASC build: #{asc_build}, project build: #{project_build} → using #{next_build}")
-
-    increment_build_number(
-      build_number: next_build,
-      xcodeproj: ios_project
-    )
+    asc_build   = app_store_build_number(app_identifier: app_identifier, live: false, api_key: api_key).to_i
+    proj_build  = get_build_number(xcodeproj: ios_project).to_i
+    next_build  = [asc_build, proj_build].max + 1
+    UI.message("ASC: #{asc_build}, project: #{proj_build} → #{next_build}")
+    increment_build_number(build_number: next_build, xcodeproj: ios_project)
 
     version = get_version_number(xcodeproj: ios_project, target: app_scheme)
-    build = get_build_number(xcodeproj: ios_project)
-    UI.success("Building version #{version} (#{build})")
+    build   = get_build_number(xcodeproj: ios_project)
+    UI.success("Building #{version} (#{build})")
 
-    # Step 2: Build
-    UI.message("🔨 Building iOS app...")
     do_build_ios(skip_prebuild: true)
 
-    # Step 3: Upload
     ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
-    UI.message("IPA path: #{ipa_path}")
-    ipa_build = sh("unzip -p '#{ipa_path}' 'Payload/#{app_scheme}.app/Info.plist' | plutil -extract CFBundleVersion raw -o - -").strip rescue "unknown"
-    UI.message("Build number inside IPA: #{ipa_build}")
-
     UI.message("🚀 Uploading to TestFlight...")
     upload_to_testflight(
       api_key: api_key,
@@ -140,114 +85,62 @@ platform :ios do
       skip_waiting_for_build_processing: true,
       distribute_external: false,
       notify_external_testers: false,
-      changelog: "Build #{build} - Automated deployment via Fastlane"
+      changelog: "Build #{build} — Automated via Fastlane"
     )
-
-    UI.success("✅ Successfully uploaded to TestFlight!")
-    UI.success("Version: #{version} (Build: #{build})")
-    UI.message("📱 Build will appear in TestFlight in ~5-10 minutes")
+    UI.success("✅ Uploaded! Version #{version} (#{build}) — appears in TestFlight in ~5-10 min")
   end
-
-  # ── Build only ──────────────────────────────────────────────────────
 
   desc "Build iOS app only (no upload)"
   lane :build do
-    UI.message("🔨 Building iOS app...")
-    do_build_ios(
-      skip_package_ipa: false,
-      export_method: "app-store"
-    )
-    UI.success("✅ Build complete!")
-    UI.message("IPA location: #{lane_context[SharedValues::IPA_OUTPUT_PATH]}")
+    do_build_ios(skip_package_ipa: false, export_method: "app-store")
+    UI.success("✅ Build complete — #{lane_context[SharedValues::IPA_OUTPUT_PATH]}")
   end
 
-  # ── Submit existing IPA ─────────────────────────────────────────────
-
-  desc "Submit existing build to TestFlight"
+  desc "Submit existing IPA to TestFlight"
   lane :submit do |options|
-    api_key = app_store_connect_api_key_from_env
+    api_key  = app_store_connect_api_key_from_env
     ipa_path = options[:ipa] ||
                lane_context[SharedValues::IPA_OUTPUT_PATH] ||
                File.expand_path("../build/#{app_scheme}.ipa", __dir__)
-
-    unless File.exist?(ipa_path)
-      UI.user_error!("No IPA file found at #{ipa_path}. Run 'make fastlane-beta' to build first.")
-    end
-
-    UI.message("Using IPA: #{ipa_path}")
-    UI.message("🚀 Uploading to TestFlight...")
+    UI.user_error!("No IPA found at #{ipa_path}") unless File.exist?(ipa_path)
     upload_to_testflight(
-      api_key: api_key,
-      ipa: ipa_path,
+      api_key: api_key, ipa: ipa_path,
       skip_waiting_for_build_processing: true,
-      distribute_external: false,
-      notify_external_testers: false
+      distribute_external: false, notify_external_testers: false
     )
-    UI.success("✅ Successfully uploaded to TestFlight!")
+    UI.success("✅ Submitted to TestFlight!")
   end
 
-  # ── Bump build number ──────────────────────────────────────────────
-
-  desc "Increment build number (synced with App Store Connect)"
+  desc "Increment build number (synced with ASC)"
   lane :bump_build do
-    asc_build = app_store_build_number(
-      app_identifier: app_identifier,
-      live: false,
-    ).to_i
-    project_build = get_build_number(xcodeproj: ios_project).to_i
-    latest_build = [asc_build, project_build].max
-    next_build = latest_build + 1
+    asc_build  = app_store_build_number(app_identifier: app_identifier, live: false).to_i
+    proj_build = get_build_number(xcodeproj: ios_project).to_i
+    next_build = [asc_build, proj_build].max + 1
     increment_build_number(build_number: next_build, xcodeproj: ios_project)
-    version = get_version_number(xcodeproj: ios_project, target: app_scheme)
-    build = get_build_number(xcodeproj: ios_project)
-    UI.success("ASC: #{asc_build}, project: #{project_build} → New build: #{build} (version #{version})")
+    UI.success("Build → #{get_build_number(xcodeproj: ios_project)}")
   end
 
-  # ════════════════════════════════════════════════════════════════════
-  # Private lanes
-  # ════════════════════════════════════════════════════════════════════
+  # ── Private ─────────────────────────────────────────────────────────
 
-  desc "Build the iOS app"
   private_lane :do_build_ios do |options|
     team_id = require_team_id!
 
     unless options[:skip_prebuild]
-      UI.message("🔧 Running expo prebuild for production variant...")
       sh("cd .. && APP_VARIANT=production npx expo prebuild --platform ios --clean")
-      UI.message("📦 Running pod install...")
       sh("cd ../ios && bundle exec pod install")
-      UI.message("🔏 Setting development team: #{team_id}")
       update_project_team(path: ios_project, teamid: team_id)
     end
 
-    # Fetch provisioning profiles for main app + all extensions
-    UI.message("📲 Fetching provisioning profiles...")
     api_key = app_store_connect_api_key_from_env
-
     provisioning_profiles = {}
 
-    # Main app
-    get_provisioning_profile(
-      app_identifier: app_identifier,
-      team_id: team_id,
-      api_key: api_key,
-    )
-    main_uuid = ENV["sigh_#{app_identifier}_appstore_profile-uuid"]
-    main_name = ENV["sigh_#{app_identifier}_appstore_profile-name"]
-    UI.success("Main app profile: #{main_name} (#{main_uuid})")
-    provisioning_profiles[app_identifier] = main_uuid
+    get_provisioning_profile(app_identifier: app_identifier, team_id: team_id, api_key: api_key)
+    provisioning_profiles[app_identifier] = ENV["sigh_#{app_identifier}_appstore_profile-uuid"]
+    UI.success("Profile: #{ENV["sigh_#{app_identifier}_appstore_profile-name"]}")
 
-    # Extensions
-    app_extensions.each do |ext_id, _ext_name|
-      get_provisioning_profile(
-        app_identifier: ext_id,
-        team_id: team_id,
-        api_key: api_key,
-      )
-      ext_uuid = ENV["sigh_#{ext_id}_appstore_profile-uuid"]
-      ext_name_val = ENV["sigh_#{ext_id}_appstore_profile-name"]
-      UI.success("Extension profile (#{ext_id}): #{ext_name_val} (#{ext_uuid})")
-      provisioning_profiles[ext_id] = ext_uuid
+    app_extensions.each do |ext_id, _|
+      get_provisioning_profile(app_identifier: ext_id, team_id: team_id, api_key: api_key)
+      provisioning_profiles[ext_id] = ENV["sigh_#{ext_id}_appstore_profile-uuid"]
     end
 
     gym(
@@ -268,31 +161,25 @@ platform :ios do
     )
   end
 
-  # App Store Connect API key from environment
   private_lane :app_store_connect_api_key_from_env do
     if ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"] &&
        ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"] &&
        ENV["APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"]
       app_store_connect_api_key(
-        key_id:        ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"].strip,
-        issuer_id:     ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"].strip,
-        key_filepath:  File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"].strip),
+        key_id:       ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"].strip,
+        issuer_id:    ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"].strip,
+        key_filepath: File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY_FILEPATH"].strip),
       )
     else
-      nil  # Fall back to Apple ID / password auth
+      nil
     end
   end
 
-  # ════════════════════════════════════════════════════════════════════
-  # Error handling
-  # ════════════════════════════════════════════════════════════════════
-
   error do |lane, exception|
-    UI.error("Error in lane '#{lane}':")
-    UI.error(exception.message)
+    UI.error("Lane '#{lane}' failed: #{exception.message}")
   end
 
   after_all do |lane|
-    UI.success("Successfully completed '#{lane}' lane! 🎉")
+    UI.success("Lane '#{lane}' completed!")
   end
 end
