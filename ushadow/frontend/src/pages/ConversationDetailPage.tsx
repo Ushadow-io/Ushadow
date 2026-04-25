@@ -292,8 +292,9 @@ export default function ConversationDetailPage() {
   const hasValidSegments = conversation.segments && conversation.segments.length > 0
 
   // Extract start/end times
-  const startTime = myceliaConv?.timeRanges?.[0]?.start || conversation.created_at
-  const endTime = myceliaConv?.timeRanges?.[0]?.end || conversation.completed_at
+  // For Mycelia: use started_at (actual recording start) over created_at (processing time)
+  const startTime = myceliaConv?.started_at || myceliaConv?.timeRanges?.[0]?.start || conversation.created_at
+  const endTime = myceliaConv?.completed_at || myceliaConv?.timeRanges?.[0]?.end
 
   // Format duration
   const formatDuration = (seconds?: number) => {
@@ -316,23 +317,6 @@ export default function ConversationDetailPage() {
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
     return `${mins}m ${secs}s`
-  }
-
-  // Format date
-  const formatDate = (dateString?: string) => {
-    if (!dateString) {
-      // Mycelia uses createdAt
-      if (myceliaConv?.createdAt) {
-        dateString = myceliaConv.createdAt
-      } else {
-        return 'Unknown'
-      }
-    }
-    try {
-      return new Date(dateString).toLocaleString()
-    } catch {
-      return dateString
-    }
   }
 
   const sourceColor = source === 'chronicle' ? 'blue' : 'purple'
@@ -553,7 +537,7 @@ export default function ConversationDetailPage() {
           {/* Segmented transcript (only if segments have actual text) */}
           {hasValidSegments ? (
             <div className="space-y-4">
-              {conversation.segments.map((segment, idx) => {
+              {conversation.segments!.map((segment, idx) => {
                 const segmentId = `segment-${idx}`
                 const isPlaying = playingSegment === segmentId
 

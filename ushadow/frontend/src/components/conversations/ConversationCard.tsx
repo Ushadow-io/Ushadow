@@ -19,12 +19,10 @@ export default function ConversationCard({ conversation, source, onClick }: Conv
     has_memory,
   } = conversation
 
-  // Mycelia stores data differently than Chronicle
-  const myceliaConv = conversation as any
-
-  // Extract start time - Mycelia uses timeRanges[0].start for actual conversation time
+  // Extract start time - Mycelia uses started_at (timeRanges[0].start) for actual conversation time
   // created_at in Mycelia is the processing timestamp, not the conversation time
-  const conversationDate = myceliaConv?.timeRanges?.[0]?.start || created_at
+  const myceliaConv = conversation as any
+  const conversationDate = myceliaConv?.started_at || created_at
 
   // Format date
   const date = conversationDate ? new Date(conversationDate) : null

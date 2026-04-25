@@ -167,8 +167,11 @@ export const myceliaApi = {
     const docs: any[] = Array.isArray(response.data) ? response.data : []
     const conversations = docs.map((doc: any) => {
       const timeRange = doc.timeRanges?.[0]
-      const durationSeconds = timeRange?.start && timeRange?.end
-        ? Math.round((new Date(timeRange.end).getTime() - new Date(timeRange.start).getTime()) / 1000)
+      // Normalize MongoDB {$date: "..."} extended JSON to plain ISO strings
+      const startedAt = timeRange?.start?.$date ?? timeRange?.start ?? null
+      const endedAt = timeRange?.end?.$date ?? timeRange?.end ?? null
+      const durationSeconds = startedAt && endedAt
+        ? Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000)
         : undefined
       const summaries: any[] = doc.summaries ?? []
       const llmSummary = summaries.filter((s: any) => s.type === 'llm').pop()
@@ -178,6 +181,8 @@ export const myceliaApi = {
         title: doc.name ?? 'Untitled',
         summary: llmSummary?.text ?? doc.description,
         created_at: doc.createdAt?.$date ?? doc.createdAt,
+        started_at: startedAt,
+        completed_at: endedAt,
         client_id: 'mycelia',
         duration_seconds: durationSeconds,
         has_memory: summaries.length > 0,

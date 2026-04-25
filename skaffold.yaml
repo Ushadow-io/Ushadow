@@ -23,13 +23,16 @@ build:
     useDockerCLI: true
 
 deploy:
-  kubectl:
-    hooks:
-      after:
-        - host:
-            command: ["bash", "k8s/scripts/seed-pvcs.sh", "ushadow"]
-            dir: .
-            os: [linux, darwin]
+  kubectl: {}
+  # ushadow-secret is intentionally NOT in the kustomize bundle.
+  # It's sourced from config/SECRETS/secrets_k8s.yaml (gitignored) and applied
+  # by `just k8s-apply-secret`. Running it here makes `skaffold dev` idempotent
+  # and guarantees the secret exists before any Deployment references it.
+  hooks:
+    before:
+      - host:
+          command: ["just", "k8s-apply-secret"]
+          os: [darwin, linux]
 
 manifests:
   kustomize:
